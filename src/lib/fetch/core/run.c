@@ -119,21 +119,18 @@ static bool run_should_process_document(const BxFetchRun* run, const BxFetchTran
     return run && completion && publication == BX_FETCH_PUBLICATION_RECORDED && completion->result == BX_FETCH_OK && (run->cfg->recursive.recursive || run->cfg->recursive.page_requisites);
 }
 
-static int run_enqueue_document(BxFetchRun* run, const BxFetchTransferCompletion* completion, int depth) {
-    const BxFetchPreparedUrl* base = bx_fetch_response_effective_target(completion->response);
-    if (!base)
-        base = bx_fetch_request_target(completion->request);
-    if (!base || !completion->output_path) {
+static int run_enqueue_document(BxFetchRun* run, const BxFetchPreparedUrl* base,
+                                const char* path, const char* content_type, int depth) {
+    if (!base || !path) {
         errno = EINVAL;
         return -1;
     }
 
-    const char* content_type = completion->response->content_type;
     size_t base_length = 0;
     size_t path_length = 0;
     size_t content_type_length = 0;
     if (!bx_fetch_resource_bounded_strlen(bx_fetch_prepared_url_transport(base), BX_FETCH_URL_MAX_BYTES, &base_length) ||
-        !bx_fetch_resource_bounded_strlen(completion->output_path, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &path_length) ||
+        !bx_fetch_resource_bounded_strlen(path, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &path_length) ||
         (content_type && !bx_fetch_resource_bounded_strlen(content_type, BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES, &content_type_length)) || base_length > SIZE_MAX - path_length ||
         base_length + path_length > SIZE_MAX - content_type_length) {
         errno = EFBIG;
@@ -149,7 +146,7 @@ static int run_enqueue_document(BxFetchRun* run, const BxFetchTransferCompletion
     if (!task)
         return -1;
     task->base = bx_fetch_prepared_url_clone(base);
-    task->path = strdup(completion->output_path);
+    task->path = strdup(path);
     task->content_type = content_type ? strdup(content_type) : NULL;
     task->accounted_bytes = accounted_bytes;
     task->depth = depth;
@@ -257,6 +254,14 @@ static int run_plan_output(void* userdata, const BxFetchPreparedUrl* target, int
         if (errno == 0)
             errno = EIO;
         return -1;
+    }
+    if (observation.decision == BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER && !run->cfg->download.dry_run &&
+        (run->cfg->recursive.recursive || run->cfg->recursive.page_requisites)) {
+        /* Skipping a payload does not skip its outgoing edges. Drain here:
+         * an entirely cached frontier may never enter the transport poll. */
+        if (run_enqueue_document(run, target, *output_path_out, NULL, depth) != 0 ||
+            run_drain_documents(run) != 0)
+            return -1;
     }
     return observation.decision == BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER ? 1 : 0;
 }
@@ -504,7 +509,11 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
         retryable_hint = false;
     }
     else if (run_should_process_document(run, completion, publication)) {
-        if (run_enqueue_document(run, completion, transfer->depth) != 0) {
+        const BxFetchPreparedUrl* base = bx_fetch_response_effective_target(completion->response);
+        if (!base)
+            base = bx_fetch_request_target(completion->request);
+        if (run_enqueue_document(run, base, completion->output_path,
+                                 completion->response->content_type, transfer->depth) != 0) {
             int error_number = errno ? errno : EIO;
             run_defer_failure(run, error_number);
             scheduler_result = error_number == EFBIG ? BX_FETCH_ERROR_RESOURCE_LIMIT : BX_FETCH_ERROR_INTERNAL;
@@ -886,7 +895,8 @@ int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetch
                              cfg->recursive.recursive || cfg->recursive.page_requisites || cfg->recursive.convert_links);
     if (!bx_fetch_config_tls_policy_valid(cfg) || !frontend || !frontend->plan_output || cfg->input.url_count < 0 || (cfg->input.url_count == 0 && !has_input_file) ||
         (cfg->input.url_count > 0 && !cfg->input.urls) || (cfg->input.force_html && !has_input_file) ||
-        (cfg->input.base_url && (!has_input_file || !cfg->input.force_html)) || invalid_markdown) {
+        (cfg->input.base_url && (!has_input_file || !cfg->input.force_html)) || invalid_markdown ||
+        (cfg->download.spider && (cfg->recursive.recursive || cfg->recursive.page_requisites))) {
         return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, NULL, NULL, NULL);
     }
     size_t direct_url_bytes = 0;

@@ -13,6 +13,7 @@ typedef struct {
     const struct bx_fetch_config* cfg;
     const BxFetchPublicationState* publication;
     const BxFetchPreparedUrl* base;
+    BxFetchPreparedUrl* document_base;
     const char* directory;
     int error_number;
 } ConversionRewriteContext;
@@ -31,33 +32,43 @@ static int conversion_fail(BxFetchLinkConversionOutcome* outcome, BxFetchLinkCon
     return -1;
 }
 
+static int conversion_html_base(void* userdata, const char* reference) {
+    ConversionRewriteContext* context = userdata;
+    context->document_base = bx_fetch_prepared_url_resolve(context->base, reference);
+    return context->document_base ? 0 : -1;
+}
+
 static char* rewrite_published_link(void* userdata, const char* reference) {
     ConversionRewriteContext* context = userdata;
     if (!context || !reference)
         return NULL;
 
-    BxFetchPreparedUrl* target = bx_fetch_prepared_url_resolve(context->base, reference);
+    BxFetchPreparedUrl* target = bx_fetch_prepared_url_resolve(context->document_base ? context->document_base : context->base, reference);
     if (!target) {
         if (errno == ENOMEM || errno == EFBIG || errno == EOVERFLOW)
             context->error_number = errno;
         return NULL;
     }
     const char* local_path = bx_fetch_publication_lookup_prepared(context->publication, target, NULL);
+    /* Resetting the HTML base must preserve unconverted remote references. */
+    char* remote = !local_path && context->document_base ? strdup(bx_fetch_prepared_url_display(target)) : NULL;
+    if (!local_path && context->document_base && !remote)
+        context->error_number = ENOMEM;
     bx_fetch_prepared_url_free(target);
-    if (!local_path)
+    if (!local_path && !remote)
         return NULL;
 
     char* relative = NULL;
-    if (context->cfg->recursive.convert_file_only) {
+    if (local_path && context->cfg->recursive.convert_file_only) {
         relative = bx_path_basename_dup(local_path);
     }
-    else {
+    else if (local_path) {
         char* absolute = bx_path_make_absolute_dup(local_path);
         if (absolute)
             relative = bx_path_relative_path_between(context->directory, absolute);
         free(absolute);
     }
-    char* rewritten = relative ? bx_fetch_url_encode_path(relative, strlen(relative)) : NULL;
+    char* rewritten = remote ? remote : relative ? bx_fetch_url_encode_path(relative, strlen(relative)) : NULL;
     free(relative);
     if (!rewritten) {
         context->error_number = errno ? errno : ENOMEM;
@@ -156,8 +167,9 @@ int bx_fetch_document_convert_download(const struct bx_fetch_config* cfg,
         .directory = directory,
     };
     errno = 0;
-    char* converted = bx_fetch_html_convert_links((const char*)original, original_length, rewrite_published_link, &rewrite);
+    char* converted = bx_fetch_html_convert_links((const char*)original, original_length, rewrite_published_link, &rewrite, conversion_html_base);
     int rewrite_error = errno;
+    bx_fetch_prepared_url_free(rewrite.document_base);
     free(directory);
     bx_fetch_prepared_url_free(base);
     if (!converted) {

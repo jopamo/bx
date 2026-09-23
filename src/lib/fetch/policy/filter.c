@@ -24,6 +24,8 @@ struct BxFetchFilter {
     char** seed_hosts;
     int seed_host_count;
     int seed_host_capacity;
+    BxFetchUrl** seed_roots;
+    size_t seed_root_count;
     regex_t accept_regex;
     bool accept_regex_compiled;
 };
@@ -243,6 +245,9 @@ void bx_fetch_filter_free(BxFetchFilter* f) {
     for (int i = 0; i < f->seed_host_count; i++)
         free(f->seed_hosts[i]);
     free(f->seed_hosts);
+    for (size_t i = 0; i < f->seed_root_count; i++)
+        bx_fetch_url_free(f->seed_roots[i]);
+    free(f->seed_roots);
     if (f->accept_regex_compiled) {
         regfree(&f->accept_regex);
     }
@@ -258,12 +263,37 @@ int bx_fetch_filter_add_canonical_seed_url(BxFetchFilter* f, const char* canonic
         return -1;
 
     int rc = -1;
-    if (mu->host && mu->host[0] != '\0') {
+    if (mu->host && mu->host[0] != '\0' && mu->path) {
         rc = append_seed_host(f, mu->host);
     }
 
+    if (rc == 0 && f->cfg->recursive.no_parent) {
+        BxFetchUrl** roots = realloc(f->seed_roots, (f->seed_root_count + 1u) * sizeof(*roots));
+        if (!roots) {
+            bx_fetch_url_free(mu);
+            return -1;
+        }
+        f->seed_roots = roots;
+        char* slash = strrchr(mu->path, '/');
+        if (slash)
+            slash[1] = '\0';
+        f->seed_roots[f->seed_root_count++] = mu;
+        return 0;
+    }
     bx_fetch_url_free(mu);
     return rc;
+}
+
+static bool within_seed_directory(const BxFetchFilter* filter, const BxFetchUrl* target) {
+    for (size_t i = 0; i < filter->seed_root_count; i++) {
+        const BxFetchUrl* root = filter->seed_roots[i];
+        if (root->scheme && target->scheme && root->host && target->host &&
+            strcasecmp(root->scheme, target->scheme) == 0 &&
+            strcasecmp(root->host, target->host) == 0 && root->port == target->port &&
+            root->path && target->path && strncmp(target->path, root->path, strlen(root->path)) == 0)
+            return true;
+    }
+    return false;
 }
 
 static bool has_extension(const char* url, const char* ext) {
@@ -387,7 +417,10 @@ BxFetchFilterDecision bx_fetch_filter_evaluate_canonical_url(BxFetchFilter* f, c
     }
 
     if (decision == FILTER_DECISION_ACCEPT) {
-        if (path_matches_any_directory(mu->path, f->exclude_dirs, f->exclude_dir_count)) {
+        if (f->cfg->recursive.no_parent && !within_seed_directory(f, mu)) {
+            decision = FILTER_DECISION_DIRECTORY_SCOPE;
+        }
+        else if (path_matches_any_directory(mu->path, f->exclude_dirs, f->exclude_dir_count)) {
             decision = FILTER_DECISION_DIRECTORY_DENYLIST;
         }
         else if (f->include_dir_count > 0 && !path_matches_any_directory(mu->path, f->include_dirs, f->include_dir_count)) {

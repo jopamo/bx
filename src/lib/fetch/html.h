@@ -42,6 +42,8 @@ typedef enum {
 
 /* `url` is transient; copy it if it must outlive the callback. */
 typedef void (*BxFetchHtmlLinkCallback)(void* userdata, const char* url, BxFetchHtmlLinkKind kind);
+/* Called once, before links, for the first base[href]. Nonzero aborts parsing. */
+typedef int (*BxFetchHtmlBaseCallback)(void* userdata, const char* href);
 
 /*
  * `url` is transient input.
@@ -51,9 +53,10 @@ typedef char* (*BxFetchLinkRewriteCallback)(void* userdata, const char* url);
 
 /* Lexical extraction distinguishes navigation links from embedded requisites.
  * Callers own URL resolution. */
-int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata);
+int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb);
 /* Returned document is heap-allocated and must be freed by the caller. */
-char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata);
+/* With base_cb, base hrefs become "./" after resolving their original value. */
+char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb);
 /* Converts one complete HTML document to bounded UTF-8 Markdown.
  * absolute_links resolves links/images against base_url and the first HTML
  * base href. Explicit schemes and unresolvable references remain unchanged. */

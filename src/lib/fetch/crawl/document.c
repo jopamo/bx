@@ -18,6 +18,8 @@ typedef struct {
     void* userdata;
     bool failed;
     int error_number;
+    const BxFetchPreparedUrl* base;
+    BxFetchPreparedUrl* document_base;
 } LinkAdapter;
 
 static int document_fail(BxFetchDocumentOutcome* outcome, BxFetchDocumentKind kind, BxFetchDocumentFailure failure, int error_number) {
@@ -39,7 +41,7 @@ static bool path_has_extension(const char* path, const char* extension) {
 
 static bool html_tag_name_allowed(const char* name, size_t length) {
     static const char* const tags[] = {
-        "a",  "article", "aside", "body", "div", "footer", "form", "h1",     "h2",      "h3",   "h4",    "h5",    "h6",    "head", "header", "html",  "img", "input",
+        "a", "base", "article", "aside", "body", "div", "footer", "form", "h1",     "h2",      "h3",   "h4",    "h5",    "h6",    "head", "header", "html",  "img", "input",
         "li", "link",    "main",  "meta", "nav", "ol",     "p",    "script", "section", "span", "style", "table", "tbody", "td",   "th",     "title", "tr",  "ul",
     };
 
@@ -243,14 +245,30 @@ int bx_fetch_document_read(const char* path, unsigned char** data_out, size_t* l
     return 0;
 }
 
+static int adapt_html_base(void* userdata, const char* reference) {
+    LinkAdapter* adapter = userdata;
+    adapter->document_base = bx_fetch_prepared_url_resolve(adapter->base, reference);
+    return adapter->document_base ? 0 : -1;
+}
+
 static void adapt_html_link(void* userdata, const char* reference, BxFetchHtmlLinkKind kind) {
     LinkAdapter* adapter = userdata;
     if (!adapter || adapter->failed)
         return;
-    if (adapter->callback(adapter->userdata, reference, kind) != 0) {
+    char* resolved = NULL;
+    if (adapter->document_base && !bx_fetch_url_has_explicit_scheme(reference)) {
+        resolved = bx_fetch_url_resolve(bx_fetch_prepared_url_transport(adapter->document_base), reference);
+        if (!resolved) {
+            adapter->failed = true;
+            adapter->error_number = errno ? errno : EINVAL;
+            return;
+        }
+    }
+    if (adapter->callback(adapter->userdata, resolved ? resolved : reference, kind) != 0) {
         adapter->failed = true;
         adapter->error_number = errno ? errno : EIO;
     }
+    free(resolved);
 }
 
 static void adapt_css_link(void* userdata, const char* reference) {
@@ -280,10 +298,12 @@ int bx_fetch_document_extract_links(const char* path, const char* content_type, 
     LinkAdapter adapter = {
         .callback = callback,
         .userdata = userdata,
+        .base = base,
     };
-    int parse_result = kind == BX_FETCH_DOCUMENT_HTML ? bx_fetch_html_extract_links((const char*)data, length, adapt_html_link, &adapter)
+    int parse_result = kind == BX_FETCH_DOCUMENT_HTML ? bx_fetch_html_extract_links((const char*)data, length, adapt_html_link, &adapter, adapt_html_base)
                                                       : bx_fetch_css_extract_links((const char*)data, length, adapt_css_link, &adapter);
     int error_number = errno;
+    bx_fetch_prepared_url_free(adapter.document_base);
     free(data);
 
     if (adapter.failed) {

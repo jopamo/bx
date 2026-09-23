@@ -187,7 +187,8 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered_observed(BxF
     if ((kind == BX_FETCH_HTML_LINK_NAVIGATION && !coordinator->cfg->recursive.recursive) || (kind == BX_FETCH_HTML_LINK_REQUISITE && !coordinator->cfg->recursive.page_requisites)) {
         return enqueue_result(BX_FETCH_CRAWL_SKIPPED_KIND, FILTER_DECISION_ACCEPT);
     }
-    if (coordinator->cfg->recursive.level != 0 && parent_depth >= coordinator->cfg->recursive.level)
+    if (kind == BX_FETCH_HTML_LINK_NAVIGATION &&
+        coordinator->cfg->recursive.level != 0 && parent_depth >= coordinator->cfg->recursive.level)
         return enqueue_result(BX_FETCH_CRAWL_SKIPPED_DEPTH, FILTER_DECISION_ACCEPT);
     if (bx_fetch_url_has_explicit_scheme(reference) && bx_fetch_protocol_policy_evaluate_url(reference, bx_fetch_config_requires_https(coordinator->cfg)) == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED) {
         return enqueue_result(BX_FETCH_CRAWL_REJECTED, FILTER_DECISION_UNSUPPORTED_PROTOCOL);
@@ -199,7 +200,8 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered_observed(BxF
             return enqueue_result(BX_FETCH_CRAWL_REJECTED, FILTER_DECISION_UNSUPPORTED_PROTOCOL);
         return enqueue_result(BX_FETCH_CRAWL_ERROR, FILTER_DECISION_ACCEPT);
     }
-    BxFetchCrawlEnqueueResult result = add_prepared(coordinator, target, parent_depth + 1, false);
+    BxFetchCrawlEnqueueResult result = add_prepared(coordinator, target,
+        parent_depth + (kind == BX_FETCH_HTML_LINK_NAVIGATION ? 1 : 0), false);
     if (target_out)
         *target_out = target;
     else
