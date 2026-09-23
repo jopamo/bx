@@ -168,6 +168,10 @@ void bx_mira_progress_complete(MiraProgressRenderer* renderer, const BxFetchRunC
     const char* outcome;
     switch (output) {
         case BX_FETCH_OUTPUT_STATE_COMMITTED:
+            if (transfer->output_path && strcmp(transfer->output_path, "-") == 0) {
+                fputs("mira: wrote to stdout\n", renderer->diagnostics);
+                return;
+            }
             outcome = "saved";
             break;
         case BX_FETCH_OUTPUT_STATE_METADATA_COMMITTED:

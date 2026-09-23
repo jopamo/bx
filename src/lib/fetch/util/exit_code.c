@@ -134,6 +134,7 @@ int bx_fetch_exit_code_for_transfer_failure(int http_status, BxFetchTransportErr
             return BX_FETCH_EXIT_PROTOCOL;
         case BX_FETCH_TRANSPORT_ERROR_NONE:
         case BX_FETCH_TRANSPORT_ERROR_NETWORK:
+        case BX_FETCH_TRANSPORT_ERROR_INCOMPLETE:
         default:
             return BX_FETCH_EXIT_NETWORK;
     }

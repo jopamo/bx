@@ -559,6 +559,8 @@ BxFetchTransportErrorKind bx_fetch_classify_curl_transport_error(CURLcode code) 
     switch (code) {
         case CURLE_OK:
             return BX_FETCH_TRANSPORT_ERROR_NONE;
+        case CURLE_PARTIAL_FILE:
+            return BX_FETCH_TRANSPORT_ERROR_INCOMPLETE;
         case CURLE_SSL_CONNECT_ERROR:
             return BX_FETCH_TRANSPORT_ERROR_TLS_RETRYABLE;
         case CURLE_PEER_FAILED_VERIFICATION:
