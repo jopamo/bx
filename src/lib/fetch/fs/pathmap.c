@@ -207,8 +207,7 @@ static char hex_digit(unsigned int value) {
     return value < 10u ? (char)('0' + value) : (char)('a' + (value - 10u));
 }
 
-static char* encode_component(const char* component) {
-    const char* prefix = pathmap_encoded_segment_prefix();
+static char* encode_component(const char* component, const char* prefix) {
     size_t prefix_len = strlen(prefix);
     size_t component_len = strlen(component);
     if (component_len > (SIZE_MAX - prefix_len - 1u) / 2u) {
@@ -241,7 +240,7 @@ char* bx_fetch_pathmap_sanitize_component(const char* component, const struct bx
     if (!parse_restrict_modes(cfg, &modes))
         return NULL;
     if (component_needs_encoding(component, modes)) {
-        return encode_component(component);
+        return encode_component(component, pathmap_encoded_segment_prefix());
     }
 
     bool restrict_mode = restrict_modes_enabled(modes);
@@ -434,6 +433,21 @@ char* bx_fetch_pathmap_url_to_local(const char* url, const struct bx_fetch_confi
     return local_path;
 }
 
+static char* url_basename(const BxFetchUrl* url, const char* query, const struct bx_fetch_config* cfg) {
+    char* name = path_basename(url->path, url->path ? strlen(url->path) : 0, default_page_name(cfg), cfg);
+    if (!name || !query)
+        return name;
+    /* The reserved prefix cannot collide with a literal remote filename.
+     * Keep the extension last so document classification still works. */
+    char* identity = encode_component(query, "@mira@query@");
+    char* result = NULL;
+    if (identity && asprintf(&result, "%s@%s", identity, name) == -1)
+        result = NULL;
+    free(identity);
+    free(name);
+    return result;
+}
+
 char* bx_fetch_pathmap_canonical_url_to_local(const char* url, const struct bx_fetch_config* cfg) {
     if (!url || !cfg)
         return NULL;
@@ -443,17 +457,20 @@ char* bx_fetch_pathmap_canonical_url_to_local(const char* url, const struct bx_f
         return NULL;
 
     char* local_path = NULL;
+    const char* query = strchr(url, '?');
+    if (query)
+        query++;
     bool flatten_layout = cfg->dirs.no_directories || (!cfg->recursive.recursive && !cfg->dirs.force_directories);
 
     if (flatten_layout) {
-        local_path = path_basename(mu->path, mu->path ? strlen(mu->path) : 0, default_page_name(cfg), cfg);
+        local_path = url_basename(mu, query, cfg);
     }
     else {
         // Build the directory structure
         char* host_part = NULL;
         char* proto_part = NULL;
         char* dir_part = NULL;
-        char* file_part = path_basename(mu->path, mu->path ? strlen(mu->path) : 0, default_page_name(cfg), cfg);
+        char* file_part = url_basename(mu, query, cfg);
         if (!file_part) {
             bx_fetch_url_free(mu);
             return NULL;

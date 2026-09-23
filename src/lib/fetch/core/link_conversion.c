@@ -13,6 +13,7 @@ typedef struct {
     const struct bx_fetch_config* cfg;
     const BxFetchPublicationState* publication;
     const BxFetchPreparedUrl* base;
+    const char* directory;
     int error_number;
 } ConversionRewriteContext;
 
@@ -46,11 +47,21 @@ static char* rewrite_published_link(void* userdata, const char* reference) {
     if (!local_path)
         return NULL;
 
-    const char* rewritten = local_path;
+    char* relative = NULL;
     if (context->cfg->recursive.convert_file_only) {
-        const char* basename = bx_path_basename_ptr(local_path);
-        if (basename)
-            rewritten = basename;
+        relative = bx_path_basename_dup(local_path);
+    }
+    else {
+        char* absolute = bx_path_make_absolute_dup(local_path);
+        if (absolute)
+            relative = bx_path_relative_path_between(context->directory, absolute);
+        free(absolute);
+    }
+    char* rewritten = relative ? bx_fetch_url_encode_path(relative, strlen(relative)) : NULL;
+    free(relative);
+    if (!rewritten) {
+        context->error_number = errno ? errno : ENOMEM;
+        return NULL;
     }
 
     const char* fragment = strchr(reference, '#');
@@ -59,17 +70,20 @@ static char* rewrite_published_link(void* userdata, const char* reference) {
     if (rewritten_length > SIZE_MAX - fragment_length - 1u) {
         context->error_number = EOVERFLOW;
         errno = EOVERFLOW;
+        free(rewritten);
         return NULL;
     }
     char* result = malloc(rewritten_length + fragment_length + 1u);
     if (!result) {
         context->error_number = ENOMEM;
+        free(rewritten);
         return NULL;
     }
     memcpy(result, rewritten, rewritten_length);
     if (fragment_length > 0)
         memcpy(result + rewritten_length, fragment, fragment_length);
     result[rewritten_length + fragment_length] = '\0';
+    free(rewritten);
     return result;
 }
 
@@ -127,14 +141,24 @@ int bx_fetch_document_convert_download(const struct bx_fetch_config* cfg,
         return conversion_fail(outcome, BX_FETCH_LINK_CONVERSION_FAILURE_REWRITE, EINVAL);
     }
 
+    char* parent = bx_path_dirname_dup(download->local_path);
+    char* directory = parent ? bx_path_make_absolute_dup(parent) : NULL;
+    free(parent);
+    if (!directory) {
+        free(original);
+        bx_fetch_prepared_url_free(base);
+        return conversion_fail(outcome, BX_FETCH_LINK_CONVERSION_FAILURE_REWRITE, errno ? errno : ENOMEM);
+    }
     ConversionRewriteContext rewrite = {
         .cfg = cfg,
         .publication = publication,
         .base = base,
+        .directory = directory,
     };
     errno = 0;
     char* converted = bx_fetch_html_convert_links((const char*)original, original_length, rewrite_published_link, &rewrite);
     int rewrite_error = errno;
+    free(directory);
     bx_fetch_prepared_url_free(base);
     if (!converted) {
         free(original);
