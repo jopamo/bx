@@ -41,14 +41,16 @@ typedef struct {
 } MiraOptionPresence;
 
 void bx_mira_emit_parse_error(const struct bx_fetch_config* config, const char* summary) {
-    fprintf(stderr, "mira: %s\n", summary);
+    if (!config || !config->logging.json_diagnostics)
+        fprintf(stderr, "mira: %s\n", summary);
     if (!config || config->logging.structured_errors)
         bx_fetch_error_emit_simple(stderr, BX_FETCH_ERROR_CLASS_PARSE, summary, NULL, NULL, -1, -1);
 }
 
 static void mira_emit_allocation_error(const struct bx_fetch_config* config) {
     const char* summary = "out of memory while parsing command line";
-    fprintf(stderr, "mira: %s\n", summary);
+    if (!config || !config->logging.json_diagnostics)
+        fprintf(stderr, "mira: %s\n", summary);
     if (!config || config->logging.structured_errors)
         bx_fetch_error_emit_simple(stderr, BX_FETCH_ERROR_CLASS_INTERNAL, summary, NULL, NULL, -1, ENOMEM);
 }
@@ -373,9 +375,19 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     if (reading) {
         argc--;
         argv++;
-        if (bx_mira_apply_read_preset(config) != 0)
-            goto allocation_failure;
     }
+
+    /* Discover the output format before reporting any parse error. Use the
+     * same grammar so an option argument named --json-diagnostics is data. */
+    opterr = 0;
+    optind = 0;
+    int diagnostic_option;
+    while ((diagnostic_option = getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), NULL)) != -1) {
+        if (diagnostic_option == MIRA_OPT_JSON_DIAGNOSTICS)
+            config->logging.json_diagnostics = true;
+    }
+    if (reading && bx_mira_apply_read_preset(config) != 0)
+        goto allocation_failure;
 
     MiraTimeoutPresence timeout_presence = {0};
     MiraOptionPresence presence = {0};
@@ -393,6 +405,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         }
 
         switch (option) {
+            case MIRA_OPT_JSON_DIAGNOSTICS:
+                break;
             case MIRA_OPT_RAW:
                 if (!reading) {
                     bx_mira_emit_parse_error(config, "--raw is only valid with read");
@@ -883,6 +897,12 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         }
     }
 
+    if (config->logging.json_diagnostics) {
+        config->logging.verbosity = BX_FETCH_VERBOSITY_QUIET;
+        config->logging.debug_trace = true;
+        config->logging.structured_errors = true;
+        config->download.show_progress = false;
+    }
     if (timeout_presence.timeout) {
         if (!timeout_presence.dns_timeout)
             config->download.dns_timeout = timeout_value;

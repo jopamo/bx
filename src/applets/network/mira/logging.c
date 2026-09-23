@@ -17,13 +17,15 @@ typedef struct {
 } MiraLogSpec;
 
 static void mira_report_log_error(const struct bx_fetch_config* config, const MiraLogSpec* spec, const char* summary, int error_number) {
-    char* quoted = bx_path_quote_dup(spec->path, BX_PATH_QUOTE_C);
-    if (quoted) {
-        fprintf(stderr, "mira: %s: %s\n", summary, quoted);
-        free(quoted);
-    }
-    else {
-        fprintf(stderr, "mira: %s\n", summary);
+    if (!config->logging.json_diagnostics) {
+        char* quoted = bx_path_quote_dup(spec->path, BX_PATH_QUOTE_C);
+        if (quoted) {
+            fprintf(stderr, "mira: %s: %s\n", summary, quoted);
+            free(quoted);
+        }
+        else {
+            fprintf(stderr, "mira: %s\n", summary);
+        }
     }
     if (config->logging.structured_errors) {
         bx_fetch_error_emit_simple(stderr, BX_FETCH_ERROR_CLASS_FILESYSTEM, summary, NULL, spec->path, -1, error_number);
