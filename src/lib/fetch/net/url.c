@@ -41,7 +41,7 @@ char* bx_fetch_url_join_https_root(const char* root, const char* path) {
     return url;
 }
 
-char* bx_fetch_url_encode_component(const char* input, size_t max_bytes) {
+static char* encode_url_text(const char* input, size_t max_bytes, bool path) {
     if (!input || max_bytes == SIZE_MAX)
         return NULL;
     size_t length = strnlen(input, max_bytes + 1);
@@ -57,7 +57,7 @@ char* bx_fetch_url_encode_component(const char* input, size_t max_bytes) {
     for (size_t i = 0; i < length; i++) {
         unsigned char c = (unsigned char)input[i];
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || strchr("-._~", c)) {
+            (c >= '0' && c <= '9') || strchr("-._~", c) || (path && c == '/')) {
             *output++ = (char)c;
         } else {
             *output++ = '%';
@@ -67,6 +67,14 @@ char* bx_fetch_url_encode_component(const char* input, size_t max_bytes) {
     }
     *output = '\0';
     return encoded;
+}
+
+char* bx_fetch_url_encode_component(const char* input, size_t max_bytes) {
+    return encode_url_text(input, max_bytes, false);
+}
+
+char* bx_fetch_url_encode_path(const char* input, size_t max_bytes) {
+    return encode_url_text(input, max_bytes, true);
 }
 
 typedef struct {
@@ -443,7 +451,7 @@ BxFetchUrl* bx_fetch_url_parse(const char* url) {
     }
 
     curl_url_get(h, CURLUPART_PATH, &mu->path, 0);
-    curl_url_get(h, CURLUPART_QUERY, &mu->query, 0);
+    curl_url_get(h, CURLUPART_QUERY, &mu->query, CURLU_GET_EMPTY);
     curl_url_get(h, CURLUPART_FRAGMENT, &mu->fragment, 0);
 
     // Note: libcurl allocates these strings, we must free them with curl_free or strdup them
@@ -513,7 +521,7 @@ char* bx_fetch_url_resolve(const char* base_url, const char* relative_url) {
     }
 
     char* resolved = NULL;
-    if (curl_url_get(h, CURLUPART_URL, &resolved, 0) == CURLUE_OK) {
+    if (curl_url_get(h, CURLUPART_URL, &resolved, CURLU_GET_EMPTY) == CURLUE_OK) {
         char* ret = strdup(resolved);
         curl_free(resolved);
         curl_url_cleanup(h);
@@ -560,7 +568,7 @@ char* bx_fetch_url_to_string(BxFetchUrl* mu) {
         curl_url_set(h, CURLUPART_FRAGMENT, mu->fragment, 0);
 
     char* url = NULL;
-    if (curl_url_get(h, CURLUPART_URL, &url, 0) == CURLUE_OK) {
+    if (curl_url_get(h, CURLUPART_URL, &url, CURLU_GET_EMPTY) == CURLUE_OK) {
         char* ret = strdup(url);
         curl_free(url);
         curl_url_cleanup(h);
