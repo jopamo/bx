@@ -168,10 +168,22 @@ typedef struct {
     BxFetchInputUrls* urls;
     BxFetchInputOutcome* outcome;
     const char* base_url;
+    char* document_base;
     size_t reserved_entries;
     size_t reserved_bytes;
     bool failed;
 } HtmlInputContext;
+
+static int input_html_base(void* userdata, const char* reference) {
+    HtmlInputContext* context = userdata;
+    context->document_base = context->base_url ? bx_fetch_url_resolve(context->base_url, reference) : bx_fetch_url_canonicalize(reference);
+    if (!context->document_base) {
+        context->failed = true;
+        return input_fail(context->outcome, BX_FETCH_INPUT_FAILURE_BASE_URL, 0, errno ? errno : EINVAL);
+    }
+    context->base_url = context->document_base;
+    return 0;
+}
 
 static bool input_is_data_url(const char* value) {
     static const char prefix[] = "data:";
@@ -295,10 +307,11 @@ int bx_fetch_input_urls_load_html(const char* path, const char* base_url, size_t
         .reserved_bytes = reserved_bytes,
     };
     errno = 0;
-    if (bx_fetch_html_extract_links((const char*)data, length, input_html_link, &context) != 0 && !context.failed)
+    if (bx_fetch_html_extract_links((const char*)data, length, input_html_link, &context, input_html_base) != 0 && !context.failed)
         result = input_fail(outcome_out, BX_FETCH_INPUT_FAILURE_HTML_PARSE, 0, errno ? errno : EINVAL);
     else if (context.failed)
         result = -1;
+    free(context.document_base);
 
 cleanup:
     free(data);

@@ -113,10 +113,21 @@ void bx_mira_print_help(void) {
         "and preserves text/JSON/XML. Missing or unsupported MIME types and NUL "
         "bytes fail unless --raw is explicit. read takes one URL.\n"
         "Spider starts with HEAD; on 405/501 it tries a ranged GET and stops after "
-        "successful headers, even if the server ignores Range.\n"
+        "successful headers, even if the server ignores Range. Combining --spider "
+        "with --recursive or --page-requisites is rejected before any requests.\n"
+        "Crawling does not fetch or apply robots.txt. Use explicit domain, directory, "
+        "depth, and request limits to constrain retrieval. --no-parent confines links "
+        "and redirects to the seed directories on their respective origins; use a "
+        "trailing slash for a directory seed. Depth counts navigation links, not "
+        "page-requisite dependencies. --no-clobber reuses existing documents for "
+        "link discovery without replacing their payloads.\n"
+        "Query variants use distinct @mira@query@HEX@ filenames, retaining the original "
+        "extension. Converted links are URL-escaped and relative to each saved document.\n"
         "Stdout is staged privately up to 64 MiB and emitted only after a complete "
         "successful transfer and conversion. Larger documents must use -O FILE. "
-        "Once stdout publication starts it cannot be rolled back or retried.\n"
+        "Once stdout publication starts it cannot be rolled back or retried.\n",
+        stdout);
+    fputs(
         "\n--http-password-file keeps HTTP passwords out of process arguments. "
         "It requires verified HTTPS for every URL and redirect and conflicts with "
         "--http-password, Bearer authentication, and --no-check-certificate. "

@@ -413,6 +413,12 @@ int bx_fetch_css_extract_links(const char* css_data, size_t len, BxFetchLinkCall
     return 0;
 }
 
+typedef struct {
+    BxFetchHtmlBaseCallback callback;
+    void* userdata;
+    bool seen;
+} HtmlBaseContext;
+
 #if HAVE_LEXBOR
 #include <lexbor/dom/interfaces/element.h>
 #include <lexbor/html/html.h>
@@ -428,6 +434,7 @@ typedef struct {
     BxFetchLinkRewriteCallback cb;
     void* userdata;
     bool failed;
+    bool reset_base;
 } LexborRewriteContext;
 
 typedef struct {
@@ -499,7 +506,8 @@ static bool visit_lexbor_link_attributes(lxb_dom_element_t* element, LexborAttrV
 }
 
 static bool extract_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
-    (void)element;
+    if (lxb_dom_interface_node(element)->local_name == LXB_TAG_BASE)
+        return true;
 
     const LexborExtractContext* extract_ctx = userdata;
     if (!extract_ctx || !extract_ctx->cb)
@@ -508,27 +516,40 @@ static bool extract_lexbor_attribute_link(lxb_dom_element_t* element, const char
     return true;
 }
 
+static bool lexbor_base_attribute(lxb_dom_element_t* element, const char* name, size_t length, const char* value, void* userdata) {
+    (void)element;
+    HtmlBaseContext* context = userdata;
+    if (context->seen || !span_ascii_case_equals_bytes(name, length, "href"))
+        return true;
+    context->seen = true;
+    return context->callback(context->userdata, value) == 0;
+}
+
 static bool rewrite_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
     const LexborRewriteContext* rewrite_ctx = userdata;
     if (!rewrite_ctx || !rewrite_ctx->cb || !element)
         return false;
 
-    char* replacement = rewrite_ctx->cb(rewrite_ctx->userdata, url);
-    if (!replacement)
+    bool base = lxb_dom_interface_node(element)->local_name == LXB_TAG_BASE;
+    if (base && (!rewrite_ctx->reset_base || !span_ascii_case_equals_bytes(attr_name, attr_name_len, "href")))
         return true;
+    char* replacement = base ? strdup("./") : rewrite_ctx->cb(rewrite_ctx->userdata, url);
+    if (!replacement)
+        return !base;
 
     bool ok = lxb_dom_element_set_attribute(element, (const lxb_char_t*)attr_name, attr_name_len, (const lxb_char_t*)replacement, strlen(replacement)) != NULL;
     free(replacement);
     return ok;
 }
 
-static bool walk_lexbor_link_attributes(lxb_dom_node_t* root, LexborAttrVisitor visitor, void* userdata) {
+static bool walk_lexbor_link_attributes(lxb_dom_node_t* root, LexborAttrVisitor visitor, void* userdata, bool base_only) {
     if (!root || !visitor)
         return false;
 
     lxb_dom_node_t* node = root;
     for (;;) {
-        if (node->type == LXB_DOM_NODE_TYPE_ELEMENT && !visit_lexbor_link_attributes(lxb_dom_interface_element(node), visitor, userdata)) {
+        if (node->type == LXB_DOM_NODE_TYPE_ELEMENT && (!base_only || node->local_name == LXB_TAG_BASE) &&
+            !visit_lexbor_link_attributes(lxb_dom_interface_element(node), visitor, userdata)) {
             return false;
         }
         if (node->first_child) {
@@ -577,7 +598,7 @@ static lxb_status_t serialize_bounded(const lxb_char_t* data, size_t length, voi
     return LXB_STATUS_OK;
 }
 
-int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
@@ -591,11 +612,16 @@ int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLi
         return -1;
     }
 
+    HtmlBaseContext base = {.callback = base_cb, .userdata = userdata};
+    if (base_cb && !walk_lexbor_link_attributes(lxb_dom_interface_node(document), lexbor_base_attribute, &base, true)) {
+        lxb_html_document_destroy(document);
+        return -1;
+    }
     LexborExtractContext ctx = {
         .cb = cb,
         .userdata = userdata,
     };
-    ctx.failed = !walk_lexbor_link_attributes(lxb_dom_interface_node(document), extract_lexbor_attribute_link, &ctx);
+    ctx.failed = !walk_lexbor_link_attributes(lxb_dom_interface_node(document), extract_lexbor_attribute_link, &ctx, false);
 
     lxb_html_document_destroy(document);
     if (ctx.failed) {
@@ -605,7 +631,7 @@ int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLi
     return 0;
 }
 
-char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
+char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
@@ -619,11 +645,17 @@ char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLink
         return NULL;
     }
 
+    HtmlBaseContext base = {.callback = base_cb, .userdata = userdata};
+    if (base_cb && !walk_lexbor_link_attributes(lxb_dom_interface_node(document), lexbor_base_attribute, &base, true)) {
+        lxb_html_document_destroy(document);
+        return NULL;
+    }
     LexborRewriteContext ctx = {
         .cb = cb,
         .userdata = userdata,
+        .reset_base = base_cb != NULL,
     };
-    ctx.failed = !walk_lexbor_link_attributes(lxb_dom_interface_node(document), rewrite_lexbor_attribute_link, &ctx);
+    ctx.failed = !walk_lexbor_link_attributes(lxb_dom_interface_node(document), rewrite_lexbor_attribute_link, &ctx, false);
     if (ctx.failed) {
         lxb_html_document_destroy(document);
         errno = ENOMEM;
@@ -666,6 +698,7 @@ typedef struct {
     HtmlReplacement* items;
     size_t count;
     size_t capacity;
+    bool reset_base;
 } HtmlRewriteContext;
 
 static bool is_html_name_char(unsigned char c) {
@@ -940,6 +973,8 @@ static int scan_html_link_attrs(const char* html_data, size_t len, HtmlAttrVisit
 }
 
 static int html_extract_visit(void* userdata, const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end, size_t value_start, size_t value_end) {
+    if (span_case_equals(html_data, tag_name_start, tag_name_end, "base"))
+        return 0;
     HtmlExtractContext* ctx = userdata;
     if (!ctx || value_end < value_start)
         return -1;
@@ -952,12 +987,30 @@ static int html_extract_visit(void* userdata, const char* html_data, size_t tag_
     return 0;
 }
 
-int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
+static int html_base_visit(void* userdata, const char* data, size_t tag_start, size_t tag_end,
+                           size_t attr_start, size_t attr_end, size_t value_start, size_t value_end) {
+    HtmlBaseContext* context = userdata;
+    if (context->seen || !span_case_equals(data, tag_start, tag_end, "base") ||
+        !span_case_equals(data, attr_start, attr_end, "href"))
+        return 0;
+    context->seen = true;
+    char* value = strndup(data + value_start, value_end - value_start);
+    if (!value)
+        return -1;
+    int result = context->callback(context->userdata, value);
+    free(value);
+    return result;
+}
+
+int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
         return -1;
 
+    HtmlBaseContext base = {.callback = base_cb, .userdata = userdata};
+    if (base_cb && scan_html_link_attrs(html_data, len, html_base_visit, &base) != 0)
+        return -1;
     HtmlExtractContext ctx = {cb, userdata};
     return scan_html_link_attrs(html_data, len, html_extract_visit, &ctx);
 }
@@ -1002,6 +1055,18 @@ static int html_rewrite_visit(void* userdata, const char* html_data, size_t tag_
     HtmlRewriteContext* ctx = userdata;
     if (!ctx || value_end < value_start)
         return -1;
+    if (span_case_equals(html_data, tag_name_start, tag_name_end, "base")) {
+        if (!ctx->reset_base || !span_case_equals(html_data, attr_name_start, attr_name_end, "href"))
+            return 0;
+        char* replacement = strdup("./");
+        if (!replacement)
+            return -1;
+        if (html_rewrite_add(ctx, value_start, value_end, replacement) != 0) {
+            free(replacement);
+            return -1;
+        }
+        return 0;
+    }
 
     char* original = strndup(html_data + value_start, value_end - value_start);
     if (!original)
@@ -1050,13 +1115,16 @@ static int append_buffer(char** buffer, size_t* length, size_t* capacity, const 
     return 0;
 }
 
-char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
+char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
         return NULL;
 
-    HtmlRewriteContext rewrite_ctx = {cb, userdata, NULL, 0, 0};
+    HtmlBaseContext base = {.callback = base_cb, .userdata = userdata};
+    if (base_cb && scan_html_link_attrs(html_data, len, html_base_visit, &base) != 0)
+        return NULL;
+    HtmlRewriteContext rewrite_ctx = {cb, userdata, NULL, 0, 0, base_cb != NULL};
     if (scan_html_link_attrs(html_data, len, html_rewrite_visit, &rewrite_ctx) != 0) {
         html_rewrite_clear(&rewrite_ctx);
         return NULL;

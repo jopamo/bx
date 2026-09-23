@@ -203,6 +203,11 @@ static int mira_conflicting_tokens(struct bx_fetch_config* config, const char* l
 }
 
 static int mira_validate_config(struct bx_fetch_config* config, const MiraOptionPresence* presence) {
+    if (config->download.spider && (config->recursive.recursive || config->recursive.page_requisites)) {
+        bx_mira_emit_parse_error(config, "--spider cannot be combined with --recursive or --page-requisites");
+        errno = EINVAL;
+        return -1;
+    }
     if (presence->http_password_file) {
         if (presence->http_password)
             return mira_conflicting_tokens(config, "--http-password", "--http-password-file");
