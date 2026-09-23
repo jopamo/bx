@@ -306,6 +306,11 @@ static int mira_validate_config(struct bx_fetch_config* config, const MiraOption
         errno = EINVAL;
         return -1;
     }
+    if (config->download.absolute_links && !config->download.html_to_markdown && !config->download.text_document) {
+        bx_mira_emit_parse_error(config, "--absolute-links requires --markdown or read without --raw");
+        errno = EINVAL;
+        return -1;
+    }
     if (config->download.html_to_markdown) {
         if (!bx_fetch_html_markdown_supported()) {
             bx_mira_emit_parse_error(config, "--markdown requires a build with Lexbor support");
@@ -646,6 +651,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case MIRA_OPT_MARKDOWN:
                 config->download.html_to_markdown = true;
                 break;
+            case MIRA_OPT_ABSOLUTE_LINKS:
+                config->download.absolute_links = true;
+                break;
             case MIRA_OPT_NO_DIRECTORIES:
                 config->dirs.no_directories = true;
                 break;
@@ -882,6 +890,15 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             config->download.connect_timeout = timeout_value;
         if (!timeout_presence.read_timeout)
             config->download.read_timeout = timeout_value;
+    }
+    /* getopt has separated option arguments from operands. Reject misplaced
+     * commands before any URL can reach the download engine. */
+    for (int index = optind; index < argc; index++) {
+        if (strcmp(argv[index], "read") == 0 || strcmp(argv[index], "github") == 0 ||
+            strcmp(argv[index], "gitlab") == 0) {
+            mira_parse_errorf(config, "subcommand '%s' must precede options and URLs", argv[index]);
+            goto parse_failure;
+        }
     }
     if (bx_fetch_config_copy_urls(config, argc - optind, argv ? &argv[optind] : NULL) != 0) {
         if (errno == EFBIG)

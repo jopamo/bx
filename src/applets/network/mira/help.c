@@ -2,6 +2,32 @@
 #include "options.h"
 #include <stdio.h>
 
+void bx_mira_print_read_help(void) {
+    fputs(
+        "Usage: mira read [OPTION]... URL\n"
+        "Read one verified HTTPS URL to stdout; no download file is created.\n"
+        "HTML becomes Markdown; text, JSON, and XML pass through unchanged.\n"
+        "Output is staged until the transfer and conversion succeed (64 MiB limit).\n"
+        "Place read before options. No configuration files are loaded.\n"
+        "\n"
+        "  --raw                 pass the response body through without conversion\n"
+        "  --absolute-links      resolve Markdown links/images using the final URL\n"
+        "                        and the HTML base URL, when present\n"
+        "  --expect=json         require a JSON response\n"
+        "  -q, --quiet           suppress progress and session messages (default)\n"
+        "  -v, --verbose         show transfer diagnostics\n"
+        "  --ca-certificate=FILE use a PEM CA bundle for TLS verification\n"
+        "  --no-retry            make one attempt\n"
+        "  --max-attempts=N      bound attempts, including the first request\n"
+        "  --max-retry-time=N    bound recovery time in seconds (default: 30)\n"
+        "  -h, --help            show this help\n"
+        "\n"
+        "HTTP, TLS-verification bypass, -O FILE, request bodies, saved headers,\n"
+        "and forced --markdown conversion are not supported by read.\n"
+        "Use mira --help for all transfer and authentication options.\n",
+        stdout);
+}
+
 static const char* mira_category_heading(MiraOptionCategory category) {
     switch (category) {
         case MIRA_OPTION_CATEGORY_STARTUP:
@@ -27,7 +53,7 @@ static const char* mira_category_heading(MiraOptionCategory category) {
 void bx_mira_print_help(void) {
     fputs(
         "Usage: mira [OPTION]... [URL]...\n"
-        "       mira read URL [--raw]\n"
+        "       mira read [OPTION]... URL\n"
         "       mira --spider URL\n"
         "       mira -O FILE URL\n"
         "       mira github COMMAND [ARGUMENT]...\n"
@@ -112,7 +138,9 @@ void bx_mira_print_help(void) {
         "output document, the derived filename uses a .md extension. Hidden elements, "
         "navigation chrome, forms, and known Lore reply boilerplate are omitted. "
         "It conflicts with resume, saved headers, spider mode, and recursive retrieval. Use "
-        "--output-document=- for stdout.\n"
+        "--output-document=- for stdout. Add --absolute-links to resolve Markdown "
+        "links and images against the final response URL and any HTML base URL; "
+        "this also works with read.\n"
         "\nConfiguration compatibility flags such as --config, --no-config, "
         "and --execute are rejected.\n",
         stdout);

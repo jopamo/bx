@@ -344,11 +344,13 @@ static bool write_markdown_response(BxFetchTransfer* transfer) {
     const BxFetchPreparedUrl* effective = bx_fetch_response_effective_target(transfer->resp);
     if (!effective)
         effective = bx_fetch_request_target(transfer->req);
-    const char* base_url = effective ? bx_fetch_prepared_url_transport(effective) : NULL;
+    /* Exported links must not inherit credentials from the request URL. */
+    const char* base_url = effective ? bx_fetch_prepared_url_display(effective) : NULL;
     size_t markdown_length = 0;
     char* markdown = bx_fetch_html_to_markdown(base_url,
                                                transfer->transform_source ? transfer->transform_source : "",
                                                transfer->transform_source_len,
+                                               transfer->engine->cfg->download.absolute_links,
                                                &markdown_length);
     if (!markdown) {
         transfer->transform_failed = true;
@@ -1286,9 +1288,17 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
         detail = "response exceeds the configured byte limit";
     }
     else if (transfer->representation_failed) {
-        detail = transfer->engine->cfg->download.text_document
-            ? "response is not a supported text document; raw output must be explicitly requested"
-            : "response does not match the expected JSON or archive representation";
+        switch (transfer->engine->cfg->download.expected_representation) {
+            case BX_FETCH_EXPECT_JSON:
+                detail = "response does not match the expected JSON representation";
+                break;
+            case BX_FETCH_EXPECT_ARCHIVE:
+                detail = "response does not match the expected archive representation";
+                break;
+            default:
+                detail = "response is not a supported text document; raw output must be explicitly requested";
+                break;
+        }
     }
     else if (transfer->transform_failed) {
         detail = "failed to convert the HTML response to Markdown";

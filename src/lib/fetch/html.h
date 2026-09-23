@@ -18,6 +18,7 @@
  */
 
 #include <stddef.h>
+#include <stdbool.h>
 
 /*
  * Parsing requires a complete document and never falls back to a prefix.
@@ -53,8 +54,10 @@ typedef char* (*BxFetchLinkRewriteCallback)(void* userdata, const char* url);
 int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata);
 /* Returned document is heap-allocated and must be freed by the caller. */
 char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata);
-/* Converts one complete HTML document to bounded UTF-8 Markdown. */
-char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, size_t* output_len);
+/* Converts one complete HTML document to bounded UTF-8 Markdown.
+ * absolute_links resolves links/images against base_url and the first HTML
+ * base href. Explicit schemes and unresolvable references remain unchanged. */
+char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, bool absolute_links, size_t* output_len);
 /* False when bx was built without the Lexbor DOM parser. */
 int bx_fetch_html_markdown_supported(void);
 /* Extraction returns lexical references; callers own URL resolution. */

@@ -60,6 +60,7 @@ MIRA_OPTION("password", required_argument, MIRA_OPT_PASSWORD, "", NULL, "PASS", 
 MIRA_OPTION("unlink", no_argument, MIRA_OPT_UNLINK, "", NULL, NULL, "replace destination at commit", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("xattr", no_argument, MIRA_OPT_XATTR, "", NULL, NULL, "stage origin metadata in xattrs", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("markdown", no_argument, MIRA_OPT_MARKDOWN, "", NULL, NULL, "convert an HTML response to Markdown", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
+MIRA_OPTION("absolute-links", no_argument, MIRA_OPT_ABSOLUTE_LINKS, "", NULL, NULL, "resolve Markdown links and images to absolute URLs", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 
 MIRA_OPTION("no-directories", no_argument, MIRA_OPT_NO_DIRECTORIES, "", "-nd", NULL, "flatten output paths", MIRA_OPTION_CATEGORY_DIRECTORIES, true)
 MIRA_OPTION("force-directories", no_argument, 'x', "x", NULL, NULL, "force directory hierarchy", MIRA_OPTION_CATEGORY_DIRECTORIES, true)

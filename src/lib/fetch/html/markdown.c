@@ -1,6 +1,7 @@
 #include "lib/fetch/html.h"
 #include "lib/fetch/html/lore_markdown.h"
 #include "lib/fetch/html/site_markdown.h"
+#include "lib/fetch/url.h"
 #include "lib/markdown/writer.h"
 #include <ctype.h>
 #include <errno.h>
@@ -16,6 +17,7 @@
 
 typedef struct {
     BxMarkdownWriter* output;
+    const char* link_base;
     size_t list_depth;
     size_t ordered_index[32];
     bool ordered[32];
@@ -285,6 +287,29 @@ static bool render_link_destination(BxMarkdownWriter* output, const lxb_char_t* 
     return !angle || bx_markdown_writer_raw(output, ">", 1u);
 }
 
+static bool render_destination(HtmlMarkdownContext* context, const lxb_char_t* value, size_t length) {
+    char* resolved = NULL;
+    if (context->link_base) {
+        char* reference = strndup((const char*)value, length);
+        if (!reference)
+            return false;
+        /* Keep explicit schemes (including mailto:) and unresolvable
+         * references intact; resolution must not initiate a request. */
+        errno = 0;
+        if (!bx_fetch_url_has_explicit_scheme(reference))
+            resolved = bx_fetch_url_resolve(context->link_base, reference);
+        int error_number = errno;
+        free(reference);
+        if (!resolved && error_number == ENOMEM)
+            return false;
+    }
+    bool rendered = render_link_destination(context->output,
+                                            resolved ? (const lxb_char_t*)resolved : value,
+                                            resolved ? strlen(resolved) : length);
+    free(resolved);
+    return rendered;
+}
+
 static bool render_link(HtmlMarkdownContext* context, lxb_dom_node_t* node) {
     lxb_dom_element_t* element = lxb_dom_interface_element(node);
     size_t href_length = 0;
@@ -304,7 +329,7 @@ static bool render_link(HtmlMarkdownContext* context, lxb_dom_node_t* node) {
         return true;
     }
     bool rendered = (!leading || bx_markdown_writer_text(context->output, " ", 1u)) && bx_markdown_writer_raw(context->output, "[", 1u) &&
-                    bx_markdown_writer_raw(context->output, label, label_length) && bx_markdown_writer_raw(context->output, "](", 2u) && render_link_destination(context->output, href, href_length) &&
+                    bx_markdown_writer_raw(context->output, label, label_length) && bx_markdown_writer_raw(context->output, "](", 2u) && render_destination(context, href, href_length) &&
                     bx_markdown_writer_raw(context->output, ")", 1u) && (!trailing || bx_markdown_writer_text(context->output, " ", 1u));
     free(label);
     return rendered;
@@ -320,7 +345,7 @@ static bool render_image(HtmlMarkdownContext* context, lxb_dom_element_t* elemen
     if (!alt || !text_has_content(alt, alt_length))
         return true;
     return bx_markdown_writer_raw(context->output, "![", 2u) && bx_markdown_writer_text(context->output, (const char*)alt, alt_length) && bx_markdown_writer_raw(context->output, "](", 2u) &&
-           render_link_destination(context->output, source, source_length) && bx_markdown_writer_raw(context->output, ")", 1u);
+           render_destination(context, source, source_length) && bx_markdown_writer_raw(context->output, ")", 1u);
 }
 
 static bool render_list(HtmlMarkdownContext* context, lxb_dom_node_t* node, bool ordered) {
@@ -630,11 +655,14 @@ static bool render_node(HtmlMarkdownContext* context, lxb_dom_node_t* node) {
     }
 }
 
-static lxb_dom_node_t* find_element(lxb_dom_node_t* node, lxb_tag_id_t tag) {
+static lxb_dom_node_t* find_element(lxb_dom_node_t* node, lxb_tag_id_t tag, const char* attribute) {
     for (lxb_dom_node_t* child = node ? node->first_child : NULL; child; child = child->next) {
-        if (child->type == LXB_DOM_NODE_TYPE_ELEMENT && child->local_name == tag)
-            return child;
-        lxb_dom_node_t* nested = find_element(child, tag);
+        size_t length = 0;
+        if (child->type == LXB_DOM_NODE_TYPE_ELEMENT && child->local_name == tag) {
+            if (!attribute || element_attribute(lxb_dom_interface_element(child), attribute, &length))
+                return child;
+        }
+        lxb_dom_node_t* nested = find_element(child, tag, attribute);
         if (nested)
             return nested;
     }
@@ -664,7 +692,7 @@ int bx_fetch_html_markdown_supported(void) {
     return 1;
 }
 
-char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, size_t* output_len) {
+char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, bool absolute_links, size_t* output_len) {
     if (output_len)
         *output_len = 0;
     if (!html_data) {
@@ -689,15 +717,40 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, siz
     bx_markdown_writer_init(&output, BX_FETCH_DOCUMENT_PARSE_MAX_BYTES);
     HtmlMarkdownContext context = {
         .output = &output,
+        .link_base = absolute_links ? base_url : NULL,
         .lore_kernel_org = bx_fetch_lore_markdown_url_matches(base_url),
         .site = bx_fetch_markdown_site_for_url(base_url),
     };
+    char* document_base = NULL;
+    if (absolute_links && base_url) {
+        lxb_html_head_element_t* head = lxb_html_document_head_element(document);
+        lxb_dom_node_t* base = find_element(head ? lxb_dom_interface_node(head) : NULL, LXB_TAG_BASE, "href");
+        size_t length = 0;
+        const lxb_char_t* href = base ? element_attribute(lxb_dom_interface_element(base), "href", &length) : NULL;
+        if (href) {
+            char* reference = strndup((const char*)href, length);
+            if (!reference) {
+                lxb_html_document_destroy(document);
+                return NULL;
+            }
+            errno = 0;
+            document_base = bx_fetch_url_resolve(base_url, reference);
+            int error_number = errno;
+            free(reference);
+            if (!document_base && error_number == ENOMEM) {
+                lxb_html_document_destroy(document);
+                return NULL;
+            }
+            if (document_base)
+                context.link_base = document_base;
+        }
+    }
     lxb_html_body_element_t* body = lxb_html_document_body_element(document);
     lxb_dom_node_t* body_node = body ? lxb_dom_interface_node(body) : lxb_dom_interface_node(document);
     bool rendered = true;
     if (!context.lore_kernel_org && !subtree_has_rendered_h1(&context, body_node)) {
         lxb_html_head_element_t* head = lxb_html_document_head_element(document);
-        lxb_dom_node_t* title = find_element(head ? lxb_dom_interface_node(head) : NULL, LXB_TAG_TITLE);
+        lxb_dom_node_t* title = find_element(head ? lxb_dom_interface_node(head) : NULL, LXB_TAG_TITLE, NULL);
         if (title && node_has_text(title))
             rendered = render_heading(&context, title, 1u);
     }
@@ -705,6 +758,7 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, siz
     char* result = rendered ? bx_markdown_writer_take(&output, output_len) : NULL;
     int error_number = errno;
     bx_markdown_writer_clear(&output);
+    free(document_base);
     lxb_html_document_destroy(document);
     if (!result)
         errno = error_number ? error_number : EINVAL;
@@ -717,8 +771,9 @@ int bx_fetch_html_markdown_supported(void) {
     return 0;
 }
 
-char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, size_t* output_len) {
+char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, bool absolute_links, size_t* output_len) {
     (void)base_url;
+    (void)absolute_links;
     (void)html_data;
     (void)len;
     if (output_len)
