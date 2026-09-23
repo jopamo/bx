@@ -1,7 +1,9 @@
 #define _GNU_SOURCE
 #include "lib/fetch/metadata.h"
 #include "lib/fetch/url.h"
+#include "lib/fetch/resource_limits.h"
 #include "lib/fetch/writer.h"
+#include "lib/path_ops.h"
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -204,6 +206,62 @@ int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta) {
     }
     free(path);
     return bx_fetch_metadata_load_fd(fd, meta);
+}
+
+int bx_fetch_metadata_recover_reference(const char* root, const char* document_path, const char* reference, char** url_out) {
+    if (!document_path || !reference || !url_out) {
+        errno = EINVAL;
+        return -1;
+    }
+    *url_out = NULL;
+    if (strnlen(reference, BX_FETCH_URL_MAX_BYTES + 1u) > BX_FETCH_URL_MAX_BYTES) {
+        errno = EFBIG;
+        return -1;
+    }
+    if (!reference[0] || reference[0] == '/' || reference[0] == '#' ||
+        bx_fetch_url_has_explicit_scheme(reference))
+        return 0;
+    size_t length = strcspn(reference, "#");
+    if (memchr(reference, '?', length))
+        return 0;
+    char* encoded = strndup(reference, length);
+    char* decoded = encoded ? bx_fetch_url_decode_path(encoded) : NULL;
+    free(encoded);
+    if (!decoded)
+        return -1;
+    char* parent = bx_path_dirname_dup(document_path);
+    char* joined = parent ? bx_path_join(parent, decoded) : NULL;
+    char* path = joined ? bx_path_normalize_absolute_lexical_dup(joined) : NULL;
+    char* boundary = bx_path_normalize_absolute_lexical_dup(root && root[0] ? root : ".");
+    free(decoded);
+    free(parent);
+    free(joined);
+    int result = -1;
+    BxFetchMetadata metadata = {0};
+    if (!path || !boundary)
+        goto done;
+    result = 0;
+    if (!bx_path_is_within(path, boundary))
+        goto done;
+    result = bx_fetch_metadata_load(path, &metadata);
+    if (result != 0 || !metadata.origin_url || !metadata.local_path)
+        goto done;
+    char* recorded_path = bx_path_normalize_absolute_lexical_dup(metadata.local_path);
+    if (!recorded_path) {
+        result = -1;
+        goto done;
+    }
+    if (strcmp(path, recorded_path) == 0) {
+        *url_out = strdup(metadata.origin_url);
+        if (!*url_out)
+            result = -1;
+    }
+    free(recorded_path);
+done:
+    bx_fetch_metadata_clear(&metadata);
+    free(boundary);
+    free(path);
+    return result;
 }
 
 int bx_fetch_metadata_load_fd(int fd, BxFetchMetadata* meta) {

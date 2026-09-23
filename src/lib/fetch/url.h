@@ -103,6 +103,8 @@ bool bx_fetch_protocol_policy_format(bool https_only, char* out, size_t out_size
 char* bx_fetch_url_encode_component(const char* input, size_t max_bytes);
 /* Encodes a local path as a URL reference, retaining directory separators. */
 char* bx_fetch_url_encode_path(const char* input, size_t max_bytes);
+/* Decodes a bounded URL path; rejects malformed escapes and embedded NUL. */
+char* bx_fetch_url_decode_path(const char* input);
 bool bx_fetch_url_is_https_root(const char* root);
 char* bx_fetch_url_join_https_root(const char* root, const char* path);
 

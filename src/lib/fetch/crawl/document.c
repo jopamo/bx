@@ -255,20 +255,10 @@ static void adapt_html_link(void* userdata, const char* reference, BxFetchHtmlLi
     LinkAdapter* adapter = userdata;
     if (!adapter || adapter->failed)
         return;
-    char* resolved = NULL;
-    if (adapter->document_base && !bx_fetch_url_has_explicit_scheme(reference)) {
-        resolved = bx_fetch_url_resolve(bx_fetch_prepared_url_transport(adapter->document_base), reference);
-        if (!resolved) {
-            adapter->failed = true;
-            adapter->error_number = errno ? errno : EINVAL;
-            return;
-        }
-    }
-    if (adapter->callback(adapter->userdata, resolved ? resolved : reference, kind) != 0) {
+    if (adapter->callback(adapter->userdata, adapter->document_base ? adapter->document_base : adapter->base, reference, kind) != 0) {
         adapter->failed = true;
         adapter->error_number = errno ? errno : EIO;
     }
-    free(resolved);
 }
 
 static void adapt_css_link(void* userdata, const char* reference) {
