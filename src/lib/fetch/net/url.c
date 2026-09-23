@@ -226,6 +226,29 @@ static bool url_has_valid_percent_escapes(const char* url) {
     return true;
 }
 
+char* bx_fetch_url_decode_path(const char* input) {
+    size_t length = 0;
+    if (!bx_fetch_resource_bounded_strlen(input, BX_FETCH_URL_MAX_BYTES, &length) ||
+        !url_has_valid_percent_escapes(input)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    int decoded_length = 0;
+    char* decoded = curl_easy_unescape(NULL, input, (int)length, &decoded_length);
+    if (!decoded) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    if (memchr(decoded, '\0', (size_t)decoded_length)) {
+        curl_free(decoded);
+        errno = EINVAL;
+        return NULL;
+    }
+    char* result = strdup(decoded);
+    curl_free(decoded);
+    return result;
+}
+
 static bool uri_is_unreserved(unsigned char c) {
     return isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~';
 }

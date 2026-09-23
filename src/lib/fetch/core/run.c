@@ -2,6 +2,7 @@
 #include "lib/fetch/run.h"
 #include "lib/fetch/html.h"
 #include "lib/fetch/http_header.h"
+#include "lib/fetch/metadata.h"
 #include "lib/fetch/pathmap.h"
 #include "lib/fetch/resource_limits.h"
 #include "lib/fetch/response.h"
@@ -33,6 +34,7 @@ typedef struct RunDocumentTask {
     char* content_type;
     size_t accounted_bytes;
     int depth;
+    bool cached;
     struct RunDocumentTask* next;
 } RunDocumentTask;
 
@@ -120,7 +122,7 @@ static bool run_should_process_document(const BxFetchRun* run, const BxFetchTran
 }
 
 static int run_enqueue_document(BxFetchRun* run, const BxFetchPreparedUrl* base,
-                                const char* path, const char* content_type, int depth) {
+                                const char* path, const char* content_type, int depth, bool cached) {
     if (!base || !path) {
         errno = EINVAL;
         return -1;
@@ -150,6 +152,7 @@ static int run_enqueue_document(BxFetchRun* run, const BxFetchPreparedUrl* base,
     task->content_type = content_type ? strdup(content_type) : NULL;
     task->accounted_bytes = accounted_bytes;
     task->depth = depth;
+    task->cached = cached;
     if (!task->base || !task->path || (content_type && !task->content_type)) {
         run_document_task_free(task);
         return -1;
@@ -168,16 +171,24 @@ static int run_enqueue_document(BxFetchRun* run, const BxFetchPreparedUrl* base,
 typedef struct {
     BxFetchRun* run;
     const RunDocumentTask* task;
+    const BxFetchPreparedUrl* local_base;
 } RunDocumentLinks;
 
-static int run_add_document_link(void* userdata, const char* reference, BxFetchHtmlLinkKind kind) {
+static int run_add_document_link(void* userdata, const BxFetchPreparedUrl* base, const char* reference, BxFetchHtmlLinkKind kind) {
     RunDocumentLinks* links = userdata;
+    char* recovered = NULL;
+    if (links->task->cached && (base == links->task->base ||
+        strcmp(bx_fetch_prepared_url_display(base), bx_fetch_prepared_url_display(links->local_base)) == 0)) {
+        if (bx_fetch_metadata_recover_reference(links->run->cfg->dirs.directory_prefix,
+                links->task->path, reference, &recovered) != 0)
+            return -1;
+    }
     BxFetchPreparedUrl* target = NULL;
     BxFetchCrawlEnqueueResult result = bx_fetch_crawl_coordinator_add_discovered_observed(
-        links->run->coordinator, links->task->base, reference, kind, links->task->depth, &target);
+        links->run->coordinator, base, recovered ? recovered : reference, kind, links->task->depth, &target);
     if (links->run->frontend.on_discovered_link) {
         BxFetchRunDiscoveredLinkObservation observation = {
-            .base = links->task->base,
+            .base = base,
             .reference = reference,
             .kind = kind,
             .parent_depth = links->task->depth,
@@ -186,6 +197,7 @@ static int run_add_document_link(void* userdata, const char* reference, BxFetchH
         };
         links->run->frontend.on_discovered_link(links->run->frontend.userdata, &observation);
     }
+    free(recovered);
     bx_fetch_prepared_url_free(target);
     if (result.status == BX_FETCH_CRAWL_ERROR)
         return -1;
@@ -202,13 +214,24 @@ static int run_drain_documents(BxFetchRun* run) {
         run->document_bytes -= task->accounted_bytes;
         task->next = NULL;
 
+        BxFetchPreparedUrl* local_base = task->cached ? bx_fetch_prepared_url_resolve(task->base, ".") : NULL;
+        if (task->cached && !local_base) {
+            int error_number = errno ? errno : ENOMEM;
+            run_document_task_free(task);
+            run_defer_failure(run, error_number);
+            run_clear_documents(run);
+            errno = error_number;
+            return -1;
+        }
         RunDocumentLinks links = {
             .run = run,
             .task = task,
+            .local_base = local_base,
         };
         BxFetchDocumentOutcome outcome = {0};
         int result = bx_fetch_document_extract_links(task->path, task->content_type, task->base, run_add_document_link, &links, &outcome);
         int error_number = errno;
+        bx_fetch_prepared_url_free(local_base);
         bool keep_running = result == 0 || (run->frontend.on_document_error && run->frontend.on_document_error(run->frontend.userdata, task->base, task->path, task->depth, &outcome));
         run_document_task_free(task);
         if (!keep_running) {
@@ -259,7 +282,7 @@ static int run_plan_output(void* userdata, const BxFetchPreparedUrl* target, int
         (run->cfg->recursive.recursive || run->cfg->recursive.page_requisites)) {
         /* Skipping a payload does not skip its outgoing edges. Drain here:
          * an entirely cached frontier may never enter the transport poll. */
-        if (run_enqueue_document(run, target, *output_path_out, NULL, depth) != 0 ||
+        if (run_enqueue_document(run, target, *output_path_out, NULL, depth, true) != 0 ||
             run_drain_documents(run) != 0)
             return -1;
     }
@@ -513,7 +536,7 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
         if (!base)
             base = bx_fetch_request_target(completion->request);
         if (run_enqueue_document(run, base, completion->output_path,
-                                 completion->response->content_type, transfer->depth) != 0) {
+                                 completion->response->content_type, transfer->depth, false) != 0) {
             int error_number = errno ? errno : EIO;
             run_defer_failure(run, error_number);
             scheduler_result = error_number == EFBIG ? BX_FETCH_ERROR_RESOURCE_LIMIT : BX_FETCH_ERROR_INTERNAL;

@@ -43,6 +43,10 @@ int bx_fetch_metadata_read_stream(FILE* f, BxFetchMetadata* meta);
 /* Consumes fd on every path; accepts only regular, singly linked sidecars. */
 int bx_fetch_metadata_load_fd(int fd, BxFetchMetadata* meta);
 int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta);
+/* Recover a converted relative link's original URL, even if its payload was
+ * removed. Reads only below root; returns an owned URL or NULL when unmapped.
+ * Recovered URLs are discovery inputs, never authority to bypass crawl policy. */
+int bx_fetch_metadata_recover_reference(const char* root, const char* document_path, const char* reference, char** url_out);
 int bx_fetch_metadata_save(const char* output_path, const BxFetchMetadata* meta);
 /*
  * Securely walks the configured output root without following symlinks and

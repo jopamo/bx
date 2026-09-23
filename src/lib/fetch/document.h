@@ -43,10 +43,11 @@ typedef struct {
 } BxFetchDocumentOutcome;
 
 /*
- * reference is borrowed parser output. Return 0 to continue or nonzero to
+ * base and reference are borrowed document-base state and parser output.
+ * Return 0 to continue or nonzero to
  * abort extraction; set errno to preserve a specific callback failure.
  */
-typedef int (*BxFetchDocumentLinkFn)(void* userdata, const char* reference, BxFetchHtmlLinkKind kind);
+typedef int (*BxFetchDocumentLinkFn)(void* userdata, const BxFetchPreparedUrl* base, const char* reference, BxFetchHtmlLinkKind kind);
 
 /*
  * Returns 0 for a parsed document or an intentionally skipped non-document,
