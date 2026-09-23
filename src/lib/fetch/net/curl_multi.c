@@ -1259,7 +1259,9 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     transfer->resp->request_body_io_failed = transfer->request_body_io_failed;
     transfer->resp->transport_error_kind = bx_fetch_classify_curl_transport_error(curl_result);
     if (transfer_uses_ftp(transfer) && transfer->resp->status_code >= 400 && transfer->resp->status_code < 600 &&
-        (transfer->resp->transport_error_kind == BX_FETCH_TRANSPORT_ERROR_NONE || transfer->resp->transport_error_kind == BX_FETCH_TRANSPORT_ERROR_NETWORK)) {
+        (transfer->resp->transport_error_kind == BX_FETCH_TRANSPORT_ERROR_NONE ||
+         transfer->resp->transport_error_kind == BX_FETCH_TRANSPORT_ERROR_NETWORK ||
+         transfer->resp->transport_error_kind == BX_FETCH_TRANSPORT_ERROR_INCOMPLETE)) {
         transfer->resp->transport_error_kind = transfer->resp->status_code == 530 ? BX_FETCH_TRANSPORT_ERROR_AUTH : BX_FETCH_TRANSPORT_ERROR_SERVER;
     }
 
