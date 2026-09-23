@@ -82,6 +82,9 @@ int bx_fetch_writer_set_final_path(BxFetchWriter* w, const char* path);
  * and publishes without replacement.
  */
 int bx_fetch_writer_set_final_path_exclusive(BxFetchWriter* w, const char* path);
+/* Requires an absent payload; permits replacing a captured regular orphan
+ * sidecar only as part of a successful payload/metadata transaction. */
+int bx_fetch_writer_set_final_path_payload_exclusive(BxFetchWriter* w, const char* path);
 /* Copies metadata into writer staging state for commit-time sidecar handling. */
 int bx_fetch_writer_stage_metadata(BxFetchWriter* w, const BxFetchMetadata* meta);
 /*

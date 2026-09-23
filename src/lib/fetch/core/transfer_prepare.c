@@ -187,7 +187,7 @@ BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fe
         return prepare_failure(candidate, error, BX_FETCH_PREPARE_FAILURE_WRITER, errno ? errno : EIO, protocol_decision, body_result);
     }
     if (cfg->download.no_clobber && !cfg->download.spider &&
-        bx_fetch_writer_set_final_path_exclusive(candidate->writer, writer_path) != 0) {
+        bx_fetch_writer_set_final_path_payload_exclusive(candidate->writer, writer_path) != 0) {
         return prepare_failure(candidate, error, BX_FETCH_PREPARE_FAILURE_WRITER, errno ? errno : EIO, protocol_decision, body_result);
     }
 
