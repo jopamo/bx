@@ -1266,6 +1266,7 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     free(transfer->resp->transport_error_detail);
     transfer->resp->transport_error_detail = NULL;
     const char* detail = NULL;
+    char incomplete[128];
     if (transfer->time_budget_exhausted) {
         detail = "invocation time budget exhausted";
     }
@@ -1302,6 +1303,19 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     }
     else if (transfer->transform_failed) {
         detail = "failed to convert the HTML response to Markdown";
+    }
+    else if (curl_result == CURLE_PARTIAL_FILE) {
+        curl_off_t received = -1;
+        (void)curl_easy_getinfo(transfer->easy, CURLINFO_SIZE_DOWNLOAD_T, &received);
+        if (received >= 0 && transfer->resp->content_length >= 0) {
+            snprintf(incomplete, sizeof(incomplete),
+                     "Incomplete response: received %" CURL_FORMAT_CURL_OFF_T "/%" PRId64 " bytes",
+                     received, transfer->resp->content_length);
+            detail = incomplete;
+        }
+        else {
+            detail = "Incomplete response: connection closed before the response body was complete";
+        }
     }
     else if (curl_result != CURLE_OK) {
         detail = curl_easy_strerror(curl_result);

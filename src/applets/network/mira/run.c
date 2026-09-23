@@ -289,9 +289,22 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     int exit_code = bx_fetch_exit_code_for_transfer_failure(http ? status : -1, transport_kind, completion->transfer->result);
     bx_mira_progress_interrupt(&frontend->progress);
     frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, exit_code);
-    char summary[64];
+    char summary[256];
     const char* error_summary = NULL;
-    if ((completion->transfer->result == BX_FETCH_ERROR_UNSUPPORTED ||
+    if (transport_kind == BX_FETCH_TRANSPORT_ERROR_INCOMPLETE && response->transport_error_detail) {
+        const char* disposition = "";
+        if (response->output_state == BX_FETCH_OUTPUT_STATE_ABORTED) {
+            bool to_stdout = completion->transfer->output_path &&
+                strcmp(completion->transfer->output_path, "-") == 0;
+            if (!to_stdout)
+                disposition = "; destination unchanged";
+            else if (frontend->config->download.stdout_spool_limit > 0)
+                disposition = "; no output written to stdout";
+        }
+        snprintf(summary, sizeof(summary), "%s%s", response->transport_error_detail, disposition);
+        error_summary = summary;
+    }
+    else if ((completion->transfer->result == BX_FETCH_ERROR_UNSUPPORTED ||
          completion->transfer->result == BX_FETCH_ERROR_RESOURCE_LIMIT) && response && response->transport_error_detail) {
         error_summary = response->transport_error_detail;
     }
