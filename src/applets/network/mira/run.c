@@ -289,20 +289,22 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     int exit_code = bx_fetch_exit_code_for_transfer_failure(http ? status : -1, transport_kind, completion->transfer->result);
     bx_mira_progress_interrupt(&frontend->progress);
     frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, exit_code);
-    if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
-        fprintf(frontend->diagnostics, "mira: transfer failed: %s\n", bx_fetch_error_string(completion->transfer->result));
+    char summary[64];
+    const char* error_summary = NULL;
+    if ((completion->transfer->result == BX_FETCH_ERROR_UNSUPPORTED ||
+         completion->transfer->result == BX_FETCH_ERROR_RESOURCE_LIMIT) && response && response->transport_error_detail) {
+        error_summary = response->transport_error_detail;
     }
+    else if ((http || ftp) && status >= 400 && status < 600) {
+        snprintf(summary, sizeof(summary), "%s status %d", http ? "HTTP" : "FTP", status);
+        error_summary = summary;
+    }
+    if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET)
+        fprintf(frontend->diagnostics, "mira: transfer failed: %s\n",
+                error_summary ? error_summary : bx_fetch_error_string(completion->transfer->result));
     if (frontend->config->logging.structured_errors) {
-        char summary[64];
-        const char* error_summary = "transfer failed";
-        if ((completion->transfer->result == BX_FETCH_ERROR_UNSUPPORTED ||
-             completion->transfer->result == BX_FETCH_ERROR_RESOURCE_LIMIT) && response && response->transport_error_detail) {
-            error_summary = response->transport_error_detail;
-        }
-        else if ((http || ftp) && status >= 400 && status < 600) {
-            snprintf(summary, sizeof(summary), "%s status %d", http ? "HTTP" : "FTP", status);
-            error_summary = summary;
-        }
+        if (!error_summary)
+            error_summary = "transfer failed";
         BxFetchErrorClass error_class = bx_fetch_error_class_for_exit_code(exit_code);
         if (ftp && error_class == BX_FETCH_ERROR_CLASS_HTTP)
             error_class = BX_FETCH_ERROR_CLASS_FTP;
@@ -419,7 +421,7 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
             return false;
         }
         if (frontend->config->https.require_verified_https) {
-            mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "HTTP authentication requires HTTPS", observation->target, observation->source_path, -1);
+            mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "this request requires verified HTTPS; plain HTTP is not allowed", observation->target, observation->source_path, -1);
             return false;
         }
         if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
@@ -740,6 +742,7 @@ int bx_mira_run_config_with_budget(const struct bx_fetch_config* config, BxFetch
 
     bool simple_direct = config->logging.verbosity == BX_FETCH_VERBOSITY_VERBOSE && !config->recursive.recursive && !config->recursive.page_requisites && config->input.url_count == 1;
     if (!config->download.dry_run && !simple_direct &&
+        config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET &&
         !config->logging.suppress_session_banner)
         fputs("mira: starting downloads\n", frontend_state.diagnostics);
 

@@ -20,8 +20,12 @@ static int mira_run_main(int argc, char** argv) {
     int result = BX_FETCH_EXIT_SUCCESS;
     if (config->startup.show_version)
         printf("mira %s\n", BX_VERSION);
-    else if (config->startup.show_help)
-        bx_mira_print_help();
+    else if (config->startup.show_help) {
+        if (argc > 1 && strcmp(argv[1], "read") == 0)
+            bx_mira_print_read_help();
+        else
+            bx_mira_print_help();
+    }
     else if (config->input.url_count == 0 && !config->input.input_file) {
         bx_mira_emit_parse_error(config, "no URLs specified");
         result = BX_FETCH_EXIT_PARSE_OR_CONFIG;

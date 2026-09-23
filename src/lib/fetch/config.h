@@ -104,6 +104,7 @@ typedef struct {
     bool xattr;
     bool metadata_sidecars;
     bool html_to_markdown;
+    bool absolute_links;
     /* Accept declared text/JSON/XML; convert only HTML to Markdown. */
     bool text_document;
     BxFetchExpectedRepresentation expected_representation;
@@ -153,7 +154,7 @@ typedef struct {
 
 typedef struct {
     bool https_only;
-    bool require_verified_https; /* Protected credentials: no plaintext or TLS-verification bypass. */
+    bool require_verified_https; /* No plaintext or TLS-verification bypass (credentials or read). */
     bool no_check_certificate;
     char* certificate;
     char* private_key;
