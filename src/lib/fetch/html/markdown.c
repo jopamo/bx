@@ -612,6 +612,300 @@ static bool native_markdown_blockquote(NativeMarkdown* context, lxa_dom_ref_t no
     return ok && bx_markdown_writer_newlines(context->output, 2u);
 }
 
+static bool native_markdown_element_is(NativeMarkdown* context, lxa_dom_ref_t node,
+                                       const char* tag, bool* match) {
+    lxa_dom_record_t record;
+    if (!native_markdown_status(lxa_dom_nodes_read(context->nodes, node, &record)))
+        return false;
+    *match = false;
+    if (record.kind != LXA_DOM_KIND_ELEMENT)
+        return true;
+    lxa_span_t name;
+    if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, node, &name)))
+        return false;
+    *match = native_markdown_name(name, tag);
+    return true;
+}
+
+static bool native_markdown_visible_cell(NativeMarkdown* context, lxa_dom_ref_t node,
+                                         bool* visible) {
+    bool th, td, hidden, skip;
+    if (!native_markdown_element_is(context, node, "th", &th)
+        || !native_markdown_element_is(context, node, "td", &td))
+        return false;
+    *visible = false;
+    if (!th && !td)
+        return true;
+    if (!native_markdown_hidden(context, node, &hidden)
+        || !native_markdown_status(bx_fetch_site_markdown_skip_node(
+            context->site, context->nodes, node, &skip)))
+        return false;
+    *visible = !hidden && !skip;
+    return true;
+}
+
+static bool native_markdown_cell_span(NativeMarkdown* context, lxa_dom_ref_t node,
+                                      size_t* span) {
+    lxa_span_t value;
+    if (!native_markdown_attribute(context, node, "colspan", &value))
+        return false;
+    *span = 1;
+    if (!value.data || !value.length)
+        return true;
+    size_t parsed = 0;
+    for (size_t i = 0; i < value.length; i++) {
+        uint8_t digit = value.data[i];
+        if (!isdigit((unsigned char)digit)
+            || parsed > (SIZE_MAX - (size_t)(digit - '0')) / 10u)
+            return true;
+        parsed = parsed * 10u + (size_t)(digit - '0');
+    }
+    if (parsed && parsed <= 1000u)
+        *span = parsed;
+    return true;
+}
+
+static bool native_markdown_table_cell_text(NativeMarkdown* context,
+                                             lxa_dom_ref_t node, size_t depth) {
+    if (depth > 256) {
+        errno = EFBIG;
+        return false;
+    }
+    lxa_dom_record_t record;
+    if (!native_markdown_status(lxa_dom_nodes_read(context->nodes, node, &record)))
+        return false;
+    if (record.kind == LXA_DOM_KIND_TEXT) {
+        lxa_span_t text;
+        return native_markdown_status(lxa_dom_nodes_character_read(context->nodes, node, &text))
+            && bx_markdown_writer_text(context->output, (const char*)text.data, text.length);
+    }
+    if (record.kind != LXA_DOM_KIND_ELEMENT)
+        return true;
+    lxa_span_t name;
+    if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, node, &name)))
+        return false;
+    bool hidden, skip;
+    if (!native_markdown_hidden(context, node, &hidden)
+        || !native_markdown_status(bx_fetch_site_markdown_skip_node(
+            context->site, context->nodes, node, &skip)))
+        return false;
+    if (hidden || skip || native_markdown_ignored(name)
+        || native_markdown_name(name, "img") || native_markdown_name(name, "image"))
+        return true;
+    if (native_markdown_name(name, "br")
+        && !bx_markdown_writer_text(context->output, " ", 1u))
+        return false;
+    lxa_dom_ref_t child;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, node, &child)))
+        return false;
+    while (child.handle) {
+        if (!native_markdown_table_cell_text(context, child, depth + 1))
+            return false;
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, child, &next)))
+            return false;
+        child = next;
+    }
+    return true;
+}
+
+static bool native_markdown_row_columns(NativeMarkdown* context, lxa_dom_ref_t row,
+                                        size_t* count) {
+    *count = 0;
+    lxa_dom_ref_t cell;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, row, &cell)))
+        return false;
+    while (cell.handle) {
+        bool visible;
+        if (!native_markdown_visible_cell(context, cell, &visible))
+            return false;
+        if (visible) {
+            size_t span;
+            if (!native_markdown_cell_span(context, cell, &span))
+                return false;
+            if (span > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES - *count) {
+                errno = EFBIG;
+                return false;
+            }
+            *count += span;
+        }
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, cell, &next)))
+            return false;
+        cell = next;
+    }
+    return true;
+}
+
+static bool native_markdown_table_columns(NativeMarkdown* context,
+                                           lxa_dom_ref_t node, size_t depth,
+                                           size_t* columns) {
+    if (depth > 256) {
+        errno = EFBIG;
+        return false;
+    }
+    lxa_dom_ref_t child;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, node, &child)))
+        return false;
+    while (child.handle) {
+        lxa_dom_record_t record;
+        if (!native_markdown_status(lxa_dom_nodes_read(context->nodes, child, &record)))
+            return false;
+        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+            bool hidden, skip, row, section;
+            lxa_span_t name;
+            if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, child, &name))
+                || !native_markdown_hidden(context, child, &hidden)
+                || !native_markdown_status(bx_fetch_site_markdown_skip_node(
+                    context->site, context->nodes, child, &skip)))
+                return false;
+            if (!hidden && !skip) {
+                row = native_markdown_name(name, "tr");
+                section = native_markdown_name(name, "thead")
+                    || native_markdown_name(name, "tbody") || native_markdown_name(name, "tfoot");
+                size_t count = 0;
+                if ((row && !native_markdown_row_columns(context, child, &count))
+                    || (section && !native_markdown_table_columns(
+                        context, child, depth + 1, &count)))
+                    return false;
+                if (count > *columns)
+                    *columns = count;
+            }
+        }
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, child, &next)))
+            return false;
+        child = next;
+    }
+    return true;
+}
+
+static bool native_markdown_table_row(NativeMarkdown* context, lxa_dom_ref_t row,
+                                      size_t columns, bool first_row) {
+    size_t count;
+    if (!native_markdown_row_columns(context, row, &count))
+        return false;
+    if (!count)
+        return true;
+    if (!bx_markdown_writer_raw(context->output, "|", 1u))
+        return false;
+    lxa_dom_ref_t cell;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, row, &cell)))
+        return false;
+    while (cell.handle) {
+        bool visible;
+        if (!native_markdown_visible_cell(context, cell, &visible))
+            return false;
+        if (visible) {
+            size_t span;
+            if (!native_markdown_cell_span(context, cell, &span)
+                || !bx_markdown_writer_raw(context->output, " ", 1u)
+                || !native_markdown_table_cell_text(context, cell, 0)
+                || !bx_markdown_writer_raw(context->output, " |", 2u))
+                return false;
+            for (size_t i = 1; i < span; i++) {
+                if (!bx_markdown_writer_raw(context->output, "  |", 3u))
+                    return false;
+            }
+        }
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, cell, &next)))
+            return false;
+        cell = next;
+    }
+    for (size_t i = count; i < columns; i++) {
+        if (!bx_markdown_writer_raw(context->output, "  |", 3u))
+            return false;
+    }
+    if (!bx_markdown_writer_newlines(context->output, 1u))
+        return false;
+    if (!first_row)
+        return true;
+    for (size_t i = 0; i < columns; i++) {
+        if (!bx_markdown_writer_raw(context->output, "| --- ", 6u))
+            return false;
+    }
+    return bx_markdown_writer_raw(context->output, "|", 1u)
+        && bx_markdown_writer_newlines(context->output, 1u);
+}
+
+static bool native_markdown_table_rows(NativeMarkdown* context, lxa_dom_ref_t node,
+                                       size_t depth, size_t columns, bool* first) {
+    if (depth > 256) {
+        errno = EFBIG;
+        return false;
+    }
+    lxa_dom_ref_t child;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, node, &child)))
+        return false;
+    while (child.handle) {
+        lxa_dom_record_t record;
+        if (!native_markdown_status(lxa_dom_nodes_read(context->nodes, child, &record)))
+            return false;
+        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+            lxa_span_t name;
+            bool hidden, row, section;
+            if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, child, &name))
+                || !native_markdown_hidden(context, child, &hidden))
+                return false;
+            if (!hidden) {
+                row = native_markdown_name(name, "tr");
+                section = native_markdown_name(name, "thead")
+                    || native_markdown_name(name, "tbody") || native_markdown_name(name, "tfoot");
+                if (row) {
+                    size_t count;
+                    if (!native_markdown_row_columns(context, child, &count)
+                        || !native_markdown_table_row(context, child, columns, *first))
+                        return false;
+                    if (count)
+                        *first = false;
+                }
+                else if (section && !native_markdown_table_rows(
+                    context, child, depth + 1, columns, first))
+                    return false;
+            }
+        }
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, child, &next)))
+            return false;
+        child = next;
+    }
+    return true;
+}
+
+static bool native_markdown_table(NativeMarkdown* context, lxa_dom_ref_t table,
+                                  size_t depth) {
+    size_t columns = 0;
+    if (!native_markdown_table_columns(context, table, depth, &columns))
+        return false;
+    if (!columns)
+        return true;
+    if (!bx_markdown_writer_newlines(context->output, 2u))
+        return false;
+    lxa_dom_ref_t child;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, table, &child)))
+        return false;
+    while (child.handle) {
+        bool caption, hidden;
+        if (!native_markdown_element_is(context, child, "caption", &caption))
+            return false;
+        if (caption) {
+            if (!native_markdown_hidden(context, child, &hidden))
+                return false;
+            if (!hidden && (!native_markdown_wrapped(context, child, depth, "**")
+                            || !bx_markdown_writer_newlines(context->output, 1u)))
+                return false;
+        }
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, child, &next)))
+            return false;
+        child = next;
+    }
+    bool first = true;
+    return native_markdown_table_rows(context, table, depth, columns, &first)
+        && bx_markdown_writer_newlines(context->output, 2u);
+}
+
 static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, size_t depth) {
     if (depth > 256) {
         errno = EFBIG;
@@ -700,8 +994,9 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
             && native_markdown_children(context, node, depth + 1);
     if (native_markdown_name(name, "blockquote"))
         return native_markdown_blockquote(context, node, depth);
-    /* Tables need their
-     * own native mappings before this path can be enabled for bx. */
+    if (native_markdown_name(name, "table"))
+        return native_markdown_table(context, node, depth);
+    /* Remaining bx and parser qualification gates still block promotion. */
     errno = ENOTSUP;
     return false;
 }
