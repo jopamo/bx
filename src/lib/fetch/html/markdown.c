@@ -190,6 +190,117 @@ static bool native_markdown_code(NativeMarkdown* context, lxa_dom_ref_t node,
     return ok;
 }
 
+static bool native_markdown_attribute(NativeMarkdown* context, lxa_dom_ref_t node,
+                                       const char* name, lxa_span_t* value) {
+    lxa_span_t key = {(const uint8_t*)name, strlen(name)};
+    lxa_dom_ref_t attr;
+    *value = (lxa_span_t){0};
+    if (!native_markdown_status(lxa_dom_nodes_find_attribute(
+        context->nodes, node, key, &attr)))
+        return false;
+    return !attr.handle || native_markdown_status(
+        lxa_dom_nodes_attribute_read(context->nodes, attr, &key, value));
+}
+
+static bool native_markdown_destination(BxMarkdownWriter* output, lxa_span_t value) {
+    bool angle = false;
+    for (size_t i = 0; i < value.length; i++) {
+        if (isspace((unsigned char)value.data[i]) || value.data[i] == '(' || value.data[i] == ')') {
+            angle = true;
+            break;
+        }
+    }
+    if (angle && !bx_markdown_writer_raw(output, "<", 1u))
+        return false;
+    for (size_t i = 0; i < value.length; i++) {
+        char c = (char)value.data[i];
+        if ((c == '\\' || (!angle && c == ')') || (angle && c == '>'))
+            && !bx_markdown_writer_raw(output, "\\", 1u))
+            return false;
+        if (!bx_markdown_writer_raw(output, &c, 1u))
+            return false;
+    }
+    return !angle || bx_markdown_writer_raw(output, ">", 1u);
+}
+
+static char* native_markdown_fragment(NativeMarkdown* context, lxa_dom_ref_t node,
+                                      size_t depth, size_t* length) {
+    BxMarkdownWriter nested;
+    bx_markdown_writer_init(&nested, BX_FETCH_DOCUMENT_PARSE_MAX_BYTES);
+    NativeMarkdown nested_context = *context;
+    nested_context.output = &nested;
+    bool rendered = native_markdown_children(&nested_context, node, depth + 1);
+    char* fragment = rendered ? bx_markdown_writer_take(&nested, length) : NULL;
+    int failure = errno;
+    bx_markdown_writer_clear(&nested);
+    if (!fragment) {
+        errno = failure ? failure : EINVAL;
+        return NULL;
+    }
+    if (*length && fragment[*length - 1u] == '\n')
+        fragment[--*length] = '\0';
+    return fragment;
+}
+
+static bool native_markdown_link(NativeMarkdown* context, lxa_dom_ref_t node,
+                                 size_t depth) {
+    lxa_span_t href;
+    if (!native_markdown_attribute(context, node, "href", &href))
+        return false;
+    if (!href.data || !href.length)
+        return native_markdown_children(context, node, depth + 1);
+    lxa_allocator_t allocator = lxa_allocator_default();
+    lxa_buffer_t text;
+    if (!native_markdown_status(lxa_buffer_init(&text, &allocator)))
+        return false;
+    lxa_status_t status = lxa_dom_nodes_text_content(
+        context->nodes, node, &text, BX_FETCH_DOCUMENT_PARSE_MAX_BYTES);
+    bool leading = text.length && isspace((unsigned char)text.data[0]);
+    bool trailing = text.length && isspace((unsigned char)text.data[text.length - 1u]);
+    lxa_buffer_destroy(&text);
+    if (!native_markdown_status(status))
+        return false;
+    size_t length = 0;
+    char* label = native_markdown_fragment(context, node, depth, &length);
+    if (!label)
+        return false;
+    bool ok = true;
+    if (length)
+        ok = (!leading || bx_markdown_writer_text(context->output, " ", 1u))
+            && bx_markdown_writer_raw(context->output, "[", 1u)
+            && bx_markdown_writer_raw(context->output, label, length)
+            && bx_markdown_writer_raw(context->output, "](", 2u)
+            && native_markdown_destination(context->output, href)
+            && bx_markdown_writer_raw(context->output, ")", 1u)
+            && (!trailing || bx_markdown_writer_text(context->output, " ", 1u));
+    free(label);
+    return ok;
+}
+
+static bool native_markdown_image(NativeMarkdown* context, lxa_dom_ref_t node) {
+    lxa_span_t src, alt;
+    if (!native_markdown_attribute(context, node, "src", &src))
+        return false;
+    if (!src.data || !src.length)
+        return true;
+    if (!native_markdown_attribute(context, node, "alt", &alt))
+        return false;
+    bool content = false;
+    for (size_t i = 0; i < alt.length; i++) {
+        if (!isspace((unsigned char)alt.data[i])) {
+            content = true;
+            break;
+        }
+    }
+    if (!content)
+        return true;
+    return bx_markdown_writer_raw(context->output, "![", 2u)
+        && bx_markdown_writer_text(context->output, (const char*)alt.data, alt.length)
+        && bx_markdown_writer_raw(context->output, "](", 2u)
+        && native_markdown_destination(context->output, src)
+        && bx_markdown_writer_raw(context->output, ")", 1u);
+}
+
 static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, size_t depth) {
     if (depth > 256) {
         errno = EFBIG;
@@ -283,7 +394,11 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
         return native_markdown_code(context, node, false);
     if (native_markdown_name(name, "pre") || native_markdown_name(name, "listing"))
         return native_markdown_code(context, node, true);
-    /* Link, image, list, table and style/ARIA policies need their
+    if (native_markdown_name(name, "a"))
+        return native_markdown_link(context, node, depth);
+    if (native_markdown_name(name, "img") || native_markdown_name(name, "image"))
+        return native_markdown_image(context, node);
+    /* Lists, tables and style/ARIA policies need their
      * own native mappings before this path can be enabled for bx. */
     errno = ENOTSUP;
     return false;
