@@ -306,6 +306,7 @@ static void test_jq_start_resets_state(char *prog, const char *input) {
   assert(jq);
 
   int compiled = jq_compile(jq, prog);
+  (void)compiled;
   assert(compiled);
 
   // First call to jq_start. Run until completion.
@@ -338,10 +339,12 @@ static void compile_args_and_check(jq_state *jq, const char *prog,
                                    jv args, jv input, jv expected) {
   printf("  subtest: %s\n", prog);
   int compiled = jq_compile_args(jq, prog, args);
+  (void)compiled;
   assert(compiled);
 
   jq_start(jq, input, 0);
   jv result = jq_next(jq);
+  (void)result;
   assert(jv_is_valid(result));
   assert(jv_equal(result, expected));
 
@@ -406,6 +409,7 @@ static void run_jq_recompile_tests(void) {
 
   // First program via jq_compile
   int compiled = jq_compile(jq, ". + 1");
+  (void)compiled;
   assert(compiled);
   jq_start(jq, jv_number(1), 0);
   jv r = jq_next(jq);
@@ -468,6 +472,7 @@ static void run_jq_exhaust_and_reuse_tests(void) {
   assert(jq);
 
   int compiled = jq_compile(jq, ".[]");
+  (void)compiled;
   assert(compiled);
 
   // First run: drain all results
@@ -580,6 +585,7 @@ static void run_jq_pthread_tests(void) {
     // Create all threads
     for (a = 0; a < NUMBER_OF_THREADS; ++a) {
         createerror = pthread_create(&threads[a], NULL, test_pthread_run, &data[a]);
+        (void)createerror;
         assert(createerror == 0);
     }
 
@@ -673,6 +679,8 @@ static void jv_test(void) {
     void* before = sub2.u.ptr;
     sub2 = jv_array_append(sub2, jv_number(200));
     void* after = sub2.u.ptr;
+    (void)before;
+    (void)after;
     assert(before == after);
     jv_free(sub2);
 

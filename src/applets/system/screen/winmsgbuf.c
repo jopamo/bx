@@ -252,6 +252,7 @@ int wmbc_printf(WinMsgBufContext *wmbc, const char *fmt, ...)
 
 		va_start(ap, fmt);
 		size_t m = vsnprintf(wmbc->p, n + 1, fmt, ap);
+		(void)m; /* The size check is compiled out with NDEBUG. */
 		assert(m == n); /* this should never fail */
 		va_end(ap);
 	}
