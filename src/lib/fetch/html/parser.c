@@ -585,7 +585,6 @@ typedef struct {
     BxFetchLinkRewriteCallback cb;
     void* userdata;
     bool reset_base;
-    bool changed;
 } NativeRewrite;
 
 static int native_rewrite_visit(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
@@ -607,19 +606,10 @@ static int native_rewrite_visit(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
         }
         return 0;
     }
-    size_t replacement_length = strlen(replacement);
-    if (value.length == replacement_length &&
-        memcmp(value.data, replacement, value.length) == 0) {
-        free(replacement);
-        return 0;
-    }
-    lxa_span_t updated = {(const uint8_t*)replacement, replacement_length};
+    lxa_span_t updated = {(const uint8_t*)replacement, strlen(replacement)};
     status = lxa_dom_nodes_attribute_set_value(nodes, attribute, updated);
     free(replacement);
-    if (status != LXA_OK)
-        return native_status_error(status);
-    state->changed = true;
-    return 0;
+    return status == LXA_OK ? 0 : native_status_error(status);
 }
 
 static lxa_write_result_t native_serialize_write(void* context, lxa_span_t bytes) {
@@ -684,10 +674,6 @@ char* bx_fetch_html_convert_links(const char* html_data, size_t len,
     NativeRewrite state = {.cb = cb, .userdata = userdata, .reset_base = base_cb != NULL};
     int result = base_cb && native_walk(document, native_base_visit, &base, true)
         ? -1 : native_walk(document, native_rewrite_visit, &state, false);
-    if (!result && !state.changed && !memchr(html_data, '\0', len)) {
-        lxa_html_document_destroy(document);
-        return strndup(html_data, len);
-    }
     NativeOutput output = {0};
     if (!result) {
         lxa_limit_reason_t reason;
