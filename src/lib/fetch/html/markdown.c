@@ -35,6 +35,61 @@ static bool native_markdown_name(lxa_span_t name, const char* expected) {
     return name.length == length && memcmp(name.data, expected, length) == 0;
 }
 
+static bool native_markdown_case_name(lxa_span_t value, const char* expected) {
+    size_t length = strlen(expected);
+    if (value.length != length)
+        return false;
+    for (size_t i = 0; i < length; i++) {
+        if (tolower((unsigned char)value.data[i]) != tolower((unsigned char)expected[i]))
+            return false;
+    }
+    return true;
+}
+
+static lxa_span_t native_markdown_trim(lxa_span_t value) {
+    while (value.length && isspace((unsigned char)value.data[0])) {
+        value.data++;
+        value.length--;
+    }
+    while (value.length && isspace((unsigned char)value.data[value.length - 1u]))
+        value.length--;
+    return value;
+}
+
+static bool native_markdown_css_equals(lxa_span_t value, const char* expected) {
+    value = native_markdown_trim(value);
+    size_t length = strlen(expected);
+    if (value.length < length
+        || !native_markdown_case_name((lxa_span_t){value.data, length}, expected))
+        return false;
+    value.data += length;
+    value.length -= length;
+    value = native_markdown_trim(value);
+    return !value.length || native_markdown_case_name(value, "!important");
+}
+
+static bool native_markdown_style_hidden(lxa_span_t style) {
+    for (size_t pos = 0; pos < style.length;) {
+        size_t end = pos;
+        while (end < style.length && style.data[end] != ';') end++;
+        size_t colon = pos;
+        while (colon < end && style.data[colon] != ':') colon++;
+        if (colon < end) {
+            lxa_span_t name = native_markdown_trim(
+                (lxa_span_t){style.data + pos, colon - pos});
+            lxa_span_t value = native_markdown_trim(
+                (lxa_span_t){style.data + colon + 1u, end - colon - 1u});
+            if ((native_markdown_case_name(name, "display")
+                 && native_markdown_css_equals(value, "none"))
+                || (native_markdown_case_name(name, "visibility")
+                    && native_markdown_css_equals(value, "hidden")))
+                return true;
+        }
+        pos = end < style.length ? end + 1u : end;
+    }
+    return false;
+}
+
 static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, size_t depth);
 
 static bool native_markdown_children(NativeMarkdown* context, lxa_dom_ref_t parent,
@@ -202,6 +257,48 @@ static bool native_markdown_attribute(NativeMarkdown* context, lxa_dom_ref_t nod
         lxa_dom_nodes_attribute_read(context->nodes, attr, &key, value));
 }
 
+static bool native_markdown_hidden(NativeMarkdown* context, lxa_dom_ref_t node,
+                                   bool* hidden) {
+    lxa_span_t key = {(const uint8_t*)"hidden", 6};
+    lxa_dom_ref_t attr;
+    *hidden = false;
+    if (!native_markdown_status(lxa_dom_nodes_find_attribute(
+        context->nodes, node, key, &attr)))
+        return false;
+    if (attr.handle) {
+        *hidden = true;
+        return true;
+    }
+    lxa_span_t value;
+    if (!native_markdown_attribute(context, node, "aria-hidden", &value))
+        return false;
+    if (value.data && native_markdown_case_name(native_markdown_trim(value), "true")) {
+        *hidden = true;
+        return true;
+    }
+    if (!native_markdown_attribute(context, node, "style", &value))
+        return false;
+    if (value.data && native_markdown_style_hidden(value)) {
+        *hidden = true;
+        return true;
+    }
+    if (!native_markdown_attribute(context, node, "role", &value))
+        return false;
+    if (value.data) {
+        value = native_markdown_trim(value);
+        static const char* const chrome[] = {
+            "navigation", "banner", "contentinfo", "complementary", "search"
+        };
+        for (size_t i = 0; i < sizeof(chrome) / sizeof(*chrome); i++) {
+            if (native_markdown_case_name(value, chrome[i])) {
+                *hidden = true;
+                return true;
+            }
+        }
+    }
+    return true;
+}
+
 static bool native_markdown_destination(BxMarkdownWriter* output, lxa_span_t value) {
     bool angle = false;
     for (size_t i = 0; i < value.length; i++) {
@@ -336,27 +433,17 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
     if (native_markdown_name(name, "head") || native_markdown_name(name, "script")
         || native_markdown_name(name, "style") || native_markdown_name(name, "template")
         || native_markdown_name(name, "noscript") || native_markdown_name(name, "nav")
-        || native_markdown_name(name, "aside") || native_markdown_name(name, "footer"))
+        || native_markdown_name(name, "aside") || native_markdown_name(name, "footer")
+        || native_markdown_name(name, "svg") || native_markdown_name(name, "canvas")
+        || native_markdown_name(name, "iframe") || native_markdown_name(name, "form")
+        || native_markdown_name(name, "button") || native_markdown_name(name, "input")
+        || native_markdown_name(name, "select") || native_markdown_name(name, "textarea"))
         return true;
-    lxa_span_t hidden_key = {(const uint8_t*)"hidden", 6};
-    lxa_dom_ref_t hidden;
-    if (!native_markdown_status(lxa_dom_nodes_find_attribute(
-        context->nodes, node, hidden_key, &hidden)))
+    bool hidden;
+    if (!native_markdown_hidden(context, node, &hidden))
         return false;
-    if (hidden.handle)
+    if (hidden)
         return true;
-    static const char* const pending_attributes[] = {"aria-hidden", "style", "role"};
-    for (size_t i = 0; i < sizeof(pending_attributes) / sizeof(*pending_attributes); i++) {
-        lxa_span_t key = {(const uint8_t*)pending_attributes[i], strlen(pending_attributes[i])};
-        lxa_dom_ref_t attribute;
-        if (!native_markdown_status(lxa_dom_nodes_find_attribute(
-            context->nodes, node, key, &attribute)))
-            return false;
-        if (attribute.handle) {
-            errno = ENOTSUP;
-            return false;
-        }
-    }
     if (unwrap || native_markdown_name(name, "span") || native_markdown_name(name, "body"))
         return native_markdown_children(context, node, depth + 1);
     if (name.length == 2 && name.data[0] == 'h' && name.data[1] >= '1' && name.data[1] <= '6') {
@@ -398,7 +485,7 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
         return native_markdown_link(context, node, depth);
     if (native_markdown_name(name, "img") || native_markdown_name(name, "image"))
         return native_markdown_image(context, node);
-    /* Lists, tables and style/ARIA policies need their
+    /* Lists and tables need their
      * own native mappings before this path can be enabled for bx. */
     errno = ENOTSUP;
     return false;
