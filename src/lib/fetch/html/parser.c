@@ -419,7 +419,284 @@ typedef struct {
     bool seen;
 } HtmlBaseContext;
 
-#if HAVE_LEXBOR
+#if HAVE_NATIVE_HTML
+#include <liblexa/html/document.h>
+#include <liblexa/serialization/native_document.h>
+
+typedef struct {
+    char* data;
+    size_t length;
+    size_t capacity;
+} NativeOutput;
+
+static bool native_name_equals(lxa_span_t name, const char* expected) {
+    size_t length = strlen(expected);
+    return name.length == length && memcmp(name.data, expected, length) == 0;
+}
+
+static int native_status_error(lxa_status_t status) {
+    errno = status == LXA_ERROR_NO_MEMORY ? ENOMEM :
+            status == LXA_ERROR_LIMIT || status == LXA_ERROR_OVERFLOW ? EFBIG :
+            status == LXA_ERROR_ENTROPY ? EIO : EINVAL;
+    return -1;
+}
+
+static int native_parse(const char* bytes, size_t len, lxa_html_document_t** out) {
+    lxa_allocator_t allocator = lxa_allocator_default();
+    lxa_limits_t limits = lxa_limits_default();
+    lxa_html_result_t result;
+    lxa_limit_reason_t reason;
+    limits.max_input_bytes = BX_FETCH_DOCUMENT_PARSE_MAX_BYTES;
+    lxa_span_t input = {(const uint8_t*)bytes, len};
+    lxa_status_t status = lxa_html_document_parse(&allocator, &limits, input, &result, &reason, out);
+    (void)result;
+    (void)reason;
+    return status == LXA_OK ? 0 : native_status_error(status);
+}
+
+/* URL copies are callback-scoped. In particular, an attribute update can
+ * relocate the document's string storage before the next lookup. */
+typedef int (*NativeVisitor)(lxa_dom_nodes_t*, lxa_dom_ref_t, lxa_dom_ref_t,
+                             bool, const char*, void*);
+
+static int native_visit_attributes(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
+                                   bool base, NativeVisitor visit, void* context) {
+    static const char* const names[] = {"href", "src"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(*names); i++) {
+        lxa_span_t key = {(const uint8_t*)names[i], strlen(names[i])};
+        lxa_dom_ref_t attribute;
+        lxa_span_t stored, value;
+        lxa_status_t status = lxa_dom_nodes_find_attribute(nodes, element, key, &attribute);
+        if (status != LXA_OK)
+            return native_status_error(status);
+        if (!attribute.handle)
+            continue;
+        status = lxa_dom_nodes_attribute_read(nodes, attribute, &stored, &value);
+        if (status != LXA_OK)
+            return native_status_error(status);
+        char* url = strndup(value.data ? (const char*)value.data : "", value.length);
+        if (!url) {
+            errno = ENOMEM;
+            return -1;
+        }
+        int result = visit(nodes, element, attribute, base, url, context);
+        free(url);
+        if (result)
+            return -1;
+    }
+    return 0;
+}
+
+static int native_walk(lxa_html_document_t* document, NativeVisitor visit,
+                       void* context, bool base_only) {
+    lxa_dom_nodes_t* nodes = lxa_html_document_nodes(document);
+    lxa_dom_ref_t root = lxa_html_document_root(document), node = root;
+    /* The canonical tree has no cycles; still bound the walk if malformed
+     * internal links ever become observable. */
+    size_t steps = 0, count = lxa_dom_nodes_length(nodes);
+    for (;;) {
+        lxa_dom_record_t record;
+        if (++steps > count * 3u + 1u)
+            return native_status_error(LXA_ERROR_ARGUMENT);
+        lxa_status_t status = lxa_dom_nodes_read(nodes, node, &record);
+        if (status != LXA_OK)
+            return native_status_error(status);
+        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+            lxa_span_t tag;
+            status = lxa_dom_nodes_element_name(nodes, node, &tag);
+            if (status != LXA_OK)
+                return native_status_error(status);
+            bool base = native_name_equals(tag, "base");
+            if ((!base_only || base) && native_visit_attributes(nodes, node, base, visit, context))
+                return -1;
+        }
+        if (record.kind == LXA_DOM_KIND_DOCUMENT || record.kind == LXA_DOM_KIND_ELEMENT) {
+            lxa_dom_ref_t child;
+            status = lxa_dom_nodes_first_child(nodes, node, &child);
+            if (status != LXA_OK)
+                return native_status_error(status);
+            if (child.handle) {
+                node = child;
+                continue;
+            }
+        }
+        for (;;) {
+            if (node.handle == root.handle)
+                return 0;
+            lxa_dom_ref_t next;
+            status = lxa_dom_nodes_next_sibling(nodes, node, &next);
+            if (status != LXA_OK)
+                return native_status_error(status);
+            if (next.handle) {
+                node = next;
+                break;
+            }
+            status = lxa_dom_nodes_parent(nodes, node, &node);
+            if (status != LXA_OK || !node.handle)
+                return native_status_error(status);
+        }
+    }
+}
+
+static int native_base_visit(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
+                             lxa_dom_ref_t attribute, bool base, const char* url, void* context) {
+    (void)element;
+    HtmlBaseContext* state = context;
+    if (!base || state->seen)
+        return 0;
+    lxa_span_t key, value;
+    lxa_status_t status = lxa_dom_nodes_attribute_read(nodes, attribute, &key, &value);
+    if (status != LXA_OK)
+        return native_status_error(status);
+    if (!native_name_equals(key, "href"))
+        return 0;
+    state->seen = true;
+    if (state->callback(state->userdata, url) == 0)
+        return 0;
+    errno = ECANCELED;
+    return -1;
+}
+
+typedef struct {
+    BxFetchHtmlLinkCallback cb;
+    void* userdata;
+} NativeExtract;
+
+static int native_extract_visit(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
+                                lxa_dom_ref_t attribute, bool base, const char* url, void* context) {
+    if (base)
+        return 0;
+    NativeExtract* state = context;
+    lxa_span_t name, key, value;
+    lxa_status_t status = lxa_dom_nodes_element_name(nodes, element, &name);
+    if (status != LXA_OK)
+        return native_status_error(status);
+    bool anchor = native_name_equals(name, "a");
+    status = lxa_dom_nodes_attribute_read(nodes, attribute, &key, &value);
+    if (status != LXA_OK)
+        return native_status_error(status);
+    state->cb(state->userdata, url,
+              anchor && native_name_equals(key, "href")
+                  ? BX_FETCH_HTML_LINK_NAVIGATION : BX_FETCH_HTML_LINK_REQUISITE);
+    return 0;
+}
+
+typedef struct {
+    BxFetchLinkRewriteCallback cb;
+    void* userdata;
+    bool reset_base;
+} NativeRewrite;
+
+static int native_rewrite_visit(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
+                                lxa_dom_ref_t attribute, bool base, const char* url, void* context) {
+    (void)element;
+    NativeRewrite* state = context;
+    lxa_span_t key, value;
+    lxa_status_t status = lxa_dom_nodes_attribute_read(nodes, attribute, &key, &value);
+    if (status != LXA_OK)
+        return native_status_error(status);
+    bool href = native_name_equals(key, "href");
+    if (base && (!state->reset_base || !href))
+        return 0;
+    char* replacement = base ? strdup("./") : state->cb(state->userdata, url);
+    if (!replacement) {
+        if (base) {
+            errno = ENOMEM;
+            return -1;
+        }
+        return 0;
+    }
+    lxa_span_t updated = {(const uint8_t*)replacement, strlen(replacement)};
+    status = lxa_dom_nodes_attribute_set_value(nodes, attribute, updated);
+    free(replacement);
+    return status == LXA_OK ? 0 : native_status_error(status);
+}
+
+static lxa_write_result_t native_serialize_write(void* context, lxa_span_t bytes) {
+    NativeOutput* out = context;
+    lxa_write_result_t result = {0};
+    if (bytes.length > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES - out->length) {
+        errno = EFBIG;
+        result.status = LXA_ERROR_LIMIT;
+        return result;
+    }
+    size_t required = out->length + bytes.length + 1u;
+    if (required > out->capacity) {
+        size_t capacity = out->capacity ? out->capacity : 4096u;
+        while (capacity < required)
+            capacity = capacity > (BX_FETCH_DOCUMENT_PARSE_MAX_BYTES + 1u) / 2u
+                ? BX_FETCH_DOCUMENT_PARSE_MAX_BYTES + 1u : capacity * 2u;
+        char* grown = realloc(out->data, capacity);
+        if (!grown) {
+            errno = ENOMEM;
+            result.status = LXA_ERROR_NO_MEMORY;
+            return result;
+        }
+        out->data = grown;
+        out->capacity = capacity;
+    }
+    if (bytes.length)
+        memcpy(out->data + out->length, bytes.data, bytes.length);
+    out->length += bytes.length;
+    out->data[out->length] = '\0';
+    result.consumed = bytes.length;
+    result.status = LXA_OK;
+    return result;
+}
+
+int bx_fetch_html_extract_links(const char* html_data, size_t len,
+                                BxFetchHtmlLinkCallback cb, void* userdata,
+                                BxFetchHtmlBaseCallback base_cb) {
+    if (!cb) errno = EINVAL;
+    if (!cb || !document_parser_input_valid(html_data, len))
+        return -1;
+    lxa_html_document_t* document = NULL;
+    if (native_parse(html_data, len, &document))
+        return -1;
+    HtmlBaseContext base = {.callback = base_cb, .userdata = userdata};
+    NativeExtract state = {.cb = cb, .userdata = userdata};
+    int result = base_cb && native_walk(document, native_base_visit, &base, true)
+        ? -1 : native_walk(document, native_extract_visit, &state, false);
+    lxa_html_document_destroy(document);
+    return result;
+}
+
+char* bx_fetch_html_convert_links(const char* html_data, size_t len,
+                                  BxFetchLinkRewriteCallback cb, void* userdata,
+                                  BxFetchHtmlBaseCallback base_cb) {
+    if (!cb) errno = EINVAL;
+    if (!cb || !document_parser_input_valid(html_data, len))
+        return NULL;
+    lxa_html_document_t* document = NULL;
+    if (native_parse(html_data, len, &document))
+        return NULL;
+    HtmlBaseContext base = {.callback = base_cb, .userdata = userdata};
+    NativeRewrite state = {.cb = cb, .userdata = userdata, .reset_base = base_cb != NULL};
+    int result = base_cb && native_walk(document, native_base_visit, &base, true)
+        ? -1 : native_walk(document, native_rewrite_visit, &state, false);
+    NativeOutput output = {0};
+    if (!result) {
+        lxa_limit_reason_t reason;
+        errno = 0;
+        lxa_status_t status = lxa_html_serialize_native_document(
+            lxa_html_document_nodes(document), lxa_html_document_root(document),
+            native_serialize_write, &output, &reason);
+        if (status != LXA_OK) {
+            if (!errno) native_status_error(status);
+            result = -1;
+        }
+    }
+    lxa_html_document_destroy(document);
+    if (result) {
+        free(output.data);
+        return NULL;
+    }
+    if (!output.data)
+        output.data = strdup("");
+    return output.data;
+}
+
+#elif HAVE_LEXBOR
 #include <lexbor/dom/interfaces/element.h>
 #include <lexbor/html/html.h>
 #include <lexbor/html/serialize.h>
