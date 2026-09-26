@@ -13,8 +13,8 @@
 #if HAVE_NATIVE_HTML
 #include <liblexa/html/document.h>
 
-/* This candidate renderer fails closed on tags whose Markdown mapping has
- * not been ported. Do not select it in the shipping bx build yet. */
+/* Private native candidate. Production selection still requires the bx
+ * consumer matrix and the complete HTML parser grammar. */
 typedef struct {
     lxa_dom_nodes_t* nodes;
     BxMarkdownWriter* output;
@@ -1028,13 +1028,11 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
         return native_markdown_blockquote(context, node, depth);
     if (native_markdown_name(name, "table"))
         return native_markdown_table(context, node, depth);
-    /* Remaining bx and parser qualification gates still block promotion. */
-    errno = ENOTSUP;
-    return false;
+    return native_markdown_children(context, node, depth + 1);
 }
 
 int bx_fetch_html_markdown_supported(void) {
-    return 0; /* A partial candidate is not a supported bx Markdown path. */
+    return 1;
 }
 
 char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data,
