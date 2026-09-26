@@ -18,6 +18,7 @@
 typedef struct {
     lxa_dom_nodes_t* nodes;
     BxMarkdownWriter* output;
+    const char* link_base;
     BxFetchMarkdownSite site;
     bool lore;
     size_t list_depth;
@@ -393,9 +394,11 @@ static bool native_markdown_has_h1(NativeMarkdown* context, lxa_dom_ref_t node,
     return true;
 }
 
-static bool native_markdown_find_title(NativeMarkdown* context, lxa_dom_ref_t head,
-                                       lxa_dom_ref_t* title) {
-    *title = (lxa_dom_ref_t){0};
+static bool native_markdown_find_head_element(NativeMarkdown* context,
+                                               lxa_dom_ref_t head,
+                                               const char* tag, const char* attribute,
+                                               lxa_dom_ref_t* found) {
+    *found = (lxa_dom_ref_t){0};
     if (!head.handle)
         return true;
     lxa_dom_ref_t node;
@@ -409,9 +412,20 @@ static bool native_markdown_find_title(NativeMarkdown* context, lxa_dom_ref_t he
             lxa_span_t name;
             if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, node, &name)))
                 return false;
-            if (native_markdown_name(name, "title")) {
-                *title = node;
-                break;
+            if (native_markdown_name(name, tag)) {
+                if (!attribute) {
+                    *found = node;
+                    break;
+                }
+                lxa_span_t key = {(const uint8_t*)attribute, strlen(attribute)};
+                lxa_dom_ref_t attr;
+                if (!native_markdown_status(lxa_dom_nodes_find_attribute(
+                    context->nodes, node, key, &attr)))
+                    return false;
+                if (attr.handle) {
+                    *found = node;
+                    break;
+                }
             }
         }
         lxa_dom_ref_t next;
@@ -422,7 +436,24 @@ static bool native_markdown_find_title(NativeMarkdown* context, lxa_dom_ref_t he
     return true;
 }
 
-static bool native_markdown_destination(BxMarkdownWriter* output, lxa_span_t value) {
+static bool native_markdown_destination(NativeMarkdown* context, lxa_span_t value) {
+    char* resolved = NULL;
+    if (context->link_base) {
+        char* reference = strndup(value.data ? (const char*)value.data : "", value.length);
+        if (!reference) {
+            errno = ENOMEM;
+            return false;
+        }
+        errno = 0;
+        if (!bx_fetch_url_has_explicit_scheme(reference))
+            resolved = bx_fetch_url_resolve(context->link_base, reference);
+        int error_number = errno;
+        free(reference);
+        if (!resolved && error_number == ENOMEM)
+            return false;
+    }
+    if (resolved)
+        value = (lxa_span_t){(const uint8_t*)resolved, strlen(resolved)};
     bool angle = false;
     for (size_t i = 0; i < value.length; i++) {
         if (isspace((unsigned char)value.data[i]) || value.data[i] == '(' || value.data[i] == ')') {
@@ -430,17 +461,18 @@ static bool native_markdown_destination(BxMarkdownWriter* output, lxa_span_t val
             break;
         }
     }
-    if (angle && !bx_markdown_writer_raw(output, "<", 1u))
-        return false;
-    for (size_t i = 0; i < value.length; i++) {
+    bool ok = !angle || bx_markdown_writer_raw(context->output, "<", 1u);
+    for (size_t i = 0; ok && i < value.length; i++) {
         char c = (char)value.data[i];
         if ((c == '\\' || (!angle && c == ')') || (angle && c == '>'))
-            && !bx_markdown_writer_raw(output, "\\", 1u))
-            return false;
-        if (!bx_markdown_writer_raw(output, &c, 1u))
-            return false;
+            && !(ok = bx_markdown_writer_raw(context->output, "\\", 1u)))
+            break;
+        ok = bx_markdown_writer_raw(context->output, &c, 1u);
     }
-    return !angle || bx_markdown_writer_raw(output, ">", 1u);
+    if (ok && angle)
+        ok = bx_markdown_writer_raw(context->output, ">", 1u);
+    free(resolved);
+    return ok;
 }
 
 static char* native_markdown_fragment(NativeMarkdown* context, lxa_dom_ref_t node,
@@ -490,7 +522,7 @@ static bool native_markdown_link(NativeMarkdown* context, lxa_dom_ref_t node,
             && bx_markdown_writer_raw(context->output, "[", 1u)
             && bx_markdown_writer_raw(context->output, label, length)
             && bx_markdown_writer_raw(context->output, "](", 2u)
-            && native_markdown_destination(context->output, href)
+            && native_markdown_destination(context, href)
             && bx_markdown_writer_raw(context->output, ")", 1u)
             && (!trailing || bx_markdown_writer_text(context->output, " ", 1u));
     free(label);
@@ -517,7 +549,7 @@ static bool native_markdown_image(NativeMarkdown* context, lxa_dom_ref_t node) {
     return bx_markdown_writer_raw(context->output, "![", 2u)
         && bx_markdown_writer_text(context->output, (const char*)alt.data, alt.length)
         && bx_markdown_writer_raw(context->output, "](", 2u)
-        && native_markdown_destination(context->output, src)
+        && native_markdown_destination(context, src)
         && bx_markdown_writer_raw(context->output, ")", 1u);
 }
 
@@ -1016,10 +1048,6 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data,
         errno = EFBIG;
         return NULL;
     }
-    if (absolute_links) {
-        errno = ENOTSUP;
-        return NULL;
-    }
     lxa_allocator_t allocator = lxa_allocator_default();
     lxa_limits_t limits = lxa_limits_default();
     limits.max_input_bytes = BX_FETCH_DOCUMENT_PARSE_MAX_BYTES;
@@ -1034,22 +1062,53 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data,
     NativeMarkdown context = {
         .nodes = lxa_html_document_nodes(document),
         .output = &output,
+        .link_base = absolute_links ? base_url : NULL,
         .site = bx_fetch_markdown_site_for_url(base_url),
         .lore = bx_fetch_lore_markdown_url_matches(base_url),
     };
+    char* document_base = NULL;
+    bool ready = true;
+    if (absolute_links && base_url) {
+        lxa_dom_ref_t base;
+        ready = native_markdown_find_head_element(&context,
+            lxa_html_document_head(document), "base", "href", &base);
+        if (ready && base.handle) {
+            lxa_span_t href;
+            ready = native_markdown_attribute(&context, base, "href", &href);
+            if (ready) {
+                char* reference = strndup(href.data ? (const char*)href.data : "", href.length);
+                if (!reference) {
+                    errno = ENOMEM;
+                    ready = false;
+                }
+                else {
+                    errno = 0;
+                    document_base = bx_fetch_url_resolve(base_url, reference);
+                    int failure = errno;
+                    free(reference);
+                    if (!document_base && failure == ENOMEM)
+                        ready = false;
+                    if (document_base)
+                        context.link_base = document_base;
+                }
+            }
+        }
+    }
     lxa_dom_ref_t body = lxa_html_document_body(document);
     bool has_h1 = false;
-    bool rendered = body.handle
+    bool rendered = ready && body.handle
         && native_markdown_has_h1(&context, body, 0, &has_h1);
     if (rendered && !has_h1 && !context.lore) {
         lxa_dom_ref_t title;
-        rendered = native_markdown_find_title(&context, lxa_html_document_head(document), &title)
+        rendered = native_markdown_find_head_element(&context,
+            lxa_html_document_head(document), "title", NULL, &title)
             && (!title.handle || native_markdown_heading(&context, title, 0, 1u));
     }
     rendered = rendered && native_markdown_children(&context, body, 0);
     char* result = rendered ? bx_markdown_writer_take(&output, output_len) : NULL;
     int failure = errno;
     bx_markdown_writer_clear(&output);
+    free(document_base);
     lxa_html_document_destroy(document);
     if (!result) errno = failure ? failure : EINVAL;
     return result;
