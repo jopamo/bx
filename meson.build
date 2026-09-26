@@ -165,12 +165,20 @@ bx_link_args = bx_static_link_args + bx_build_id_link_args
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
 libcurl_dep = dependency('libcurl', static : use_static_binary)
-fetch_lexbor_dep = dependency(
-  'lexbor',
-  required : false,
-  static : use_static_binary,
-  include_type : 'system',
-)
+if get_option('native_html_candidate')
+  fetch_native_html_dep = dependency(
+    'liblexa-html-candidate',
+    required : true,
+    static : use_static_binary,
+  )
+else
+  fetch_lexbor_dep = dependency(
+    'lexbor',
+    required : false,
+    static : use_static_binary,
+    include_type : 'system',
+  )
+endif
 
 if host_machine.system() != 'linux'
   error('bx fetch requires Linux kernel 5.6 or newer and has no insecure path-resolution fallback')
@@ -1578,10 +1586,13 @@ bx_fetch_core_sources = files(
 )
 
 bx_fetch_core_deps = [libcurl_dep, bx_markdown_dep]
-bx_fetch_core_c_args = ['-DHAVE_LEXBOR=0']
-if fetch_lexbor_dep.found()
+bx_fetch_core_c_args = ['-DHAVE_LEXBOR=0', '-DHAVE_NATIVE_HTML=0']
+if get_option('native_html_candidate')
+  bx_fetch_core_deps += [fetch_native_html_dep]
+  bx_fetch_core_c_args = ['-DHAVE_LEXBOR=0', '-DHAVE_NATIVE_HTML=1']
+elif fetch_lexbor_dep.found()
   bx_fetch_core_deps += [fetch_lexbor_dep]
-  bx_fetch_core_c_args = ['-DHAVE_LEXBOR=1']
+  bx_fetch_core_c_args = ['-DHAVE_LEXBOR=1', '-DHAVE_NATIVE_HTML=0']
 endif
 
 # Private fetch mechanics shared by the Wget and Mira policy frontends.
