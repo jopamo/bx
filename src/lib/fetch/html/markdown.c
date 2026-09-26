@@ -299,6 +299,115 @@ static bool native_markdown_hidden(NativeMarkdown* context, lxa_dom_ref_t node,
     return true;
 }
 
+static bool native_markdown_ignored(lxa_span_t name) {
+    static const char* const names[] = {
+        "head", "script", "style", "template", "noscript", "svg", "canvas",
+        "iframe", "nav", "aside", "footer", "form", "button", "input",
+        "select", "textarea"
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(*names); i++) {
+        if (native_markdown_name(name, names[i]))
+            return true;
+    }
+    return false;
+}
+
+static bool native_markdown_heading(NativeMarkdown* context, lxa_dom_ref_t node,
+                                    size_t depth, size_t level) {
+    bool present;
+    if (!native_markdown_has_text(context, node, &present))
+        return false;
+    if (!present)
+        return true;
+    static const char hashes[] = "######";
+    return bx_markdown_writer_newlines(context->output, 2u)
+        && bx_markdown_writer_raw(context->output, hashes, level)
+        && bx_markdown_writer_raw(context->output, " ", 1u)
+        && native_markdown_children(context, node, depth + 1)
+        && bx_markdown_writer_newlines(context->output, 2u);
+}
+
+static bool native_markdown_has_h1(NativeMarkdown* context, lxa_dom_ref_t node,
+                                   size_t depth, bool* found) {
+    if (depth > 256) {
+        errno = EFBIG;
+        return false;
+    }
+    lxa_dom_record_t record;
+    if (!native_markdown_status(lxa_dom_nodes_read(context->nodes, node, &record)))
+        return false;
+    if (record.kind == LXA_DOM_KIND_ELEMENT) {
+        bool skip = false;
+        if (context->lore && !native_markdown_status(
+            bx_fetch_lore_markdown_skip_node(context->nodes, node, &skip)))
+            return false;
+        if (skip)
+            return true;
+        if (!native_markdown_status(bx_fetch_site_markdown_skip_node(
+            context->site, context->nodes, node, &skip)))
+            return false;
+        if (skip)
+            return true;
+        lxa_span_t name;
+        if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, node, &name)))
+            return false;
+        if (native_markdown_ignored(name))
+            return true;
+        if (!native_markdown_hidden(context, node, &skip))
+            return false;
+        if (skip)
+            return true;
+        if (native_markdown_name(name, "h1")
+            && !native_markdown_has_text(context, node, found))
+            return false;
+        if (*found)
+            return true;
+    }
+    if (record.kind != LXA_DOM_KIND_ELEMENT && record.kind != LXA_DOM_KIND_DOCUMENT)
+        return true;
+    lxa_dom_ref_t child;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, node, &child)))
+        return false;
+    while (child.handle && !*found) {
+        if (!native_markdown_has_h1(context, child, depth + 1, found))
+            return false;
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, child, &next)))
+            return false;
+        child = next;
+    }
+    return true;
+}
+
+static bool native_markdown_find_title(NativeMarkdown* context, lxa_dom_ref_t head,
+                                       lxa_dom_ref_t* title) {
+    *title = (lxa_dom_ref_t){0};
+    if (!head.handle)
+        return true;
+    lxa_dom_ref_t node;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, head, &node)))
+        return false;
+    while (node.handle) {
+        lxa_dom_record_t record;
+        if (!native_markdown_status(lxa_dom_nodes_read(context->nodes, node, &record)))
+            return false;
+        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+            lxa_span_t name;
+            if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, node, &name)))
+                return false;
+            if (native_markdown_name(name, "title")) {
+                *title = node;
+                break;
+            }
+        }
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, node, &next)))
+            return false;
+        node = next;
+    }
+    return true;
+}
+
 static bool native_markdown_destination(BxMarkdownWriter* output, lxa_span_t value) {
     bool angle = false;
     for (size_t i = 0; i < value.length; i++) {
@@ -430,14 +539,7 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
     lxa_span_t name;
     if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, node, &name)))
         return false;
-    if (native_markdown_name(name, "head") || native_markdown_name(name, "script")
-        || native_markdown_name(name, "style") || native_markdown_name(name, "template")
-        || native_markdown_name(name, "noscript") || native_markdown_name(name, "nav")
-        || native_markdown_name(name, "aside") || native_markdown_name(name, "footer")
-        || native_markdown_name(name, "svg") || native_markdown_name(name, "canvas")
-        || native_markdown_name(name, "iframe") || native_markdown_name(name, "form")
-        || native_markdown_name(name, "button") || native_markdown_name(name, "input")
-        || native_markdown_name(name, "select") || native_markdown_name(name, "textarea"))
+    if (native_markdown_ignored(name))
         return true;
     bool hidden;
     if (!native_markdown_hidden(context, node, &hidden))
@@ -447,18 +549,7 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
     if (unwrap || native_markdown_name(name, "span") || native_markdown_name(name, "body"))
         return native_markdown_children(context, node, depth + 1);
     if (name.length == 2 && name.data[0] == 'h' && name.data[1] >= '1' && name.data[1] <= '6') {
-        bool present;
-        if (!native_markdown_has_text(context, node, &present))
-            return false;
-        if (!present)
-            return true;
-        static const char hashes[] = "######";
-        size_t level = (size_t)(name.data[1] - '0');
-        return bx_markdown_writer_newlines(context->output, 2u)
-            && bx_markdown_writer_raw(context->output, hashes, level)
-            && bx_markdown_writer_raw(context->output, " ", 1u)
-            && native_markdown_children(context, node, depth + 1)
-            && bx_markdown_writer_newlines(context->output, 2u);
+        return native_markdown_heading(context, node, depth, (size_t)(name.data[1] - '0'));
     }
     if (native_markdown_name(name, "p") || native_markdown_name(name, "div")
         || native_markdown_name(name, "section") || native_markdown_name(name, "article")
@@ -527,32 +618,16 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data,
         .site = bx_fetch_markdown_site_for_url(base_url),
         .lore = bx_fetch_lore_markdown_url_matches(base_url),
     };
-    /* Title fallback has not been ported. Reject a titled document instead
-     * of quietly omitting its heading. */
-    lxa_dom_ref_t head = lxa_html_document_head(document), item = {0};
-    bool ready = !head.handle || native_markdown_status(
-        lxa_dom_nodes_first_child(context.nodes, head, &item));
-    while (ready && item.handle) {
-        lxa_dom_record_t record;
-        ready = native_markdown_status(lxa_dom_nodes_read(context.nodes, item, &record));
-        if (!ready) break;
-        if (record.kind == LXA_DOM_KIND_ELEMENT) {
-            lxa_span_t name;
-            ready = native_markdown_status(lxa_dom_nodes_element_name(context.nodes, item, &name));
-            if (!ready) break;
-            if (native_markdown_name(name, "title")) {
-                errno = ENOTSUP;
-                ready = false;
-                break;
-            }
-        }
-        lxa_dom_ref_t next;
-        ready = native_markdown_status(lxa_dom_nodes_next_sibling(context.nodes, item, &next));
-        item = next;
-    }
     lxa_dom_ref_t body = lxa_html_document_body(document);
-    bool rendered = ready && body.handle
-        && native_markdown_children(&context, body, 0);
+    bool has_h1 = false;
+    bool rendered = body.handle
+        && native_markdown_has_h1(&context, body, 0, &has_h1);
+    if (rendered && !has_h1 && !context.lore) {
+        lxa_dom_ref_t title;
+        rendered = native_markdown_find_title(&context, lxa_html_document_head(document), &title)
+            && (!title.handle || native_markdown_heading(&context, title, 0, 1u));
+    }
+    rendered = rendered && native_markdown_children(&context, body, 0);
     char* result = rendered ? bx_markdown_writer_take(&output, output_len) : NULL;
     int failure = errno;
     bx_markdown_writer_clear(&output);
