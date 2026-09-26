@@ -10,7 +10,228 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if HAVE_LEXBOR
+#if HAVE_NATIVE_HTML
+#include <liblexa/html/document.h>
+
+/* This candidate renderer fails closed on tags whose Markdown mapping has
+ * not been ported. Do not select it in the shipping bx build yet. */
+typedef struct {
+    lxa_dom_nodes_t* nodes;
+    BxMarkdownWriter* output;
+    BxFetchMarkdownSite site;
+    bool lore;
+} NativeMarkdown;
+
+static bool native_markdown_status(lxa_status_t status) {
+    if (status == LXA_OK)
+        return true;
+    errno = status == LXA_ERROR_NO_MEMORY ? ENOMEM :
+            status == LXA_ERROR_LIMIT || status == LXA_ERROR_OVERFLOW ? EFBIG : EINVAL;
+    return false;
+}
+
+static bool native_markdown_name(lxa_span_t name, const char* expected) {
+    size_t length = strlen(expected);
+    return name.length == length && memcmp(name.data, expected, length) == 0;
+}
+
+static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, size_t depth);
+
+static bool native_markdown_children(NativeMarkdown* context, lxa_dom_ref_t parent,
+                                     size_t depth) {
+    lxa_dom_ref_t child;
+    if (!native_markdown_status(lxa_dom_nodes_first_child(context->nodes, parent, &child)))
+        return false;
+    while (child.handle) {
+        if (!native_markdown_node(context, child, depth))
+            return false;
+        lxa_dom_ref_t next;
+        if (!native_markdown_status(lxa_dom_nodes_next_sibling(context->nodes, child, &next)))
+            return false;
+        child = next;
+    }
+    return true;
+}
+
+static bool native_markdown_has_text(NativeMarkdown* context, lxa_dom_ref_t node,
+                                     bool* present) {
+    lxa_allocator_t allocator = lxa_allocator_default();
+    lxa_buffer_t text;
+    if (!native_markdown_status(lxa_buffer_init(&text, &allocator)))
+        return false;
+    lxa_status_t status = lxa_dom_nodes_text_content(
+        context->nodes, node, &text, BX_FETCH_DOCUMENT_PARSE_MAX_BYTES);
+    *present = false;
+    if (status == LXA_OK) {
+        for (size_t i = 0; i < text.length; i++) {
+            if (!isspace((unsigned char)text.data[i])) {
+                *present = true;
+                break;
+            }
+        }
+    }
+    lxa_buffer_destroy(&text);
+    return native_markdown_status(status);
+}
+
+static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, size_t depth) {
+    if (depth > 256) {
+        errno = EFBIG;
+        return false;
+    }
+    bool skip = false, unwrap = false;
+    if (context->lore && !native_markdown_status(
+        bx_fetch_lore_markdown_skip_node(context->nodes, node, &skip)))
+        return false;
+    if (skip)
+        return true;
+    if (!native_markdown_status(bx_fetch_site_markdown_skip_node(
+        context->site, context->nodes, node, &skip)))
+        return false;
+    if (skip)
+        return true;
+    if (!native_markdown_status(bx_fetch_site_markdown_unwrap_node(
+        context->site, context->nodes, node, &unwrap)))
+        return false;
+    lxa_dom_record_t record;
+    if (!native_markdown_status(lxa_dom_nodes_read(context->nodes, node, &record)))
+        return false;
+    if (record.kind == LXA_DOM_KIND_TEXT) {
+        lxa_span_t text;
+        return native_markdown_status(lxa_dom_nodes_character_read(context->nodes, node, &text))
+            && bx_markdown_writer_text(context->output, (const char*)text.data, text.length);
+    }
+    if (record.kind != LXA_DOM_KIND_ELEMENT)
+        return true;
+    lxa_span_t name;
+    if (!native_markdown_status(lxa_dom_nodes_element_name(context->nodes, node, &name)))
+        return false;
+    if (native_markdown_name(name, "head") || native_markdown_name(name, "script")
+        || native_markdown_name(name, "style") || native_markdown_name(name, "template")
+        || native_markdown_name(name, "noscript") || native_markdown_name(name, "nav")
+        || native_markdown_name(name, "aside") || native_markdown_name(name, "footer"))
+        return true;
+    lxa_span_t hidden_key = {(const uint8_t*)"hidden", 6};
+    lxa_dom_ref_t hidden;
+    if (!native_markdown_status(lxa_dom_nodes_find_attribute(
+        context->nodes, node, hidden_key, &hidden)))
+        return false;
+    if (hidden.handle)
+        return true;
+    static const char* const pending_attributes[] = {"aria-hidden", "style", "role"};
+    for (size_t i = 0; i < sizeof(pending_attributes) / sizeof(*pending_attributes); i++) {
+        lxa_span_t key = {(const uint8_t*)pending_attributes[i], strlen(pending_attributes[i])};
+        lxa_dom_ref_t attribute;
+        if (!native_markdown_status(lxa_dom_nodes_find_attribute(
+            context->nodes, node, key, &attribute)))
+            return false;
+        if (attribute.handle) {
+            errno = ENOTSUP;
+            return false;
+        }
+    }
+    if (unwrap || native_markdown_name(name, "span") || native_markdown_name(name, "body"))
+        return native_markdown_children(context, node, depth + 1);
+    if (name.length == 2 && name.data[0] == 'h' && name.data[1] >= '1' && name.data[1] <= '6') {
+        bool present;
+        if (!native_markdown_has_text(context, node, &present))
+            return false;
+        if (!present)
+            return true;
+        static const char hashes[] = "######";
+        size_t level = (size_t)(name.data[1] - '0');
+        return bx_markdown_writer_newlines(context->output, 2u)
+            && bx_markdown_writer_raw(context->output, hashes, level)
+            && bx_markdown_writer_raw(context->output, " ", 1u)
+            && native_markdown_children(context, node, depth + 1)
+            && bx_markdown_writer_newlines(context->output, 2u);
+    }
+    if (native_markdown_name(name, "p") || native_markdown_name(name, "div")
+        || native_markdown_name(name, "section") || native_markdown_name(name, "article")
+        || native_markdown_name(name, "main") || native_markdown_name(name, "header")) {
+        return bx_markdown_writer_newlines(context->output, 2u)
+            && native_markdown_children(context, node, depth + 1)
+            && bx_markdown_writer_newlines(context->output, 2u);
+    }
+    if (native_markdown_name(name, "br"))
+        return bx_markdown_writer_raw(context->output, "\\\n", 2u);
+    /* Link, image, list, code, table and style/ARIA policies need their
+     * own native mappings before this path can be enabled for bx. */
+    errno = ENOTSUP;
+    return false;
+}
+
+int bx_fetch_html_markdown_supported(void) {
+    return 0; /* A partial candidate is not a supported bx Markdown path. */
+}
+
+char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data,
+                               size_t len, bool absolute_links, size_t* output_len) {
+    if (output_len) *output_len = 0;
+    if (!html_data) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (len > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES) {
+        errno = EFBIG;
+        return NULL;
+    }
+    if (absolute_links) {
+        errno = ENOTSUP;
+        return NULL;
+    }
+    lxa_allocator_t allocator = lxa_allocator_default();
+    lxa_limits_t limits = lxa_limits_default();
+    limits.max_input_bytes = BX_FETCH_DOCUMENT_PARSE_MAX_BYTES;
+    lxa_html_document_t* document = NULL;
+    lxa_span_t input = {(const uint8_t*)html_data, len};
+    if (!native_markdown_status(lxa_html_document_parse(
+        &allocator, &limits, input, NULL, NULL, &document)))
+        return NULL;
+    errno = 0;
+    BxMarkdownWriter output;
+    bx_markdown_writer_init(&output, BX_FETCH_DOCUMENT_PARSE_MAX_BYTES);
+    NativeMarkdown context = {
+        .nodes = lxa_html_document_nodes(document),
+        .output = &output,
+        .site = bx_fetch_markdown_site_for_url(base_url),
+        .lore = bx_fetch_lore_markdown_url_matches(base_url),
+    };
+    /* Title fallback has not been ported. Reject a titled document instead
+     * of quietly omitting its heading. */
+    lxa_dom_ref_t head = lxa_html_document_head(document), item = {0};
+    bool ready = !head.handle || native_markdown_status(
+        lxa_dom_nodes_first_child(context.nodes, head, &item));
+    while (ready && item.handle) {
+        lxa_dom_record_t record;
+        ready = native_markdown_status(lxa_dom_nodes_read(context.nodes, item, &record));
+        if (!ready) break;
+        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+            lxa_span_t name;
+            ready = native_markdown_status(lxa_dom_nodes_element_name(context.nodes, item, &name));
+            if (!ready) break;
+            if (native_markdown_name(name, "title")) {
+                errno = ENOTSUP;
+                ready = false;
+                break;
+            }
+        }
+        lxa_dom_ref_t next;
+        ready = native_markdown_status(lxa_dom_nodes_next_sibling(context.nodes, item, &next));
+        item = next;
+    }
+    lxa_dom_ref_t body = lxa_html_document_body(document);
+    bool rendered = ready && body.handle
+        && native_markdown_children(&context, body, 0);
+    char* result = rendered ? bx_markdown_writer_take(&output, output_len) : NULL;
+    int failure = errno;
+    bx_markdown_writer_clear(&output);
+    lxa_html_document_destroy(document);
+    if (!result) errno = failure ? failure : EINVAL;
+    return result;
+}
+
+#elif HAVE_LEXBOR
 #include <lexbor/dom/interfaces/character_data.h>
 #include <lexbor/dom/interfaces/element.h>
 #include <lexbor/html/html.h>
