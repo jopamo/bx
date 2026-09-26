@@ -20,6 +20,10 @@ typedef struct {
     BxMarkdownWriter* output;
     BxFetchMarkdownSite site;
     bool lore;
+    size_t list_depth;
+    size_t ordered_index[32];
+    bool ordered[32];
+    bool in_list_item;
 } NativeMarkdown;
 
 static bool native_markdown_status(lxa_status_t status) {
@@ -327,6 +331,16 @@ static bool native_markdown_heading(NativeMarkdown* context, lxa_dom_ref_t node,
         && bx_markdown_writer_newlines(context->output, 2u);
 }
 
+static bool native_markdown_block(NativeMarkdown* context, lxa_dom_ref_t node,
+                                  size_t depth) {
+    if (context->in_list_item)
+        return native_markdown_children(context, node, depth + 1)
+            && bx_markdown_writer_newlines(context->output, 1u);
+    return bx_markdown_writer_newlines(context->output, 2u)
+        && native_markdown_children(context, node, depth + 1)
+        && bx_markdown_writer_newlines(context->output, 2u);
+}
+
 static bool native_markdown_has_h1(NativeMarkdown* context, lxa_dom_ref_t node,
                                    size_t depth, bool* found) {
     if (depth > 256) {
@@ -507,6 +521,69 @@ static bool native_markdown_image(NativeMarkdown* context, lxa_dom_ref_t node) {
         && bx_markdown_writer_raw(context->output, ")", 1u);
 }
 
+static bool native_markdown_list(NativeMarkdown* context, lxa_dom_ref_t node,
+                                 size_t depth, bool ordered) {
+    if (context->list_depth >= sizeof(context->ordered) / sizeof(*context->ordered)) {
+        errno = EFBIG;
+        return false;
+    }
+    if (!bx_markdown_writer_newlines(context->output, context->list_depth ? 1u : 2u))
+        return false;
+    size_t index = context->list_depth++;
+    context->ordered[index] = ordered;
+    context->ordered_index[index] = 1u;
+    if (ordered) {
+        lxa_span_t start;
+        if (!native_markdown_attribute(context, node, "start", &start)) {
+            context->list_depth--;
+            return false;
+        }
+        size_t parsed = 0;
+        bool valid = start.data && start.length;
+        for (size_t i = 0; valid && i < start.length; i++) {
+            uint8_t digit = start.data[i];
+            if (!isdigit((unsigned char)digit) || parsed > (SIZE_MAX - (size_t)(digit - '0')) / 10u)
+                valid = false;
+            else
+                parsed = parsed * 10u + (size_t)(digit - '0');
+        }
+        if (valid)
+            context->ordered_index[index] = parsed;
+    }
+    bool rendered = native_markdown_children(context, node, depth + 1);
+    context->list_depth--;
+    return rendered && bx_markdown_writer_newlines(context->output,
+                                                   context->list_depth ? 1u : 2u);
+}
+
+static bool native_markdown_list_item(NativeMarkdown* context, lxa_dom_ref_t node,
+                                      size_t depth) {
+    if (!context->list_depth)
+        return native_markdown_block(context, node, depth);
+    size_t index = context->list_depth - 1u;
+    if (!bx_markdown_writer_newlines(context->output, 1u))
+        return false;
+    for (size_t i = 0; i < index; i++) {
+        if (!bx_markdown_writer_raw(context->output, "  ", 2u))
+            return false;
+    }
+    if (context->ordered[index]) {
+        char prefix[32];
+        int length = snprintf(prefix, sizeof(prefix), "%zu. ",
+                              context->ordered_index[index]++);
+        if (length < 0 || (size_t)length >= sizeof(prefix)
+            || !bx_markdown_writer_raw(context->output, prefix, (size_t)length))
+            return false;
+    }
+    else if (!bx_markdown_writer_raw(context->output, "- ", 2u))
+        return false;
+    bool was_in_list_item = context->in_list_item;
+    context->in_list_item = true;
+    bool rendered = native_markdown_children(context, node, depth + 1);
+    context->in_list_item = was_in_list_item;
+    return rendered;
+}
+
 static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, size_t depth) {
     if (depth > 256) {
         errno = EFBIG;
@@ -554,9 +631,7 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
     if (native_markdown_name(name, "p") || native_markdown_name(name, "div")
         || native_markdown_name(name, "section") || native_markdown_name(name, "article")
         || native_markdown_name(name, "main") || native_markdown_name(name, "header")) {
-        return bx_markdown_writer_newlines(context->output, 2u)
-            && native_markdown_children(context, node, depth + 1)
-            && bx_markdown_writer_newlines(context->output, 2u);
+        return native_markdown_block(context, node, depth);
     }
     if (native_markdown_name(name, "br"))
         return bx_markdown_writer_raw(context->output, "\\\n", 2u);
@@ -576,7 +651,20 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
         return native_markdown_link(context, node, depth);
     if (native_markdown_name(name, "img") || native_markdown_name(name, "image"))
         return native_markdown_image(context, node);
-    /* Lists and tables need their
+    if (native_markdown_name(name, "ul") || native_markdown_name(name, "ol"))
+        return native_markdown_list(context, node, depth, native_markdown_name(name, "ol"));
+    if (native_markdown_name(name, "li"))
+        return native_markdown_list_item(context, node, depth);
+    if (native_markdown_name(name, "dl"))
+        return native_markdown_block(context, node, depth);
+    if (native_markdown_name(name, "dt"))
+        return bx_markdown_writer_newlines(context->output, 1u)
+            && native_markdown_wrapped(context, node, depth, "**");
+    if (native_markdown_name(name, "dd"))
+        return bx_markdown_writer_newlines(context->output, 1u)
+            && bx_markdown_writer_raw(context->output, ": ", 2u)
+            && native_markdown_children(context, node, depth + 1);
+    /* Quotes and tables need their
      * own native mappings before this path can be enabled for bx. */
     errno = ENOTSUP;
     return false;
