@@ -12,6 +12,12 @@ option(
   description : 'Static link policy: enabled (default), auto (musl toolchains), or disabled'
 )
 option(
+  'native_html_candidate',
+  type : 'boolean',
+  value : false,
+  description : 'Private native HTML/Markdown candidate; requires liblexa-html-candidate and never falls back to Lexbor'
+)
+option(
   'multicall_install_mode',
   type : 'combo',
   choices : ['shebang', 'symlink'],
