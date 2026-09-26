@@ -1207,6 +1207,7 @@ static int expand_call_arglist(block* b, jv args, jv *env) {
       }
       }
 
+      (void)desired_args; // The arity check is compiled out with NDEBUG.
       assert(actual_args == desired_args); // because now handle this above
     }
     ret = BLOCK(ret, prelude, inst_block(curr));
