@@ -584,6 +584,34 @@ static bool native_markdown_list_item(NativeMarkdown* context, lxa_dom_ref_t nod
     return rendered;
 }
 
+static bool native_markdown_blockquote(NativeMarkdown* context, lxa_dom_ref_t node,
+                                        size_t depth) {
+    BxMarkdownWriter nested;
+    bx_markdown_writer_init(&nested, BX_FETCH_DOCUMENT_PARSE_MAX_BYTES);
+    NativeMarkdown nested_context = *context;
+    nested_context.output = &nested;
+    bool rendered = native_markdown_children(&nested_context, node, depth + 1);
+    size_t length = 0;
+    char* text = rendered ? bx_markdown_writer_take(&nested, &length) : NULL;
+    int failure = errno;
+    bx_markdown_writer_clear(&nested);
+    if (!text) {
+        errno = failure ? failure : EINVAL;
+        return false;
+    }
+    bool ok = bx_markdown_writer_newlines(context->output, 2u);
+    for (size_t start = 0; ok && start < length;) {
+        size_t end = start;
+        while (end < length && text[end] != '\n') end++;
+        ok = bx_markdown_writer_raw(context->output, "> ", 2u)
+            && bx_markdown_writer_raw(context->output, text + start, end - start)
+            && bx_markdown_writer_newlines(context->output, 1u);
+        start = end < length ? end + 1u : end;
+    }
+    free(text);
+    return ok && bx_markdown_writer_newlines(context->output, 2u);
+}
+
 static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, size_t depth) {
     if (depth > 256) {
         errno = EFBIG;
@@ -630,11 +658,17 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
     }
     if (native_markdown_name(name, "p") || native_markdown_name(name, "div")
         || native_markdown_name(name, "section") || native_markdown_name(name, "article")
-        || native_markdown_name(name, "main") || native_markdown_name(name, "header")) {
+        || native_markdown_name(name, "main") || native_markdown_name(name, "header")
+        || native_markdown_name(name, "figure") || native_markdown_name(name, "figcaption")
+        || native_markdown_name(name, "details") || native_markdown_name(name, "summary")) {
         return native_markdown_block(context, node, depth);
     }
     if (native_markdown_name(name, "br"))
         return bx_markdown_writer_raw(context->output, "\\\n", 2u);
+    if (native_markdown_name(name, "hr"))
+        return bx_markdown_writer_newlines(context->output, 2u)
+            && bx_markdown_writer_raw(context->output, "---", 3u)
+            && bx_markdown_writer_newlines(context->output, 2u);
     if (native_markdown_name(name, "strong") || native_markdown_name(name, "b"))
         return native_markdown_wrapped(context, node, depth, "**");
     if (native_markdown_name(name, "em") || native_markdown_name(name, "i"))
@@ -664,7 +698,9 @@ static bool native_markdown_node(NativeMarkdown* context, lxa_dom_ref_t node, si
         return bx_markdown_writer_newlines(context->output, 1u)
             && bx_markdown_writer_raw(context->output, ": ", 2u)
             && native_markdown_children(context, node, depth + 1);
-    /* Quotes and tables need their
+    if (native_markdown_name(name, "blockquote"))
+        return native_markdown_blockquote(context, node, depth);
+    /* Tables need their
      * own native mappings before this path can be enabled for bx. */
     errno = ENOTSUP;
     return false;
