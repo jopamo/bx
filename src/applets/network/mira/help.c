@@ -152,7 +152,7 @@ void bx_mira_print_help(void) {
         "FTP credentials override generic and URL credentials as a pair. "
         "An omitted component is empty; empty option values clear that setting.\n"
         "FTP resume, timestamping, and saved HTTP headers are rejected.\n"
-        "\n--markdown buffers one bounded HTML response, parses it with Lexbor, "
+        "\n--markdown buffers one bounded HTML response, parses it as HTML, "
         "and writes Markdown instead of the response body. Without an explicit "
         "output document, the derived filename uses a .md extension. Hidden elements, "
         "navigation chrome, forms, and known Lore reply boilerplate are omitted. "

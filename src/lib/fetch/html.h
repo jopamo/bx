@@ -61,7 +61,7 @@ char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLink
  * absolute_links resolves links/images against base_url and the first HTML
  * base href. Explicit schemes and unresolvable references remain unchanged. */
 char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, bool absolute_links, size_t* output_len);
-/* False when bx was built without the Lexbor DOM parser. */
+/* False when bx was built without an HTML parser. */
 int bx_fetch_html_markdown_supported(void);
 /* Extraction returns lexical references; callers own URL resolution. */
 int bx_fetch_css_extract_links(const char* css_data, size_t len, BxFetchLinkCallback cb, void* userdata);
