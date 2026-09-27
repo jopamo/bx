@@ -3,12 +3,7 @@
 
 #include <stdbool.h>
 
-#if HAVE_LEXBOR || HAVE_NATIVE_HTML
-#if HAVE_NATIVE_HTML
 #include <liblexa/dom/node_store.h>
-#else
-#include <lexbor/dom/interfaces/node.h>
-#endif
 
 typedef enum {
     BX_FETCH_MARKDOWN_SITE_GENERIC = 0,
@@ -19,13 +14,6 @@ typedef enum {
 } BxFetchMarkdownSite;
 
 BxFetchMarkdownSite bx_fetch_markdown_site_for_url(const char* base_url);
-#if HAVE_NATIVE_HTML
 lxa_status_t bx_fetch_site_markdown_skip_node(BxFetchMarkdownSite site, lxa_dom_nodes_t* nodes, lxa_dom_ref_t node, bool* skip);
 lxa_status_t bx_fetch_site_markdown_unwrap_node(BxFetchMarkdownSite site, lxa_dom_nodes_t* nodes, lxa_dom_ref_t node, bool* unwrap);
-#else
-bool bx_fetch_site_markdown_skip_node(BxFetchMarkdownSite site, lxb_dom_node_t* node);
-bool bx_fetch_site_markdown_unwrap_node(BxFetchMarkdownSite site, lxb_dom_node_t* node);
-#endif
-#endif
-
 #endif
