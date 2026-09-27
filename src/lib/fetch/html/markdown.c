@@ -31,7 +31,8 @@ static bool native_markdown_status(lxa_status_t status) {
     if (status == LXA_OK)
         return true;
     errno = status == LXA_ERROR_NO_MEMORY ? ENOMEM :
-            status == LXA_ERROR_LIMIT || status == LXA_ERROR_OVERFLOW ? EFBIG : EINVAL;
+            status == LXA_ERROR_LIMIT || status == LXA_ERROR_OVERFLOW ? EFBIG :
+            status == LXA_ERROR_ENTROPY ? EIO : EINVAL;
     return false;
 }
 
