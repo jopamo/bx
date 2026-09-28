@@ -420,7 +420,7 @@ typedef struct {
 } HtmlBaseContext;
 
 #include <liblexa/html/document.h>
-#include <liblexa/serialization/document.h>
+#include <liblexa/serialize.h>
 
 typedef struct {
     char* data;
