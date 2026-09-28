@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -16,6 +17,7 @@
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
+#include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
 
 #ifdef S_ISVTX
@@ -784,7 +786,7 @@ static bool bx_tar_stream_write_fs_raw_entry(
     struct timespec mtime,
     struct bx_diag_ctx* diag) {
     struct bx_file_metadata metadata = {0};
-    if (!bx_tar_metadata_collect(&metadata, source_fd, fs_entry->source_path,
+    if (!bx_tar_metadata_collect(&metadata, source_fd,
                                   S_ISLNK(fs_entry->st->st_mode),
                                   S_ISDIR(fs_entry->st->st_mode),
                                   state->options->numeric_owner,
@@ -993,35 +995,48 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
                                          const struct bx_archive_fs_visit_entry* entry,
                                          struct bx_diag_ctx* diag) {
     const struct bx_tar_metadata_options* metadata = state->options->metadata;
-    bool directory_metadata = S_ISDIR(entry->st->st_mode) && metadata
-        && (metadata->acls || metadata->xattrs || metadata->selinux);
-    if (!S_ISREG(entry->st->st_mode) && !directory_metadata)
+    bool symlink = S_ISLNK(entry->st->st_mode);
+    bool needs_metadata = metadata
+        && (metadata->xattrs || metadata->selinux || (metadata->acls && !symlink));
+    if (!S_ISREG(entry->st->st_mode) && !needs_metadata)
         return bx_tar_stream_write_opened_fs_entry(state, entry, -1, diag);
 
     struct stat opened;
+    bool borrowed = symlink && entry->source_fd >= 0;
     int fd;
-    if (directory_metadata) {
-        fd = bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name,
-                                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+    if (S_ISREG(entry->st->st_mode))
+        fd = bx_fd_openat_regular_verified(entry->source_parent_fd, entry->source_name,
+                                            entry->st, &opened);
+    else {
+        int flags = S_ISDIR(entry->st->st_mode) ? O_RDONLY | O_DIRECTORY : O_PATH;
+        fd = borrowed ? entry->source_fd
+            : bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name, flags | O_NOFOLLOW, 0);
         if (fd >= 0 && bx_fd_fstat_expected(fd, entry->st, &opened) != 0) {
             int error = errno;
-            close(fd);
+            if (!borrowed)
+                close(fd);
             fd = -1;
             errno = error;
         }
-    } else
-        fd = bx_fd_openat_regular_verified(entry->source_parent_fd, entry->source_name,
-                                            entry->st, &opened);
+    }
     if (fd < 0) {
         bx_diag(diag, "%s: %s", entry->source_path, strerror(errno));
         return false;
     }
-    /* Header, ACLs/xattrs and payload all refer to this single opened inode.
-     * Keep the descriptor local, even when the input list was buffered. */
+    /* Metadata and payload refer to this opened inode. A streaming symlink
+     * borrows the walker's FD; buffered inputs must acquire their own. */
     struct bx_archive_fs_visit_entry verified = *entry;
     verified.st = &opened;
-    bool ok = bx_tar_stream_write_opened_fs_entry(state, &verified, fd, diag);
-    bool closed = bx_fd_close(&fd, entry->source_path, ok ? diag : NULL);
+    char* target = symlink && !borrowed ? bx_path_readlinkat_dup(fd, "") : NULL;
+    bool ok = !symlink || borrowed || target;
+    if (!ok)
+        bx_diag(diag, "%s: %s", entry->source_path, strerror(errno));
+    if (target)
+        verified.link_target = target;
+    if (ok)
+        ok = bx_tar_stream_write_opened_fs_entry(state, &verified, fd, diag);
+    free(target);
+    bool closed = borrowed || bx_fd_close(&fd, entry->source_path, ok ? diag : NULL);
     return ok && closed;
 }
 
@@ -1471,6 +1486,7 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
     for (i = 0u; i < files->len; i++) {
         struct bx_archive_fs_visit_entry entry = {
             .source_parent_fd = AT_FDCWD,
+            .source_fd = -1,
             .source_name = files->entries[i].source_path,
             .source_path = files->entries[i].source_path,
             .archive_path = files->entries[i].archive_path,

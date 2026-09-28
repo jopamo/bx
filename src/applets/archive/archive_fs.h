@@ -25,6 +25,8 @@ struct bx_archive_fs_list {
 struct bx_archive_fs_visit_entry {
     /* Borrowed source authority, valid only during the visitor call. */
     int source_parent_fd;
+    /* Pinned symlink FD, or -1. Owned by the walker, including on failure. */
+    int source_fd;
     const char* source_name;
     const char* source_path;
     const char* archive_path;
