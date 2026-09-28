@@ -71,6 +71,7 @@ char* bx_path_basename_dup(const char* path);
 char* bx_path_remove_last_extension_dup(const char* path);
 char* bx_path_dirname_dup(const char* path);
 char* bx_path_readlink_dup(const char* path);
+char* bx_path_readlinkat_dup(int parent_fd, const char* name);
 char* bx_path_parent_dir_dup(const char* path);
 char* bx_path_parent_dir_stripped_dup(const char* path);
 char* bx_path_parents_layout_dup(const char* source_operand);

@@ -758,6 +758,8 @@ static const char* bx_tar_create_error_verb(enum bx_archive_fs_error_op op) {
             return "readlink";
         case BX_ARCHIVE_FS_ERROR_OPENDIR:
             return "open";
+        case BX_ARCHIVE_FS_ERROR_READDIR:
+            return "read";
         case BX_ARCHIVE_FS_ERROR_CLOSEDIR:
             return "close";
     }

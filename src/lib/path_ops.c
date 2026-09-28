@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -660,12 +661,12 @@ char* bx_path_remove_last_extension_dup(const char* path) {
     return bx_path_dup_range(path, (size_t)(dot - path));
 }
 
-char* bx_path_readlink_dup(const char* path) {
+char* bx_path_readlinkat_dup(int parent_fd, const char* name) {
     size_t cap = 128u;
     char* target = xmalloc(cap + 1u);
 
     for (;;) {
-        ssize_t nread = readlink(path, target, cap);
+        ssize_t nread = readlinkat(parent_fd, name, target, cap);
         if (nread < 0) {
             free(target);
             return NULL;
@@ -683,6 +684,10 @@ char* bx_path_readlink_dup(const char* path) {
         cap *= 2u;
         target = xrealloc(target, cap + 1u);
     }
+}
+
+char* bx_path_readlink_dup(const char* path) {
+    return bx_path_readlinkat_dup(AT_FDCWD, path);
 }
 
 char* bx_path_dirname_dup(const char* path) {
