@@ -21,6 +21,13 @@ bool bx_fd_close(int* p_fd, const char* path, struct bx_diag_ctx* diag);
  * Reports error to diag. returns fd or -1. */
 int bx_fd_open_read(const char* path, struct bx_diag_ctx* diag);
 
+/* Open a selected regular file once, without following the final component.
+ * The caller owns parent-path resolution. Return an owned readable CLOEXEC fd
+ * only if its type/device/inode match expected; fill opened from that fd.
+ * O_NONBLOCK prevents a substituted FIFO from hanging before verification. */
+int bx_fd_openat_regular_verified(int parent_fd, const char* name,
+                                  const struct stat* expected, struct stat* opened);
+
 /* bx_fd_open_write: wrapper for open(O_WRONLY | flags).
  * Reports error to diag. returns fd or -1. */
 int bx_fd_open_write(const char* path, int flags, mode_t mode, struct bx_diag_ctx* diag);

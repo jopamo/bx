@@ -637,19 +637,15 @@ static bool bx_tar_stream_write_sparse_number_line(struct bx_tar_stream_live_ent
 }
 
 static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
+                                          int fd,
                                           const char* path,
                                           size_t expected_size,
                                           unsigned char* buffer,
                                           size_t buffer_size,
                                           struct bx_diag_ctx* diag) {
-    int fd = bx_fd_open_read(path, diag);
     size_t padding = bx_tar_stream_round_up(expected_size, BX_TAR_STREAM_BLOCK_SIZE) - expected_size;
     size_t total = 0u;
     bool padding_written = padding == 0u;
-
-    if (fd < 0) {
-        return false;
-    }
 
     while (total < expected_size) {
         size_t chunk = expected_size - total;
@@ -666,12 +662,10 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
 
             if (nread < 0) {
                 bx_diag(diag, "%s: %s", path, strerror(errno));
-                bx_fd_close(&fd, path, NULL);
                 return false;
             }
             if (nread == 0) {
                 bx_diag(diag, "%s: file shrank while reading", path);
-                bx_fd_close(&fd, path, NULL);
                 return false;
             }
             filled += (size_t)nread;
@@ -683,7 +677,6 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
             padding_written = true;
         }
         if (!bx_tar_stream_sink_write(sink, buffer, write_len, diag)) {
-            bx_fd_close(&fd, path, NULL);
             return false;
         }
         total += chunk;
@@ -691,10 +684,6 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
 
     if (!padding_written
         && !bx_tar_stream_sink_write(sink, bx_tar_stream_zero_block, padding, diag)) {
-        bx_fd_close(&fd, path, NULL);
-        return false;
-    }
-    if (!bx_fd_close(&fd, path, diag)) {
         return false;
     }
     return true;
@@ -782,6 +771,7 @@ static bool bx_tar_stream_apply_mode_text(mode_t initial_mode,
 static bool bx_tar_stream_write_fs_raw_entry(
     const struct bx_tar_stream_fs_write_state* state,
     const struct bx_archive_fs_visit_entry* fs_entry,
+    int source_fd,
     enum bx_tar_stream_kind kind,
     const char* linkname,
     const unsigned char* data,
@@ -794,7 +784,7 @@ static bool bx_tar_stream_write_fs_raw_entry(
     struct timespec mtime,
     struct bx_diag_ctx* diag) {
     struct bx_file_metadata metadata = {0};
-    if (!bx_tar_metadata_collect(&metadata, fs_entry->source_path,
+    if (!bx_tar_metadata_collect(&metadata, source_fd, fs_entry->source_path,
                                   S_ISLNK(fs_entry->st->st_mode),
                                   S_ISDIR(fs_entry->st->st_mode),
                                   state->options->numeric_owner,
@@ -825,8 +815,9 @@ static bool bx_tar_stream_write_fs_raw_entry(
     return ok;
 }
 
-static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* state,
+static bool bx_tar_stream_write_opened_fs_entry(struct bx_tar_stream_fs_write_state* state,
                                          const struct bx_archive_fs_visit_entry* fs_entry,
+                                         int source_fd,
                                          struct bx_diag_ctx* diag) {
     const struct bx_tar_stream_sink* sink = state->sink;
     const struct bx_tar_stream_options* options = state->options;
@@ -896,6 +887,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         }
         return bx_tar_stream_write_fs_raw_entry(state,
                                                 fs_entry,
+                                                source_fd,
                                                 kind,
                                                 NULL,
                                                 directory_data,
@@ -911,6 +903,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
     if (S_ISLNK(fs_entry->st->st_mode)) {
         return bx_tar_stream_write_fs_raw_entry(state,
                                                 fs_entry,
+                                                source_fd,
                                                 BX_TAR_STREAM_KIND_SYMLINK,
                                                 fs_entry->link_target,
                                                 NULL,
@@ -926,6 +919,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
     if (S_ISFIFO(fs_entry->st->st_mode)) {
         return bx_tar_stream_write_fs_raw_entry(state,
                                                 fs_entry,
+                                                source_fd,
                                                 BX_TAR_STREAM_KIND_FIFO,
                                                 NULL,
                                                 NULL,
@@ -948,6 +942,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         if (index >= 0) {
             return bx_tar_stream_write_fs_raw_entry(state,
                                                     fs_entry,
+                                                    source_fd,
                                                     BX_TAR_STREAM_KIND_HARDLINK,
                                                     state->seen.items[index].first_name,
                                                     NULL,
@@ -968,6 +963,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
 
     if (!bx_tar_stream_write_fs_raw_entry(state,
                                           fs_entry,
+                                          source_fd,
                                           BX_TAR_STREAM_KIND_REG,
                                           NULL,
                                           NULL,
@@ -982,6 +978,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         return false;
     }
     if (!bx_tar_stream_write_file_data(sink,
+                                       source_fd,
                                        fs_entry->source_path,
                                        file_size,
                                        state->file_buffer,
@@ -990,6 +987,28 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         return false;
     }
     return true;
+}
+
+static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* state,
+                                         const struct bx_archive_fs_visit_entry* entry,
+                                         struct bx_diag_ctx* diag) {
+    if (!S_ISREG(entry->st->st_mode))
+        return bx_tar_stream_write_opened_fs_entry(state, entry, -1, diag);
+
+    struct stat opened;
+    int fd = bx_fd_openat_regular_verified(entry->source_parent_fd, entry->source_name,
+                                           entry->st, &opened);
+    if (fd < 0) {
+        bx_diag(diag, "%s: %s", entry->source_path, strerror(errno));
+        return false;
+    }
+    /* Header, ACLs/xattrs and payload all refer to this single opened inode.
+     * Keep the descriptor local, even when the input list was buffered. */
+    struct bx_archive_fs_visit_entry verified = *entry;
+    verified.st = &opened;
+    bool ok = bx_tar_stream_write_opened_fs_entry(state, &verified, fd, diag);
+    bool closed = bx_fd_close(&fd, entry->source_path, ok ? diag : NULL);
+    return ok && closed;
 }
 
 static bool bx_tar_stream_visit_fs_entry(const struct bx_archive_fs_visit_entry* fs_entry,
@@ -1437,6 +1456,8 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
 
     for (i = 0u; i < files->len; i++) {
         struct bx_archive_fs_visit_entry entry = {
+            .source_parent_fd = AT_FDCWD,
+            .source_name = files->entries[i].source_path,
             .source_path = files->entries[i].source_path,
             .archive_path = files->entries[i].archive_path,
             .st = &files->entries[i].st,

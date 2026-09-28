@@ -43,6 +43,30 @@ int bx_fd_open_read(const char* path, struct bx_diag_ctx* diag) {
     return fd;
 }
 
+int bx_fd_openat_regular_verified(int parent_fd, const char* name,
+                                  const struct stat* expected, struct stat* opened) {
+    if (!expected || !opened || !S_ISREG(expected->st_mode)) {
+        errno = EINVAL;
+        return -1;
+    }
+    int fd = bx_fd_openat_cloexec(parent_fd, name,
+                                 O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY, 0);
+    if (fd < 0)
+        return -1;
+    int error = 0;
+    if (fstat(fd, opened) != 0)
+        error = errno;
+    else if (!S_ISREG(opened->st_mode) || opened->st_dev != expected->st_dev
+             || opened->st_ino != expected->st_ino)
+        error = ESTALE;
+    if (error) {
+        close(fd);
+        errno = error;
+        return -1;
+    }
+    return fd;
+}
+
 int bx_fd_open_write(const char* path, int flags, mode_t mode, struct bx_diag_ctx* diag) {
     int fd = bx_fd_open_cloexec(path, O_WRONLY | flags, mode);
     if (fd < 0) {

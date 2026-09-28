@@ -53,12 +53,12 @@ void bx_tar_metadata_select(struct bx_file_metadata* selected,
     }
 }
 
-bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, const char* path,
+bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd, const char* path,
                               bool symlink, bool directory, bool numeric_ids,
                               const struct bx_tar_metadata_options* options) {
     if (!options)
         return true;
-    return bx_file_metadata_read(metadata, path, symlink, directory, options->acls,
+    return bx_file_metadata_read(metadata, fd, path, symlink, directory, options->acls,
                                numeric_ids, options->xattrs || options->selinux
                                    ? bx_tar_metadata_collect_filter : NULL,
                                options);
