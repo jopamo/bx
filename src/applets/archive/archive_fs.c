@@ -293,6 +293,8 @@ static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
             return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, errno);
     }
     bool ok = state->visit_fn(&(struct bx_archive_fs_visit_entry){
+        .source_parent_fd = parent_fd,
+        .source_name = name,
         .source_path = state->source.data,
         .archive_path = state->archive.data,
         .st = &status,

@@ -23,6 +23,9 @@ struct bx_archive_fs_list {
 };
 
 struct bx_archive_fs_visit_entry {
+    /* Borrowed source authority, valid only during the visitor call. */
+    int source_parent_fd;
+    const char* source_name;
     const char* source_path;
     const char* archive_path;
     const struct stat* st;

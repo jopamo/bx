@@ -66,9 +66,9 @@ static bool bx_metadata_unsupported(int error) {
     return error == ENOTSUP || error == ENOSYS;
 }
 
-static bool bx_metadata_read_acl(char** text, const char* path, acl_type_t type,
+static bool bx_metadata_read_acl(char** text, int fd, const char* path, acl_type_t type,
                                   bool numeric_ids) {
-    acl_t acl = acl_get_file(path, type);
+    acl_t acl = fd >= 0 ? acl_get_fd(fd) : acl_get_file(path, type);
     if (!acl)
         return bx_metadata_unsupported(errno);
     char* value = acl_to_any_text(acl, NULL, ',', numeric_ids ? TEXT_NUMERIC_IDS : 0);
@@ -80,12 +80,16 @@ static bool bx_metadata_read_acl(char** text, const char* path, acl_type_t type,
     return true;
 }
 
-bool bx_file_metadata_read(struct bx_file_metadata* metadata, const char* path,
+bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd, const char* path,
                            bool symlink, bool directory, bool acls, bool numeric_ids,
                            bx_file_xattr_filter filter, const void* user) {
+    if (fd >= 0 && (symlink || directory)) {
+        errno = EINVAL;
+        return false;
+    }
     if (acls && !symlink) {
-        if (!bx_metadata_read_acl(&metadata->acl_access, path, ACL_TYPE_ACCESS, numeric_ids)
-            || (directory && !bx_metadata_read_acl(&metadata->acl_default, path,
+        if (!bx_metadata_read_acl(&metadata->acl_access, fd, path, ACL_TYPE_ACCESS, numeric_ids)
+            || (directory && !bx_metadata_read_acl(&metadata->acl_default, -1, path,
                                                     ACL_TYPE_DEFAULT, numeric_ids)))
             return false;
     }
@@ -95,7 +99,8 @@ bool bx_file_metadata_read(struct bx_file_metadata* metadata, const char* path,
      * syscall, avoiding a size-query/read race when another writer changes it. */
     char* names = xmalloc(65536u);
     unsigned char* value = xmalloc(65536u);
-    ssize_t size = symlink ? llistxattr(path, names, 65536u)
+    ssize_t size = fd >= 0 ? flistxattr(fd, names, 65536u)
+        : symlink ? llistxattr(path, names, 65536u)
                            : listxattr(path, names, 65536u);
     bool ok = size >= 0 || bx_metadata_unsupported(errno);
     for (ssize_t pos = 0; ok && pos < size;) {
@@ -103,7 +108,8 @@ bool bx_file_metadata_read(struct bx_file_metadata* metadata, const char* path,
         pos += (ssize_t)strlen(name) + 1;
         if (!filter(name, user))
             continue;
-        ssize_t len = symlink ? lgetxattr(path, name, value, 65536u)
+        ssize_t len = fd >= 0 ? fgetxattr(fd, name, value, 65536u)
+            : symlink ? lgetxattr(path, name, value, 65536u)
                               : getxattr(path, name, value, 65536u);
         if (len < 0) {
             if (errno != ENODATA)
