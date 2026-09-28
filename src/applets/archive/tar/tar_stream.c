@@ -992,12 +992,26 @@ static bool bx_tar_stream_write_opened_fs_entry(struct bx_tar_stream_fs_write_st
 static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* state,
                                          const struct bx_archive_fs_visit_entry* entry,
                                          struct bx_diag_ctx* diag) {
-    if (!S_ISREG(entry->st->st_mode))
+    const struct bx_tar_metadata_options* metadata = state->options->metadata;
+    bool directory_metadata = S_ISDIR(entry->st->st_mode) && metadata
+        && (metadata->acls || metadata->xattrs || metadata->selinux);
+    if (!S_ISREG(entry->st->st_mode) && !directory_metadata)
         return bx_tar_stream_write_opened_fs_entry(state, entry, -1, diag);
 
     struct stat opened;
-    int fd = bx_fd_openat_regular_verified(entry->source_parent_fd, entry->source_name,
-                                           entry->st, &opened);
+    int fd;
+    if (directory_metadata) {
+        fd = bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name,
+                                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+        if (fd >= 0 && bx_fd_fstat_expected(fd, entry->st, &opened) != 0) {
+            int error = errno;
+            close(fd);
+            fd = -1;
+            errno = error;
+        }
+    } else
+        fd = bx_fd_openat_regular_verified(entry->source_parent_fd, entry->source_name,
+                                            entry->st, &opened);
     if (fd < 0) {
         bx_diag(diag, "%s: %s", entry->source_path, strerror(errno));
         return false;

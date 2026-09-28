@@ -2,9 +2,11 @@
 #include "lib/file_metadata.h"
 
 #include <acl/libacl.h>
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/acl.h>
@@ -66,9 +68,83 @@ static bool bx_metadata_unsupported(int error) {
     return error == ENOTSUP || error == ENOSYS;
 }
 
+/* libacl has no default-ACL fd getter. Decode Linux's version-2 xattr into
+ * libacl entries so both access and default ACLs use the same text format. */
+static acl_t bx_metadata_default_acl_fd(int fd) {
+    unsigned char* data = xmalloc(65536u);
+    ssize_t size = fgetxattr(fd, "system.posix_acl_default", data, 65536u);
+    acl_t acl = NULL;
+    if (size < 0) {
+        if (errno == ENODATA)
+            acl = acl_init(0);
+        goto out;
+    }
+    uint32_t version;
+    if (size < 4 || (size - 4) % 8 != 0)
+        goto invalid;
+    memcpy(&version, data, sizeof(version));
+    if (le32toh(version) != 2)
+        goto invalid;
+    acl = acl_init((int)((size - 4) / 8));
+    if (!acl)
+        goto out;
+    for (ssize_t pos = 4; pos < size; pos += 8) {
+        uint16_t tag, perms;
+        uint32_t id;
+        memcpy(&tag, data + pos, sizeof(tag));
+        memcpy(&perms, data + pos + 2, sizeof(perms));
+        memcpy(&id, data + pos + 4, sizeof(id));
+        tag = le16toh(tag);
+        perms = le16toh(perms);
+        id = le32toh(id);
+        if ((perms & ~7u) || (tag != ACL_USER && tag != ACL_GROUP && id != UINT32_MAX))
+            goto invalid;
+        acl_entry_t entry;
+        acl_permset_t set;
+        if (acl_create_entry(&acl, &entry) != 0 || acl_set_tag_type(entry, tag) != 0
+            || acl_get_permset(entry, &set) != 0 || acl_clear_perms(set) != 0
+            || ((perms & ACL_READ) && acl_add_perm(set, ACL_READ) != 0)
+            || ((perms & ACL_WRITE) && acl_add_perm(set, ACL_WRITE) != 0)
+            || ((perms & ACL_EXECUTE) && acl_add_perm(set, ACL_EXECUTE) != 0))
+            goto fail;
+        if (tag == ACL_USER) {
+            uid_t uid = (uid_t)id;
+            if (id == UINT32_MAX || (uint32_t)uid != id)
+                goto invalid;
+            if (acl_set_qualifier(entry, &uid) != 0)
+                goto fail;
+        } else if (tag == ACL_GROUP) {
+            gid_t gid = (gid_t)id;
+            if (id == UINT32_MAX || (uint32_t)gid != id)
+                goto invalid;
+            if (acl_set_qualifier(entry, &gid) != 0)
+                goto fail;
+        }
+    }
+    if (size > 4 && acl_valid(acl) != 0)
+        goto fail;
+    goto out;
+invalid:
+    errno = EINVAL;
+fail: {
+    int error = errno;
+    if (acl)
+        acl_free(acl);
+    acl = NULL;
+    errno = error;
+}
+out: {
+    int error = errno;
+    free(data);
+    errno = error;
+    return acl;
+}
+}
+
 static bool bx_metadata_read_acl(char** text, int fd, const char* path, acl_type_t type,
                                   bool numeric_ids) {
-    acl_t acl = fd >= 0 ? acl_get_fd(fd) : acl_get_file(path, type);
+    acl_t acl = fd < 0 ? acl_get_file(path, type)
+        : type == ACL_TYPE_DEFAULT ? bx_metadata_default_acl_fd(fd) : acl_get_fd(fd);
     if (!acl)
         return bx_metadata_unsupported(errno);
     char* value = acl_to_any_text(acl, NULL, ',', numeric_ids ? TEXT_NUMERIC_IDS : 0);
@@ -83,13 +159,13 @@ static bool bx_metadata_read_acl(char** text, int fd, const char* path, acl_type
 bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd, const char* path,
                            bool symlink, bool directory, bool acls, bool numeric_ids,
                            bx_file_xattr_filter filter, const void* user) {
-    if (fd >= 0 && (symlink || directory)) {
+    if (fd >= 0 && symlink) {
         errno = EINVAL;
         return false;
     }
     if (acls && !symlink) {
         if (!bx_metadata_read_acl(&metadata->acl_access, fd, path, ACL_TYPE_ACCESS, numeric_ids)
-            || (directory && !bx_metadata_read_acl(&metadata->acl_default, -1, path,
+            || (directory && !bx_metadata_read_acl(&metadata->acl_default, fd, path,
                                                     ACL_TYPE_DEFAULT, numeric_ids)))
             return false;
     }
