@@ -244,6 +244,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_ACLS_OFF,
     BX_TAR_OPT_WARNING,
     BX_TAR_OPT_IGNORE_FAILED_READ,
+    BX_TAR_OPT_ONE_FILE_SYSTEM,
     BX_TAR_OPT_LISTED_INCREMENTAL,
     BX_TAR_OPT_INCREMENTAL,
     BX_TAR_OPT_OCCURRENCE,
@@ -410,7 +411,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--newer-mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER_MTIME},
     {"--newer", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER},
     {"--after-date", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER},
-    {"--one-file-system", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--one-file-system", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ONE_FILE_SYSTEM},
     {"--absolute-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ABSOLUTE_NAMES_ON},
     {"--strip-components", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STRIP_COMPONENTS},
     {"--transform", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_TRANSFORM},
@@ -4641,6 +4642,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->format_ustar = false;
             options->metadata.xattrs = true;
             return true;
+        case BX_TAR_OPT_ONE_FILE_SYSTEM:
+            options->create_options.one_file_system = true;
+            return true;
         case BX_TAR_OPT_XATTRS_OFF:
             options->metadata.xattrs = false;
             return true;
@@ -4910,6 +4914,13 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
             return false;
         }
         return bx_tar_report_missing_mode(diag);
+    }
+    if (options->create_options.one_file_system
+        && options->mode != BX_TAR_MODE_CREATE
+        && options->mode != BX_TAR_MODE_APPEND
+        && options->mode != BX_TAR_MODE_UPDATE) {
+        bx_diag(diag, "--one-file-system requires creating an archive from files");
+        return false;
     }
     if (options->unsupported_external_compress_option != NULL) {
         bx_diag(diag,

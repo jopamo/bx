@@ -31,6 +31,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -X FILE               exclude create inputs matching patterns from FILE\n");
     fprintf(stream, "      --exclude=PATTERN skip matching paths during archive creation\n");
     fprintf(stream, "      --no-recursion    archive directory entries without descending\n");
+    fprintf(stream, "      --one-file-system do not descend into other mounts when creating\n"
+                    "                        (old kernels: device boundary; bind mounts may cross)\n");
     fprintf(stream, "      --remove-files    delete archived source files after success\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
     fprintf(stream, "  -A                    append members from source archives\n");

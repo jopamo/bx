@@ -68,6 +68,7 @@ struct bx_tar_create_collect_ctx {
     bx_archive_fs_visit_fn visit_fn;
     void* visit_user_data;
     bool sort_children;
+    bool one_file_system;
     bool had_create_errors;
     bool ignore_failed_read;
     struct bx_diag_ctx* diag;
@@ -829,6 +830,7 @@ static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
                                                 name,
                                                 state->recurse,
                                                 ctx->sort_children,
+                                                ctx->one_file_system,
                                                 bx_tar_create_include_path,
                                                 &filter_state,
                                                 bx_tar_create_handle_fs_error,
@@ -1467,6 +1469,7 @@ bool bx_tar_create_visit_fs_entries(const struct bx_tar_create_options* create_o
         .visit_fn = visit_fn,
         .visit_user_data = visit_user_data,
         .sort_children = sort_children,
+        .one_file_system = create_options->one_file_system,
         .had_create_errors = false,
         .ignore_failed_read = create_options->ignore_failed_read,
         .diag = diag,
