@@ -95,12 +95,12 @@ static lxa_status_t node_follows_man_text(lxa_dom_nodes_t* nodes, lxa_dom_ref_t 
     lxa_status_t status = lxa_dom_nodes_prev_sibling(nodes, node, &node);
     *found = false;
     while (status == LXA_OK && node.handle) {
-        lxa_dom_record_t record;
+        lxa_dom_kind_t kind;
         lxa_span_t name;
-        status = lxa_dom_nodes_read(nodes, node, &record);
+        status = lxa_dom_nodes_kind(nodes, node, &kind);
         if (status != LXA_OK)
             break;
-        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+        if (kind == LXA_DOM_KIND_ELEMENT) {
             status = lxa_dom_nodes_element_name(nodes, node, &name);
             if (status != LXA_OK)
                 break;
@@ -128,9 +128,9 @@ lxa_status_t bx_fetch_site_markdown_skip_node(BxFetchMarkdownSite site,
     if (!skip || !nodes)
         return LXA_ERROR_ARGUMENT;
     *skip = false;
-    lxa_dom_record_t record;
-    lxa_status_t status = lxa_dom_nodes_read(nodes, node, &record);
-    if (status != LXA_OK || record.kind != LXA_DOM_KIND_ELEMENT)
+    lxa_dom_kind_t kind;
+    lxa_status_t status = lxa_dom_nodes_kind(nodes, node, &kind);
+    if (status != LXA_OK || kind != LXA_DOM_KIND_ELEMENT)
         return status;
     lxa_span_t id;
     switch (site) {
@@ -171,8 +171,8 @@ lxa_status_t bx_fetch_site_markdown_unwrap_node(BxFetchMarkdownSite site,
     *unwrap = false;
     if (site != BX_FETCH_MARKDOWN_SITE_RFC_EDITOR)
         return LXA_OK;
-    lxa_dom_record_t record;
-    lxa_status_t status = lxa_dom_nodes_read(nodes, node, &record);
-    return status != LXA_OK || record.kind != LXA_DOM_KIND_ELEMENT
+    lxa_dom_kind_t kind;
+    lxa_status_t status = lxa_dom_nodes_kind(nodes, node, &kind);
+    return status != LXA_OK || kind != LXA_DOM_KIND_ELEMENT
         ? status : element_has_class(nodes, node, "selfRef", unwrap);
 }

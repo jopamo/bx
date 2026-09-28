@@ -43,12 +43,12 @@ static lxa_status_t lore_attribute(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element
 
 static lxa_status_t lore_is_tag(lxa_dom_nodes_t* nodes, lxa_dom_ref_t node,
                                 const char* tag, bool* matches) {
-    lxa_dom_record_t record;
-    lxa_status_t status = lxa_dom_nodes_read(nodes, node, &record);
+    lxa_dom_kind_t kind;
+    lxa_status_t status = lxa_dom_nodes_kind(nodes, node, &kind);
     if (status != LXA_OK)
         return status;
     *matches = false;
-    if (record.kind != LXA_DOM_KIND_ELEMENT)
+    if (kind != LXA_DOM_KIND_ELEMENT)
         return LXA_OK;
     lxa_span_t name;
     status = lxa_dom_nodes_element_name(nodes, node, &name);
@@ -85,11 +85,11 @@ static lxa_status_t lore_follows_reply_instructions(lxa_dom_nodes_t* nodes,
     lxa_status_t status = lxa_dom_nodes_prev_sibling(nodes, node, &node);
     *skip = false;
     while (status == LXA_OK && node.handle) {
-        lxa_dom_record_t record;
-        status = lxa_dom_nodes_read(nodes, node, &record);
+        lxa_dom_kind_t kind;
+        status = lxa_dom_nodes_kind(nodes, node, &kind);
         if (status != LXA_OK)
             return status;
-        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+        if (kind == LXA_DOM_KIND_ELEMENT) {
             bool match;
             status = lore_is_tag(nodes, node, "hr", &match);
             if (status != LXA_OK || match)
@@ -126,11 +126,11 @@ lxa_status_t bx_fetch_lore_markdown_skip_node(lxa_dom_nodes_t* nodes,
     status = lore_follows_reply_instructions(nodes, node, skip);
     if (status != LXA_OK || *skip)
         return status;
-    lxa_dom_record_t record;
-    status = lxa_dom_nodes_read(nodes, node, &record);
+    lxa_dom_kind_t kind;
+    status = lxa_dom_nodes_kind(nodes, node, &kind);
     if (status != LXA_OK)
         return status;
-    if (record.kind == LXA_DOM_KIND_TEXT) {
+    if (kind == LXA_DOM_KIND_TEXT) {
         lxa_span_t text;
         status = lxa_dom_nodes_character_read(nodes, node, &text);
         if (status == LXA_OK)
@@ -143,10 +143,10 @@ lxa_status_t bx_fetch_lore_markdown_skip_node(lxa_dom_nodes_t* nodes,
         return status;
     status = lxa_dom_nodes_next_sibling(nodes, node, &node);
     while (status == LXA_OK && node.handle) {
-        status = lxa_dom_nodes_read(nodes, node, &record);
+        status = lxa_dom_nodes_kind(nodes, node, &kind);
         if (status != LXA_OK)
             return status;
-        if (record.kind == LXA_DOM_KIND_TEXT) {
+        if (kind == LXA_DOM_KIND_TEXT) {
             lxa_span_t text;
             status = lxa_dom_nodes_character_read(nodes, node, &text);
             if (status != LXA_OK)
