@@ -494,13 +494,13 @@ static int native_walk(lxa_html_document_t* document, NativeVisitor visit,
      * internal links ever become observable. */
     size_t steps = 0, count = lxa_dom_nodes_length(nodes);
     for (;;) {
-        lxa_dom_record_t record;
+        lxa_dom_kind_t kind;
         if (++steps > count * 3u + 1u)
             return native_status_error(LXA_ERROR_ARGUMENT);
-        lxa_status_t status = lxa_dom_nodes_read(nodes, node, &record);
+        lxa_status_t status = lxa_dom_nodes_kind(nodes, node, &kind);
         if (status != LXA_OK)
             return native_status_error(status);
-        if (record.kind == LXA_DOM_KIND_ELEMENT) {
+        if (kind == LXA_DOM_KIND_ELEMENT) {
             lxa_span_t tag;
             status = lxa_dom_nodes_element_name(nodes, node, &tag);
             if (status != LXA_OK)
@@ -509,7 +509,7 @@ static int native_walk(lxa_html_document_t* document, NativeVisitor visit,
             if ((!base_only || base) && native_visit_attributes(nodes, node, base, visit, context))
                 return -1;
         }
-        if (record.kind == LXA_DOM_KIND_DOCUMENT || record.kind == LXA_DOM_KIND_ELEMENT) {
+        if (kind == LXA_DOM_KIND_DOCUMENT || kind == LXA_DOM_KIND_ELEMENT) {
             lxa_dom_ref_t child;
             status = lxa_dom_nodes_first_child(nodes, node, &child);
             if (status != LXA_OK)
