@@ -54,7 +54,6 @@ struct bx_tar_create_directive_list {
 };
 
 struct bx_tar_create_options {
-    bool remove_files;
     bool ignore_failed_read;
     bool one_file_system;
     struct bx_tar_create_directive_list directives;
@@ -115,8 +114,5 @@ bool bx_tar_create_visit_fs_entries(const struct bx_tar_create_options* create_o
                                     void* visit_user_data,
                                     bool* had_create_errors,
                                     struct bx_diag_ctx* diag);
-
-bool bx_tar_create_remove_archived_sources(const struct bx_archive_fs_list* list,
-                                           const struct bx_diag_ctx* diag);
 
 #endif /* BX_APPLETS_ARCHIVE_TAR_TAR_CREATE_H */

@@ -34,7 +34,6 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "                        creation never follows source or parent symlinks\n");
     fprintf(stream, "      --one-file-system do not descend into other mounts when creating\n"
                     "                        (old kernels: device boundary; bind mounts may cross)\n");
-    fprintf(stream, "      --remove-files    delete archived source files after success\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
     fprintf(stream, "  -A                    append members from source archives\n");
     fprintf(stream, "  -d                    compare archive members against the filesystem\n");
