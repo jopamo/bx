@@ -148,319 +148,163 @@ bx_archive_fs_handle_error(const char* path,
     return BX_ARCHIVE_FS_ERROR_ABORT;
 }
 
-/* A NULL result means the caller must not descend (boundary or skipped error).
- * Check the same open directory that readdir will consume, before any reads. */
-static bool bx_archive_fs_open_dir(const char* path,
-                                   struct bx_archive_fs_boundary* boundary,
-                                   DIR** result,
-                                   bx_archive_fs_error_fn error_fn,
-                                   void* error_user_data,
-                                   struct bx_diag_ctx* diag) {
-    *result = opendir(path);
-    if (!*result)
-        return bx_archive_fs_handle_error(path, BX_ARCHIVE_FS_ERROR_OPENDIR, errno,
-                                          error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-    if (!boundary->enabled)
-        return true;
-    struct bx_mount_identity identity;
-    bool same = true;
-    bool ok = bx_mount_identity_read(dirfd(*result), &identity);
-    if (ok && boundary->initialized)
-        ok = bx_mount_identity_compare(&boundary->root, &identity, &same);
-    if (!ok || !same) {
-        int error = errno;
-        int rc = closedir(*result);
-        *result = NULL;
-        if (!ok)
-            return bx_archive_fs_handle_error(path, BX_ARCHIVE_FS_ERROR_LSTAT, error,
-                                              error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-        if (rc != 0)
-            return bx_archive_fs_handle_error(path, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno,
-                                              error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-        return true;
-    }
-    if (!boundary->initialized) {
-        boundary->root = identity;
-        boundary->initialized = true;
-    }
-    return true;
+struct bx_archive_fs_visit_state {
+    struct bx_archive_fs_path_buf source;
+    struct bx_archive_fs_path_buf archive;
+    struct bx_archive_fs_boundary boundary;
+    bool sort_children;
+    bx_archive_fs_include_fn include_fn;
+    void* include_user_data;
+    bx_archive_fs_error_fn error_fn;
+    void* error_user_data;
+    bx_archive_fs_visit_fn visit_fn;
+    void* visit_user_data;
+    struct bx_diag_ctx* diag;
+};
+
+static bool bx_archive_fs_visit_error(struct bx_archive_fs_visit_state* state,
+                                       enum bx_archive_fs_error_op op, int error) {
+    return bx_archive_fs_handle_error(state->source.data, op, error,
+                                       state->error_fn, state->error_user_data,
+                                       state->diag) == BX_ARCHIVE_FS_ERROR_SKIP;
 }
 
-static bool bx_archive_read_children(const char* dir_path,
-                                     bool sort_children,
-                                     struct bx_archive_fs_boundary* boundary,
-                                     char*** names_out,
-                                     size_t* count_out,
-                                     bx_archive_fs_error_fn error_fn,
-                                     void* error_user_data,
-                                     struct bx_diag_ctx* diag) {
-    DIR* dir;
-    struct dirent* ent;
-    char** names = NULL;
-    size_t len = 0u;
-    size_t cap = 0u;
-
-    if (!bx_archive_fs_open_dir(dir_path, boundary, &dir, error_fn, error_user_data, diag))
-        return false;
-    if (!dir) {
-        *names_out = NULL;
-        *count_out = 0u;
-        return true;
+/* A NULL result means the caller must not descend (boundary or skipped error).
+ * Keep the checked directory open through child lookup, including sorted walks. */
+static bool bx_archive_fs_open_dir(struct bx_archive_fs_visit_state* state,
+                                   int parent_fd, const char* name,
+                                   const struct stat* expected, DIR** result) {
+    *result = NULL;
+    int fd = bx_fd_openat_cloexec(parent_fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+    if (fd < 0)
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_OPENDIR, errno);
+    struct stat opened;
+    if (fstat(fd, &opened) != 0) {
+        int error = errno;
+        close(fd);
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, error);
     }
-
-    while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
-            continue;
-        }
-        if (len == cap) {
-            size_t next_cap = cap ? cap * 2u : 16u;
-            names = xrealloc(names, next_cap * sizeof(*names));
-            cap = next_cap;
-        }
-        names[len++] = xstrdup(ent->d_name);
+    if (opened.st_dev != expected->st_dev || opened.st_ino != expected->st_ino) {
+        close(fd);
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, ESTALE);
     }
-
-    if (closedir(dir) != 0) {
-        if (bx_archive_fs_handle_error(dir_path,
-                                       BX_ARCHIVE_FS_ERROR_CLOSEDIR,
-                                       errno,
-                                       error_fn,
-                                       error_user_data,
-                                       diag) == BX_ARCHIVE_FS_ERROR_SKIP) {
-            *names_out = names;
-            *count_out = len;
+    if (state->boundary.enabled) {
+        struct bx_mount_identity identity;
+        bool same = true;
+        bool ok = bx_mount_identity_read(fd, &identity);
+        if (ok && state->boundary.initialized)
+            ok = bx_mount_identity_compare(&state->boundary.root, &identity, &same);
+        if (!ok || !same) {
+            int error = errno;
+            int rc = close(fd);
+            if (!ok)
+                return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, error);
+            if (rc != 0)
+                return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno);
             return true;
         }
-        while (len > 0u) {
-            free(names[--len]);
+        if (!state->boundary.initialized) {
+            state->boundary.root = identity;
+            state->boundary.initialized = true;
         }
-        free(names);
-        return false;
     }
-
-    if (sort_children && len > 1u) {
-        qsort(names, len, sizeof(*names), bx_archive_name_compare);
+    *result = fdopendir(fd);
+    if (!*result) {
+        int error = errno;
+        close(fd);
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_OPENDIR, error);
     }
-
-    *names_out = names;
-    *count_out = len;
     return true;
 }
 
-static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_buf* source_path,
-                                                    struct bx_archive_fs_path_buf* archive_path,
-                                                    bool recurse,
-                                                    bool sort_children,
-                                                    struct bx_archive_fs_boundary* boundary,
-                                                    bx_archive_fs_include_fn include_fn,
-                                                    void* include_user_data,
-                                                    bx_archive_fs_error_fn error_fn,
-                                                    void* error_user_data,
-                                                    bx_archive_fs_visit_fn visit_fn,
-                                                    void* visit_user_data,
-                                                    struct bx_diag_ctx* diag);
+static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
+                                       int parent_fd, const char* name, bool recurse);
 
-static bool bx_archive_fs_visit_sorted_children(struct bx_archive_fs_path_buf* source_path,
-                                                struct bx_archive_fs_path_buf* archive_path,
-                                                bool sort_children,
-                                                struct bx_archive_fs_boundary* boundary,
-                                                bx_archive_fs_include_fn include_fn,
-                                                void* include_user_data,
-                                                bx_archive_fs_error_fn error_fn,
-                                                void* error_user_data,
-                                                bx_archive_fs_visit_fn visit_fn,
-                                                void* visit_user_data,
-                                                struct bx_diag_ctx* diag) {
-    char** children = NULL;
-    size_t child_count = 0u;
-    size_t i;
-
-    if (!bx_archive_read_children(source_path->data,
-                                  sort_children,
-                                  boundary,
-                                  &children,
-                                  &child_count,
-                                  error_fn,
-                                  error_user_data,
-                                  diag)) {
-        return false;
-    }
-
-    for (i = 0u; i < child_count; i++) {
-        size_t source_restore_len = bx_archive_fs_path_buf_push_child(source_path, children[i]);
-        size_t archive_restore_len = bx_archive_fs_path_buf_push_child(archive_path, children[i]);
-        bool ok = bx_archive_fs_visit_path_filtered_inner(source_path,
-                                                          archive_path,
-                                                          true,
-                                                          sort_children,
-                                                          boundary,
-                                                          include_fn,
-                                                          include_user_data,
-                                                          error_fn,
-                                                          error_user_data,
-                                                          visit_fn,
-                                                          visit_user_data,
-                                                          diag);
-
-        bx_archive_fs_path_buf_restore(archive_path, archive_restore_len);
-        bx_archive_fs_path_buf_restore(source_path, source_restore_len);
-        free(children[i]);
-        if (!ok) {
-            while (++i < child_count) {
-                free(children[i]);
+static bool bx_archive_fs_visit_children(struct bx_archive_fs_visit_state* state, DIR* dir) {
+    char** names = NULL;
+    size_t len = 0, cap = 0, index = 0;
+    bool ok = true;
+    struct dirent* entry;
+    if (state->sort_children) {
+        for (;;) {
+            errno = 0;
+            entry = readdir(dir);
+            if (!entry) {
+                if (errno)
+                    ok = bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READDIR, errno);
+                break;
             }
-            free(children);
-            return false;
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+            if (len == cap) {
+                cap = cap ? cap * 2u : 16u;
+                names = xrealloc(names, cap * sizeof(*names));
+            }
+            names[len++] = xstrdup(entry->d_name);
         }
+        if (len > 1)
+            qsort(names, len, sizeof(*names), bx_archive_name_compare);
     }
-
-    free(children);
-    return true;
+    while (ok) {
+        const char* name;
+        if (state->sort_children) {
+            if (index == len)
+                break;
+            name = names[index++];
+        }
+        else {
+            errno = 0;
+            entry = readdir(dir);
+            if (!entry) {
+                if (errno)
+                    ok = bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READDIR, errno);
+                break;
+            }
+            name = entry->d_name;
+            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+                continue;
+        }
+        size_t source_len = bx_archive_fs_path_buf_push_child(&state->source, name);
+        size_t archive_len = bx_archive_fs_path_buf_push_child(&state->archive, name);
+        ok = bx_archive_fs_visit_inner(state, dirfd(dir), name, true);
+        bx_archive_fs_path_buf_restore(&state->archive, archive_len);
+        bx_archive_fs_path_buf_restore(&state->source, source_len);
+    }
+    for (size_t i = 0; i < len; i++)
+        free(names[i]);
+    free(names);
+    if (closedir(dir) != 0 && ok)
+        ok = bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno);
+    return ok;
 }
 
-static bool bx_archive_fs_visit_unsorted_children(struct bx_archive_fs_path_buf* source_path,
-                                                  struct bx_archive_fs_path_buf* archive_path,
-                                                  bool sort_children,
-                                                  struct bx_archive_fs_boundary* boundary,
-                                                  bx_archive_fs_include_fn include_fn,
-                                                  void* include_user_data,
-                                                  bx_archive_fs_error_fn error_fn,
-                                                  void* error_user_data,
-                                                  bx_archive_fs_visit_fn visit_fn,
-                                                  void* visit_user_data,
-                                                  struct bx_diag_ctx* diag) {
+static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
+                                       int parent_fd, const char* name, bool recurse) {
+    struct stat status;
+    if (fstatat(parent_fd, name, &status, AT_SYMLINK_NOFOLLOW) != 0)
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, errno);
+    if (state->include_fn && !state->include_fn(state->source.data, state->archive.data,
+                                                &status, state->include_user_data))
+        return true;
+    char* target = NULL;
+    if (S_ISLNK(status.st_mode)) {
+        target = bx_path_readlinkat_dup(parent_fd, name);
+        if (!target)
+            return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, errno);
+    }
+    bool ok = state->visit_fn(&(struct bx_archive_fs_visit_entry){
+        .source_path = state->source.data,
+        .archive_path = state->archive.data,
+        .st = &status,
+        .link_target = target,
+    }, state->visit_user_data, state->diag);
+    free(target);
+    if (!ok || !recurse || !S_ISDIR(status.st_mode))
+        return ok;
     DIR* dir;
-    struct dirent* ent;
-
-    if (!bx_archive_fs_open_dir(source_path->data, boundary, &dir, error_fn, error_user_data, diag))
+    if (!bx_archive_fs_open_dir(state, parent_fd, name, &status, &dir))
         return false;
-    if (!dir)
-        return true;
-
-    while ((ent = readdir(dir)) != NULL) {
-        size_t source_restore_len;
-        size_t archive_restore_len;
-        bool ok;
-
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
-            continue;
-        }
-
-        source_restore_len = bx_archive_fs_path_buf_push_child(source_path, ent->d_name);
-        archive_restore_len = bx_archive_fs_path_buf_push_child(archive_path, ent->d_name);
-        ok = bx_archive_fs_visit_path_filtered_inner(source_path,
-                                                     archive_path,
-                                                     true,
-                                                     sort_children,
-                                                     boundary,
-                                                     include_fn,
-                                                     include_user_data,
-                                                     error_fn,
-                                                     error_user_data,
-                                                     visit_fn,
-                                                     visit_user_data,
-                                                     diag);
-        bx_archive_fs_path_buf_restore(archive_path, archive_restore_len);
-        bx_archive_fs_path_buf_restore(source_path, source_restore_len);
-        if (!ok) {
-            closedir(dir);
-            return false;
-        }
-    }
-
-    if (closedir(dir) != 0) {
-        return bx_archive_fs_handle_error(source_path->data,
-                                          BX_ARCHIVE_FS_ERROR_CLOSEDIR,
-                                          errno,
-                                          error_fn,
-                                          error_user_data,
-                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-    }
-
-    return true;
-}
-
-static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_buf* source_path,
-                                                    struct bx_archive_fs_path_buf* archive_path,
-                                                    bool recurse,
-                                                    bool sort_children,
-                                                    struct bx_archive_fs_boundary* boundary,
-                                                    bx_archive_fs_include_fn include_fn,
-                                                    void* include_user_data,
-                                                    bx_archive_fs_error_fn error_fn,
-                                                    void* error_user_data,
-                                                    bx_archive_fs_visit_fn visit_fn,
-                                                    void* visit_user_data,
-                                                    struct bx_diag_ctx* diag) {
-    struct stat st;
-    char* link_target = NULL;
-
-    if (lstat(source_path->data, &st) != 0) {
-        return bx_archive_fs_handle_error(source_path->data,
-                                          BX_ARCHIVE_FS_ERROR_LSTAT,
-                                          errno,
-                                          error_fn,
-                                          error_user_data,
-                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-    }
-
-    if (include_fn != NULL
-        && !include_fn(source_path->data, archive_path->data, &st, include_user_data)) {
-        return true;
-    }
-
-    if (S_ISLNK(st.st_mode)) {
-        link_target = bx_path_readlink_dup(source_path->data);
-        if (link_target == NULL) {
-            return bx_archive_fs_handle_error(source_path->data,
-                                              BX_ARCHIVE_FS_ERROR_READLINK,
-                                              errno,
-                                              error_fn,
-                                              error_user_data,
-                                              diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-        }
-    }
-
-    if (!visit_fn(&(struct bx_archive_fs_visit_entry){
-                      .source_path = source_path->data,
-                      .archive_path = archive_path->data,
-                      .st = &st,
-                      .link_target = link_target,
-                  },
-                  visit_user_data,
-                  diag)) {
-        free(link_target);
-        return false;
-    }
-    free(link_target);
-
-    if (!recurse || !S_ISDIR(st.st_mode)) {
-        return true;
-    }
-    if (sort_children) {
-        return bx_archive_fs_visit_sorted_children(source_path,
-                                                   archive_path,
-                                                   sort_children,
-                                                   boundary,
-                                                   include_fn,
-                                                   include_user_data,
-                                                   error_fn,
-                                                   error_user_data,
-                                                   visit_fn,
-                                                   visit_user_data,
-                                                   diag);
-    }
-    return bx_archive_fs_visit_unsorted_children(source_path,
-                                                 archive_path,
-                                                 sort_children,
-                                                 boundary,
-                                                 include_fn,
-                                                 include_user_data,
-                                                 error_fn,
-                                                 error_user_data,
-                                                 visit_fn,
-                                                 visit_user_data,
-                                                 diag);
+    return !dir || bx_archive_fs_visit_children(state, dir);
 }
 
 bool bx_archive_fs_visit_path_filtered(const char* source_path,
@@ -475,27 +319,22 @@ bool bx_archive_fs_visit_path_filtered(const char* source_path,
                                        bx_archive_fs_visit_fn visit_fn,
                                        void* visit_user_data,
                                        struct bx_diag_ctx* diag) {
-    struct bx_archive_fs_path_buf source_buf = {0};
-    struct bx_archive_fs_path_buf archive_buf = {0};
-    struct bx_archive_fs_boundary boundary = {.enabled = one_file_system};
-    bool ok;
-
-    bx_archive_fs_path_buf_init(&source_buf, source_path);
-    bx_archive_fs_path_buf_init(&archive_buf, archive_path);
-    ok = bx_archive_fs_visit_path_filtered_inner(&source_buf,
-                                                 &archive_buf,
-                                                 recurse,
-                                                 sort_children,
-                                                 &boundary,
-                                                 include_fn,
-                                                 include_user_data,
-                                                 error_fn,
-                                                 error_user_data,
-                                                 visit_fn,
-                                                 visit_user_data,
-                                                 diag);
-    bx_archive_fs_path_buf_cleanup(&archive_buf);
-    bx_archive_fs_path_buf_cleanup(&source_buf);
+    struct bx_archive_fs_visit_state state = {
+        .boundary = {.enabled = one_file_system},
+        .sort_children = sort_children,
+        .include_fn = include_fn,
+        .include_user_data = include_user_data,
+        .error_fn = error_fn,
+        .error_user_data = error_user_data,
+        .visit_fn = visit_fn,
+        .visit_user_data = visit_user_data,
+        .diag = diag,
+    };
+    bx_archive_fs_path_buf_init(&state.source, source_path);
+    bx_archive_fs_path_buf_init(&state.archive, archive_path);
+    bool ok = bx_archive_fs_visit_inner(&state, AT_FDCWD, source_path, recurse);
+    bx_archive_fs_path_buf_cleanup(&state.archive);
+    bx_archive_fs_path_buf_cleanup(&state.source);
     return ok;
 }
 
