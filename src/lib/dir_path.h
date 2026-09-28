@@ -20,5 +20,7 @@ int bx_dir_path_open_parent(int root_fd, const char* path, bool create, mode_t m
  * A trailing slash requires an existing directory leaf. Returns an owned
  * CLOEXEC parent fd and allocated leaf, or leaves *leaf unchanged on failure. */
 int bx_dir_path_open_source_parent(const char* path, char** leaf);
+/* Same source policy, resolving relative paths from a borrowed start_fd. */
+int bx_dir_path_open_source_parent_at(int start_fd, const char* path, char** leaf);
 
 #endif
