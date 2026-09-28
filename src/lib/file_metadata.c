@@ -20,7 +20,6 @@ void bx_file_metadata_free(struct bx_file_metadata* metadata) {
     free(metadata->xattrs);
     free(metadata->acl_access);
     free(metadata->acl_default);
-    free(metadata->selinux);
     memset(metadata, 0, sizeof(*metadata));
 }
 
@@ -60,7 +59,6 @@ void bx_file_metadata_copy(struct bx_file_metadata* dest,
     }
     dest->acl_access = source->acl_access ? xstrdup(source->acl_access) : NULL;
     dest->acl_default = source->acl_default ? xstrdup(source->acl_default) : NULL;
-    dest->selinux = source->selinux ? xstrdup(source->selinux) : NULL;
     dest->restore_acls = source->restore_acls;
 }
 
@@ -150,6 +148,14 @@ static acl_t bx_metadata_acl_from_text(const char* text) {
     return acl;
 }
 
+static bool bx_metadata_apply_xattr(const struct bx_file_xattr* attr, int fd,
+                                     const char* path, bool path_fd) {
+    int rc = path_fd ? setxattr(path, attr->name, attr->value, attr->size, 0)
+        : fd >= 0 ? fsetxattr(fd, attr->name, attr->value, attr->size, 0)
+                   : lsetxattr(path, attr->name, attr->value, attr->size, 0);
+    return rc == 0;
+}
+
 bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
                             const char* path, bool symlink, bool directory,
                             mode_t mode) {
@@ -191,21 +197,16 @@ bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
                 return false;
         }
     }
+    const struct bx_file_xattr* capabilities = NULL;
     for (size_t i = 0; i < metadata->len; i++) {
         const struct bx_file_xattr* attr = &metadata->xattrs[i];
-        int rc = path_fd ? setxattr(acl_path, attr->name, attr->value, attr->size, 0)
-            : fd >= 0 ? fsetxattr(fd, attr->name, attr->value, attr->size, 0)
-                       : lsetxattr(path, attr->name, attr->value, attr->size, 0);
-        if (rc != 0)
+        if (strcmp(attr->name, "security.capability") == 0) {
+            capabilities = attr;
+            continue;
+        }
+        if (!bx_metadata_apply_xattr(attr, fd, path_fd ? acl_path : path, path_fd))
             return false;
     }
-    if (metadata->selinux) {
-        size_t size = strlen(metadata->selinux) + 1u;
-        int rc = path_fd ? setxattr(acl_path, "security.selinux", metadata->selinux, size, 0)
-            : fd >= 0 ? fsetxattr(fd, "security.selinux", metadata->selinux, size, 0)
-                       : lsetxattr(path, "security.selinux", metadata->selinux, size, 0);
-        if (rc != 0)
-            return false;
-    }
-    return true;
+    return !capabilities
+        || bx_metadata_apply_xattr(capabilities, fd, path_fd ? acl_path : path, path_fd);
 }
