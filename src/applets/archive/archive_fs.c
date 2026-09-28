@@ -11,12 +11,19 @@
 #include "applets/archive/archive_fs.h"
 #include "bx/libbx.h"
 #include "lib/fd_ops.h"
+#include "lib/mount_identity.h"
 #include "lib/path_ops.h"
 
 struct bx_archive_fs_path_buf {
     char* data;
     size_t len;
     size_t cap;
+};
+
+struct bx_archive_fs_boundary {
+    bool enabled;
+    bool initialized;
+    struct bx_mount_identity root;
 };
 
 static void bx_archive_fs_entry_free(struct bx_archive_fs_entry* entry) {
@@ -141,31 +148,64 @@ bx_archive_fs_handle_error(const char* path,
     return BX_ARCHIVE_FS_ERROR_ABORT;
 }
 
+/* A NULL result means the caller must not descend (boundary or skipped error).
+ * Check the same open directory that readdir will consume, before any reads. */
+static bool bx_archive_fs_open_dir(const char* path,
+                                   struct bx_archive_fs_boundary* boundary,
+                                   DIR** result,
+                                   bx_archive_fs_error_fn error_fn,
+                                   void* error_user_data,
+                                   struct bx_diag_ctx* diag) {
+    *result = opendir(path);
+    if (!*result)
+        return bx_archive_fs_handle_error(path, BX_ARCHIVE_FS_ERROR_OPENDIR, errno,
+                                          error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+    if (!boundary->enabled)
+        return true;
+    struct bx_mount_identity identity;
+    bool same = true;
+    bool ok = bx_mount_identity_read(dirfd(*result), &identity);
+    if (ok && boundary->initialized)
+        ok = bx_mount_identity_compare(&boundary->root, &identity, &same);
+    if (!ok || !same) {
+        int error = errno;
+        int rc = closedir(*result);
+        *result = NULL;
+        if (!ok)
+            return bx_archive_fs_handle_error(path, BX_ARCHIVE_FS_ERROR_LSTAT, error,
+                                              error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+        if (rc != 0)
+            return bx_archive_fs_handle_error(path, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno,
+                                              error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+        return true;
+    }
+    if (!boundary->initialized) {
+        boundary->root = identity;
+        boundary->initialized = true;
+    }
+    return true;
+}
+
 static bool bx_archive_read_children(const char* dir_path,
                                      bool sort_children,
+                                     struct bx_archive_fs_boundary* boundary,
                                      char*** names_out,
                                      size_t* count_out,
                                      bx_archive_fs_error_fn error_fn,
                                      void* error_user_data,
                                      struct bx_diag_ctx* diag) {
-    DIR* dir = opendir(dir_path);
+    DIR* dir;
     struct dirent* ent;
     char** names = NULL;
     size_t len = 0u;
     size_t cap = 0u;
 
-    if (dir == NULL) {
-        if (bx_archive_fs_handle_error(dir_path,
-                                       BX_ARCHIVE_FS_ERROR_OPENDIR,
-                                       errno,
-                                       error_fn,
-                                       error_user_data,
-                                       diag) == BX_ARCHIVE_FS_ERROR_SKIP) {
-            *names_out = NULL;
-            *count_out = 0u;
-            return true;
-        }
+    if (!bx_archive_fs_open_dir(dir_path, boundary, &dir, error_fn, error_user_data, diag))
         return false;
+    if (!dir) {
+        *names_out = NULL;
+        *count_out = 0u;
+        return true;
     }
 
     while ((ent = readdir(dir)) != NULL) {
@@ -211,6 +251,7 @@ static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_bu
                                                     struct bx_archive_fs_path_buf* archive_path,
                                                     bool recurse,
                                                     bool sort_children,
+                                                    struct bx_archive_fs_boundary* boundary,
                                                     bx_archive_fs_include_fn include_fn,
                                                     void* include_user_data,
                                                     bx_archive_fs_error_fn error_fn,
@@ -222,6 +263,7 @@ static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_bu
 static bool bx_archive_fs_visit_sorted_children(struct bx_archive_fs_path_buf* source_path,
                                                 struct bx_archive_fs_path_buf* archive_path,
                                                 bool sort_children,
+                                                struct bx_archive_fs_boundary* boundary,
                                                 bx_archive_fs_include_fn include_fn,
                                                 void* include_user_data,
                                                 bx_archive_fs_error_fn error_fn,
@@ -235,6 +277,7 @@ static bool bx_archive_fs_visit_sorted_children(struct bx_archive_fs_path_buf* s
 
     if (!bx_archive_read_children(source_path->data,
                                   sort_children,
+                                  boundary,
                                   &children,
                                   &child_count,
                                   error_fn,
@@ -250,6 +293,7 @@ static bool bx_archive_fs_visit_sorted_children(struct bx_archive_fs_path_buf* s
                                                           archive_path,
                                                           true,
                                                           sort_children,
+                                                          boundary,
                                                           include_fn,
                                                           include_user_data,
                                                           error_fn,
@@ -277,6 +321,7 @@ static bool bx_archive_fs_visit_sorted_children(struct bx_archive_fs_path_buf* s
 static bool bx_archive_fs_visit_unsorted_children(struct bx_archive_fs_path_buf* source_path,
                                                   struct bx_archive_fs_path_buf* archive_path,
                                                   bool sort_children,
+                                                  struct bx_archive_fs_boundary* boundary,
                                                   bx_archive_fs_include_fn include_fn,
                                                   void* include_user_data,
                                                   bx_archive_fs_error_fn error_fn,
@@ -284,17 +329,13 @@ static bool bx_archive_fs_visit_unsorted_children(struct bx_archive_fs_path_buf*
                                                   bx_archive_fs_visit_fn visit_fn,
                                                   void* visit_user_data,
                                                   struct bx_diag_ctx* diag) {
-    DIR* dir = opendir(source_path->data);
+    DIR* dir;
     struct dirent* ent;
 
-    if (dir == NULL) {
-        return bx_archive_fs_handle_error(source_path->data,
-                                          BX_ARCHIVE_FS_ERROR_OPENDIR,
-                                          errno,
-                                          error_fn,
-                                          error_user_data,
-                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-    }
+    if (!bx_archive_fs_open_dir(source_path->data, boundary, &dir, error_fn, error_user_data, diag))
+        return false;
+    if (!dir)
+        return true;
 
     while ((ent = readdir(dir)) != NULL) {
         size_t source_restore_len;
@@ -311,6 +352,7 @@ static bool bx_archive_fs_visit_unsorted_children(struct bx_archive_fs_path_buf*
                                                      archive_path,
                                                      true,
                                                      sort_children,
+                                                     boundary,
                                                      include_fn,
                                                      include_user_data,
                                                      error_fn,
@@ -342,6 +384,7 @@ static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_bu
                                                     struct bx_archive_fs_path_buf* archive_path,
                                                     bool recurse,
                                                     bool sort_children,
+                                                    struct bx_archive_fs_boundary* boundary,
                                                     bx_archive_fs_include_fn include_fn,
                                                     void* include_user_data,
                                                     bx_archive_fs_error_fn error_fn,
@@ -398,6 +441,7 @@ static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_bu
         return bx_archive_fs_visit_sorted_children(source_path,
                                                    archive_path,
                                                    sort_children,
+                                                   boundary,
                                                    include_fn,
                                                    include_user_data,
                                                    error_fn,
@@ -409,6 +453,7 @@ static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_bu
     return bx_archive_fs_visit_unsorted_children(source_path,
                                                  archive_path,
                                                  sort_children,
+                                                 boundary,
                                                  include_fn,
                                                  include_user_data,
                                                  error_fn,
@@ -422,6 +467,7 @@ bool bx_archive_fs_visit_path_filtered(const char* source_path,
                                        const char* archive_path,
                                        bool recurse,
                                        bool sort_children,
+                                       bool one_file_system,
                                        bx_archive_fs_include_fn include_fn,
                                        void* include_user_data,
                                        bx_archive_fs_error_fn error_fn,
@@ -431,6 +477,7 @@ bool bx_archive_fs_visit_path_filtered(const char* source_path,
                                        struct bx_diag_ctx* diag) {
     struct bx_archive_fs_path_buf source_buf = {0};
     struct bx_archive_fs_path_buf archive_buf = {0};
+    struct bx_archive_fs_boundary boundary = {.enabled = one_file_system};
     bool ok;
 
     bx_archive_fs_path_buf_init(&source_buf, source_path);
@@ -439,6 +486,7 @@ bool bx_archive_fs_visit_path_filtered(const char* source_path,
                                                  &archive_buf,
                                                  recurse,
                                                  sort_children,
+                                                 &boundary,
                                                  include_fn,
                                                  include_user_data,
                                                  error_fn,
@@ -465,6 +513,7 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                              archive_path,
                                              recurse,
                                              sort_children,
+                                             false,
                                              include_fn,
                                              include_user_data,
                                              error_fn,
