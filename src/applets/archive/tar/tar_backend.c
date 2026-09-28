@@ -116,8 +116,7 @@ struct bx_tar_options {
     struct timespec mtime;
     enum bx_tar_owner_policy owner_policy;
     enum bx_tar_permission_policy permission_policy;
-    bool xattrs;
-    bool acls;
+    struct bx_tar_metadata_options metadata;
     bool no_mt;
     enum bx_archive_codec_seek_mode seek_mode;
     char* mode_text;
@@ -237,6 +236,10 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_PERMISSIONS_OFF,
     BX_TAR_OPT_XATTRS_ON,
     BX_TAR_OPT_XATTRS_OFF,
+    BX_TAR_OPT_XATTRS_INCLUDE,
+    BX_TAR_OPT_XATTRS_EXCLUDE,
+    BX_TAR_OPT_SELINUX_ON,
+    BX_TAR_OPT_SELINUX_OFF,
     BX_TAR_OPT_ACLS_ON,
     BX_TAR_OPT_ACLS_OFF,
     BX_TAR_OPT_WARNING,
@@ -360,12 +363,12 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--same-order", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_ON},
     {"--no-acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_OFF},
-    {"--no-selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--no-selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SELINUX_OFF},
     {"--no-xattrs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XATTRS_OFF},
-    {"--selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SELINUX_ON},
     {"--xattrs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XATTRS_ON},
-    {"--xattrs-exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--xattrs-include", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--xattrs-exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_XATTRS_EXCLUDE},
+    {"--xattrs-include", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_XATTRS_INCLUDE},
     {"--force-local", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ARCHIVE_PATH},
     {"--info-script", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
@@ -503,6 +506,7 @@ static void bx_tar_release_mapped_name(struct bx_tar_mapped_name* name) {
 static struct bx_tar_stream_options
 bx_tar_make_stream_options(const struct bx_tar_options* options) {
     return (struct bx_tar_stream_options){
+        .metadata = &options->metadata,
         .format_ustar = options->format_ustar,
         .old_gnu = options->incremental_plan != NULL,
         .numeric_owner = options->numeric_owner,
@@ -2347,6 +2351,32 @@ static bool bx_tar_extract_sparse_payload(struct bx_tar_extract_state* state,
     return true;
 }
 
+static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
+                                     const struct bx_tar_entry* entry, int fd,
+                                     const char* path, mode_t mode,
+                                     struct bx_diag_ctx* diag) {
+    struct bx_file_metadata selected = {0};
+    bx_tar_metadata_select(&selected, &entry->metadata, &state->options->metadata);
+    bool symlink = entry->kind == BX_TAR_KIND_SYMLINK;
+    int owned_fd = -1;
+    bool ok = true;
+    if (fd < 0 && !symlink
+        && (selected.restore_acls || bx_tar_metadata_present(&selected))) {
+        owned_fd = bx_fd_open_cloexec(path, O_PATH | O_NOFOLLOW, 0);
+        if (owned_fd < 0)
+            ok = false;
+        fd = owned_fd;
+    }
+    if (ok)
+        ok = bx_file_metadata_apply(&selected, fd, path, symlink, false, mode);
+    if (!ok)
+        bx_diag(diag, "%s: cannot restore metadata: %s", path, strerror(errno));
+    if (owned_fd >= 0)
+        close(owned_fd);
+    bx_file_metadata_free(&selected);
+    return ok;
+}
+
 static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                                      const struct bx_tar_entry* entry,
                                      struct bx_diag_ctx* diag) {
@@ -2510,6 +2540,8 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                 free(dest_path);
                 return false;
             }
+            bx_tar_metadata_select(&state->dirs.entries[state->dirs.len - 1u].metadata,
+                                     &entry->metadata, &state->options->metadata);
         }
         if (!bx_tar_extract_apply_path_ownership(dest_path,
                                                  false,
@@ -2663,6 +2695,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         }
     }
 
+    if (!bx_tar_extract_metadata(state, entry, -1, dest_path, extract_mode, diag)) {
+        free(dest_path);
+        return false;
+    }
     free(dest_path);
     bx_tar_extract_clear_current_stream(state);
     return true;
@@ -2741,6 +2777,10 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
     }
     if (fchmod(fd, mode & 07777u) != 0) {
         bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        bx_tar_extract_clear_current_stream(state);
+        return false;
+    }
+    if (!bx_tar_extract_metadata(state, entry, fd, dest_path, mode, diag)) {
         bx_tar_extract_clear_current_stream(state);
         return false;
     }
@@ -3127,6 +3167,7 @@ static bool bx_tar_write_parsed_entry_sink(const struct bx_tar_stream_sink* sink
                                          entry->data_len,
                                          entry->mtime,
                                          true,
+                                         &entry->metadata,
                                          diag);
 }
 
@@ -3230,6 +3271,7 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
                                              entry->size,
                                              entry->mtime,
                                              true,
+                                             &entry->metadata,
                                              diag);
     }
     if (entry->kind == BX_TAR_KIND_REG && entry->sparse) {
@@ -3246,6 +3288,7 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
                                                    entry->size,
                                                    entry->data_len,
                                                    entry->mtime,
+                                                   &entry->metadata,
                                                    diag);
     }
 
@@ -4538,11 +4581,12 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_TRANSFORM:
             return bx_tar_transform_rule_init(&options->name_transform, value, diag);
         case BX_TAR_OPT_FORMAT:
-            if (strcmp(value, "ustar") != 0) {
+            if (strcmp(value, "ustar") != 0 && strcmp(value, "pax") != 0
+                && strcmp(value, "posix") != 0) {
                 bx_diag(diag, "unsupported format '%s'", value);
                 return false;
             }
-            options->format_ustar = true;
+            options->format_ustar = strcmp(value, "ustar") == 0;
             return true;
         case BX_TAR_OPT_SORT:
             if (strcmp(value, "name") != 0) {
@@ -4594,17 +4638,33 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->permission_policy = BX_TAR_PERMISSIONS_DISABLE;
             return true;
         case BX_TAR_OPT_XATTRS_ON:
-            options->xattrs = true;
+            options->format_ustar = false;
+            options->metadata.xattrs = true;
             return true;
         case BX_TAR_OPT_XATTRS_OFF:
-            options->xattrs = false;
+            options->metadata.xattrs = false;
             return true;
         case BX_TAR_OPT_ACLS_ON:
-            options->acls = true;
+            options->format_ustar = false;
+            options->metadata.acls = true;
             return true;
         case BX_TAR_OPT_ACLS_OFF:
-            options->acls = false;
+            options->metadata.acls = false;
             return true;
+        case BX_TAR_OPT_SELINUX_ON:
+            options->format_ustar = false;
+            options->metadata.selinux = true;
+            return true;
+        case BX_TAR_OPT_SELINUX_OFF:
+            options->metadata.selinux = false;
+            return true;
+        case BX_TAR_OPT_XATTRS_INCLUDE:
+        case BX_TAR_OPT_XATTRS_EXCLUDE:
+            options->format_ustar = false;
+            options->metadata.xattrs = true;
+            return bx_archive_name_list_append(effect == BX_TAR_OPT_XATTRS_INCLUDE
+                                                  ? &options->metadata.include
+                                                  : &options->metadata.exclude, value);
         case BX_TAR_OPT_WARNING:
             if (!bx_tar_warning_keyword_supported(value)) {
                 bx_diag(diag, "invalid argument '%s' for '--warning'", value);
@@ -4617,6 +4677,8 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
 }
 
 static void bx_tar_options_cleanup(struct bx_tar_options* options) {
+    bx_archive_name_list_free(&options->metadata.include);
+    bx_archive_name_list_free(&options->metadata.exclude);
     bx_tar_transform_rule_cleanup(&options->name_transform);
     bx_tar_create_options_cleanup(&options->create_options);
     bx_archive_name_list_free(&options->source_archives);
@@ -4837,6 +4899,11 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         i++;
     }
 
+    if (options->format_ustar
+        && (options->metadata.xattrs || options->metadata.acls || options->metadata.selinux)) {
+        bx_diag(diag, "metadata requires pax format");
+        return false;
+    }
     if (options->mode == BX_TAR_MODE_NONE) {
         if (options->unsupported_mode != NULL) {
             bx_diag(diag, "%s is not yet supported", options->unsupported_mode);

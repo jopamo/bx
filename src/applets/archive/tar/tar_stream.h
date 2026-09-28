@@ -8,9 +8,11 @@
 
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/tar/tar_id_map.h"
+#include "applets/archive/tar/tar_metadata.h"
 #include "bx/diag.h"
 
 struct bx_tar_stream_options {
+    const struct bx_tar_metadata_options* metadata;
     bool format_ustar;
     bool old_gnu;
     bool numeric_owner;
@@ -73,6 +75,7 @@ bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
                                    size_t data_len,
                                    struct timespec mtime,
                                    bool allow_pax,
+                                   const struct bx_file_metadata* metadata,
                                    struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_write_trailer(const struct bx_tar_stream_sink* sink,
@@ -92,6 +95,7 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
                                    size_t data_len,
                                    struct timespec mtime,
                                    bool allow_pax,
+                                   const struct bx_file_metadata* metadata,
                                    struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
@@ -107,6 +111,7 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
                                          size_t logical_size,
                                          size_t compact_size,
                                          struct timespec mtime,
+                                         const struct bx_file_metadata* metadata,
                                          struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,

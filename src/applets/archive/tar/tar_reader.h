@@ -10,6 +10,7 @@
 
 #include "applets/archive/archive_codec.h"
 #include "applets/archive/archive_common.h"
+#include "lib/file_metadata.h"
 
 #define BX_TAR_BLOCK_SIZE 512u
 
@@ -27,6 +28,7 @@ struct bx_tar_sparse_extent {
 };
 
 struct bx_tar_entry {
+    struct bx_file_metadata metadata;
     char* name;
     char* linkname;
     char* uname;
