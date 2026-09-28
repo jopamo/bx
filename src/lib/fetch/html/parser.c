@@ -420,7 +420,7 @@ typedef struct {
 } HtmlBaseContext;
 
 #include <liblexa/html/document.h>
-#include <liblexa/serialization/native_document.h>
+#include <liblexa/serialization/document.h>
 
 typedef struct {
     char* data;
@@ -677,7 +677,7 @@ char* bx_fetch_html_convert_links(const char* html_data, size_t len,
     if (!result) {
         lxa_limit_reason_t reason;
         errno = 0;
-        lxa_status_t status = lxa_html_serialize_native_document(
+        lxa_status_t status = lxa_html_serialize_document(
             lxa_html_document_nodes(document), lxa_html_document_root(document),
             native_serialize_write, &output, &reason);
         if (status != LXA_OK) {
