@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -33,6 +34,8 @@
 #define BX_TAR_STREAM_RECORD_BLOCKS 20u
 #define BX_TAR_STREAM_FILE_BUFFER_SIZE (1024u * 1024u)
 #define BX_TAR_STREAM_ID_NAME_CACHE_SIZE 16u
+#define BX_TAR_USTAR_ID_MAX UINTMAX_C(07777777)
+#define BX_TAR_USTAR_SIZE_TIME_MAX UINTMAX_C(077777777777)
 
 static const unsigned char bx_tar_stream_zero_block[BX_TAR_STREAM_BLOCK_SIZE];
 static const unsigned char
@@ -343,13 +346,28 @@ static bool bx_tar_stream_pax_append_record(struct bx_archive_buffer* buffer,
     return bx_tar_pax_append(buffer, key, value, strlen(value));
 }
 
-static bool bx_tar_stream_pax_append_size_record(struct bx_archive_buffer* buffer,
+static bool bx_tar_stream_pax_append_number_record(struct bx_archive_buffer* buffer,
                                                  const char* key,
-                                                 size_t value) {
+                                                 uintmax_t value) {
     char text[32];
 
-    snprintf(text, sizeof(text), "%zu", value);
+    snprintf(text, sizeof(text), "%ju", value);
     return bx_tar_stream_pax_append_record(buffer, key, text);
+}
+
+static bool bx_tar_stream_pax_append_mtime(struct bx_archive_buffer* buffer, struct timespec time) {
+    char text[64];
+    intmax_t seconds = (intmax_t)time.tv_sec;
+    if (!time.tv_nsec) {
+        snprintf(text, sizeof(text), "%jd", seconds);
+    } else if (seconds < 0) {
+        /* timespec is floor-normalized; PAX is a signed decimal number. */
+        snprintf(text, sizeof(text), "-%ju.%09ld",
+                 (uintmax_t)(-(seconds + 1)), 1000000000L - time.tv_nsec);
+    } else {
+        snprintf(text, sizeof(text), "%jd.%09ld", seconds, time.tv_nsec);
+    }
+    return bx_tar_stream_pax_append_record(buffer, "mtime", text);
 }
 
 static bool bx_tar_stream_append_prepared_raw_header(const struct bx_tar_stream_sink* sink,
@@ -474,10 +492,22 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
                                        struct bx_diag_ctx* diag) {
     bool need_path_pax;
     bool need_link_pax = false;
+    bool need_uid_pax = (uintmax_t)uid > BX_TAR_USTAR_ID_MAX;
+    bool need_gid_pax = (uintmax_t)gid > BX_TAR_USTAR_ID_MAX;
+    bool need_size_pax = (uintmax_t)size > BX_TAR_USTAR_SIZE_TIME_MAX;
+    bool need_mtime_pax = mtime.tv_sec < 0 || mtime.tv_nsec != 0
+        || (uintmax_t)mtime.tv_sec > BX_TAR_USTAR_SIZE_TIME_MAX;
+    bool need_numeric_pax = need_uid_pax || need_gid_pax || need_size_pax || need_mtime_pax;
     const char* stored_link = linkname;
     const char* actual_header_path = path;
     struct bx_tar_stream_ustar_name split_path;
 
+    if (mtime.tv_nsec < 0 || mtime.tv_nsec >= 1000000000L
+        || size > SIZE_MAX - (BX_TAR_STREAM_BLOCK_SIZE - 1u)
+        || uid == (uid_t)-1 || gid == (gid_t)-1) {
+        bx_diag(diag, "%s: invalid numeric metadata", path);
+        return false;
+    }
     need_path_pax = !bx_tar_stream_split_ustar_name(path, is_dir, &split_path)
         || (old_gnu && split_path.prefix_len != 0u);
     if (linkname != NULL && strlen(linkname) > 100u) {
@@ -489,11 +519,11 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
         return false;
     }
 
-    if (bx_tar_metadata_present(metadata) && !allow_pax) {
+    if ((need_numeric_pax || bx_tar_metadata_present(metadata)) && !allow_pax) {
         bx_diag(diag, "%s: metadata requires pax format", path);
         return false;
     }
-    if (need_path_pax || need_link_pax || bx_tar_metadata_present(metadata)) {
+    if (need_path_pax || need_link_pax || need_numeric_pax || bx_tar_metadata_present(metadata)) {
         struct timespec zero_time = {0, 0};
         struct bx_archive_buffer pax_data = {0};
         size_t pax_size;
@@ -501,7 +531,11 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
         bx_archive_buffer_init(&pax_data);
         if (!bx_tar_metadata_write(&pax_data, metadata)
             || (need_path_pax && !bx_tar_stream_pax_append_record(&pax_data, "path", path))
-            || (need_link_pax && !bx_tar_stream_pax_append_record(&pax_data, "linkpath", linkname))) {
+            || (need_link_pax && !bx_tar_stream_pax_append_record(&pax_data, "linkpath", linkname))
+            || (need_uid_pax && !bx_tar_stream_pax_append_number_record(&pax_data, "uid", uid))
+            || (need_gid_pax && !bx_tar_stream_pax_append_number_record(&pax_data, "gid", gid))
+            || (need_size_pax && !bx_tar_stream_pax_append_number_record(&pax_data, "size", size))
+            || (need_mtime_pax && !bx_tar_stream_pax_append_mtime(&pax_data, mtime))) {
             bx_archive_buffer_free(&pax_data);
             bx_diag(diag, "archive write failed: %s", strerror(errno));
             return false;
@@ -545,6 +579,14 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
         if (need_link_pax) {
             stored_link = "";
         }
+        if (need_uid_pax)
+            uid = 0;
+        if (need_gid_pax)
+            gid = 0;
+        if (need_size_pax)
+            size = 0;
+        if (need_mtime_pax)
+            mtime = zero_time;
     }
 
     if (!need_path_pax) {
@@ -1324,7 +1366,7 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
         || !bx_tar_stream_pax_append_record(&pax_data, "path", path)
         || !bx_tar_stream_pax_append_record(&pax_data, "GNU.sparse.major", "1")
         || !bx_tar_stream_pax_append_record(&pax_data, "GNU.sparse.minor", "0")
-        || !bx_tar_stream_pax_append_size_record(&pax_data, "GNU.sparse.realsize", logical_size)) {
+        || !bx_tar_stream_pax_append_number_record(&pax_data, "GNU.sparse.realsize", logical_size)) {
         bx_archive_buffer_free(&pax_data);
         bx_diag(diag, "archive write failed: %s", strerror(errno));
         return false;

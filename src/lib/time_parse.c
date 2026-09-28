@@ -533,7 +533,10 @@ bool bx_time_parse_epoch_literal(const char* text, const struct bx_time_epoch_pa
         return false;
     }
 
-    if (seconds_value < 0 && nsec != 0) {
+    const char* sign = text + 1;
+    while (isspace((unsigned char)*sign))
+        sign++;
+    if (*sign == '-' && nsec != 0) {
         if (!options->normalize_negative_fraction) {
             return false;
         }
