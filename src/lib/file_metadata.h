@@ -18,7 +18,6 @@ struct bx_file_metadata {
     size_t len;
     char* acl_access;
     char* acl_default;
-    char* selinux;
     bool restore_acls;
 };
 
@@ -35,7 +34,8 @@ bool bx_file_metadata_read(struct bx_file_metadata* metadata, const char* path,
                            bool symlink, bool directory, bool acls, bool numeric_ids,
                            bx_file_xattr_filter filter, const void* user);
 /* fd identifies an already-open inode. With fd == -1, use no-follow path APIs.
- * Apply after chown/chmod and data writes, which can clear inode metadata. */
+ * Apply after chown/chmod and data writes, which can clear inode metadata.
+ * ACLs precede xattrs; security.capability is applied last. */
 bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
                             const char* path, bool symlink, bool directory,
                             mode_t mode);

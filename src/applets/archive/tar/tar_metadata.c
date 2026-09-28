@@ -19,6 +19,12 @@ static bool bx_tar_metadata_matches(const struct bx_archive_name_list* masks,
 
 static bool bx_tar_metadata_wanted(const struct bx_tar_metadata_options* options,
                                     const char* name, bool creating) {
+    /* The text ACL representation is authoritative when explicitly enabled. */
+    if (options->acls && (strcmp(name, "system.posix_acl_access") == 0
+                         || strcmp(name, "system.posix_acl_default") == 0))
+        return false;
+    if (options->selinux && strcmp(name, "security.selinux") == 0)
+        return true;
     return options->xattrs
         && (options->include.len
             ? bx_tar_metadata_matches(&options->include, name)
@@ -28,8 +34,7 @@ static bool bx_tar_metadata_wanted(const struct bx_tar_metadata_options* options
 
 static bool bx_tar_metadata_collect_filter(const char* name, const void* user) {
     const struct bx_tar_metadata_options* options = user;
-    return (options->selinux && strcmp(name, "security.selinux") == 0)
-        || bx_tar_metadata_wanted(options, name, true);
+    return bx_tar_metadata_wanted(options, name, true);
 }
 
 void bx_tar_metadata_select(struct bx_file_metadata* selected,
@@ -46,8 +51,6 @@ void bx_tar_metadata_select(struct bx_file_metadata* selected,
         selected->acl_access = metadata->acl_access ? xstrdup(metadata->acl_access) : NULL;
         selected->acl_default = metadata->acl_default ? xstrdup(metadata->acl_default) : NULL;
     }
-    if (options->selinux && metadata->selinux)
-        selected->selinux = xstrdup(metadata->selinux);
 }
 
 bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, const char* path,
@@ -55,40 +58,35 @@ bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, const char* path
                               const struct bx_tar_metadata_options* options) {
     if (!options)
         return true;
-    if (!bx_file_metadata_read(metadata, path, symlink, directory, options->acls,
+    return bx_file_metadata_read(metadata, path, symlink, directory, options->acls,
                                numeric_ids, options->xattrs || options->selinux
                                    ? bx_tar_metadata_collect_filter : NULL,
-                               options))
-        return false;
-    for (size_t i = 0; i < metadata->len; i++) {
-        struct bx_file_xattr* attr = &metadata->xattrs[i];
-        if (options->selinux && strcmp(attr->name, "security.selinux") == 0) {
-            metadata->selinux = xmalloc(attr->size + 1u);
-            memcpy(metadata->selinux, attr->value, attr->size);
-            metadata->selinux[attr->size] = '\0';
-            if (!bx_tar_metadata_wanted(options, attr->name, true)) {
-                free(attr->name);
-                free(attr->value);
-                memmove(attr, attr + 1, (metadata->len - i - 1u) * sizeof(*attr));
-                metadata->len--;
-            }
-            break;
-        }
-    }
-    return true;
+                               options);
 }
 
 bool bx_tar_metadata_parse(struct bx_file_metadata* metadata, const char* key,
                             const void* value, size_t len) {
     if (strncmp(key, "SCHILY.xattr.", 13u) == 0)
         return bx_file_metadata_set(metadata, key + 13u, value, len);
+    /* Accept the legacy textual encoding, but keep one binary xattr value.
+     * Both encodings replace the same slot, so archive record order wins. */
+    if (strcmp(key, "RHT.security.selinux") == 0) {
+        if (memchr(value, '\0', len) || len >= 65536u) {
+            errno = EINVAL;
+            return false;
+        }
+        char* context = xmalloc(len + 1u);
+        memcpy(context, value, len);
+        context[len] = '\0';
+        bool ok = bx_file_metadata_set(metadata, "security.selinux", context, len + 1u);
+        free(context);
+        return ok;
+    }
     char** slot = NULL;
     if (strcmp(key, "SCHILY.acl.access") == 0)
         slot = &metadata->acl_access;
     else if (strcmp(key, "SCHILY.acl.default") == 0)
         slot = &metadata->acl_default;
-    else if (strcmp(key, "RHT.security.selinux") == 0)
-        slot = &metadata->selinux;
     if (slot) {
         if (memchr(value, '\0', len) || len > 65536u) {
             errno = EINVAL;
@@ -123,7 +121,7 @@ bool bx_tar_pax_append(struct bx_archive_buffer* pax, const char* key,
 
 bool bx_tar_metadata_present(const struct bx_file_metadata* metadata) {
     return metadata && (metadata->len || metadata->acl_access
-                         || metadata->acl_default || metadata->selinux);
+                         || metadata->acl_default);
 }
 
 bool bx_tar_metadata_write(struct bx_archive_buffer* pax,
@@ -142,8 +140,5 @@ bool bx_tar_metadata_write(struct bx_archive_buffer* pax,
                                   strlen(metadata->acl_access)))
         && (!metadata->acl_default
             || bx_tar_pax_append(pax, "SCHILY.acl.default", metadata->acl_default,
-                                  strlen(metadata->acl_default)))
-        && (!metadata->selinux
-            || bx_tar_pax_append(pax, "RHT.security.selinux", metadata->selinux,
-                                  strlen(metadata->selinux)));
+                                  strlen(metadata->acl_default)));
 }
