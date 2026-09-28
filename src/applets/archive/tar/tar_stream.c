@@ -106,6 +106,7 @@ static bool bx_tar_stream_write_raw_entry_formatted(
     bool old_gnu,
     struct timespec atime,
     struct timespec ctime,
+    const struct bx_file_metadata* metadata,
     struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,
@@ -336,25 +337,7 @@ static size_t bx_tar_stream_decimal_digits(size_t value) {
 static bool bx_tar_stream_pax_append_record(struct bx_archive_buffer* buffer,
                                             const char* key,
                                             const char* value) {
-    size_t payload_len = strlen(key) + 1u + strlen(value) + 1u;
-    size_t digits = bx_tar_stream_decimal_digits(payload_len + 2u);
-    size_t total;
-    char prefix[32];
-
-    while (true) {
-        total = payload_len + digits + 1u;
-        if (bx_tar_stream_decimal_digits(total) == digits) {
-            break;
-        }
-        digits = bx_tar_stream_decimal_digits(total);
-    }
-
-    snprintf(prefix, sizeof(prefix), "%zu ", total);
-    return bx_archive_buffer_append(buffer, prefix, strlen(prefix))
-        && bx_archive_buffer_append(buffer, key, strlen(key))
-        && bx_archive_buffer_append_byte(buffer, '=')
-        && bx_archive_buffer_append(buffer, value, strlen(value))
-        && bx_archive_buffer_append_byte(buffer, '\n');
+    return bx_tar_pax_append(buffer, key, value, strlen(value));
 }
 
 static bool bx_tar_stream_pax_append_size_record(struct bx_archive_buffer* buffer,
@@ -484,6 +467,7 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
                                        bool old_gnu,
                                        struct timespec atime,
                                        struct timespec ctime,
+                                       const struct bx_file_metadata* metadata,
                                        struct bx_diag_ctx* diag) {
     bool need_path_pax;
     bool need_link_pax = false;
@@ -502,13 +486,18 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
         return false;
     }
 
-    if (need_path_pax || need_link_pax) {
+    if (bx_tar_metadata_present(metadata) && !allow_pax) {
+        bx_diag(diag, "%s: metadata requires pax format", path);
+        return false;
+    }
+    if (need_path_pax || need_link_pax || bx_tar_metadata_present(metadata)) {
         struct timespec zero_time = {0, 0};
         struct bx_archive_buffer pax_data = {0};
         size_t pax_size;
 
         bx_archive_buffer_init(&pax_data);
-        if ((need_path_pax && !bx_tar_stream_pax_append_record(&pax_data, "path", path))
+        if (!bx_tar_metadata_write(&pax_data, metadata)
+            || (need_path_pax && !bx_tar_stream_pax_append_record(&pax_data, "path", path))
             || (need_link_pax && !bx_tar_stream_pax_append_record(&pax_data, "linkpath", linkname))) {
             bx_archive_buffer_free(&pax_data);
             bx_diag(diag, "archive write failed: %s", strerror(errno));
@@ -804,7 +793,17 @@ static bool bx_tar_stream_write_fs_raw_entry(
     const char* gname,
     struct timespec mtime,
     struct bx_diag_ctx* diag) {
-    return bx_tar_stream_write_raw_entry_formatted(state->sink,
+    struct bx_file_metadata metadata = {0};
+    if (!bx_tar_metadata_collect(&metadata, fs_entry->source_path,
+                                  S_ISLNK(fs_entry->st->st_mode),
+                                  S_ISDIR(fs_entry->st->st_mode),
+                                  state->options->numeric_owner,
+                                  state->options->metadata)) {
+        bx_diag(diag, "%s: cannot read metadata: %s", fs_entry->source_path, strerror(errno));
+        bx_file_metadata_free(&metadata);
+        return false;
+    }
+    bool ok = bx_tar_stream_write_raw_entry_formatted(state->sink,
                                                    fs_entry->archive_path,
                                                    linkname,
                                                    uname,
@@ -820,7 +819,10 @@ static bool bx_tar_stream_write_fs_raw_entry(
                                                    state->options->old_gnu,
                                                    fs_entry->st->st_atim,
                                                    fs_entry->st->st_ctim,
+                                                   &metadata,
                                                    diag);
+    bx_file_metadata_free(&metadata);
+    return ok;
 }
 
 static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* state,
@@ -1035,6 +1037,7 @@ static bool bx_tar_stream_write_raw_entry_formatted(const struct bx_tar_stream_s
                                                     bool old_gnu,
                                                     struct timespec atime,
                                                     struct timespec ctime,
+                                                    const struct bx_file_metadata* metadata,
                                                     struct bx_diag_ctx* diag) {
     bool is_dir = false;
     char typeflag = '0';
@@ -1082,6 +1085,7 @@ static bool bx_tar_stream_write_raw_entry_formatted(const struct bx_tar_stream_s
                                     old_gnu,
                                     atime,
                                     ctime,
+                                    metadata,
                                     diag)) {
         return false;
     }
@@ -1105,6 +1109,7 @@ bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
                                    size_t data_len,
                                    struct timespec mtime,
                                    bool allow_pax,
+                                   const struct bx_file_metadata* metadata,
                                    struct bx_diag_ctx* diag) {
     return bx_tar_stream_write_raw_entry_formatted(sink,
                                                    path,
@@ -1122,6 +1127,7 @@ bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
                                                    false,
                                                    mtime,
                                                    mtime,
+                                                   metadata,
                                                    diag);
 }
 
@@ -1138,6 +1144,7 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
                                    size_t data_len,
                                    struct timespec mtime,
                                    bool allow_pax,
+                                   const struct bx_file_metadata* metadata,
                                    struct bx_diag_ctx* diag) {
     bool is_dir = false;
     char typeflag = '0';
@@ -1191,6 +1198,7 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
                                     false,
                                     mtime,
                                     mtime,
+                                    metadata,
                                     diag)) {
         return false;
     }
@@ -1215,6 +1223,7 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
                                          size_t logical_size,
                                          size_t compact_size,
                                          struct timespec mtime,
+                                         const struct bx_file_metadata* metadata,
                                          struct bx_diag_ctx* diag) {
     struct bx_archive_buffer pax_data = {0};
     struct timespec zero_time = {0, 0};
@@ -1243,7 +1252,8 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
     }
 
     bx_archive_buffer_init(&pax_data);
-    if (!bx_tar_stream_pax_append_record(&pax_data, "path", path)
+    if (!bx_tar_metadata_write(&pax_data, metadata)
+        || !bx_tar_stream_pax_append_record(&pax_data, "path", path)
         || !bx_tar_stream_pax_append_record(&pax_data, "GNU.sparse.major", "1")
         || !bx_tar_stream_pax_append_record(&pax_data, "GNU.sparse.minor", "0")
         || !bx_tar_stream_pax_append_size_record(&pax_data, "GNU.sparse.realsize", logical_size)) {
@@ -1314,6 +1324,7 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
                                        payload_size,
                                        mtime,
                                        true,
+                                       NULL,
                                        diag)) {
         return false;
     }

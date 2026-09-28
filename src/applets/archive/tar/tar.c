@@ -46,6 +46,14 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "                        preserve files newer than their archive copies\n");
     fprintf(stream, "      --same-owner      restore archive ownership when permitted\n");
     fprintf(stream, "      --no-same-owner   do not restore archive ownership\n");
+    fprintf(stream, "      --xattrs, --no-xattrs\n"
+                    "                        enable or disable extended attributes\n"
+                    "      --xattrs-include=PATTERN, --xattrs-exclude=PATTERN\n"
+                    "                        filter attribute names (implies --xattrs)\n"
+                    "      --acls, --no-acls  enable or disable POSIX access/default ACLs\n"
+                    "      --selinux, --no-selinux\n"
+                    "                        enable or disable SELinux contexts\n"
+                    "      --format=pax      write metadata in POSIX extended headers\n");
     fprintf(stream, "  -p, --same-permissions\n");
     fprintf(stream, "                        preserve archive permission bits\n");
     fprintf(stream, "      --no-same-permissions\n");

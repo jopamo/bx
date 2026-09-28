@@ -164,6 +164,7 @@ bx_link_args = bx_static_link_args + bx_build_id_link_args
 
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
+acl_dep = dependency('libacl', static : use_static_binary)
 libcurl_dep = dependency('libcurl', static : use_static_binary)
 fetch_native_html_dep = dependency(
   'liblexa-html-candidate',
@@ -252,7 +253,7 @@ if not libzstd_dep.found()
 endif
 add_project_arguments('-DBX_HAVE_LIBZSTD=1', language : 'c')
 
-bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep, zlib_dep]
+bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep, zlib_dep, acl_dep]
 if libbz2_dep.found()
   bx_deps += [libbz2_dep]
 endif
@@ -308,6 +309,7 @@ bx_lib_sources = [
   'src/lib/child_runner.c',
   'src/lib/copy_data.c',
   'src/lib/copy_metadata.c',
+  'src/lib/file_metadata.c',
   'src/lib/copy_tree.c',
   'src/lib/dir_cycle.c',
   'src/lib/dir_path.c',
@@ -403,6 +405,7 @@ bx_archive_applet_sources = [
   'src/applets/archive/tar/tar_patterns.c',
   'src/applets/archive/tar/tar_report.c',
   'src/applets/archive/tar/tar_reader.c',
+  'src/applets/archive/tar/tar_metadata.c',
   'src/applets/archive/tar/tar_select.c',
   'src/applets/archive/tar/tar_stream.c',
 ]

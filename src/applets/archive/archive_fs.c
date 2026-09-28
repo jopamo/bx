@@ -743,6 +743,7 @@ bool bx_archive_ensure_parent_dirs_safe(const char* path, struct bx_diag_ctx* di
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
     size_t i;
     for (i = 0u; i < dirs->len; i++) {
+        bx_file_metadata_free(&dirs->entries[i].metadata);
         close(dirs->entries[i].fd);
         free(dirs->entries[i].path);
     }
@@ -775,6 +776,7 @@ static bool bx_archive_pending_dirs_record_owned(struct bx_archive_pending_dirs*
         dirs->cap = next_cap;
     }
     entry = &dirs->entries[dirs->len++];
+    memset(entry, 0, sizeof(*entry));
     entry->path = xstrdup(path);
     entry->fd = fd;
     entry->mode = mode;
@@ -835,10 +837,16 @@ bool bx_archive_pending_dirs_apply(struct bx_archive_pending_dirs* dirs,
             bx_diag(diag, "%s: %s", entry->path, strerror(errno));
             return false;
         }
+        if (!bx_file_metadata_apply(&entry->metadata, entry->fd, entry->path,
+                                     false, true, entry->mode)) {
+            bx_diag(diag, "%s: cannot restore metadata: %s", entry->path, strerror(errno));
+            return false;
+        }
         if (entry->set_mtime && !bx_archive_set_fd_mtime(entry->fd, entry->path, entry->mtime, diag)) {
             return false;
         }
         bool closed = bx_fd_close(&entry->fd, entry->path, diag);
+        bx_file_metadata_free(&entry->metadata);
         free(entry->path);
         dirs->len--;
         if (!closed)

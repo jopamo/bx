@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "bx/diag.h"
+#include "lib/file_metadata.h"
 
 struct bx_archive_fs_entry {
     char* source_path;
@@ -53,6 +54,7 @@ typedef bool (*bx_archive_fs_visit_fn)(const struct bx_archive_fs_visit_entry* e
                                        struct bx_diag_ctx* diag);
 
 struct bx_archive_pending_dir {
+    struct bx_file_metadata metadata;
     char* path;
     int fd;
     mode_t mode;

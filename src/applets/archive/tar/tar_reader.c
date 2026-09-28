@@ -13,11 +13,13 @@
 
 #include "applets/archive/archive_codec.h"
 #include "applets/archive/tar/tar_reader.h"
+#include "applets/archive/tar/tar_metadata.h"
 #include "bx/libbx.h"
 
 #define BX_TAR_READER_FILE_CHUNK_SIZE (256u * 1024u)
 
 struct bx_tar_pax_info {
+    struct bx_file_metadata metadata;
     char* path;
     char* linkpath;
     char* uname;
@@ -34,6 +36,7 @@ struct bx_tar_stream_input {
 };
 
 void bx_tar_entry_free(struct bx_tar_entry* entry) {
+    bx_file_metadata_free(&entry->metadata);
     if (entry->name != NULL) {
         free(entry->name);
     }
@@ -87,6 +90,7 @@ bool bx_tar_entry_list_push(struct bx_tar_entry_list* list, const struct bx_tar_
 }
 
 static void bx_tar_pax_info_clear(struct bx_tar_pax_info* pax) {
+    bx_file_metadata_free(&pax->metadata);
     if (!pax->active) {
         return;
     }
@@ -322,17 +326,23 @@ static bool bx_tar_parse_pax_size_value(const char* value, size_t* value_out) {
 
 static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax,
                                     char* record,
+                                    size_t record_len,
                                     bool skip_owner_group_names) {
     const char* key;
     const char* value;
-    char* equal = strchr(record, '=');
+    char* equal = memchr(record, '=', record_len);
 
-    if (equal == NULL) {
+    if (equal == NULL || memchr(record, '\0', (size_t)(equal - record))) {
         return false;
     }
     *equal = '\0';
     key = record;
     value = equal + 1;
+    size_t value_len = record_len - (size_t)(value - record);
+    if (strncmp(key, "SCHILY.", 7u) == 0 || strcmp(key, "RHT.security.selinux") == 0) {
+        pax->active = true;
+        return bx_tar_metadata_parse(&pax->metadata, key, value, value_len);
+    }
     if (strcmp(key, "path") == 0) {
         free(pax->path);
         pax->path = xstrdup(value);
@@ -477,7 +487,7 @@ static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax,
         record = xmalloc(field_len + 1u);
         memcpy(record, data + field_start, field_len);
         record[field_len] = '\0';
-        if (!bx_tar_apply_pax_record(pax, record, skip_owner_group_names)) {
+        if (!bx_tar_apply_pax_record(pax, record, field_len, skip_owner_group_names)) {
             free(record);
             return false;
         }
@@ -521,6 +531,7 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
         }
     }
     entry->name = name;
+    bx_file_metadata_copy(&entry->metadata, &pax->metadata);
     entry->mode = 0644u;
     entry->size = size;
     entry->dumpdir = typeflag == 'D';
@@ -914,7 +925,8 @@ static bool bx_tar_stream_input_read_pax_records(struct bx_tar_stream_input* inp
             }
             record[record_len - 1u] = '\0';
         }
-        if (!bx_tar_apply_pax_record(pax, record, skip_owner_group_names)) {
+        if (!bx_tar_apply_pax_record(pax, record, line_len - consumed - 1u,
+                                     skip_owner_group_names)) {
             free(record);
             return false;
         }
@@ -1215,6 +1227,7 @@ static bool bx_tar_clone_entry(struct bx_tar_entry* dst,
                                struct bx_diag_ctx* diag) {
     memset(dst, 0, sizeof(*dst));
     dst->kind = src->kind;
+    bx_file_metadata_copy(&dst->metadata, &src->metadata);
     dst->mode = src->mode;
     dst->uid = src->uid;
     dst->gid = src->gid;
