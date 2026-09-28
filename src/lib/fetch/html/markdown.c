@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <liblexa/html/document.h>
+#include <liblexa/html.h>
 
 /* Private native candidate. Production selection still requires the bx
  * consumer matrix and the complete HTML parser grammar. */

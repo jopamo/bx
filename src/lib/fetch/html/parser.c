@@ -419,7 +419,7 @@ typedef struct {
     bool seen;
 } HtmlBaseContext;
 
-#include <liblexa/html/document.h>
+#include <liblexa/html.h>
 #include <liblexa/serialize.h>
 
 typedef struct {
