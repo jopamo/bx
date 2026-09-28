@@ -61,6 +61,7 @@ static bool bx_archive_fs_list_push(struct bx_archive_fs_list* list,
     }
 
     entry = &list->entries[list->len++];
+    *entry = (struct bx_archive_fs_entry){0};
     entry->source_path = xstrdup(source_path);
     entry->archive_path = xstrdup(archive_path);
     entry->st = *st;
