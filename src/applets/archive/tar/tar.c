@@ -18,6 +18,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Manipulate tar archives.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -c                    create a new archive\n");
+    fprintf(stream, "                        detectable source changes fail creation;\n"
+                    "                        use a snapshot or quiescent source for consistency\n");
     fprintf(stream, "  -t                    list archive members\n");
     fprintf(stream, "  -x                    extract archive members\n");
     fprintf(stream, "  -f ARCHIVE            use ARCHIVE instead of standard input/output\n");
