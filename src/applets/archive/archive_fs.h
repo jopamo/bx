@@ -14,6 +14,9 @@ struct bx_archive_fs_entry {
     char* archive_path;
     struct stat st;
     char* link_target;
+    /* Buffered tar readers verify the parent before opening the leaf. */
+    dev_t source_parent_dev;
+    ino_t source_parent_ino;
 };
 
 struct bx_archive_fs_list {

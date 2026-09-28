@@ -15,6 +15,7 @@
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
 #include "lib/fd_ops.h"
+#include "lib/dir_path.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
@@ -1484,17 +1485,35 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
     counting_user.bytes_written = bytes_written_io;
 
     for (i = 0u; i < files->len; i++) {
-        struct bx_archive_fs_visit_entry entry = {
-            .source_parent_fd = AT_FDCWD,
-            .source_fd = -1,
-            .source_name = files->entries[i].source_path,
-            .source_path = files->entries[i].source_path,
-            .archive_path = files->entries[i].archive_path,
-            .st = &files->entries[i].st,
-            .link_target = files->entries[i].link_target,
+        const struct bx_archive_fs_entry* saved = &files->entries[i];
+        char* name = NULL;
+        /* Tar keeps cwd/root unchanged during creation. Resolve every parent
+         * component no-follow, then verify the selected parent. Keep only this
+         * entry's descriptors, not one FD per buffered input. */
+        int parent = bx_dir_path_open_source_parent(saved->source_path, &name);
+        struct stat expected = {
+            .st_dev = saved->source_parent_dev,
+            .st_ino = saved->source_parent_ino,
+            .st_mode = S_IFDIR,
         };
-
-        if (!bx_tar_stream_write_fs_entry(&state, &entry, diag)) {
+        struct stat opened;
+        bool ok = parent >= 0 && bx_fd_fstat_expected(parent, &expected, &opened) == 0;
+        if (!ok)
+            bx_diag(diag, "%s: cannot open source parent: %s", saved->source_path, strerror(errno));
+        struct bx_archive_fs_visit_entry entry = {
+            .source_parent_fd = parent,
+            .source_fd = -1,
+            .source_name = name,
+            .source_path = saved->source_path,
+            .archive_path = saved->archive_path,
+            .st = &saved->st,
+            .link_target = saved->link_target,
+        };
+        if (ok)
+            ok = bx_tar_stream_write_fs_entry(&state, &entry, diag);
+        bool closed = bx_fd_close(&parent, saved->source_path, ok ? diag : NULL);
+        free(name);
+        if (!ok || !closed) {
             free(state.file_buffer);
             bx_tar_stream_id_name_cache_cleanup(&state.name_caches.groups);
             bx_tar_stream_id_name_cache_cleanup(&state.name_caches.users);

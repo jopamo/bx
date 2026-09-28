@@ -849,7 +849,11 @@ static bool bx_tar_create_collect_entry(const struct bx_archive_fs_visit_entry* 
                                         void* user_data,
                                         struct bx_diag_ctx* diag) {
     struct bx_archive_fs_list* list = user_data;
-    (void)diag;
+    struct stat parent;
+    if (fstat(entry->source_parent_fd, &parent) != 0) {
+        bx_diag(diag, "%s: cannot stat source parent: %s", entry->source_path, strerror(errno));
+        return false;
+    }
 
     if (list->len == list->cap) {
         size_t next_cap = list->cap ? list->cap * 2u : 32u;
@@ -860,6 +864,8 @@ static bool bx_tar_create_collect_entry(const struct bx_archive_fs_visit_entry* 
     list->entries[list->len].source_path = xstrdup(entry->source_path);
     list->entries[list->len].archive_path = xstrdup(entry->archive_path);
     list->entries[list->len].st = *entry->st;
+    list->entries[list->len].source_parent_dev = parent.st_dev;
+    list->entries[list->len].source_parent_ino = parent.st_ino;
     list->entries[list->len].link_target = entry->link_target ? xstrdup(entry->link_target) : NULL;
     list->len++;
     return true;
