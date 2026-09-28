@@ -78,7 +78,11 @@ struct bx_archive_parent_dir_cache {
 };
 
 void bx_archive_fs_list_free(struct bx_archive_fs_list* list);
-bool bx_archive_fs_visit_path_filtered(const char* source_path,
+/* Borrows the operand parent/name; source_path is only the display path.
+ * The frontend owns explicit-operand parent-resolution policy. */
+bool bx_archive_fs_visit_at_filtered(int source_parent_fd,
+                                       const char* source_name,
+                                       const char* source_path,
                                        const char* archive_path,
                                        bool recurse,
                                        bool sort_children,

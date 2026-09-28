@@ -27,6 +27,9 @@ int bx_fd_open_read(const char* path, struct bx_diag_ctx* diag);
  * O_NONBLOCK prevents a substituted FIFO from hanging before verification. */
 int bx_fd_openat_regular_verified(int parent_fd, const char* name,
                                   const struct stat* expected, struct stat* opened);
+/* Verify type/device/inode, publishing opened only on success. The two stat
+ * pointers may alias. A different inode is ESTALE; syscall errors are retained. */
+int bx_fd_fstat_expected(int fd, const struct stat* expected, struct stat* opened);
 
 /* bx_fd_open_write: wrapper for open(O_WRONLY | flags).
  * Reports error to diag. returns fd or -1. */

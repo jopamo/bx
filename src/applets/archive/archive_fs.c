@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -179,14 +180,10 @@ static bool bx_archive_fs_open_dir(struct bx_archive_fs_visit_state* state,
     if (fd < 0)
         return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_OPENDIR, errno);
     struct stat opened;
-    if (fstat(fd, &opened) != 0) {
+    if (bx_fd_fstat_expected(fd, expected, &opened) != 0) {
         int error = errno;
         close(fd);
         return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, error);
-    }
-    if (opened.st_dev != expected->st_dev || opened.st_ino != expected->st_ino) {
-        close(fd);
-        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, ESTALE);
     }
     if (state->boundary.enabled) {
         struct bx_mount_identity identity;
@@ -288,9 +285,19 @@ static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
         return true;
     char* target = NULL;
     if (S_ISLNK(status.st_mode)) {
-        target = bx_path_readlinkat_dup(parent_fd, name);
-        if (!target)
+        int fd = bx_fd_openat_cloexec(parent_fd, name, O_PATH | O_NOFOLLOW, 0);
+        if (fd < 0)
             return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, errno);
+        if (bx_fd_fstat_expected(fd, &status, &status) == 0)
+            target = bx_path_readlinkat_dup(fd, "");
+        int error = errno;
+        int rc = close(fd);
+        if (!target)
+            return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, error);
+        if (rc != 0) {
+            free(target);
+            return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, errno);
+        }
     }
     bool ok = state->visit_fn(&(struct bx_archive_fs_visit_entry){
         .source_parent_fd = parent_fd,
@@ -309,7 +316,9 @@ static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
     return !dir || bx_archive_fs_visit_children(state, dir);
 }
 
-bool bx_archive_fs_visit_path_filtered(const char* source_path,
+bool bx_archive_fs_visit_at_filtered(int source_parent_fd,
+                                       const char* source_name,
+                                       const char* source_path,
                                        const char* archive_path,
                                        bool recurse,
                                        bool sort_children,
@@ -334,7 +343,7 @@ bool bx_archive_fs_visit_path_filtered(const char* source_path,
     };
     bx_archive_fs_path_buf_init(&state.source, source_path);
     bx_archive_fs_path_buf_init(&state.archive, archive_path);
-    bool ok = bx_archive_fs_visit_inner(&state, AT_FDCWD, source_path, recurse);
+    bool ok = bx_archive_fs_visit_inner(&state, source_parent_fd, source_name, recurse);
     bx_archive_fs_path_buf_cleanup(&state.archive);
     bx_archive_fs_path_buf_cleanup(&state.source);
     return ok;
@@ -350,7 +359,9 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                      bx_archive_fs_error_fn error_fn,
                                      void* error_user_data,
                                      struct bx_diag_ctx* diag) {
-    return bx_archive_fs_visit_path_filtered(source_path,
+    return bx_archive_fs_visit_at_filtered(AT_FDCWD,
+                                             source_path,
+                                             source_path,
                                              archive_path,
                                              recurse,
                                              sort_children,

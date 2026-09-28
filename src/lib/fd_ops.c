@@ -43,6 +43,23 @@ int bx_fd_open_read(const char* path, struct bx_diag_ctx* diag) {
     return fd;
 }
 
+int bx_fd_fstat_expected(int fd, const struct stat* expected, struct stat* opened) {
+    if (!expected || !opened) {
+        errno = EINVAL;
+        return -1;
+    }
+    struct stat status;
+    if (fstat(fd, &status) != 0)
+        return -1;
+    if ((status.st_mode & S_IFMT) != (expected->st_mode & S_IFMT)
+        || status.st_dev != expected->st_dev || status.st_ino != expected->st_ino) {
+        errno = ESTALE;
+        return -1;
+    }
+    *opened = status;
+    return 0;
+}
+
 int bx_fd_openat_regular_verified(int parent_fd, const char* name,
                                   const struct stat* expected, struct stat* opened) {
     if (!expected || !opened || !S_ISREG(expected->st_mode)) {
@@ -53,13 +70,8 @@ int bx_fd_openat_regular_verified(int parent_fd, const char* name,
                                  O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY, 0);
     if (fd < 0)
         return -1;
-    int error = 0;
-    if (fstat(fd, opened) != 0)
-        error = errno;
-    else if (!S_ISREG(opened->st_mode) || opened->st_dev != expected->st_dev
-             || opened->st_ino != expected->st_ino)
-        error = ESTALE;
-    if (error) {
+    if (bx_fd_fstat_expected(fd, expected, opened) != 0) {
+        int error = errno;
         close(fd);
         errno = error;
         return -1;

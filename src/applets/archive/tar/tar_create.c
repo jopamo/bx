@@ -10,6 +10,7 @@
 #include "applets/archive/tar/tar_files_from.h"
 #include "applets/archive/tar/tar_patterns.h"
 #include "bx/libbx.h"
+#include "lib/dir_path.h"
 #include "lib/path_ops.h"
 
 struct bx_tar_files_from_state {
@@ -828,7 +829,16 @@ static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
         .had_create_errors = &ctx->had_create_errors,
     };
     char* source_path = bx_tar_create_resolve_input_path(state->cwd, name);
-    bool ok = bx_archive_fs_visit_path_filtered(source_path,
+    char* source_name = NULL;
+    int parent = bx_dir_path_open_source_parent(source_path, &source_name);
+    bool ok;
+    if (parent < 0)
+        ok = bx_tar_create_handle_fs_error(source_path, BX_ARCHIVE_FS_ERROR_LSTAT,
+                                            errno, &filter_state) == BX_ARCHIVE_FS_ERROR_SKIP;
+    else {
+        ok = bx_archive_fs_visit_at_filtered(parent,
+                                                source_name,
+                                                source_path,
                                                 name,
                                                 state->recurse,
                                                 ctx->sort_children,
@@ -840,8 +850,13 @@ static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
                                                 ctx->visit_fn,
                                                 ctx->visit_user_data,
                                                 ctx->diag);
+        if (close(parent) != 0 && ok)
+            ok = bx_tar_create_handle_fs_error(source_path, BX_ARCHIVE_FS_ERROR_CLOSEDIR,
+                                                errno, &filter_state) == BX_ARCHIVE_FS_ERROR_SKIP;
+    }
 
     bx_tar_create_filter_state_cleanup(&filter_state);
+    free(source_name);
     free(source_path);
     return ok;
 }
