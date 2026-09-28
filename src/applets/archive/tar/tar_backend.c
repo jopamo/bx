@@ -4760,7 +4760,6 @@ static bool bx_tar_report_fs_entries(FILE* stream,
 struct bx_tar_create_stream_producer_ctx {
     const struct bx_tar_create_options* create_options;
     bool sort_children;
-    bool had_create_errors;
 };
 
 static bool bx_tar_create_stream_entries_produce(void* user,
@@ -4768,13 +4767,22 @@ static bool bx_tar_create_stream_entries_produce(void* user,
                                                  void* visit_user_data,
                                                  struct bx_diag_ctx* diag) {
     struct bx_tar_create_stream_producer_ctx* ctx = user;
+    bool had_create_errors = false;
 
-    return bx_tar_create_visit_fs_entries(ctx->create_options,
+    if (!bx_tar_create_visit_fs_entries(ctx->create_options,
                                           ctx->sort_children,
                                           visit_fn,
                                           visit_user_data,
-                                          &ctx->had_create_errors,
-                                          diag);
+                                          &had_create_errors,
+                                          diag)) {
+        return false;
+    }
+    /* Skipped required inputs invalidate the producer, before any writer commits. */
+    if (had_create_errors) {
+        bx_tar_report_previous_errors(diag);
+        return false;
+    }
+    return true;
 }
 
 static bool bx_tar_can_stream_create(const struct bx_tar_options* options) {
@@ -4966,7 +4974,6 @@ int bx_tar_run(int argc, char** argv) {
             struct bx_tar_create_stream_producer_ctx stream_ctx = {
                 .create_options = &options.create_options,
                 .sort_children = options.sort_name,
-                .had_create_errors = false,
             };
             uint64_t total_bytes_written = 0u;
             size_t compress_threads = bx_tar_effective_compress_threads(&options);
@@ -4992,10 +4999,6 @@ int bx_tar_run(int argc, char** argv) {
                 && !bx_tar_report_totals_line(true, total_bytes_written, &diag)) {
                 rc = 2;
             }
-            if (rc == 0 && stream_ctx.had_create_errors) {
-                bx_tar_report_previous_errors(&diag);
-                rc = 2;
-            }
             bx_tar_options_cleanup(&options);
             return rc;
         }
@@ -5005,7 +5008,6 @@ int bx_tar_run(int argc, char** argv) {
         struct bx_tar_incremental_plan incremental_plan = {0};
         bool incremental_active = options.incremental_snapshot_path != NULL;
         bool had_create_errors = false;
-        bool had_postwrite_errors = false;
         uint64_t total_bytes_written = 0u;
         size_t compress_threads = bx_tar_effective_compress_threads(&options);
         bool use_mt = compress_threads > 1u
@@ -5024,7 +5026,12 @@ int bx_tar_run(int argc, char** argv) {
                                               &options.create_options,
                                               options.sort_name,
                                               &had_create_errors,
-                                              &diag)) {
+                                              &diag)
+            || had_create_errors) {
+            if (had_create_errors) {
+                bx_tar_report_previous_errors(&diag);
+            }
+            bx_archive_fs_list_free(&files);
             bx_tar_incremental_plan_cleanup(&incremental_plan);
             bx_tar_options_cleanup(&options);
             return 2;
@@ -5077,13 +5084,6 @@ int bx_tar_run(int argc, char** argv) {
         if (options.report_totals
             && total_bytes_written > 0u
             && !bx_tar_report_totals_line(true, total_bytes_written, &diag)) {
-            rc = 2;
-        }
-        if (rc == 0 && had_create_errors) {
-            had_postwrite_errors = true;
-        }
-        if (rc == 0 && had_postwrite_errors) {
-            bx_tar_report_previous_errors(&diag);
             rc = 2;
         }
         if (!bx_tar_report_output_finish(&report_output, &diag)) {

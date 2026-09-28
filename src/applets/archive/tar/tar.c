@@ -21,6 +21,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -t                    list archive members\n");
     fprintf(stream, "  -x                    extract archive members\n");
     fprintf(stream, "  -f ARCHIVE            use ARCHIVE instead of standard input/output\n");
+    fprintf(stream, "                        creation publishes regular output only on success;\n"
+                    "                        stdout/pipes may contain partial data on failure\n");
     fprintf(stream, "  -C DIR                change to DIR before processing files\n");
     fprintf(stream, "  -T FILE               read create inputs from FILE\n");
     fprintf(stream, "      --add-file=FILE   add FILE even when its name begins with '-'\n");
