@@ -11,6 +11,8 @@
 #include <string.h>
 #include <sys/acl.h>
 #include <sys/xattr.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include "bx/libbx.h"
 
@@ -141,10 +143,9 @@ out: {
 }
 }
 
-static bool bx_metadata_read_acl(char** text, int fd, const char* path, acl_type_t type,
+static bool bx_metadata_read_acl(char** text, int fd, acl_type_t type,
                                   bool numeric_ids) {
-    acl_t acl = fd < 0 ? acl_get_file(path, type)
-        : type == ACL_TYPE_DEFAULT ? bx_metadata_default_acl_fd(fd) : acl_get_fd(fd);
+    acl_t acl = type == ACL_TYPE_DEFAULT ? bx_metadata_default_acl_fd(fd) : acl_get_fd(fd);
     if (!acl)
         return bx_metadata_unsupported(errno);
     char* value = acl_to_any_text(acl, NULL, ',', numeric_ids ? TEXT_NUMERIC_IDS : 0);
@@ -156,16 +157,45 @@ static bool bx_metadata_read_acl(char** text, int fd, const char* path, acl_type
     return true;
 }
 
-bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd, const char* path,
+/* Newer kernels can support empty-path xattr operations on O_PATH FDs even
+ * where the older f*xattr interfaces reject them. Never retry by pathname. */
+static ssize_t bx_metadata_list_xattrs(int fd, char* names, size_t size) {
+    ssize_t rc = flistxattr(fd, names, size);
+#ifdef SYS_listxattrat
+    if (rc < 0 && errno == EBADF)
+        rc = syscall(SYS_listxattrat, fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW, names, size);
+#endif
+    return rc;
+}
+
+static ssize_t bx_metadata_get_xattr(int fd, const char* name, void* value, size_t size) {
+    ssize_t rc = fgetxattr(fd, name, value, size);
+#ifdef SYS_getxattrat
+    if (rc < 0 && errno == EBADF) {
+        /* Linux xattr_args ABI, also aligned to eight bytes on 32-bit targets.
+         * Keep this usable with libc headers that do not declare xattrat yet. */
+        struct {
+            _Alignas(8) uint64_t value;
+            uint32_t size;
+            uint32_t flags;
+        } args = {.value = (uintptr_t)value, .size = (uint32_t)size};
+        rc = syscall(SYS_getxattrat, fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW,
+                       name, &args, sizeof(args));
+    }
+#endif
+    return rc;
+}
+
+bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
                            bool symlink, bool directory, bool acls, bool numeric_ids,
                            bx_file_xattr_filter filter, const void* user) {
-    if (fd >= 0 && symlink) {
-        errno = EINVAL;
+    if (fd < 0 && (filter || (acls && !symlink))) {
+        errno = EBADF;
         return false;
     }
     if (acls && !symlink) {
-        if (!bx_metadata_read_acl(&metadata->acl_access, fd, path, ACL_TYPE_ACCESS, numeric_ids)
-            || (directory && !bx_metadata_read_acl(&metadata->acl_default, fd, path,
+        if (!bx_metadata_read_acl(&metadata->acl_access, fd, ACL_TYPE_ACCESS, numeric_ids)
+            || (directory && !bx_metadata_read_acl(&metadata->acl_default, fd,
                                                     ACL_TYPE_DEFAULT, numeric_ids)))
             return false;
     }
@@ -175,28 +205,30 @@ bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd, const char
      * syscall, avoiding a size-query/read race when another writer changes it. */
     char* names = xmalloc(65536u);
     unsigned char* value = xmalloc(65536u);
-    ssize_t size = fd >= 0 ? flistxattr(fd, names, 65536u)
-        : symlink ? llistxattr(path, names, 65536u)
-                           : listxattr(path, names, 65536u);
-    bool ok = size >= 0 || bx_metadata_unsupported(errno);
+    ssize_t size = bx_metadata_list_xattrs(fd, names, 65536u);
+    bool ok = size >= 0;
     for (ssize_t pos = 0; ok && pos < size;) {
         const char* name = names + pos;
         pos += (ssize_t)strlen(name) + 1;
         if (!filter(name, user))
             continue;
-        ssize_t len = fd >= 0 ? fgetxattr(fd, name, value, 65536u)
-            : symlink ? lgetxattr(path, name, value, 65536u)
-                              : getxattr(path, name, value, 65536u);
+        ssize_t len = bx_metadata_get_xattr(fd, name, value, 65536u);
         if (len < 0) {
-            if (errno != ENODATA)
-                ok = false;
-            continue;
+            ok = false;
+            break;
         }
         ok = bx_file_metadata_set(metadata, name, value, (size_t)len);
     }
     int error = errno;
     free(value);
     free(names);
+    /* EBADF here can mean a valid O_PATH descriptor whose xattr operations
+     * the kernel does not support, rather than a closed descriptor. */
+    if (!ok && error == EBADF) {
+        int flags = fcntl(fd, F_GETFL);
+        if (flags >= 0 && (flags & O_PATH))
+            error = EOPNOTSUPP;
+    }
     errno = error;
     return ok;
 }

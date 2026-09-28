@@ -51,6 +51,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --no-same-owner   do not restore archive ownership\n");
     fprintf(stream, "      --xattrs, --no-xattrs\n"
                     "                        enable or disable extended attributes\n"
+                    "                        creation fails if requested attributes cannot be read\n"
+                    "                        safely, even with --ignore-failed-read\n"
                     "      --xattrs-include=PATTERN, --xattrs-exclude=PATTERN\n"
                     "                        filter attribute names (implies --xattrs)\n"
                     "      --acls, --no-acls  enable or disable POSIX access/default ACLs\n"

@@ -28,10 +28,10 @@ bool bx_file_metadata_set(struct bx_file_metadata* metadata, const char* name,
                           const void* value, size_t size);
 void bx_file_metadata_copy(struct bx_file_metadata* dest,
                            const struct bx_file_metadata* source);
-/* Read into an empty model. fd >= 0 borrows a readable descriptor and never
- * resolves path. Symlinks currently require fd == -1.
+/* Read into an empty model from a borrowed FD, never a pathname. O_PATH xattr
+ * access requires kernel support; requested xattr read failures are fatal.
  * The filter and context are borrowed only for this call. */
-bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd, const char* path,
+bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
                            bool symlink, bool directory, bool acls, bool numeric_ids,
                            bx_file_xattr_filter filter, const void* user);
 /* fd identifies an already-open inode. With fd == -1, use no-follow path APIs.

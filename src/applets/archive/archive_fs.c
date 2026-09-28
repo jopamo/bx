@@ -282,6 +282,7 @@ static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
         return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, errno);
     struct bx_archive_fs_visit_entry visit = {
         .source_parent_fd = parent_fd,
+        .source_fd = -1,
         .source_name = name,
         .source_path = state->source.data,
         .archive_path = state->archive.data,
@@ -296,17 +297,17 @@ static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
             return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, errno);
         if (bx_fd_fstat_expected(fd, &status, &status) == 0)
             target = bx_path_readlinkat_dup(fd, "");
-        int error = errno;
-        int rc = close(fd);
-        if (!target)
+        if (!target) {
+            int error = errno;
+            close(fd);
             return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, error);
-        if (rc != 0) {
-            free(target);
-            return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, errno);
         }
+        visit.source_fd = fd;
     }
     visit.link_target = target;
     bool ok = state->visit_fn(&visit, state->visit_user_data, state->diag);
+    if (visit.source_fd >= 0 && close(visit.source_fd) != 0 && ok)
+        ok = bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_READLINK, errno);
     free(target);
     if (!ok || !recurse || !S_ISDIR(status.st_mode))
         return ok;
