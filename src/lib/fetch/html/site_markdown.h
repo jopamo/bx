@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-#include <liblexa/dom/node_store.h>
+#include <liblexa/dom.h>
 
 typedef enum {
     BX_FETCH_MARKDOWN_SITE_GENERIC = 0,
