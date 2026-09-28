@@ -63,7 +63,7 @@ int bx_dir_path_open_parent(int root_fd, const char* path, bool create, mode_t m
                                     O_RDONLY, create, mode, leaf);
 }
 
-int bx_dir_path_open_source_parent(const char* path, char** leaf) {
+int bx_dir_path_open_source_parent_at(int start_fd, const char* path, char** leaf) {
     if (!path || !leaf) {
         errno = EINVAL;
         return -1;
@@ -73,7 +73,8 @@ int bx_dir_path_open_source_parent(const char* path, char** leaf) {
         errno = ENOENT;
         return -1;
     }
-    int root = bx_fd_open_cloexec(path[0] == '/' ? "/" : ".", O_PATH | O_DIRECTORY, 0);
+    int root = path[0] == '/' ? bx_fd_open_cloexec("/", O_PATH | O_DIRECTORY, 0)
+        : bx_fd_openat_cloexec(start_fd, ".", O_PATH | O_DIRECTORY, 0);
     if (root < 0)
         return -1;
     char* name = NULL;
@@ -94,4 +95,8 @@ int bx_dir_path_open_source_parent(const char* path, char** leaf) {
     }
     *leaf = name;
     return parent;
+}
+
+int bx_dir_path_open_source_parent(const char* path, char** leaf) {
+    return bx_dir_path_open_source_parent_at(AT_FDCWD, path, leaf);
 }

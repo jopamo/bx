@@ -1,4 +1,6 @@
+#define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +13,7 @@
 #include "applets/archive/tar/tar_patterns.h"
 #include "bx/libbx.h"
 #include "lib/dir_path.h"
+#include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 
 struct bx_tar_files_from_state {
@@ -61,6 +64,7 @@ struct bx_tar_create_filter_state {
     bool exclude_vcs;
     bool exclude_vcs_ignores;
     bool ignore_failed_read;
+    bool probe_failed;
     struct bx_diag_ctx* diag;
     bool* had_create_errors;
 };
@@ -74,6 +78,10 @@ struct bx_tar_create_collect_ctx {
     bool ignore_failed_read;
     struct bx_diag_ctx* diag;
 };
+
+static enum bx_archive_fs_error_action
+bx_tar_create_handle_fs_error(const char* source_path, enum bx_archive_fs_error_op op,
+                              int errnum, void* user_data);
 
 static void bx_tar_create_directive_list_free(struct bx_tar_create_directive_list* list) {
     size_t i;
@@ -455,61 +463,95 @@ static bool bx_tar_create_path_contains_sep(const char* path) {
     return strchr(path, '/') != NULL;
 }
 
-static bool bx_tar_create_path_exists(const char* dir_path,
-                                      const char* name) {
-    char* full_path = bx_path_join(dir_path, name);
-    bool exists = (access(full_path, F_OK) == 0);
-
-    free(full_path);
-    return exists;
+/* Marker presence never follows its target. Pattern contents must come from a
+ * regular file opened and verified relative to the directory being filtered. */
+static int bx_tar_create_probe(struct bx_tar_create_filter_state* state, int dir_fd,
+                                const char* dir_path, const char* name, bool read_file) {
+    char* leaf = NULL;
+    /* Preserve the old directory/name join semantics for leading slashes. */
+    const char* relative = name;
+    while (*relative == '/')
+        relative++;
+    int parent = bx_dir_path_open_source_parent_at(dir_fd, *relative ? relative : ".", &leaf);
+    int result = -1;
+    int error = errno;
+    if (parent >= 0) {
+        struct stat status;
+        if (fstatat(parent, leaf, &status, AT_SYMLINK_NOFOLLOW) == 0) {
+            if (!read_file)
+                result = 0;
+            else if (!S_ISREG(status.st_mode))
+                errno = EINVAL;
+            else
+                result = bx_fd_openat_regular_verified(parent, leaf, &status, &status);
+        }
+        error = errno;
+        if (close(parent) != 0 && result >= 0) {
+            error = errno;
+            if (read_file)
+                close(result);
+            result = -1;
+        }
+    }
+    free(leaf);
+    if (result < 0 && error != ENOENT) {
+        char* path = bx_path_join(dir_path, name);
+        bx_tar_create_handle_fs_error(path, read_file ? BX_ARCHIVE_FS_ERROR_OPENDIR
+                                                      : BX_ARCHIVE_FS_ERROR_LSTAT,
+                                       error, state);
+        free(path);
+        state->probe_failed = true;
+    }
+    return result;
 }
 
-static bool bx_tar_create_load_pattern_file(const char* path,
+static bool bx_tar_create_path_exists(struct bx_tar_create_filter_state* state, int dir_fd,
+                                      const char* dir_path, const char* name) {
+    return bx_tar_create_probe(state, dir_fd, dir_path, name, false) >= 0;
+}
+
+static bool bx_tar_create_load_pattern_file(struct bx_tar_create_filter_state* state,
+                                            int dir_fd, const char* dir_path, const char* name,
                                             struct bx_tar_match_pattern_list* out,
-                                            const struct bx_tar_match_policy* policy,
-                                            struct bx_diag_ctx* diag) {
+                                            const struct bx_tar_match_policy* policy) {
+    int fd = bx_tar_create_probe(state, dir_fd, dir_path, name, true);
+    if (fd < 0)
+        return !state->probe_failed;
+    FILE* stream = fdopen(fd, "rb");
+    if (!stream) {
+        int error = errno;
+        close(fd);
+        bx_tar_create_handle_fs_error(dir_path, BX_ARCHIVE_FS_ERROR_OPENDIR, error, state);
+        return false;
+    }
     struct bx_archive_name_list loaded = {0};
-    bool ok = true;
-    size_t i;
-
-    if (access(path, F_OK) != 0) {
-        if (errno == ENOENT) {
-            return true;
-        }
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return false;
+    bool ok = bx_archive_name_list_read_stream(stream, '\n', &loaded, state->diag);
+    if (fclose(stream) != 0) {
+        bx_tar_create_handle_fs_error(dir_path, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno, state);
+        ok = false;
     }
-    if (!bx_archive_name_list_read_path(path, '\n', &loaded, diag)) {
-        return false;
-    }
-
-    for (i = 0u; i < loaded.len; i++) {
-        if (!bx_tar_match_pattern_list_append(out, loaded.items[i], policy)) {
-            ok = false;
-            break;
-        }
-    }
+    if (!ok && !state->ignore_failed_read)
+        *state->had_create_errors = true;
+    for (size_t i = 0u; ok && i < loaded.len; i++)
+        ok = bx_tar_match_pattern_list_append(out, loaded.items[i], policy);
     bx_archive_name_list_free(&loaded);
     return ok;
 }
 
-static bool bx_tar_create_record_ignore_file_patterns(struct bx_tar_create_dir_policy* policy,
+static bool bx_tar_create_record_ignore_file_patterns(struct bx_tar_create_filter_state* state,
+                                                      int dir_fd, struct bx_tar_create_dir_policy* policy,
                                                       const char* dir_path,
                                                       const struct bx_archive_name_list* names,
                                                       bool recursive,
-                                                      const struct bx_tar_match_policy* match_policy,
-                                                      struct bx_diag_ctx* diag) {
+                                                      const struct bx_tar_match_policy* match_policy) {
     size_t i;
 
     for (i = 0u; i < names->len; i++) {
-        char* full_path = bx_path_join(dir_path, names->items[i]);
-        bool ok = bx_tar_create_load_pattern_file(full_path,
+        bool ok = bx_tar_create_load_pattern_file(state, dir_fd, dir_path, names->items[i],
                                                   recursive
                                                       ? &policy->recursive_patterns
                                                       : &policy->local_patterns,
-                                                  match_policy,
-                                                  diag);
-        free(full_path);
+                                                  match_policy);
         if (!ok) {
             return false;
         }
@@ -538,10 +580,10 @@ static bool bx_tar_create_is_vcs_dir_name(const char* name) {
     return false;
 }
 
-static bool bx_tar_create_record_vcs_ignore_patterns(struct bx_tar_create_dir_policy* policy,
+static bool bx_tar_create_record_vcs_ignore_patterns(struct bx_tar_create_filter_state* state,
+                                                     int dir_fd, struct bx_tar_create_dir_policy* policy,
                                                      const char* dir_path,
-                                                     const struct bx_tar_match_policy* match_policy,
-                                                     struct bx_diag_ctx* diag) {
+                                                     const struct bx_tar_match_policy* match_policy) {
     static const struct {
         const char* name;
         bool recursive;
@@ -554,14 +596,11 @@ static bool bx_tar_create_record_vcs_ignore_patterns(struct bx_tar_create_dir_po
     size_t i;
 
     for (i = 0u; i < sizeof(files) / sizeof(files[0]); i++) {
-        char* full_path = bx_path_join(dir_path, files[i].name);
-        bool ok = bx_tar_create_load_pattern_file(full_path,
+        bool ok = bx_tar_create_load_pattern_file(state, dir_fd, dir_path, files[i].name,
                                                   files[i].recursive
                                                       ? &policy->recursive_patterns
                                                       : &policy->local_patterns,
-                                                  match_policy,
-                                                  diag);
-        free(full_path);
+                                                  match_policy);
         if (!ok) {
             return false;
         }
@@ -612,13 +651,14 @@ static bool bx_tar_create_check_ancestor_policies(const struct bx_tar_create_fil
     return true;
 }
 
-static bool bx_tar_create_dir_has_any_marker(const char* dir_path,
+static bool bx_tar_create_dir_has_any_marker(struct bx_tar_create_filter_state* state, int dir_fd,
+                                             const char* dir_path,
                                              const struct bx_archive_name_list* names,
                                              struct bx_archive_name_list* found_names) {
     size_t i;
 
     for (i = 0u; i < names->len; i++) {
-        if (bx_tar_create_path_exists(dir_path, names->items[i])) {
+        if (bx_tar_create_path_exists(state, dir_fd, dir_path, names->items[i])) {
             if (found_names != NULL
                 && !bx_archive_name_list_append(found_names, names->items[i])) {
                 return false;
@@ -629,6 +669,7 @@ static bool bx_tar_create_dir_has_any_marker(const char* dir_path,
 }
 
 static bool bx_tar_create_maybe_record_dir_policy(struct bx_tar_create_filter_state* state,
+                                                  int dir_fd,
                                                   const char* source_path,
                                                   const char* archive_path) {
     struct bx_tar_create_dir_policy* policy = NULL;
@@ -641,11 +682,11 @@ static bool bx_tar_create_maybe_record_dir_policy(struct bx_tar_create_filter_st
 
     size_t i;
 
-    if (state->exclude_caches_all && bx_tar_create_path_exists(source_path, "CACHEDIR.TAG")) {
+    if (state->exclude_caches_all && bx_tar_create_path_exists(state, dir_fd, source_path, "CACHEDIR.TAG")) {
         exclude_all = true;
     }
     for (i = 0u; !exclude_all && i < state->exclude_tag_all_files->len; i++) {
-        if (bx_tar_create_path_exists(source_path, state->exclude_tag_all_files->items[i])) {
+        if (bx_tar_create_path_exists(state, dir_fd, source_path, state->exclude_tag_all_files->items[i])) {
             exclude_all = true;
         }
     }
@@ -654,24 +695,24 @@ static bool bx_tar_create_maybe_record_dir_policy(struct bx_tar_create_filter_st
         return false;
     }
 
-    if (state->exclude_caches_under && bx_tar_create_path_exists(source_path, "CACHEDIR.TAG")) {
+    if (state->exclude_caches_under && bx_tar_create_path_exists(state, dir_fd, source_path, "CACHEDIR.TAG")) {
         exclude_under = true;
     }
     for (i = 0u; !exclude_under && i < state->exclude_tag_under_files->len; i++) {
-        if (bx_tar_create_path_exists(source_path, state->exclude_tag_under_files->items[i])) {
+        if (bx_tar_create_path_exists(state, dir_fd, source_path, state->exclude_tag_under_files->items[i])) {
             exclude_under = true;
         }
     }
 
     if (!exclude_under) {
-        if (state->exclude_caches && bx_tar_create_path_exists(source_path, "CACHEDIR.TAG")) {
+        if (state->exclude_caches && bx_tar_create_path_exists(state, dir_fd, source_path, "CACHEDIR.TAG")) {
             exclude_except_keep = true;
             if (!bx_tar_create_name_list_append_unique(&keep_names, "CACHEDIR.TAG")) {
                 ok = false;
             }
         }
         if (ok
-            && !bx_tar_create_dir_has_any_marker(source_path,
+            && !bx_tar_create_dir_has_any_marker(state, dir_fd, source_path,
                                                  state->exclude_tag_files,
                                                  &keep_names)) {
             ok = false;
@@ -702,36 +743,34 @@ static bool bx_tar_create_maybe_record_dir_policy(struct bx_tar_create_filter_st
     policy->exclude_under = exclude_under;
     policy->exclude_except_keep = exclude_except_keep;
 
-    if (!bx_tar_create_record_ignore_file_patterns(policy,
+    if (!bx_tar_create_record_ignore_file_patterns(state, dir_fd, policy,
                                                    source_path,
                                                    state->exclude_ignore_files,
                                                    false,
-                                                   state->exclude_policy,
-                                                   state->diag)
-        || !bx_tar_create_record_ignore_file_patterns(policy,
+                                                   state->exclude_policy)
+        || !bx_tar_create_record_ignore_file_patterns(state, dir_fd, policy,
                                                       source_path,
                                                       state->exclude_ignore_recursive_files,
                                                       true,
-                                                      state->exclude_policy,
-                                                      state->diag)) {
+                                                      state->exclude_policy)) {
         return false;
     }
     if (state->exclude_vcs_ignores
-        && !bx_tar_create_record_vcs_ignore_patterns(policy,
+        && !bx_tar_create_record_vcs_ignore_patterns(state, dir_fd, policy,
                                                      source_path,
-                                                     state->exclude_policy,
-                                                     state->diag)) {
+                                                     state->exclude_policy)) {
         return false;
     }
 
     return true;
 }
 
-static bool bx_tar_create_include_path(const char* source_path,
-                                       const char* archive_path,
-                                       const struct stat* st,
+static bool bx_tar_create_include_path(const struct bx_archive_fs_visit_entry* entry,
                                        void* user_data) {
     struct bx_tar_create_filter_state* state = user_data;
+    const char* source_path = entry->source_path;
+    const char* archive_path = entry->archive_path;
+    const struct stat* st = entry->st;
 
     if (!bx_tar_create_check_ancestor_policies(state, source_path, archive_path)) {
         return false;
@@ -744,11 +783,29 @@ static bool bx_tar_create_include_path(const char* source_path,
         && bx_tar_create_is_vcs_dir_name(bx_path_basename_ptr(archive_path))) {
         return false;
     }
-    if (S_ISDIR(st->st_mode)
-        && !bx_tar_create_maybe_record_dir_policy(state, source_path, archive_path)) {
+    bool probes = state->exclude_caches || state->exclude_caches_all || state->exclude_caches_under
+        || state->exclude_tag_files->len || state->exclude_tag_all_files->len
+        || state->exclude_tag_under_files->len || state->exclude_ignore_files->len
+        || state->exclude_ignore_recursive_files->len || state->exclude_vcs_ignores;
+    if (!S_ISDIR(st->st_mode) || !probes)
+        return true;
+    int fd = bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name,
+                                 O_PATH | O_DIRECTORY | O_NOFOLLOW, 0);
+    struct stat opened;
+    if (fd < 0 || bx_fd_fstat_expected(fd, st, &opened) != 0) {
+        int error = errno;
+        if (fd >= 0)
+            close(fd);
+        bx_tar_create_handle_fs_error(source_path, BX_ARCHIVE_FS_ERROR_OPENDIR, error, state);
         return false;
     }
-    return true;
+    state->probe_failed = false;
+    bool included = bx_tar_create_maybe_record_dir_policy(state, fd, source_path, archive_path);
+    if (close(fd) != 0) {
+        bx_tar_create_handle_fs_error(source_path, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno, state);
+        return false;
+    }
+    return included && !state->probe_failed;
 }
 
 static const char* bx_tar_create_error_verb(enum bx_archive_fs_error_op op) {

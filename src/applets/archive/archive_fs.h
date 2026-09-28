@@ -45,9 +45,8 @@ enum bx_archive_fs_error_action {
     BX_ARCHIVE_FS_ERROR_SKIP,
 };
 
-typedef bool (*bx_archive_fs_include_fn)(const char* source_path,
-                                         const char* archive_path,
-                                         const struct stat* st,
+/* Runs before link-target capture; borrows the same parent/name as the visitor. */
+typedef bool (*bx_archive_fs_include_fn)(const struct bx_archive_fs_visit_entry* entry,
                                          void* user_data);
 typedef enum bx_archive_fs_error_action (*bx_archive_fs_error_fn)(const char* source_path,
                                                                   enum bx_archive_fs_error_op op,
