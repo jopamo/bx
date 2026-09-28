@@ -999,9 +999,6 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
     bool symlink = S_ISLNK(entry->st->st_mode);
     bool needs_metadata = metadata
         && (metadata->xattrs || metadata->selinux || (metadata->acls && !symlink));
-    if (!S_ISREG(entry->st->st_mode) && !needs_metadata)
-        return bx_tar_stream_write_opened_fs_entry(state, entry, -1, diag);
-
     struct stat opened;
     bool borrowed = symlink && entry->source_fd >= 0;
     int fd;
@@ -1009,7 +1006,8 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         fd = bx_fd_openat_regular_verified(entry->source_parent_fd, entry->source_name,
                                             entry->st, &opened);
     else {
-        int flags = S_ISDIR(entry->st->st_mode) ? O_RDONLY | O_DIRECTORY : O_PATH;
+        int flags = S_ISDIR(entry->st->st_mode) && needs_metadata
+            ? O_RDONLY | O_DIRECTORY : O_PATH;
         fd = borrowed ? entry->source_fd
             : bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name, flags | O_NOFOLLOW, 0);
         if (fd >= 0 && bx_fd_fstat_expected(fd, entry->st, &opened) != 0) {
@@ -1036,6 +1034,27 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         verified.link_target = target;
     if (ok)
         ok = bx_tar_stream_write_opened_fs_entry(state, &verified, fd, diag);
+    if (ok) {
+        struct stat after;
+        if (fstat(fd, &after) != 0) {
+            bx_diag(diag, "%s: %s", entry->source_path, strerror(errno));
+            ok = false;
+        }
+        /* Reading may change atime. Identity pinning does not freeze contents,
+         * link counts, or metadata; compare the state used for this entry. */
+        else if (after.st_dev != opened.st_dev || after.st_ino != opened.st_ino
+                 || after.st_mode != opened.st_mode || after.st_uid != opened.st_uid
+                 || after.st_gid != opened.st_gid || after.st_nlink != opened.st_nlink
+                 || after.st_rdev != opened.st_rdev || after.st_size != opened.st_size
+                 || after.st_mtim.tv_sec != opened.st_mtim.tv_sec
+                 || after.st_mtim.tv_nsec != opened.st_mtim.tv_nsec
+                 || after.st_ctim.tv_sec != opened.st_ctim.tv_sec
+                 || after.st_ctim.tv_nsec != opened.st_ctim.tv_nsec) {
+            errno = ESTALE;
+            bx_diag(diag, "%s: file changed while reading", entry->source_path);
+            ok = false;
+        }
+    }
     free(target);
     bool closed = borrowed || bx_fd_close(&fd, entry->source_path, ok ? diag : NULL);
     return ok && closed;
