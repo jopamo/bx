@@ -199,7 +199,6 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_EXCLUDE_TAG_UNDER,
     BX_TAR_OPT_EXCLUDE_VCS,
     BX_TAR_OPT_EXCLUDE_VCS_IGNORES,
-    BX_TAR_OPT_REMOVE_FILES,
     BX_TAR_OPT_THREADS,
     BX_TAR_OPT_COMPRESS_THREADS,
     BX_TAR_OPT_MT_CHUNK_SIZE,
@@ -328,7 +327,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--overwrite", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OVERWRITE},
     {"--overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--recursive-unlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSIVE_UNLINK},
-    {"--remove-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REMOVE_FILES},
     {"--threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_THREADS},
     {"--compress-threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_THREADS},
     {"--mt-chunk-size", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MT_CHUNK_SIZE},
@@ -3959,10 +3957,6 @@ postwrite:
         && !bx_tar_report_totals_line(true, total_bytes_written, diag)) {
         rc = 2;
     }
-    if (rc == 0 && options->create_options.remove_files
-        && !bx_tar_create_remove_archived_sources(&appended_files, diag)) {
-        had_postwrite_errors = true;
-    }
     if (rc == 0 && had_update_errors) {
         had_postwrite_errors = true;
     }
@@ -4151,11 +4145,6 @@ postwrite:
         rc = 2;
     }
     if (options->mode == BX_TAR_MODE_APPEND && had_append_errors) {
-        had_postwrite_errors = true;
-    }
-    if (options->mode == BX_TAR_MODE_APPEND
-        && options->create_options.remove_files
-        && !bx_tar_create_remove_archived_sources(&appended_files, diag)) {
         had_postwrite_errors = true;
     }
     if (rc == 0 && options->mode == BX_TAR_MODE_DELETE && had_selection_errors) {
@@ -4471,9 +4460,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_tar_create_options_set_exclude_vcs(&options->create_options);
         case BX_TAR_OPT_EXCLUDE_VCS_IGNORES:
             return bx_tar_create_options_set_exclude_vcs_ignores(&options->create_options);
-        case BX_TAR_OPT_REMOVE_FILES:
-            options->create_options.remove_files = true;
-            return true;
         case BX_TAR_OPT_IGNORE_FAILED_READ:
             options->create_options.ignore_failed_read = true;
             return true;
@@ -4793,7 +4779,6 @@ static bool bx_tar_create_stream_entries_produce(void* user,
 
 static bool bx_tar_can_stream_create(const struct bx_tar_options* options) {
     return !options->verbose_reports
-        && !options->create_options.remove_files
         && !options->newer_active
         && options->incremental_snapshot_path == NULL;
 }
@@ -5093,11 +5078,6 @@ int bx_tar_run(int argc, char** argv) {
             && total_bytes_written > 0u
             && !bx_tar_report_totals_line(true, total_bytes_written, &diag)) {
             rc = 2;
-        }
-        if (rc == 0 && options.create_options.remove_files) {
-            if (!bx_tar_create_remove_archived_sources(&files, &diag)) {
-                had_postwrite_errors = true;
-            }
         }
         if (rc == 0 && had_create_errors) {
             had_postwrite_errors = true;
