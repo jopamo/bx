@@ -15,10 +15,29 @@
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_metadata.h"
 #include "bx/libbx.h"
+#include "lib/checked_math.h"
+#include "lib/size_parse.h"
+#include "lib/time_parse.h"
 
 #define BX_TAR_READER_FILE_CHUNK_SIZE (256u * 1024u)
 
+enum bx_tar_pax_number {
+    BX_TAR_PAX_SIZE = 1u,
+    BX_TAR_PAX_UID = 2u,
+    BX_TAR_PAX_GID = 4u,
+    BX_TAR_PAX_MTIME = 8u,
+};
+
+struct bx_tar_pax_numbers {
+    unsigned int defined, present;
+    size_t size;
+    uid_t uid;
+    gid_t gid;
+    struct timespec mtime;
+};
+
 struct bx_tar_pax_info {
+    struct bx_tar_pax_numbers numbers;
     struct bx_file_metadata metadata;
     char* path;
     char* linkpath;
@@ -223,6 +242,18 @@ static bool bx_tar_header_checksum_valid(const unsigned char* header) {
     return recorded == unsigned_sum || (signed_sum >= 0 && recorded == (size_t)signed_sum);
 }
 
+static bool bx_tar_header_payload_size(const unsigned char* header,
+                                       const struct bx_tar_pax_numbers* numbers,
+                                       size_t* size) {
+    unsigned char type = header[156];
+    bool extended = type == 'x' || type == 'g' || type == 'L' || type == 'K';
+    if (!extended && (numbers->present & BX_TAR_PAX_SIZE))
+        *size = numbers->size;
+    else if (!bx_tar_parse_octal_field(header + 124, 12u, size))
+        return false;
+    return *size <= SIZE_MAX - (BX_TAR_BLOCK_SIZE - 1u);
+}
+
 static bool bx_tar_parse_sparse_map(const unsigned char* payload,
                                     size_t payload_size,
                                     struct bx_tar_entry* entry,
@@ -296,11 +327,9 @@ static bool bx_tar_parse_pax_int_value(const char* value, int min_value, int max
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    intmax_t parsed = strtoimax(value, &end, 10);
-    if (errno == ERANGE || end == value || end == NULL || *end != '\0'
-        || parsed < (intmax_t)min_value || parsed > (intmax_t)max_value) {
+    uintmax_t parsed;
+    if (!bx_size_parse_uint(value, &parsed)
+        || parsed < (uintmax_t)min_value || parsed > (uintmax_t)max_value) {
         return false;
     }
 
@@ -313,10 +342,8 @@ static bool bx_tar_parse_pax_size_value(const char* value, size_t* value_out) {
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    uintmax_t parsed = strtoumax(value, &end, 10);
-    if (errno == ERANGE || end == value || end == NULL || *end != '\0' || parsed > SIZE_MAX) {
+    uintmax_t parsed;
+    if (!bx_size_parse_uint(value, &parsed) || parsed > SIZE_MAX) {
         return false;
     }
 
@@ -324,10 +351,102 @@ static bool bx_tar_parse_pax_size_value(const char* value, size_t* value_out) {
     return true;
 }
 
+static bool bx_tar_parse_pax_time(const char* value, struct timespec* result) {
+    const char* cursor = value + (*value == '-');
+    const char* digits = cursor;
+    while (*cursor >= '0' && *cursor <= '9')
+        cursor++;
+    if (cursor == digits)
+        return false;
+    const char* fraction = cursor;
+    long nsec = 0;
+    if (!bx_time_parse_fractional_nanoseconds(&cursor, &nsec) || *cursor)
+        return false;
+    /* The supported timestamp precision is nanoseconds. Extra zero digits
+     * remain exact; never silently discard a nonzero fractional remainder. */
+    if (*fraction == '.') {
+        for (const char* p = fraction + 1; p < cursor; p++)
+            if (p - fraction > 9 && *p != '0')
+                return false;
+    }
+    errno = 0;
+    char* end;
+    intmax_t seconds = strtoimax(value, &end, 10);
+    if (errno == ERANGE || end != fraction)
+        return false;
+    if (*value == '-' && nsec) {
+        if (seconds == INTMAX_MIN)
+            return false;
+        seconds--;
+        nsec = 1000000000L - nsec;
+    }
+    if (!bx_checked_intmax_to_time_t(seconds, &result->tv_sec))
+        return false;
+    result->tv_nsec = nsec;
+    return true;
+}
+
+static bool bx_tar_pax_apply_number(struct bx_tar_pax_numbers* numbers,
+                                    unsigned int field, const char* value) {
+    if (!*value) {
+        numbers->defined |= field;
+        numbers->present &= ~field;
+        return true;
+    }
+    uintmax_t parsed = 0;
+    if (field == BX_TAR_PAX_MTIME) {
+        if (!bx_tar_parse_pax_time(value, &numbers->mtime))
+            return false;
+    } else {
+        if (!bx_size_parse_uint(value, &parsed))
+            return false;
+        switch (field) {
+            case BX_TAR_PAX_SIZE:
+                /* All payload paths round to a complete tar block. */
+                if (parsed > SIZE_MAX - (BX_TAR_BLOCK_SIZE - 1u))
+                    return false;
+                numbers->size = (size_t)parsed;
+                break;
+            case BX_TAR_PAX_UID:
+                if (parsed >= (uintmax_t)(uid_t)-1)
+                    return false;
+                numbers->uid = (uid_t)parsed;
+                break;
+            case BX_TAR_PAX_GID:
+                if (parsed >= (uintmax_t)(gid_t)-1)
+                    return false;
+                numbers->gid = (gid_t)parsed;
+                break;
+            default:
+                return false;
+        }
+    }
+    numbers->defined |= field;
+    numbers->present |= field;
+    return true;
+}
+
+static struct bx_tar_pax_numbers
+bx_tar_pax_effective_numbers(const struct bx_tar_pax_numbers* global,
+                             const struct bx_tar_pax_numbers* local) {
+    struct bx_tar_pax_numbers result = *global;
+    result.present = (global->present & ~local->defined) | local->present;
+    if (local->present & BX_TAR_PAX_SIZE)
+        result.size = local->size;
+    if (local->present & BX_TAR_PAX_UID)
+        result.uid = local->uid;
+    if (local->present & BX_TAR_PAX_GID)
+        result.gid = local->gid;
+    if (local->present & BX_TAR_PAX_MTIME)
+        result.mtime = local->mtime;
+    return result;
+}
+
 static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax,
                                     char* record,
                                     size_t record_len,
-                                    bool skip_owner_group_names) {
+                                    bool skip_owner_group_names,
+                                    struct bx_tar_pax_numbers* global) {
     const char* key;
     const char* value;
     char* equal = memchr(record, '=', record_len);
@@ -339,6 +458,20 @@ static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax,
     key = record;
     value = equal + 1;
     size_t value_len = record_len - (size_t)(value - record);
+    unsigned int field = strcmp(key, "size") == 0 ? BX_TAR_PAX_SIZE
+        : strcmp(key, "uid") == 0 ? BX_TAR_PAX_UID
+        : strcmp(key, "gid") == 0 ? BX_TAR_PAX_GID
+        : strcmp(key, "mtime") == 0 ? BX_TAR_PAX_MTIME : 0u;
+    if (field) {
+        if (memchr(value, '\0', value_len))
+            return false;
+        pax->active = true;
+        return bx_tar_pax_apply_number(global ? global : &pax->numbers, field, value);
+    }
+    /* Non-numeric global extensions are not part of this reader's supported
+     * global state yet; local metadata retains its existing ownership. */
+    if (global)
+        return true;
     if (strncmp(key, "SCHILY.", 7u) == 0 || strcmp(key, "RHT.security.selinux") == 0) {
         pax->active = true;
         return bx_tar_metadata_parse(&pax->metadata, key, value, value_len);
@@ -455,7 +588,8 @@ static bool bx_tar_header_is_oldgnu(const unsigned char* header) {
 static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax,
                                      const unsigned char* data,
                                      size_t len,
-                                     bool skip_owner_group_names) {
+                                     bool skip_owner_group_names,
+                                     struct bx_tar_pax_numbers* global) {
     size_t pos = 0u;
 
     while (pos < len) {
@@ -476,7 +610,7 @@ static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax,
             digits_end++;
         }
         if (digits_end == pos || digits_end >= len || data[digits_end] != ' '
-            || line_len == 0u || pos + line_len > len || data[pos + line_len - 1u] != '\n') {
+            || line_len == 0u || line_len > len - pos || data[pos + line_len - 1u] != '\n') {
             return false;
         }
         field_start = digits_end + 1u;
@@ -487,7 +621,7 @@ static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax,
         record = xmalloc(field_len + 1u);
         memcpy(record, data + field_start, field_len);
         record[field_len] = '\0';
-        if (!bx_tar_apply_pax_record(pax, record, field_len, skip_owner_group_names)) {
+        if (!bx_tar_apply_pax_record(pax, record, field_len, skip_owner_group_names, global)) {
             free(record);
             return false;
         }
@@ -501,6 +635,7 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
                                              size_t size,
                                              unsigned char typeflag,
                                              const struct bx_tar_pax_info* pax,
+                                             const struct bx_tar_pax_numbers* numbers,
                                              char** gnu_long_name,
                                              char** gnu_long_link,
                                              bool skip_owner_group_names,
@@ -544,6 +679,8 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
         entry->mode = (mode_t)parsed_mode;
         entry->mtime.tv_sec = (time_t)parsed_mtime;
         entry->mtime.tv_nsec = 0;
+        if (numbers->present & BX_TAR_PAX_MTIME)
+            entry->mtime = numbers->mtime;
         if (!skip_owner_group_ids) {
             size_t parsed_uid = 0u;
             size_t parsed_gid = 0u;
@@ -552,6 +689,10 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
             bx_tar_parse_octal_field(header + 116, 8u, &parsed_gid);
             entry->uid = (uid_t)parsed_uid;
             entry->gid = (gid_t)parsed_gid;
+            if (numbers->present & BX_TAR_PAX_UID)
+                entry->uid = numbers->uid;
+            if (numbers->present & BX_TAR_PAX_GID)
+                entry->gid = numbers->gid;
         }
     }
     if (!skip_owner_group_names) {
@@ -630,6 +771,7 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
                                  struct bx_diag_ctx* diag) {
     size_t pos = 0u;
     struct bx_tar_pax_info pax = {0};
+    struct bx_tar_pax_numbers global = {0};
     char* gnu_long_name = NULL;
     char* gnu_long_link = NULL;
 
@@ -657,17 +799,18 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
             bx_diag(diag, "invalid tar header");
             return false;
         }
-        if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
+        typeflag = header[156];
+        struct bx_tar_pax_numbers numbers = bx_tar_pax_effective_numbers(&global, &pax.numbers);
+        if (!bx_tar_header_payload_size(header, &numbers, &size)) {
             bx_tar_pax_info_clear(&pax);
             free(gnu_long_name);
             free(gnu_long_link);
             bx_diag(diag, "invalid tar header");
             return false;
         }
-        typeflag = header[156];
         payload_start = pos + BX_TAR_BLOCK_SIZE;
         payload_padded = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE);
-        if (payload_start + payload_padded > archive->len) {
+        if (payload_padded > archive->len - payload_start) {
             bx_tar_pax_info_clear(&pax);
             free(gnu_long_name);
             free(gnu_long_link);
@@ -675,18 +818,15 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
             return false;
         }
 
-        if (typeflag == 'x') {
-            if (!bx_tar_parse_pax_records(&pax, archive->data + payload_start, size, false)) {
+        if (typeflag == 'x' || typeflag == 'g') {
+            if (!bx_tar_parse_pax_records(&pax, archive->data + payload_start, size, false,
+                                          typeflag == 'g' ? &global : NULL)) {
                 bx_tar_pax_info_clear(&pax);
                 free(gnu_long_name);
                 free(gnu_long_link);
                 bx_diag(diag, "invalid pax header");
                 return false;
             }
-            pos = payload_start + payload_padded;
-            continue;
-        }
-        if (typeflag == 'g') {
             pos = payload_start + payload_padded;
             continue;
         }
@@ -715,6 +855,7 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
                                               size,
                                               typeflag,
                                               &pax,
+                                              &numbers,
                                               &gnu_long_name,
                                               &gnu_long_link,
                                               false,
@@ -866,6 +1007,7 @@ static bool bx_tar_stream_input_read_pax_records(struct bx_tar_stream_input* inp
                                                  size_t size,
                                                  struct bx_tar_pax_info* pax,
                                                  bool skip_owner_group_names,
+                                                 struct bx_tar_pax_numbers* global,
                                                  struct bx_diag_ctx* diag) {
     size_t remaining = size;
     size_t padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
@@ -926,7 +1068,7 @@ static bool bx_tar_stream_input_read_pax_records(struct bx_tar_stream_input* inp
             record[record_len - 1u] = '\0';
         }
         if (!bx_tar_apply_pax_record(pax, record, line_len - consumed - 1u,
-                                     skip_owner_group_names)) {
+                                     skip_owner_group_names, global)) {
             free(record);
             return false;
         }
@@ -1358,6 +1500,7 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
                                  struct bx_diag_ctx* diag) {
     struct bx_tar_stream_input input;
     struct bx_tar_pax_info pax = {0};
+    struct bx_tar_pax_numbers global = {0};
     char* gnu_long_name = NULL;
     char* gnu_long_link = NULL;
     unsigned char header[BX_TAR_BLOCK_SIZE];
@@ -1428,25 +1571,21 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
             bx_diag(diag, "invalid tar header");
             goto out;
         }
-        if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
+        struct bx_tar_pax_numbers numbers = bx_tar_pax_effective_numbers(&global, &pax.numbers);
+        if (!bx_tar_header_payload_size(header, &numbers, &size)) {
             bx_diag(diag, "invalid tar header");
             goto out;
         }
         typeflag = header[156];
 
-        if (typeflag == 'x') {
+        if (typeflag == 'x' || typeflag == 'g') {
             if (!bx_tar_stream_input_read_pax_records(&input,
                                                       size,
                                                       &pax,
                                                       options->skip_owner_group_names,
+                                                      typeflag == 'g' ? &global : NULL,
                                                       diag)) {
                 bx_diag(diag, "invalid pax header");
-                goto out;
-            }
-            continue;
-        }
-        if (typeflag == 'g') {
-            if (!bx_tar_stream_input_skip_payload(&input, size, diag)) {
                 goto out;
             }
             continue;
@@ -1472,6 +1611,7 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
                                               size,
                                               typeflag,
                                               &pax,
+                                              &numbers,
                                               &gnu_long_name,
                                               &gnu_long_link,
                                               options->skip_owner_group_names,
@@ -1560,6 +1700,7 @@ bool bx_tar_read_volume_label_stream(const struct bx_tar_reader_stream_options* 
                                      struct bx_diag_ctx* diag) {
     struct bx_tar_stream_input input;
     struct bx_tar_pax_info pax = {0};
+    struct bx_tar_pax_numbers global = {0};
     char* gnu_long_name = NULL;
     char* gnu_long_link = NULL;
     unsigned char header[BX_TAR_BLOCK_SIZE];
@@ -1613,25 +1754,21 @@ bool bx_tar_read_volume_label_stream(const struct bx_tar_reader_stream_options* 
             bx_diag(diag, "invalid tar header");
             goto out;
         }
-        if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
+        struct bx_tar_pax_numbers numbers = bx_tar_pax_effective_numbers(&global, &pax.numbers);
+        if (!bx_tar_header_payload_size(header, &numbers, &size)) {
             bx_diag(diag, "invalid tar header");
             goto out;
         }
         typeflag = header[156];
 
-        if (typeflag == 'x') {
+        if (typeflag == 'x' || typeflag == 'g') {
             if (!bx_tar_stream_input_read_pax_records(&input,
                                                       size,
                                                       &pax,
                                                       options->skip_owner_group_names,
+                                                      typeflag == 'g' ? &global : NULL,
                                                       diag)) {
                 bx_diag(diag, "invalid pax header");
-                goto out;
-            }
-            continue;
-        }
-        if (typeflag == 'g') {
-            if (!bx_tar_stream_input_skip_payload(&input, size, diag)) {
                 goto out;
             }
             continue;
