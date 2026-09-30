@@ -89,33 +89,41 @@ bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len
     return true;
 }
 
-bool bx_archive_buffer_read_all(FILE* stream, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
+bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
     unsigned char chunk[8192];
+    struct bx_fd_input input = BX_FD_INPUT_INIT;
+    bool ok = false;
+    if (bx_fd_input_init(&input, fd, BX_FD_INPUT_BORROWED) != 0) {
+        bx_diag(diag, "read error: %s", strerror(errno));
+        return false;
+    }
 
     while (true) {
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
             bx_diag(diag, "read error: %s", strerror(errno));
-            return false;
+            break;
         }
-        size_t nread = fread(chunk, 1u, sizeof(chunk), stream);
+        ssize_t nread = bx_fd_input_read(&input, chunk, sizeof(chunk), bx_archive_temp_signal_fd());
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
+            nread = -1;
+        }
+        if (nread < 0) {
             bx_diag(diag, "read error: %s", strerror(errno));
-            return false;
+            break;
         }
-        if (nread > 0u && !bx_archive_buffer_append(buffer, chunk, nread)) {
+        if (nread > 0 && !bx_archive_buffer_append(buffer, chunk, (size_t)nread)) {
             bx_diag(diag, "buffer growth failed: %s", strerror(errno));
-            return false;
+            break;
         }
-        if (nread < sizeof(chunk)) {
-            if (ferror(stream)) {
-                bx_diag(diag, "read error: %s", strerror(errno));
-                return false;
-            }
-            return true;
+        if (nread == 0) {
+            ok = true;
+            break;
         }
     }
+    bx_fd_input_close(&input);
+    return ok;
 }
 
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
@@ -196,15 +204,12 @@ static bool bx_archive_name_list_split_buffer(const struct bx_archive_buffer* in
     return true;
 }
 
-bool bx_archive_name_list_read_stream(FILE* stream,
-                                      unsigned char separator,
-                                      struct bx_archive_name_list* list,
-                                      struct bx_diag_ctx* diag) {
+bool bx_archive_name_list_read_fd(int fd, unsigned char separator, struct bx_archive_name_list* list, struct bx_diag_ctx* diag) {
     struct bx_archive_buffer input = {0};
     bool ok;
 
     bx_archive_buffer_init(&input);
-    if (!bx_archive_buffer_read_all(stream, &input, diag)) {
+    if (!bx_archive_buffer_read_all(fd, &input, diag)) {
         bx_archive_buffer_free(&input);
         return false;
     }
@@ -218,21 +223,21 @@ bool bx_archive_name_list_read_path(const char* path,
                                     unsigned char separator,
                                     struct bx_archive_name_list* list,
                                     struct bx_diag_ctx* diag) {
-    FILE* stream;
+    int fd;
     bool ok;
 
     if (strcmp(path, "-") == 0) {
-        return bx_archive_name_list_read_stream(stdin, separator, list, diag);
+        return bx_archive_name_list_read_fd(STDIN_FILENO, separator, list, diag);
     }
 
-    stream = fopen(path, "rb");
-    if (stream == NULL) {
+    fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
+    if (fd < 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
 
-    ok = bx_archive_name_list_read_stream(stream, separator, list, diag);
-    if (fclose(stream) != 0) {
+    ok = bx_archive_name_list_read_fd(fd, separator, list, diag);
+    if (close(fd) != 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }

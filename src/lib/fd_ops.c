@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 
 #include <fcntl.h>
+#include <poll.h>
+#include <limits.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -16,6 +18,100 @@
 
 #include "lib/fd_ops.h"
 #include "bx/diag.h"
+
+int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownership ownership) {
+    struct stat st;
+    if (input->fd >= 0 || (ownership != BX_FD_INPUT_BORROWED && ownership != BX_FD_INPUT_OWNED)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fstat(fd, &st) != 0)
+        return -1;
+    bool direct = S_ISREG(st.st_mode) || S_ISBLK(st.st_mode) || S_ISDIR(st.st_mode) ||
+                  (S_ISCHR(st.st_mode) && major(st.st_rdev) == 1 && (minor(st.st_rdev) == 3 || minor(st.st_rdev) == 5 || minor(st.st_rdev) == 7));
+    if (!direct && !S_ISFIFO(st.st_mode) && !S_ISSOCK(st.st_mode)) {
+        int flags = fcntl(fd, F_GETFL);
+        if (flags < 0)
+            return -1;
+        if (!(flags & O_NONBLOCK)) {
+            if (ownership == BX_FD_INPUT_BORROWED) {
+                errno = EOPNOTSUPP;
+                return -1;
+            }
+            if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
+                return -1;
+        }
+    }
+    input->fd = fd;
+    input->type = st.st_mode & S_IFMT;
+    input->owned = ownership == BX_FD_INPUT_OWNED;
+    return 0;
+}
+
+void bx_fd_input_close(struct bx_fd_input* input) {
+    int error = errno;
+    bx_fd_cleanup(&input->relay[0]);
+    bx_fd_cleanup(&input->relay[1]);
+    if (input->owned)
+        bx_fd_cleanup(&input->fd);
+    input->fd = -1;
+    errno = error;
+}
+
+static int bx_fd_input_cancelled(int cancel_fd) {
+    if (cancel_fd < 0)
+        return 0;
+    struct pollfd wake = {.fd = cancel_fd, .events = POLLIN};
+    int result = poll(&wake, 1, 0);
+    if (result > 0) {
+        errno = wake.revents & POLLIN ? EINTR : EBADF;
+        return -1;
+    }
+    return result;
+}
+
+static ssize_t bx_fd_input_attempt(struct bx_fd_input* input, void* data, size_t len) {
+    if (S_ISSOCK(input->type))
+        return recv(input->fd, data, len, MSG_DONTWAIT);
+    if (!S_ISFIFO(input->type))
+        return read(input->fd, data, len);
+    if (input->relay[0] < 0 && pipe2(input->relay, O_CLOEXEC | O_NONBLOCK) != 0)
+        return -1;
+    ssize_t count = splice(input->fd, NULL, input->relay[1], NULL, len, SPLICE_F_NONBLOCK);
+    if (count <= 0)
+        return count;
+    return read(input->relay[0], data, (size_t)count);
+}
+
+ssize_t bx_fd_input_read(struct bx_fd_input* input, void* data, size_t len, int cancel_fd) {
+    if (len == 0)
+        return 0;
+    if (len > (size_t)SSIZE_MAX)
+        len = (size_t)SSIZE_MAX;
+    while (true) {
+        if (bx_fd_input_cancelled(cancel_fd) != 0)
+            return -1;
+        ssize_t count = bx_fd_input_attempt(input, data, len);
+        if (count >= 0)
+            return bx_fd_input_cancelled(cancel_fd) == 0 ? count : -1;
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return -1;
+        struct pollfd waits[2] = {
+            {.fd = input->fd, .events = POLLIN},
+            {.fd = cancel_fd, .events = POLLIN},
+        };
+        if (poll(waits, 2, -1) < 0)
+            return -1;
+        if (waits[1].revents) {
+            errno = waits[1].revents & POLLIN ? EINTR : EBADF;
+            return -1;
+        }
+        if (waits[0].revents & POLLNVAL) {
+            errno = EBADF;
+            return -1;
+        }
+    }
+}
 
 void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage) {
     int error = errno;

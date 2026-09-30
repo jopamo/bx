@@ -274,18 +274,18 @@ static bool bx_cpio_parse_owner_spec(const char* text,
 }
 
 static bool bx_cpio_read_file(const char* path, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
-    FILE* stream = fopen(path, "rb");
-    if (stream == NULL) {
+    int fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
+    if (fd < 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
     bx_archive_buffer_init(buffer);
-    if (!bx_archive_buffer_read_all(stream, buffer, diag)) {
-        fclose(stream);
+    if (!bx_archive_buffer_read_all(fd, buffer, diag)) {
+        close(fd);
         bx_archive_buffer_free(buffer);
         return false;
     }
-    if (fclose(stream) != 0) {
+    if (close(fd) != 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         bx_archive_buffer_free(buffer);
         return false;
@@ -377,11 +377,7 @@ static bool bx_cpio_read_name_list(const struct bx_cpio_options* options,
                                    struct bx_diag_ctx* diag) {
     struct bx_archive_name_list names = {0};
 
-    if (!bx_archive_name_list_read_stream(
-            stdin,
-            options->null_input ? '\0' : '\n',
-            &names,
-            diag)) {
+    if (!bx_archive_name_list_read_fd(STDIN_FILENO, options->null_input ? '\0' : '\n', &names, diag)) {
         return false;
     }
 
@@ -601,25 +597,25 @@ static bool bx_cpio_write_archive_output(const struct bx_cpio_options* options,
 static bool bx_cpio_read_archive_input(const struct bx_cpio_options* options,
                                        struct bx_archive_buffer* archive,
                                        struct bx_diag_ctx* diag) {
-    FILE* stream;
+    int fd;
     bx_archive_buffer_init(archive);
     if (options->archive_path == NULL) {
-        stream = stdin;
+        fd = STDIN_FILENO;
     }
     else {
-        stream = fopen(options->archive_path, "rb");
-        if (stream == NULL) {
+        fd = bx_fd_open_cloexec(options->archive_path, O_RDONLY, 0);
+        if (fd < 0) {
             bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
             return false;
         }
     }
-    if (!bx_archive_buffer_read_all(stream, archive, diag)) {
-        if (stream != stdin) {
-            fclose(stream);
+    if (!bx_archive_buffer_read_all(fd, archive, diag)) {
+        if (options->archive_path != NULL) {
+            close(fd);
         }
         return false;
     }
-    if (stream != stdin && fclose(stream) != 0) {
+    if (options->archive_path != NULL && close(fd) != 0) {
         bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
         return false;
     }

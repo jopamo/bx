@@ -66,6 +66,31 @@ int bx_fd_dup2_exact(int oldfd, int newfd);
 int bx_fd_set_cloexec(int fd, bool enabled);
 int bx_fd_set_nonblocking(int fd, bool enabled);
 
+enum bx_fd_input_ownership {
+    BX_FD_INPUT_BORROWED,
+    BX_FD_INPUT_OWNED,
+};
+
+struct bx_fd_input {
+    int fd;
+    int relay[2];
+    mode_t type;
+    bool owned;
+};
+#define BX_FD_INPUT_INIT {.fd = -1, .relay = {-1, -1}}
+/* OWNED transfers the fd on success and requires exclusive ownership of its
+ * open file description. BORROWED never changes shared status flags or closes
+ * the source. Other borrowed streams must remain nonblocking for their lifetime;
+ * storage files, pipes/FIFOs, sockets and Linux null/zero/full devices need no
+ * flag changes. Initialization failure leaves the source with its caller. */
+int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownership ownership);
+/* cancel_fd is a persistent, readable-on-cancellation notification, or -1.
+ * Pipe reads use a private nonblocking relay; socket reads use MSG_DONTWAIT.
+ * Readiness is never followed by a potentially blocking shared-stream read.
+ * Regular-file reads do not promise bounded storage latency. */
+ssize_t bx_fd_input_read(struct bx_fd_input* input, void* data, size_t len, int cancel_fd);
+void bx_fd_input_close(struct bx_fd_input* input);
+
 /* Non-follow constructors/checks. These force the non-follow bit at the
  * syscall boundary so callers cannot silently downgrade symlink policy. */
 int bx_fd_open_nofollow_cloexec(const char* path, int flags, mode_t mode);

@@ -33,16 +33,13 @@ void bx_archive_buffer_free(struct bx_archive_buffer* buffer);
 bool bx_archive_buffer_append(struct bx_archive_buffer* buffer, const void* data, size_t len);
 bool bx_archive_buffer_append_byte(struct bx_archive_buffer* buffer, unsigned char value);
 bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len);
-bool bx_archive_buffer_read_all(FILE* stream, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
+bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_has_gzip_magic(const struct bx_archive_buffer* buffer);
 
 void bx_archive_name_list_free(struct bx_archive_name_list* list);
 bool bx_archive_name_list_append(struct bx_archive_name_list* list, const char* name);
-bool bx_archive_name_list_read_stream(FILE* stream,
-                                      unsigned char separator,
-                                      struct bx_archive_name_list* list,
-                                      struct bx_diag_ctx* diag);
+bool bx_archive_name_list_read_fd(int fd, unsigned char separator, struct bx_archive_name_list* list, struct bx_diag_ctx* diag);
 bool bx_archive_name_list_read_path(const char* path,
                                     unsigned char separator,
                                     struct bx_archive_name_list* list,

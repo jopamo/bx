@@ -6,29 +6,30 @@
 
 #include "applets/archive/tar/tar_files_from.h"
 #include "bx/libbx.h"
+#include "lib/fd_ops.h"
 
 bool bx_tar_files_from_read_buffer(const char* path,
                                    struct bx_archive_buffer* buffer,
                                    struct bx_diag_ctx* diag) {
-    FILE* stream;
+    int fd;
 
     bx_archive_buffer_init(buffer);
     if (strcmp(path, "-") == 0) {
-        return bx_archive_buffer_read_all(stdin, buffer, diag);
+        return bx_archive_buffer_read_all(STDIN_FILENO, buffer, diag);
     }
 
-    stream = fopen(path, "rb");
-    if (stream == NULL) {
+    fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
+    if (fd < 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
 
-    if (!bx_archive_buffer_read_all(stream, buffer, diag)) {
-        fclose(stream);
+    if (!bx_archive_buffer_read_all(fd, buffer, diag)) {
+        close(fd);
         bx_archive_buffer_free(buffer);
         return false;
     }
-    if (fclose(stream) != 0) {
+    if (close(fd) != 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         bx_archive_buffer_free(buffer);
         return false;
