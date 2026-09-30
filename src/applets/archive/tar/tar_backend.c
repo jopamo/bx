@@ -3001,6 +3001,10 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
                 bx_diag(diag, "unrecognized option '%s'", arg);
                 return false;
             }
+            if (spec->arg_mode == BX_TAR_OPTARG_NONE && value != NULL) {
+                bx_diag(diag, "option '%s' doesn't allow an argument", spec->name);
+                return false;
+            }
 
             if (spec->arg_mode == BX_TAR_OPTARG_REQUIRED) {
                 if (value == NULL && ++i >= argc) {
