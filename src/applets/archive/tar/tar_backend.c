@@ -16,6 +16,7 @@
 #include "applets/archive/archive_codec.h"
 #include "applets/archive/archive_common.h"
 #include "applets/archive/archive_fs.h"
+#include "applets/archive/archive_temp.h"
 #include "applets/archive/tar/tar_backend.h"
 #include "applets/archive/tar/tar_create.h"
 #include "applets/archive/tar/tar_dumpdir.h"
@@ -33,6 +34,7 @@
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
+#include "lib/inode_ledger.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/remove_ops.h"
@@ -1047,6 +1049,19 @@ static bool bx_tar_write_create_archive_stream_mt_direct(bx_tar_stream_fs_entry_
     return ok;
 }
 
+struct bx_tar_pending_link {
+    char* path;
+    char* target;
+    char* leaf;
+    dev_t parent_dev;
+    ino_t parent_ino;
+    struct bx_file_restore restore;
+    struct timespec mtime;
+    bool omit_mtime;
+    size_t bytes;
+    uint64_t sequence;
+};
+
 struct bx_tar_extract_state {
     const struct bx_tar_options* options;
     bool restore_owner;
@@ -1056,6 +1071,12 @@ struct bx_tar_extract_state {
     const struct bx_tar_select_plan* select_plan;
     bool incremental_mode;
     struct bx_archive_pending_dirs dirs;
+    struct bx_inode_ledger restored;
+    struct bx_tar_pending_link* links;
+    size_t link_count;
+    size_t link_bytes;
+    uint64_t sequence;
+    size_t link_checks;
     int root_fd;
     int parent_fd;
     char* leaf;
@@ -1195,6 +1216,14 @@ static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
     bx_fd_cleanup(&state->parent_fd);
     free(state->leaf);
     bx_archive_pending_dirs_free(&state->dirs);
+    bx_inode_ledger_free(&state->restored);
+    for (size_t i = 0; i < state->link_count; i++) {
+        free(state->links[i].path);
+        free(state->links[i].target);
+        free(state->links[i].leaf);
+        bx_file_metadata_free(&state->links[i].restore.metadata);
+    }
+    free(state->links);
 }
 
 static void bx_tar_list_state_init(struct bx_tar_list_state* state,
@@ -2384,6 +2413,191 @@ static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
     return ok;
 }
 
+static void bx_tar_extract_drop_link(struct bx_tar_extract_state* state, size_t index) {
+    struct bx_tar_pending_link* link = &state->links[index];
+    state->link_bytes -= link->bytes;
+    free(link->path);
+    free(link->target);
+    free(link->leaf);
+    bx_file_metadata_free(&link->restore.metadata);
+    memmove(link, link + 1, (--state->link_count - index) * sizeof(*link));
+}
+
+static bool bx_tar_extract_cancel_links(struct bx_tar_extract_state* state, struct bx_diag_ctx* diag) {
+    if (!state->link_count)
+        return true;
+    struct stat parent;
+    if (fstat(state->parent_fd, &parent) != 0) {
+        bx_diag(diag, "%s: %s", state->leaf, strerror(errno));
+        return false;
+    }
+    for (size_t i = 0; i < state->link_count;) {
+        struct bx_tar_pending_link* link = &state->links[i];
+        if (link->parent_dev == parent.st_dev && link->parent_ino == parent.st_ino && strcmp(link->leaf, state->leaf) == 0)
+            bx_tar_extract_drop_link(state, i);
+        else
+            i++;
+    }
+    return true;
+}
+
+static bool bx_tar_extract_record_inode(struct bx_tar_extract_state* state, int fd, const char* path, struct bx_diag_ctx* diag) {
+    struct stat status;
+    if (fstat(fd, &status) == 0 && bx_inode_ledger_record(&state->restored, &status, state->sequence, 1048576u))
+        return true;
+    bx_diag(diag, "%s: cannot record restored inode (limit 1048576): %s", path, strerror(errno));
+    return false;
+}
+
+static bool bx_tar_extract_queue_link(struct bx_tar_extract_state* state, const struct bx_tar_entry* entry, const char* path, const char* target, mode_t mode, struct bx_diag_ctx* diag) {
+    struct bx_tar_pending_link link = {0};
+    struct stat parent;
+    if (fstat(state->parent_fd, &parent) != 0) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+    bx_tar_extract_select_metadata(state, entry, mode, &link.restore);
+    size_t bytes = sizeof(link) + strlen(path) + strlen(target) + strlen(state->leaf) + 3u;
+    const struct bx_file_metadata* metadata = &link.restore.metadata;
+    for (size_t i = 0; i < metadata->len; i++)
+        bytes += sizeof(metadata->xattrs[i]) + strlen(metadata->xattrs[i].name) + 1u + metadata->xattrs[i].size;
+    if (metadata->acl_access)
+        bytes += strlen(metadata->acl_access) + 1u;
+    if (metadata->acl_default)
+        bytes += strlen(metadata->acl_default) + 1u;
+    if (state->link_count >= 4096u || bytes > 16u * 1024u * 1024u - state->link_bytes) {
+        bx_file_metadata_free(&link.restore.metadata);
+        bx_diag(diag, "%s: unresolved hard-link limit exceeded (4096 links, 16 MiB)", path);
+        return false;
+    }
+    link.path = xstrdup(path);
+    link.target = xstrdup(target);
+    link.leaf = xstrdup(state->leaf);
+    link.parent_dev = parent.st_dev;
+    link.parent_ino = parent.st_ino;
+    link.mtime = entry->mtime;
+    link.omit_mtime = entry->omit_mtime;
+    link.bytes = bytes;
+    link.sequence = state->sequence;
+    state->links = xrealloc(state->links, (state->link_count + 1u) * sizeof(*state->links));
+    state->links[state->link_count++] = link;
+    state->link_bytes += bytes;
+    return true;
+}
+
+/* Resolver failures that a later archive member can repair remain pending. */
+static bool bx_tar_link_missing(int error) {
+    return error == ENOENT || error == ENOTDIR || error == ELOOP;
+}
+
+static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, struct bx_diag_ctx* diag) {
+    if (!state->restored.len)
+        return true;
+    bool progress;
+    do {
+        progress = false;
+        for (size_t i = 0; i < state->link_count;) {
+            if (++state->link_checks > 1048576u) {
+                bx_diag(diag, "hard-link resolution work limit exceeded (1048576 checks)");
+                return false;
+            }
+            if (bx_archive_temp_pending_signal()) {
+                bx_diag(diag, "hard-link resolution interrupted");
+                return false;
+            }
+            struct bx_tar_pending_link* link = &state->links[i];
+            char* leaf = NULL;
+            int parent = bx_dir_path_open_destination_parent(state->root_fd, link->path, state->dirs.path_policy, false, 0, &leaf);
+            struct stat parent_status;
+            bool stale = parent < 0 && bx_tar_link_missing(errno);
+            if (parent >= 0 && fstat(parent, &parent_status) == 0)
+                stale = parent_status.st_dev != link->parent_dev || parent_status.st_ino != link->parent_ino;
+            else if (!stale) {
+                bx_diag(diag, "%s: %s", link->path, strerror(errno));
+                bx_fd_cleanup(&parent);
+                free(leaf);
+                return false;
+            }
+            if (stale) {
+                bx_fd_cleanup(&parent);
+                free(leaf);
+                bx_tar_extract_drop_link(state, i);
+                progress = true;
+                continue;
+            }
+            char* source_leaf = NULL;
+            int source_parent = bx_dir_path_open_destination_parent(state->root_fd, link->target, state->dirs.path_policy, false, 0, &source_leaf);
+            int source = source_parent < 0 ? -1 : bx_fd_openat_cloexec(source_parent, source_leaf, O_PATH | O_NOFOLLOW, 0);
+            int error = errno;
+            struct stat expected;
+            bool waiting = source < 0 && bx_tar_link_missing(error);
+            bool ok = source >= 0 && fstat(source, &expected) == 0;
+            uint64_t sequence = 0;
+            if (ok && !bx_inode_ledger_lookup(&state->restored, &expected, &sequence))
+                waiting = true;
+            if (waiting) {
+                bx_fd_cleanup(&source);
+                bx_fd_cleanup(&source_parent);
+                free(source_leaf);
+                bx_fd_cleanup(&parent);
+                free(leaf);
+                i++;
+                continue;
+            }
+            if (!ok) {
+                if (source >= 0)
+                    error = errno;
+                bx_diag(diag, "%s: %s", link->target, strerror(error));
+            }
+            if (ok) {
+                struct bx_tar_entry entry = {.kind = BX_TAR_KIND_HARDLINK, .name = link->path, .mtime = link->mtime, .omit_mtime = link->omit_mtime};
+                int saved_parent = state->parent_fd;
+                char* saved_leaf = state->leaf;
+                state->parent_fd = parent;
+                state->leaf = leaf;
+                enum bx_tar_existing_target_action action = bx_tar_extract_existing_target_action(state, &entry, link->path, diag);
+                if (action == BX_TAR_EXISTING_TARGET_ERROR)
+                    ok = false;
+                else if (action == BX_TAR_EXISTING_TARGET_PROCEED) {
+                    struct stat destination;
+                    bool already_linked = fstatat(parent, leaf, &destination, AT_SYMLINK_NOFOLLOW) == 0 && destination.st_dev == expected.st_dev && destination.st_ino == expected.st_ino &&
+                                          (destination.st_mode & S_IFMT) == (expected.st_mode & S_IFMT);
+                    ok = already_linked || bx_tar_extract_prepare_final_non_dir_target(state, &entry, link->path, diag);
+                    if (ok && !already_linked && bx_fd_linkat_child(source_parent, source_leaf, parent, leaf, 0) != 0) {
+                        bx_diag(diag, "%s: %s", link->path, strerror(errno));
+                        ok = false;
+                    }
+                    if (ok) {
+                        int fd = bx_fd_openat_metadata(parent, leaf);
+                        struct stat linked;
+                        ok = fd >= 0 && bx_fd_fstat_expected(fd, &expected, &linked) == 0;
+                        if (!ok)
+                            bx_diag(diag, "%s: %s", link->path, strerror(errno));
+                        if (ok && link->sequence > sequence)
+                            ok = bx_archive_restore_fd(&link->restore, fd, link->path, S_ISLNK(linked.st_mode), false, diag);
+                        if (ok && link->sequence > sequence)
+                            ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, 1048576u);
+                        if (fd >= 0 && !bx_fd_close(&fd, link->path, diag))
+                            ok = false;
+                    }
+                }
+                state->parent_fd = saved_parent;
+                state->leaf = saved_leaf;
+            }
+            bx_fd_cleanup(&parent);
+            free(leaf);
+            bx_fd_cleanup(&source);
+            bx_fd_cleanup(&source_parent);
+            free(source_leaf);
+            if (!ok)
+                return false;
+            bx_tar_extract_drop_link(state, i);
+            progress = true;
+        }
+    } while (progress && state->link_count);
+    return true;
+}
+
 static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
                                      const struct bx_tar_entry* entry,
                                      struct bx_diag_ctx* diag) {
@@ -2394,6 +2608,12 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
     bool stripped_absolute;
     bool stripped_dotdot;
     mode_t extract_mode = 0;
+
+    if (state->sequence == UINT64_MAX) {
+        bx_diag(diag, "archive member sequence overflow");
+        return false;
+    }
+    state->sequence++;
 
     if (!bx_tar_starting_file_gate_reached(&state->starting_file_reached,
                                            state->options->starting_file,
@@ -2490,6 +2710,11 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
             bx_tar_extract_clear_current_stream(state);
             return true;
         }
+    }
+    if (!bx_tar_extract_cancel_links(state, diag)) {
+        bx_tar_release_mapped_name(&clean_name);
+        free(dest_path);
+        return false;
     }
     if (state->options->verbose_reports
         && !(state->options->report_block_numbers
@@ -2627,28 +2852,11 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
         (void)target_stripped_absolute;
         (void)target_stripped_dotdot;
         bx_tar_release_mapped_name(&mapped_target);
-        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
-            free(dest_path);
-            free(target);
-            state->status = 2;
-            return true;
-        }
-        char* target_leaf = NULL;
-        int target_parent = bx_dir_path_open_destination_parent(state->root_fd, target,
-                                state->dirs.path_policy, false, 0, &target_leaf);
-        int rc = target_parent < 0 ? -1
-            : linkat(target_parent, target_leaf, state->parent_fd, state->leaf, 0);
-        int error = errno;
-        bx_fd_cleanup(&target_parent);
-        free(target_leaf);
-        if (rc != 0) {
-            errno = error;
-            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            free(dest_path);
-            free(target);
-            return false;
-        }
+        bool ok = bx_tar_extract_queue_link(state, entry, dest_path, target, extract_mode, diag);
         free(target);
+        free(dest_path);
+        bx_tar_extract_clear_current_stream(state);
+        return ok && bx_tar_extract_resolve_links(state, diag);
     }
     else if (entry->kind == BX_TAR_KIND_FIFO) {
         if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
@@ -2669,12 +2877,12 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
         free(dest_path);
         return false;
     }
-    bool ok = bx_tar_extract_metadata(state, entry, fd, dest_path, extract_mode, diag);
+    bool ok = bx_tar_extract_metadata(state, entry, fd, dest_path, extract_mode, diag) && bx_tar_extract_record_inode(state, fd, dest_path, diag);
     if (!bx_fd_close(&fd, dest_path, diag))
         ok = false;
     free(dest_path);
     bx_tar_extract_clear_current_stream(state);
-    return ok;
+    return ok && bx_tar_extract_resolve_links(state, diag);
 }
 
 static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
@@ -2748,7 +2956,7 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
             return false;
         }
     }
-    if (!bx_tar_extract_metadata(state, entry, fd, dest_path, mode, diag)) {
+    if (!bx_tar_extract_metadata(state, entry, fd, dest_path, mode, diag) || !bx_tar_extract_record_inode(state, fd, dest_path, diag)) {
         bx_tar_extract_clear_current_stream(state);
         return false;
     }
@@ -2768,7 +2976,7 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
         return false;
     }
     free(dest_path);
-    return true;
+    return bx_tar_extract_resolve_links(state, diag);
 }
 
 static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
@@ -2779,6 +2987,13 @@ static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
                                                        state->occurrence_counts,
                                                        diag)) {
         state->status = 2;
+    }
+    if (!bx_tar_extract_resolve_links(state, diag))
+        return 2;
+    if (state->link_count) {
+        for (size_t i = 0; i < state->link_count; i++)
+            bx_diag(diag, "%s: unresolved hard link to '%s' (target not restored)", state->links[i].path, state->links[i].target);
+        return 2;
     }
     if (!bx_archive_pending_dirs_apply(&state->dirs, state->root_fd, diag)) {
         return 2;

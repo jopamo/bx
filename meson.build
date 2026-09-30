@@ -310,6 +310,7 @@ bx_lib_sources = [
   'src/lib/copy_data.c',
   'src/lib/copy_metadata.c',
   'src/lib/file_metadata.c',
+  'src/lib/inode_ledger.c',
   'src/lib/mount_identity.c',
   'src/lib/copy_tree.c',
   'src/lib/dir_cycle.c',
