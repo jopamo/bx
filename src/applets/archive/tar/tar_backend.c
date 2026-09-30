@@ -50,7 +50,6 @@
 enum bx_tar_mode {
     BX_TAR_MODE_NONE = 0,
     BX_TAR_MODE_CREATE,
-    BX_TAR_MODE_COMPARE,
     BX_TAR_MODE_LIST,
     BX_TAR_MODE_EXTRACT,
 };
@@ -78,7 +77,6 @@ enum bx_tar_permission_policy {
 
 struct bx_tar_options {
     enum bx_tar_mode mode;
-    const char* unsupported_mode;
     const char* unsupported_external_compress_option;
     char* unsupported_external_compress_program;
     bool saw_mode_option;
@@ -141,10 +139,8 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_SPARSE_VERSION,
     BX_TAR_OPT_HOLE_DETECTION,
     BX_TAR_OPT_MODE_CREATE,
-    BX_TAR_OPT_MODE_COMPARE,
     BX_TAR_OPT_MODE_LIST,
     BX_TAR_OPT_MODE_EXTRACT,
-    BX_TAR_OPT_MODE_UNSUPPORTED,
     BX_TAR_OPT_ARCHIVE_PATH,
     BX_TAR_OPT_DIRECTORY,
     BX_TAR_OPT_TO_STDOUT,
@@ -251,8 +247,6 @@ struct bx_tar_short_option_spec {
 
 static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--create", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
-    {"--diff", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
-    {"--compare", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {"--list", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {"--extract", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {"--get", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
@@ -401,7 +395,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
 
 static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'c', "-c", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
-    {'d', "-d", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {'t', "-t", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {'x', "-x", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_ON},
@@ -1050,28 +1043,6 @@ struct bx_tar_list_state {
     uint64_t total_bytes_read;
 };
 
-struct bx_tar_compare_state {
-    const struct bx_tar_options* options;
-    FILE* report_stream;
-    const struct bx_tar_select_plan* select_plan;
-    struct bx_tar_name_policy name_policy;
-    bool warned_absolute;
-    bool warned_dotdot;
-    bool* matched_members;
-    uintmax_t* occurrence_counts;
-    int status;
-    int current_fd;
-    char* current_fs_path;
-    bool current_skip;
-    bool current_compare_contents;
-    bool current_sparse;
-    bool current_reported_content_diff;
-    size_t current_sparse_extent_index;
-    size_t current_sparse_extent_offset;
-    size_t current_sparse_logical_offset;
-    uint64_t total_bytes_read;
-};
-
 static bool* bx_tar_alloc_matched_members(const struct bx_tar_select_plan* select_plan) {
     bool* matched_members;
 
@@ -1174,35 +1145,6 @@ static void bx_tar_list_state_init(struct bx_tar_list_state* state,
 }
 
 static void bx_tar_list_state_cleanup(struct bx_tar_list_state* state) {
-    free(state->matched_members);
-    free(state->occurrence_counts);
-}
-
-static void bx_tar_compare_state_init(struct bx_tar_compare_state* state,
-                                      const struct bx_tar_options* options,
-                                      const struct bx_tar_select_plan* select_plan,
-                                      FILE* report_stream) {
-    memset(state, 0, sizeof(*state));
-    state->options = options;
-    state->report_stream = report_stream;
-    state->select_plan = select_plan;
-    state->matched_members = bx_tar_alloc_matched_members(select_plan);
-    state->occurrence_counts = bx_tar_alloc_occurrence_counts(select_plan, options->occurrence);
-    state->current_fd = -1;
-    state->name_policy = (struct bx_tar_name_policy){
-        .absolute_names = options->absolute_names,
-        .strip_components = options->strip_components,
-        .one_top_level = options->one_top_level,
-    };
-}
-
-static void bx_tar_compare_state_cleanup(struct bx_tar_compare_state* state) {
-    if (state->current_fd >= 0) {
-        close(state->current_fd);
-        state->current_fd = -1;
-    }
-    free(state->current_fs_path);
-    state->current_fs_path = NULL;
     free(state->matched_members);
     free(state->occurrence_counts);
 }
@@ -1449,134 +1391,6 @@ static bool bx_tar_extract_prepare_final_dir_target(struct bx_tar_extract_state*
     return true;
 }
 
-static void bx_tar_compare_clear_current_stream(struct bx_tar_compare_state* state) {
-    if (state->current_fd >= 0) {
-        close(state->current_fd);
-        state->current_fd = -1;
-    }
-    free(state->current_fs_path);
-    state->current_fs_path = NULL;
-    state->current_skip = false;
-    state->current_compare_contents = false;
-    state->current_sparse = false;
-    state->current_reported_content_diff = false;
-    state->current_sparse_extent_index = 0u;
-    state->current_sparse_extent_offset = 0u;
-    state->current_sparse_logical_offset = 0u;
-}
-
-static bool bx_tar_compare_report_stdout(struct bx_tar_compare_state* state,
-                                         struct bx_diag_ctx* diag,
-                                         const char* format,
-                                         const char* name,
-                                         const char* extra) {
-    state->status = state->status < 1 ? 1 : state->status;
-    if (!bx_tar_report_printf(state->report_stream,
-                              diag,
-                              format,
-                              name,
-                              extra)) {
-        state->status = 2;
-        return false;
-    }
-    return true;
-}
-
-static void bx_tar_compare_report_stderr(struct bx_tar_compare_state* state,
-                                         struct bx_diag_ctx* diag,
-                                         const char* format,
-                                         const char* name,
-                                         const char* reason) {
-    fprintf(stderr, "%s: ", diag->progname);
-    fprintf(stderr, format, name, reason);
-    state->status = state->status < 1 ? 1 : state->status;
-}
-
-static void bx_tar_compare_report_error(struct bx_tar_compare_state* state,
-                                        struct bx_diag_ctx* diag,
-                                        const char* format,
-                                        const char* name,
-                                        const char* reason) {
-    fprintf(stderr, "%s: ", diag->progname);
-    fprintf(stderr, format, name, reason);
-    state->status = 2;
-}
-
-static enum bx_tar_kind bx_tar_kind_from_stat_mode(mode_t mode) {
-    if (S_ISREG(mode)) {
-        return BX_TAR_KIND_REG;
-    }
-    if (S_ISDIR(mode)) {
-        return BX_TAR_KIND_DIR;
-    }
-    if (S_ISLNK(mode)) {
-        return BX_TAR_KIND_SYMLINK;
-    }
-    if (S_ISFIFO(mode)) {
-        return BX_TAR_KIND_FIFO;
-    }
-    if (S_ISCHR(mode))
-        return BX_TAR_KIND_CHAR;
-    if (S_ISBLK(mode))
-        return BX_TAR_KIND_BLOCK;
-    return BX_TAR_KIND_REG;
-}
-
-static bool bx_tar_compare_kind_matches(enum bx_tar_kind archive_kind, mode_t fs_mode) {
-    if (archive_kind == BX_TAR_KIND_HARDLINK) {
-        return S_ISREG(fs_mode);
-    }
-    return bx_tar_kind_from_stat_mode(fs_mode) == archive_kind;
-}
-
-static bool bx_tar_compare_verify_zero_range(int fd,
-                                             size_t start_offset,
-                                             size_t len,
-                                             struct bx_tar_compare_state* state,
-                                             const struct bx_tar_entry* entry,
-                                             struct bx_diag_ctx* diag) {
-    unsigned char buffer[8192];
-
-    if (len == 0u) {
-        return true;
-    }
-    if (lseek(fd, (off_t)start_offset, SEEK_SET) < 0) {
-        bx_tar_compare_report_error(state, diag, "%s: Cannot open: %s\n", entry->name, strerror(errno));
-        return false;
-    }
-
-    while (len > 0u) {
-        size_t chunk = len > sizeof(buffer) ? sizeof(buffer) : len;
-        ssize_t nread = read(fd, buffer, chunk);
-
-        if (nread < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            bx_tar_compare_report_error(state, diag, "%s: Cannot open: %s\n", entry->name, strerror(errno));
-            return false;
-        }
-        if ((size_t)nread != chunk) {
-            if (!state->current_reported_content_diff) {
-                state->current_reported_content_diff = true;
-                return bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL);
-            }
-            return false;
-        }
-        for (size_t i = 0u; i < chunk; i++) {
-            if (buffer[i] != 0u) {
-                if (!state->current_reported_content_diff) {
-                    state->current_reported_content_diff = true;
-                    return bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL);
-                }
-                return false;
-            }
-        }
-        len -= chunk;
-    }
-    return true;
-}
-
 static bool bx_tar_extract_write_zero_bytes(size_t zero_len,
                                             struct bx_diag_ctx* diag) {
     unsigned char zeros[4096] = {0};
@@ -1591,331 +1405,6 @@ static bool bx_tar_extract_write_zero_bytes(size_t zero_len,
         zero_len -= chunk;
     }
     return true;
-}
-
-static bool bx_tar_compare_one_entry(struct bx_tar_compare_state* state,
-                                     const struct bx_tar_entry* entry,
-                                     struct bx_diag_ctx* diag) {
-    struct stat st;
-    struct bx_tar_mapped_name clean_name = {0};
-    bool stripped_absolute;
-    bool stripped_dotdot;
-
-    bx_tar_compare_clear_current_stream(state);
-    if (!bx_tar_select_plan_match_occurrence(state->select_plan,
-                                             entry->name,
-                                             state->select_plan->len == 0u,
-                                             state->matched_members,
-                                             state->options->occurrence,
-                                             state->occurrence_counts,
-                                             NULL)) {
-        state->current_skip = true;
-        return true;
-    }
-
-    clean_name = bx_tar_map_member_name(entry->name,
-                                        &state->name_policy,
-                                        &stripped_absolute,
-                                        &stripped_dotdot);
-    bx_tar_warn_name_adjustments(diag,
-                                 stripped_absolute,
-                                 &state->warned_absolute,
-                                 stripped_dotdot,
-                                 &state->warned_dotdot);
-    if (clean_name.text[0] == '\0') {
-        bx_tar_report_empty_name(entry, diag);
-        bx_tar_release_mapped_name(&clean_name);
-        state->current_skip = true;
-        return true;
-    }
-    state->current_fs_path = clean_name.owned != NULL ? clean_name.owned : xstrdup(clean_name.text);
-    clean_name.owned = NULL;
-    clean_name.text = state->current_fs_path;
-
-    if (lstat(state->current_fs_path, &st) != 0) {
-        if (errno == ENOENT) {
-            bx_tar_compare_report_stderr(state,
-                                         diag,
-                                         "%s: Warning: Cannot stat: %s\n",
-                                         entry->name,
-                                         strerror(errno));
-        }
-        else {
-            bx_tar_compare_report_error(state,
-                                        diag,
-                                        "%s: Cannot stat: %s\n",
-                                        entry->name,
-                                        strerror(errno));
-        }
-        state->current_skip = true;
-        return true;
-    }
-
-    if (!bx_tar_compare_kind_matches(entry->kind, st.st_mode)) {
-        if (!bx_tar_compare_report_stdout(state, diag, "%s: File type differs\n", entry->name, NULL)) {
-            return false;
-        }
-    }
-    if ((st.st_mode & 07777u) != (entry->mode & 07777u)) {
-        if (!bx_tar_compare_report_stdout(state, diag, "%s: Mode differs\n", entry->name, NULL)) {
-            return false;
-        }
-    }
-    if (!entry->omit_mtime && st.st_mtim.tv_sec != entry->mtime.tv_sec) {
-        if (!bx_tar_compare_report_stdout(state, diag, "%s: Mod time differs\n", entry->name, NULL)) {
-            return false;
-        }
-    }
-
-    if (entry->kind == BX_TAR_KIND_SYMLINK) {
-        char* target = bx_path_readlink_dup(state->current_fs_path);
-
-        if (target == NULL) {
-            bx_tar_compare_report_error(state,
-                                        diag,
-                                        "%s: Cannot readlink: %s\n",
-                                        entry->name,
-                                        strerror(errno));
-            return true;
-        }
-        if (strcmp(target, entry->linkname) != 0
-            && !bx_tar_compare_report_stdout(state, diag, "%s: Symlink differs\n", entry->name, NULL)) {
-            free(target);
-            return false;
-        }
-        free(target);
-        state->current_skip = true;
-        return true;
-    }
-    if (entry->kind == BX_TAR_KIND_HARDLINK) {
-        bool link_abs = false;
-        bool link_dotdot = false;
-        struct bx_tar_mapped_name mapped_target = bx_tar_map_member_name(entry->linkname,
-                                                                         &state->name_policy,
-                                                                         &link_abs,
-                                                                         &link_dotdot);
-        struct stat target_st;
-        bool linked = false;
-
-        (void)link_abs;
-        (void)link_dotdot;
-        if (lstat(mapped_target.text, &target_st) == 0) {
-            linked = target_st.st_dev == st.st_dev && target_st.st_ino == st.st_ino;
-        }
-        if (!linked
-            && !bx_tar_compare_report_stdout(state, diag, "%s: Not linked to %s\n", entry->name, entry->linkname)) {
-            bx_tar_release_mapped_name(&mapped_target);
-            return false;
-        }
-        bx_tar_release_mapped_name(&mapped_target);
-        state->current_skip = true;
-        return true;
-    }
-    if (entry->kind != BX_TAR_KIND_REG) {
-        state->current_skip = true;
-        return true;
-    }
-
-    if ((size_t)st.st_size != entry->size) {
-        if (!bx_tar_compare_report_stdout(state, diag, "%s: Size differs\n", entry->name, NULL)) {
-            return false;
-        }
-        state->current_skip = true;
-        return true;
-    }
-
-    state->current_fd = bx_fd_open_cloexec(state->current_fs_path, O_RDONLY, 0);
-    if (state->current_fd < 0) {
-        bx_tar_compare_report_error(state,
-                                    diag,
-                                    "%s: Cannot open: %s\n",
-                                    entry->name,
-                                    strerror(errno));
-        state->current_skip = true;
-        return true;
-    }
-    state->current_compare_contents = true;
-    state->current_sparse = entry->sparse;
-    return true;
-}
-
-static bool bx_tar_compare_entry_payload(struct bx_tar_compare_state* state,
-                                         const struct bx_tar_entry* entry,
-                                         const unsigned char* data,
-                                         size_t len,
-                                         struct bx_diag_ctx* diag) {
-    unsigned char buffer[8192];
-
-    if (state->current_skip || !state->current_compare_contents || len == 0u) {
-        return true;
-    }
-
-    if (!state->current_sparse) {
-        size_t offset = 0u;
-
-        while (offset < len) {
-            size_t chunk = len - offset;
-            ssize_t nread;
-
-            if (chunk > sizeof(buffer)) {
-                chunk = sizeof(buffer);
-            }
-            nread = read(state->current_fd, buffer, chunk);
-            if (nread < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                bx_tar_compare_report_error(state,
-                                            diag,
-                                            "%s: Cannot open: %s\n",
-                                            entry->name,
-                                            strerror(errno));
-                state->current_compare_contents = false;
-                return true;
-            }
-            if ((size_t)nread != chunk || memcmp(buffer, data + offset, chunk) != 0) {
-                if (!state->current_reported_content_diff) {
-                    state->current_reported_content_diff = true;
-                    if (!bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL)) {
-                        return false;
-                    }
-                }
-                state->current_compare_contents = false;
-                return true;
-            }
-            offset += chunk;
-        }
-        return true;
-    }
-
-    while (len > 0u) {
-        const struct bx_tar_sparse_extent* extent;
-        size_t chunk;
-        ssize_t nread;
-
-        while (state->current_sparse_extent_index < entry->extent_count
-               && state->current_sparse_extent_offset
-                   == entry->extents[state->current_sparse_extent_index].size) {
-            state->current_sparse_extent_index++;
-            state->current_sparse_extent_offset = 0u;
-        }
-        if (state->current_sparse_extent_index >= entry->extent_count) {
-            state->current_compare_contents = false;
-            return true;
-        }
-
-        extent = &entry->extents[state->current_sparse_extent_index];
-        if (state->current_sparse_extent_offset == 0u) {
-            if (!bx_tar_compare_verify_zero_range(state->current_fd,
-                                                  state->current_sparse_logical_offset,
-                                                  extent->offset - state->current_sparse_logical_offset,
-                                                  state,
-                                                  entry,
-                                                  diag)) {
-                state->current_compare_contents = false;
-                return state->status < 2;
-            }
-            if (lseek(state->current_fd, (off_t)extent->offset, SEEK_SET) < 0) {
-                bx_tar_compare_report_error(state,
-                                            diag,
-                                            "%s: Cannot open: %s\n",
-                                            entry->name,
-                                            strerror(errno));
-                state->current_compare_contents = false;
-                return true;
-            }
-            state->current_sparse_logical_offset = extent->offset;
-        }
-
-        chunk = extent->size - state->current_sparse_extent_offset;
-        if (chunk > len) {
-            chunk = len;
-        }
-        {
-            size_t compared = 0u;
-
-            while (compared < chunk) {
-                size_t read_chunk = chunk - compared;
-
-                if (read_chunk > sizeof(buffer)) {
-                    read_chunk = sizeof(buffer);
-                }
-                while (true) {
-                    nread = read(state->current_fd, buffer, read_chunk);
-                    if (nread < 0 && errno == EINTR) {
-                        continue;
-                    }
-                    break;
-                }
-                if (nread < 0) {
-                    bx_tar_compare_report_error(state,
-                                                diag,
-                                                "%s: Cannot open: %s\n",
-                                                entry->name,
-                                                strerror(errno));
-                    state->current_compare_contents = false;
-                    return true;
-                }
-                if ((size_t)nread != read_chunk || memcmp(buffer, data + compared, read_chunk) != 0) {
-                    if (!state->current_reported_content_diff) {
-                        state->current_reported_content_diff = true;
-                        if (!bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL)) {
-                            return false;
-                        }
-                    }
-                    state->current_compare_contents = false;
-                    return true;
-                }
-                compared += read_chunk;
-            }
-        }
-
-        data += chunk;
-        len -= chunk;
-        state->current_sparse_extent_offset += chunk;
-        state->current_sparse_logical_offset += chunk;
-    }
-    return true;
-}
-
-static bool bx_tar_compare_end_entry(struct bx_tar_compare_state* state,
-                                     const struct bx_tar_entry* entry,
-                                     struct bx_diag_ctx* diag) {
-    if (state->current_compare_contents && state->current_sparse) {
-        while (state->current_sparse_extent_index < entry->extent_count
-               && state->current_sparse_extent_offset
-                   == entry->extents[state->current_sparse_extent_index].size) {
-            state->current_sparse_extent_index++;
-            state->current_sparse_extent_offset = 0u;
-        }
-        if (state->current_sparse_extent_index == entry->extent_count
-            && !bx_tar_compare_verify_zero_range(state->current_fd,
-                                                 state->current_sparse_logical_offset,
-                                                 entry->size - state->current_sparse_logical_offset,
-                                                 state,
-                                                 entry,
-                                                 diag)) {
-            bx_tar_compare_clear_current_stream(state);
-            return state->status < 2;
-        }
-    }
-    bx_tar_compare_clear_current_stream(state);
-    return true;
-}
-
-static int bx_tar_compare_finish(struct bx_tar_compare_state* state,
-                                 struct bx_diag_ctx* diag) {
-    if (bx_tar_select_plan_report_unmatched_occurrence(state->select_plan,
-                                                       state->matched_members,
-                                                       state->options->occurrence,
-                                                       state->occurrence_counts,
-                                                       diag)) {
-        state->status = 2;
-    }
-    if (state->status == 2) {
-        bx_tar_report_previous_errors(diag);
-    }
-    return state->status;
 }
 
 static bool bx_tar_extract_sparse_payload_complete(const struct bx_tar_extract_state* state,
@@ -2805,40 +2294,6 @@ static bool bx_tar_list_stream_visit(void* user,
     return bx_tar_list_one_entry(user, entry, diag);
 }
 
-static bool bx_tar_compare_stream_visit(void* user,
-                                        const struct bx_tar_entry* entry,
-                                        struct bx_diag_ctx* diag) {
-    return bx_tar_compare_one_entry(user, entry, diag);
-}
-
-static bool bx_tar_compare_stream_payload_visit(void* user,
-                                                const struct bx_tar_entry* entry,
-                                                const unsigned char* data,
-                                                size_t len,
-                                                struct bx_diag_ctx* diag) {
-    return bx_tar_compare_entry_payload(user, entry, data, len, diag);
-}
-
-static bool bx_tar_compare_stream_end_visit(void* user,
-                                            const struct bx_tar_entry* entry,
-                                            struct bx_diag_ctx* diag) {
-    return bx_tar_compare_end_entry(user, entry, diag);
-}
-
-static bool bx_tar_compare_stream_finish(void* user,
-                                         uint64_t block_index,
-                                         enum bx_tar_stream_end_kind end_kind,
-                                         uint64_t total_bytes_read,
-                                         struct bx_diag_ctx* diag) {
-    struct bx_tar_compare_state* state = user;
-    state->total_bytes_read = bx_tar_reported_total_bytes_read(block_index, end_kind, total_bytes_read);
-    return bx_tar_report_archive_end_if_requested(state->options,
-                                                  state->report_stream,
-                                                  block_index,
-                                                  end_kind,
-                                                  diag);
-}
-
 static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
                                          const struct bx_tar_select_plan* select_plan,
                                          struct bx_diag_ctx* diag) {
@@ -2851,11 +2306,9 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
     };
     struct bx_tar_report_output report_output = {0};
     bool need_report_output = options->mode == BX_TAR_MODE_LIST
-        || options->mode == BX_TAR_MODE_COMPARE
         || options->verbose_reports
         || (options->mode == BX_TAR_MODE_EXTRACT && options->report_block_numbers);
     FILE* report_default_stream = (options->mode == BX_TAR_MODE_LIST
-                                   || options->mode == BX_TAR_MODE_COMPARE
                                    || (options->mode == BX_TAR_MODE_EXTRACT && !options->to_stdout))
         ? stdout
         : stderr;
@@ -2895,37 +2348,6 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         }
         rc = bx_tar_list_finish(&state, diag);
         bx_tar_list_state_cleanup(&state);
-        return rc;
-    }
-    else if (options->mode == BX_TAR_MODE_COMPARE) {
-        struct bx_tar_compare_state state;
-        struct bx_tar_stream_visitor_ops visitor_ops = {
-            .user = &state,
-            .begin_entry = bx_tar_compare_stream_visit,
-            .visit_payload = bx_tar_compare_stream_payload_visit,
-            .end_entry = bx_tar_compare_stream_end_visit,
-            .finish_archive = bx_tar_compare_stream_finish,
-            .stream_sparse_payload = true,
-        };
-        int rc;
-
-        bx_tar_compare_state_init(&state, options, select_plan, report_output.stream);
-        if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
-            bx_tar_compare_state_cleanup(&state);
-            bx_tar_report_output_cleanup(&report_output);
-            return 2;
-        }
-        if (!bx_tar_report_output_finish(&report_output, diag)) {
-            bx_tar_compare_state_cleanup(&state);
-            return 2;
-        }
-        if (options->report_totals
-            && !bx_tar_report_totals_line(false, state.total_bytes_read, diag)) {
-            bx_tar_compare_state_cleanup(&state);
-            return 2;
-        }
-        rc = bx_tar_compare_finish(&state, diag);
-        bx_tar_compare_state_cleanup(&state);
         return rc;
     }
     else {
@@ -3139,7 +2561,6 @@ static const char* bx_tar_occurrence_mode_option(enum bx_tar_mode mode) {
         case BX_TAR_MODE_CREATE:
             return "-c";
         case BX_TAR_MODE_NONE:
-        case BX_TAR_MODE_COMPARE:
         case BX_TAR_MODE_LIST:
         case BX_TAR_MODE_EXTRACT:
             return NULL;
@@ -3149,7 +2570,7 @@ static const char* bx_tar_occurrence_mode_option(enum bx_tar_mode mode) {
 
 static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
     fprintf(stderr,
-            "%s: You must specify one of the '-cdtx' options\n",
+            "%s: You must specify one of the '-ctx' options\n",
             diag->progname);
     fprintf(stderr,
             "Try '%s --help' or '%s --usage' for more information.\n",
@@ -3160,7 +2581,7 @@ static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
 
 static bool bx_tar_report_mode_conflict(const struct bx_diag_ctx* diag) {
     fprintf(stderr,
-            "%s: You may not specify more than one '-cdtx' option\n",
+            "%s: You may not specify more than one '-ctx' option\n",
             diag->progname);
     fprintf(stderr,
             "Try '%s --help' or '%s --usage' for more information.\n",
@@ -3171,7 +2592,6 @@ static bool bx_tar_report_mode_conflict(const struct bx_diag_ctx* diag) {
 
 static bool bx_tar_set_mode_option(struct bx_tar_options* options,
                                    enum bx_tar_mode mode,
-                                   const char* unsupported_display,
                                    struct bx_diag_ctx* diag) {
     if (options->saw_mode_option) {
         return bx_tar_report_mode_conflict(diag);
@@ -3179,7 +2599,6 @@ static bool bx_tar_set_mode_option(struct bx_tar_options* options,
 
     options->saw_mode_option = true;
     options->mode = mode;
-    options->unsupported_mode = unsupported_display;
     return true;
 }
 
@@ -3274,11 +2693,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->sparse_selectors = true;
             return true;
         case BX_TAR_OPT_MODE_CREATE:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_CREATE, NULL, diag);
-        case BX_TAR_OPT_MODE_COMPARE:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_COMPARE, NULL, diag);
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_CREATE, diag);
         case BX_TAR_OPT_MODE_LIST:
-            if (!bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, NULL, diag)) {
+            if (!bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, diag)) {
                 return false;
             }
             if (options->verbose_count < 3u) {
@@ -3286,9 +2703,7 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             }
             return true;
         case BX_TAR_OPT_MODE_EXTRACT:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_EXTRACT, NULL, diag);
-        case BX_TAR_OPT_MODE_UNSUPPORTED:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_NONE, display, diag);
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_EXTRACT, diag);
         case BX_TAR_OPT_ARCHIVE_PATH:
             options->archive_path = value;
             return true;
@@ -3800,10 +3215,6 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         return false;
     }
     if (options->mode == BX_TAR_MODE_NONE) {
-        if (options->unsupported_mode != NULL) {
-            bx_diag(diag, "%s is not yet supported", options->unsupported_mode);
-            return false;
-        }
         return bx_tar_report_missing_mode(diag);
     }
     if (options->metadata.file_flags && options->mode != BX_TAR_MODE_CREATE && options->mode != BX_TAR_MODE_EXTRACT) {

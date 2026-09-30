@@ -8,7 +8,6 @@
 
 static void bx_tar_print_usage(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s -cf ARCHIVE [OPTION]... FILE...\n", progname);
-    fprintf(stream, "       %s -Af ARCHIVE [OPTION]... SOURCE_ARCHIVE...\n", progname);
     fprintf(stream, "       %s -tf ARCHIVE [OPTION]... [MEMBER...]\n", progname);
     fprintf(stream, "       %s -xf ARCHIVE [OPTION]... [MEMBER...]\n", progname);
 }
@@ -43,7 +42,6 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --one-file-system do not descend into other mounts when creating\n"
                     "                        (old kernels: device boundary; bind mounts may cross)\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
-    fprintf(stream, "  -d                    compare archive members against the filesystem\n");
     fprintf(stream, "      --occurrence[=N]  process only the Nth occurrence of each named member\n");
     fprintf(stream, "  -k, --keep-old-files  do not overwrite existing files; report an error\n");
     fprintf(stream, "      --skip-old-files  do not overwrite existing files; continue\n");
