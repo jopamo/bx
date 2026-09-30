@@ -52,18 +52,41 @@ bool bx_file_metadata_set(struct bx_file_metadata* metadata, const char* name,
     return true;
 }
 
-void bx_file_metadata_copy(struct bx_file_metadata* dest,
-                           const struct bx_file_metadata* source) {
+void bx_file_metadata_remove(struct bx_file_metadata* metadata, const char* name) {
+    for (size_t i = 0; i < metadata->len; i++) {
+        if (strcmp(metadata->xattrs[i].name, name) != 0)
+            continue;
+        free(metadata->xattrs[i].name);
+        free(metadata->xattrs[i].value);
+        memmove(&metadata->xattrs[i], &metadata->xattrs[i + 1u], (metadata->len - i - 1u) * sizeof(*metadata->xattrs));
+        metadata->len--;
+        return;
+    }
+}
+
+void bx_file_metadata_overlay(struct bx_file_metadata* dest, const struct bx_file_metadata* source) {
     if (dest == source)
         return;
-    bx_file_metadata_free(dest);
     for (size_t i = 0; i < source->len; i++) {
         const struct bx_file_xattr* attr = &source->xattrs[i];
         bx_file_metadata_set(dest, attr->name, attr->value, attr->size);
     }
-    dest->acl_access = source->acl_access ? xstrdup(source->acl_access) : NULL;
-    dest->acl_default = source->acl_default ? xstrdup(source->acl_default) : NULL;
-    dest->restore_acls = source->restore_acls;
+    if (source->acl_access) {
+        free(dest->acl_access);
+        dest->acl_access = xstrdup(source->acl_access);
+    }
+    if (source->acl_default) {
+        free(dest->acl_default);
+        dest->acl_default = xstrdup(source->acl_default);
+    }
+    dest->restore_acls |= source->restore_acls;
+}
+
+void bx_file_metadata_copy(struct bx_file_metadata* dest, const struct bx_file_metadata* source) {
+    if (dest == source)
+        return;
+    bx_file_metadata_free(dest);
+    bx_file_metadata_overlay(dest, source);
 }
 
 static bool bx_metadata_unsupported(int error) {
