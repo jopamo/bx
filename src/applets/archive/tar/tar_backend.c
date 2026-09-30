@@ -1908,6 +1908,10 @@ static enum bx_tar_kind bx_tar_kind_from_stat_mode(mode_t mode) {
     if (S_ISFIFO(mode)) {
         return BX_TAR_KIND_FIFO;
     }
+    if (S_ISCHR(mode))
+        return BX_TAR_KIND_CHAR;
+    if (S_ISBLK(mode))
+        return BX_TAR_KIND_BLOCK;
     return BX_TAR_KIND_REG;
 }
 
@@ -2905,12 +2909,36 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
             return false;
         }
     }
+    else if (entry->kind == BX_TAR_KIND_CHAR || entry->kind == BX_TAR_KIND_BLOCK) {
+        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
+            free(dest_path);
+            state->status = 2;
+            return true;
+        }
+        mode_t type = entry->kind == BX_TAR_KIND_CHAR ? S_IFCHR : S_IFBLK;
+        if (bx_fd_mknodat(state->parent_fd, state->leaf, type | extract_mode, entry->rdev) != 0) {
+            bx_diag(diag, "%s: cannot create device node: %s", dest_path, strerror(errno));
+            free(dest_path);
+            return false;
+        }
+    }
 
     int fd = bx_fd_openat_metadata(state->parent_fd, state->leaf);
     if (fd < 0) {
         bx_diag(diag, "%s: %s", dest_path, strerror(errno));
         free(dest_path);
         return false;
+    }
+    if (entry->kind == BX_TAR_KIND_CHAR || entry->kind == BX_TAR_KIND_BLOCK) {
+        struct stat status;
+        mode_t type = entry->kind == BX_TAR_KIND_CHAR ? S_IFCHR : S_IFBLK;
+        int rc = fstat(fd, &status);
+        if (rc != 0 || (status.st_mode & S_IFMT) != type || status.st_rdev != entry->rdev) {
+            bx_diag(diag, "%s: cannot verify device node: %s", dest_path, strerror(rc != 0 ? errno : ESTALE));
+            close(fd);
+            free(dest_path);
+            return false;
+        }
     }
     bool ok = bx_tar_extract_metadata(state, entry, fd, dest_path, extract_mode, diag) && bx_tar_extract_record_inode(state, fd, dest_path, diag);
     if (!bx_fd_close(&fd, dest_path, diag))
@@ -3350,6 +3378,10 @@ static enum bx_tar_stream_kind bx_tar_stream_kind_from_entry_kind(enum bx_tar_ki
             return BX_TAR_STREAM_KIND_HARDLINK;
         case BX_TAR_KIND_FIFO:
             return BX_TAR_STREAM_KIND_FIFO;
+        case BX_TAR_KIND_CHAR:
+            return BX_TAR_STREAM_KIND_CHAR;
+        case BX_TAR_KIND_BLOCK:
+            return BX_TAR_STREAM_KIND_BLOCK;
     }
     return BX_TAR_STREAM_KIND_REG;
 }
@@ -3392,6 +3424,7 @@ static bool bx_tar_write_parsed_entry_sink(const struct bx_tar_stream_sink* sink
                                          entry->mode,
                                          entry->uid,
                                          entry->gid,
+                                         entry->rdev,
                                          entry->data,
                                          entry->data_len,
                                          entry->mtime,
@@ -3501,6 +3534,7 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
                                              entry->mode,
                                              entry->uid,
                                              entry->gid,
+                                             entry->rdev,
                                              entry->size,
                                              entry->mtime,
                                              true,
