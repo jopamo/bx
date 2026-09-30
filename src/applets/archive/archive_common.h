@@ -61,10 +61,6 @@ bool bx_archive_output_file_finish(struct bx_archive_output_file* out,
                                    struct bx_diag_ctx* diag);
 void bx_archive_output_file_discard(struct bx_archive_output_file* out);
 
-bool bx_archive_snapshot_input_path(const char* archive_path,
-                                    char** snapshot_path_out,
-                                    struct bx_diag_ctx* diag);
-
 bool bx_archive_path_has_gzip_suffix(const char* path);
 
 #endif /* BX_APPLETS_ARCHIVE_ARCHIVE_COMMON_H */
