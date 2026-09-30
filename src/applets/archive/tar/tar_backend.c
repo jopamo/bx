@@ -1094,7 +1094,8 @@ struct bx_tar_extract_state {
     bool* matched_members;
     uintmax_t* occurrence_counts;
     int status;
-    int current_fd;
+    struct bx_fd_staged_file current_file;
+    char* current_leaf;
     char* current_dest_path;
     size_t boundary_prefix;
     mode_t current_mode_bits;
@@ -1205,7 +1206,7 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
         .one_top_level = options->one_top_level,
         .transform = options->name_transform.active ? &options->name_transform : NULL,
     };
-    state->current_fd = -1;
+    state->current_file = (struct bx_fd_staged_file)BX_FD_STAGED_FILE_INIT;
     state->root_fd = -1;
     state->parent_fd = -1;
     state->dirs.path_policy = BX_DIR_PATH_ALLOW_EXTERNAL | BX_DIR_PATH_REPLACE_NON_DIRS | BX_DIR_PATH_NO_MOUNT_CROSSING;
@@ -1213,10 +1214,8 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
 
 static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
     bx_fd_cleanup(&state->root_fd);
-    if (state->current_fd >= 0) {
-        close(state->current_fd);
-        state->current_fd = -1;
-    }
+    bx_fd_staged_file_discard(&state->current_file);
+    free(state->current_leaf);
     free(state->current_dest_path);
     state->current_dest_path = NULL;
     free(state->matched_members);
@@ -1675,10 +1674,9 @@ static uint64_t bx_tar_reported_total_bytes_read(uint64_t block_index,
 }
 
 static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* state) {
-    if (state->current_fd >= 0) {
-        close(state->current_fd);
-        state->current_fd = -1;
-    }
+    bx_fd_staged_file_discard(&state->current_file);
+    free(state->current_leaf);
+    state->current_leaf = NULL;
     state->current_stream_mode = BX_TAR_EXTRACT_STREAM_NONE;
     state->current_mode_bits = 0u;
     state->current_sparse = false;
@@ -2359,8 +2357,7 @@ static bool bx_tar_extract_sparse_payload(struct bx_tar_extract_state* state,
                 }
                 state->current_sparse_logical_offset = extent->offset;
             }
-            else if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_FILE
-                     && lseek(state->current_fd, (off_t)extent->offset, SEEK_SET) < 0) {
+            else if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_FILE && lseek(state->current_file.fd, (off_t)extent->offset, SEEK_SET) < 0) {
                 bx_diag(diag, "%s: %s", state->current_dest_path, strerror(errno));
                 return false;
             }
@@ -2377,7 +2374,7 @@ static bool bx_tar_extract_sparse_payload(struct bx_tar_extract_state* state,
             }
             state->current_sparse_logical_offset += chunk;
         }
-        else if (!bx_archive_write_regular_payload(state->current_fd, cursor, chunk, false, diag)) {
+        else if (!bx_archive_write_regular_payload(state->current_file.fd, cursor, chunk, false, diag)) {
             return false;
         }
 
@@ -2426,10 +2423,23 @@ static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
         return false;
     }
     bool deferred = state->options->metadata.file_flags && S_ISREG(status.st_mode);
-    bool ok = deferred ? bx_archive_pending_metadata_record_fd(&state->dirs, fd, path, state->boundary_prefix, &selected, state->sequence, state->sequence)
-                       : bx_archive_restore_fd(&selected, fd, path, S_ISLNK(status.st_mode), S_ISDIR(status.st_mode), diag);
-    if (deferred && !ok)
-        bx_diag(diag, "%s: cannot defer metadata: %s", path, strerror(errno));
+    struct bx_file_restore immediate = selected;
+    if (deferred) {
+        immediate.flags_set = immediate.flags_clear = 0u;
+        immediate.mode = 0600u;
+    }
+    bool ok = bx_archive_restore_fd(&immediate, fd, path, S_ISLNK(status.st_mode), S_ISDIR(status.st_mode), diag);
+    /* Final snapshots must remain reopenable until links and restrictive flags
+     * are complete. ACL replay can have changed the temporary access mask. */
+    if (ok && deferred && fchmod(fd, 0600u) != 0) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        ok = false;
+    }
+    if (ok && deferred) {
+        ok = bx_archive_pending_metadata_record_fd(&state->dirs, fd, path, state->boundary_prefix, &selected, state->sequence, state->sequence);
+        if (!ok)
+            bx_diag(diag, "%s: cannot defer metadata: %s", path, strerror(errno));
+    }
     bx_file_metadata_free(&selected.metadata);
     return ok;
 }
@@ -2834,37 +2844,13 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
     }
 
     if (entry->kind == BX_TAR_KIND_REG) {
-        int fd;
-        mode_t create_mode = state->options->metadata.file_flags ? 0600u : extract_mode;
-
-        fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, create_mode);
-        if (fd < 0) {
-            if (errno != EEXIST && errno != EISDIR) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
-                return false;
-            }
-            if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
-                free(dest_path);
-                state->status = 2;
-                bx_tar_extract_clear_current_stream(state);
-                return true;
-            }
-            fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, create_mode);
-            if (fd < 0) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
-                return false;
-            }
-        }
-        if (state->options->metadata.file_flags && fchmod(fd, 0600u) != 0) {
+        bx_tar_extract_clear_current_stream(state);
+        if (bx_fd_staged_file_begin(&state->current_file, state->parent_fd, state->leaf) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            close(fd);
             free(dest_path);
             return false;
         }
-        bx_tar_extract_clear_current_stream(state);
-        state->current_fd = fd;
+        state->current_leaf = xstrdup(state->leaf);
         state->current_dest_path = dest_path;
         state->current_mode_bits = extract_mode;
         state->current_stream_mode = BX_TAR_EXTRACT_STREAM_FILE;
@@ -2980,14 +2966,14 @@ static bool bx_tar_extract_entry_payload(struct bx_tar_extract_state* state,
         }
         return true;
     }
-    return bx_archive_write_regular_payload(state->current_fd, data, len, false, diag);
+    return bx_archive_write_regular_payload(state->current_file.fd, data, len, false, diag);
 }
 
 static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
                                      const struct bx_tar_entry* entry,
                                      struct bx_diag_ctx* diag) {
     char* dest_path = state->current_dest_path;
-    int fd = state->current_fd;
+    int fd = state->current_file.fd;
     mode_t mode = state->current_mode_bits;
 
     (void)entry;
@@ -3023,27 +3009,61 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
             return false;
         }
     }
-    if (!bx_tar_extract_metadata(state, entry, fd, dest_path, mode, diag) || !bx_tar_extract_record_inode(state, fd, dest_path, diag)) {
+    if (!bx_tar_extract_metadata(state, entry, fd, dest_path, mode, diag)) {
+        bx_tar_extract_clear_current_stream(state);
+        return false;
+    }
+    struct stat candidate;
+    if (fstat(fd, &candidate) != 0) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        bx_tar_extract_clear_current_stream(state);
+        return false;
+    }
+    if (state->restored.len >= 1048576u && !bx_inode_ledger_lookup(&state->restored, &candidate, NULL, NULL)) {
+        bx_diag(diag, "%s: cannot record restored inode: %s", dest_path, strerror(E2BIG));
         bx_tar_extract_clear_current_stream(state);
         return false;
     }
 
-    state->current_fd = -1;
-    state->current_dest_path = NULL;
-    state->current_stream_mode = BX_TAR_EXTRACT_STREAM_NONE;
-    state->current_mode_bits = 0u;
-    state->current_sparse = false;
-    state->current_sparse_extent_index = 0u;
-    state->current_sparse_extent_offset = 0u;
-    state->current_sparse_logical_offset = 0u;
-
-    if (close(fd) != 0) {
-        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-        free(dest_path);
+    if (bx_archive_temp_pending_signal()) {
+        bx_diag(diag, "extraction interrupted");
+        bx_tar_extract_clear_current_stream(state);
         return false;
     }
-    free(dest_path);
-    return bx_tar_extract_resolve_links(state, diag);
+    struct stat existing;
+    int found = fstatat(state->current_file.parent_fd, state->current_leaf, &existing, AT_SYMLINK_NOFOLLOW);
+    if (found != 0 && errno != ENOENT) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        bx_tar_extract_clear_current_stream(state);
+        return false;
+    }
+    if (found == 0 && S_ISDIR(existing.st_mode)) {
+        if (!state->options->recursive_unlink && state->options->old_file_mode == BX_TAR_OLD_FILES_OVERWRITE) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(EISDIR));
+            state->status = 2;
+            bx_tar_extract_clear_current_stream(state);
+            return true;
+        }
+        bool removed = state->options->recursive_unlink ? bx_remove_recursive_at(state->current_file.parent_fd, state->current_leaf, dest_path, &existing, diag)
+                                                        : bx_fd_unlinkat_child(state->current_file.parent_fd, state->current_leaf, AT_REMOVEDIR) == 0;
+        if (!removed) {
+            int error = errno == ENOTEMPTY || errno == EEXIST ? EEXIST : errno;
+            bx_diag(diag, "%s: %s", dest_path, strerror(error));
+            state->status = 2;
+            bx_tar_extract_clear_current_stream(state);
+            return true;
+        }
+    }
+    if (bx_fd_staged_file_publish(&state->current_file, state->current_leaf) != 0) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        bx_tar_extract_clear_current_stream(state);
+        return false;
+    }
+    bool recorded = bx_inode_ledger_record(&state->restored, &candidate, state->sequence, state->sequence, 1048576u);
+    if (!recorded)
+        bx_diag(diag, "%s: cannot record restored inode: %s", dest_path, strerror(errno));
+    bx_tar_extract_clear_current_stream(state);
+    return recorded && bx_tar_extract_resolve_links(state, diag);
 }
 
 static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
