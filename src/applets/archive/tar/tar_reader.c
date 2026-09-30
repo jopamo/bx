@@ -242,16 +242,25 @@ static bool bx_tar_header_checksum_valid(const unsigned char* header) {
     return recorded == unsigned_sum || (signed_sum >= 0 && recorded == (size_t)signed_sum);
 }
 
-static bool bx_tar_header_payload_size(const unsigned char* header,
-                                       const struct bx_tar_pax_numbers* numbers,
-                                       size_t* size) {
+static bool bx_tar_header_payload_size(const unsigned char* header, const struct bx_tar_pax_numbers* numbers, size_t* size, struct bx_diag_ctx* diag) {
     unsigned char type = header[156];
     bool extended = type == 'x' || type == 'g' || type == 'L' || type == 'K';
+    /* A deleted size has no authoritative payload boundary. */
+    if (!extended && (numbers->defined & ~numbers->present & BX_TAR_PAX_SIZE)) {
+        bx_diag(diag, "cannot determine payload boundary after pax size deletion");
+        return false;
+    }
     if (!extended && (numbers->present & BX_TAR_PAX_SIZE))
         *size = numbers->size;
-    else if (!bx_tar_parse_octal_field(header + 124, 12u, size))
+    else if (!bx_tar_parse_octal_field(header + 124, 12u, size)) {
+        bx_diag(diag, "invalid tar header");
         return false;
-    return *size <= SIZE_MAX - (BX_TAR_BLOCK_SIZE - 1u);
+    }
+    if (*size > SIZE_MAX - (BX_TAR_BLOCK_SIZE - 1u)) {
+        bx_diag(diag, "invalid tar header");
+        return false;
+    }
+    return true;
 }
 
 static bool bx_tar_parse_sparse_map(const unsigned char* payload,
@@ -430,6 +439,7 @@ static struct bx_tar_pax_numbers
 bx_tar_pax_effective_numbers(const struct bx_tar_pax_numbers* global,
                              const struct bx_tar_pax_numbers* local) {
     struct bx_tar_pax_numbers result = *global;
+    result.defined |= local->defined;
     result.present = (global->present & ~local->defined) | local->present;
     if (local->present & BX_TAR_PAX_SIZE)
         result.size = local->size;
@@ -670,12 +680,17 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
     entry->mode = 0644u;
     entry->size = size;
     entry->dumpdir = typeflag == 'D';
+    unsigned int deleted = numbers->defined & ~numbers->present;
+    entry->omit_uid = (deleted & BX_TAR_PAX_UID) != 0u;
+    entry->omit_gid = (deleted & BX_TAR_PAX_GID) != 0u;
+    entry->omit_mtime = (deleted & BX_TAR_PAX_MTIME) != 0u;
     {
         size_t parsed_mode = 0u;
         size_t parsed_mtime = 0u;
 
         bx_tar_parse_octal_field(header + 100, 8u, &parsed_mode);
-        bx_tar_parse_octal_field(header + 136, 12u, &parsed_mtime);
+        if (!entry->omit_mtime)
+            bx_tar_parse_octal_field(header + 136, 12u, &parsed_mtime);
         entry->mode = (mode_t)parsed_mode;
         entry->mtime.tv_sec = (time_t)parsed_mtime;
         entry->mtime.tv_nsec = 0;
@@ -685,8 +700,10 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
             size_t parsed_uid = 0u;
             size_t parsed_gid = 0u;
 
-            bx_tar_parse_octal_field(header + 108, 8u, &parsed_uid);
-            bx_tar_parse_octal_field(header + 116, 8u, &parsed_gid);
+            if (!entry->omit_uid)
+                bx_tar_parse_octal_field(header + 108, 8u, &parsed_uid);
+            if (!entry->omit_gid)
+                bx_tar_parse_octal_field(header + 116, 8u, &parsed_gid);
             entry->uid = (uid_t)parsed_uid;
             entry->gid = (gid_t)parsed_gid;
             if (numbers->present & BX_TAR_PAX_UID)
@@ -801,11 +818,10 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
         }
         typeflag = header[156];
         struct bx_tar_pax_numbers numbers = bx_tar_pax_effective_numbers(&global, &pax.numbers);
-        if (!bx_tar_header_payload_size(header, &numbers, &size)) {
+        if (!bx_tar_header_payload_size(header, &numbers, &size, diag)) {
             bx_tar_pax_info_clear(&pax);
             free(gnu_long_name);
             free(gnu_long_link);
-            bx_diag(diag, "invalid tar header");
             return false;
         }
         payload_start = pos + BX_TAR_BLOCK_SIZE;
@@ -1376,6 +1392,9 @@ static bool bx_tar_clone_entry(struct bx_tar_entry* dst,
     dst->uname = src->uname ? xstrdup(src->uname) : NULL;
     dst->gname = src->gname ? xstrdup(src->gname) : NULL;
     dst->mtime = src->mtime;
+    dst->omit_uid = src->omit_uid;
+    dst->omit_gid = src->omit_gid;
+    dst->omit_mtime = src->omit_mtime;
     dst->data_len = src->data_len;
     dst->size = src->size;
     dst->dumpdir = src->dumpdir;
@@ -1572,8 +1591,7 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
             goto out;
         }
         struct bx_tar_pax_numbers numbers = bx_tar_pax_effective_numbers(&global, &pax.numbers);
-        if (!bx_tar_header_payload_size(header, &numbers, &size)) {
-            bx_diag(diag, "invalid tar header");
+        if (!bx_tar_header_payload_size(header, &numbers, &size, diag)) {
             goto out;
         }
         typeflag = header[156];
@@ -1755,8 +1773,7 @@ bool bx_tar_read_volume_label_stream(const struct bx_tar_reader_stream_options* 
             goto out;
         }
         struct bx_tar_pax_numbers numbers = bx_tar_pax_effective_numbers(&global, &pax.numbers);
-        if (!bx_tar_header_payload_size(header, &numbers, &size)) {
-            bx_diag(diag, "invalid tar header");
+        if (!bx_tar_header_payload_size(header, &numbers, &size, diag)) {
             goto out;
         }
         typeflag = header[156];
