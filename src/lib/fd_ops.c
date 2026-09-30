@@ -12,9 +12,64 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "lib/fd_ops.h"
 #include "bx/diag.h"
+
+void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage) {
+    int error = errno;
+    bx_fd_cleanup(&stage->fd);
+    if (stage->name[0])
+        bx_fd_unlinkat_child(stage->parent_fd, stage->name, 0);
+    stage->name[0] = '\0';
+    bx_fd_cleanup(&stage->parent_fd);
+    errno = error;
+}
+
+int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const char* destination) {
+    if (stage->fd >= 0 || stage->parent_fd >= 0 || !bx_fd_at_name_is_child(destination)) {
+        errno = EINVAL;
+        return -1;
+    }
+    stage->parent_fd = bx_fd_dup_cloexec(parent);
+    if (stage->parent_fd < 0)
+        return -1;
+    for (unsigned attempt = 0; attempt < 128; attempt++) {
+        char name[sizeof(stage->name)];
+        snprintf(name, sizeof(name), ".bx-stage.%ld.%d.%u", (long)getpid(), stage->parent_fd, attempt);
+        if (strcmp(name, destination) == 0)
+            continue;
+        stage->fd = bx_fd_openat_child_nofollow(stage->parent_fd, name, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (stage->fd >= 0) {
+            memcpy(stage->name, name, strlen(name) + 1);
+            if (fchmod(stage->fd, 0600) == 0)
+                return 0;
+            break;
+        }
+        if (errno != EEXIST)
+            break;
+    }
+    int error = errno;
+    bx_fd_staged_file_discard(stage);
+    errno = error;
+    return -1;
+}
+
+int bx_fd_staged_file_publish(struct bx_fd_staged_file* stage, const char* destination) {
+    if (stage->fd < 0 || stage->parent_fd < 0 || !stage->name[0] || !bx_fd_at_name_is_child(destination)) {
+        errno = EINVAL;
+        return -1;
+    }
+    int fd = stage->fd;
+    stage->fd = -1;
+    if (close(fd) != 0)
+        return -1;
+    if (bx_fd_renameat_child(stage->parent_fd, stage->name, stage->parent_fd, destination) != 0)
+        return -1;
+    stage->name[0] = '\0';
+    return 0;
+}
 
 bool bx_fd_close(int* p_fd, const char* path, struct bx_diag_ctx* diag) {
     if (p_fd == NULL || *p_fd < 0) {

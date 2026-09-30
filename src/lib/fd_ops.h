@@ -117,4 +117,18 @@ int bx_fd_mkdirat_child(int dirfd, const char* name, mode_t mode);
 int bx_fd_symlinkat_child(const char* target, int linkdirfd, const char* linkname);
 int bx_fd_linkat_child(int olddirfd, const char* oldname, int newdirfd, const char* newname, int flags);
 
+struct bx_fd_staged_file {
+    int parent_fd;
+    int fd;
+    char name[80];
+};
+#define BX_FD_STAGED_FILE_INIT {.parent_fd = -1, .fd = -1}
+/* Borrow the parent, retain a duplicate and create an exclusive mode-0600
+ * sibling. The caller owns cleanup on both success and failure. */
+int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const char* destination);
+/* Close the writer before renaming. Failure leaves the destination unchanged
+ * and retains the private name for discard. No durability barrier is implied. */
+int bx_fd_staged_file_publish(struct bx_fd_staged_file* stage, const char* destination);
+void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage);
+
 #endif /* BX_COMMON_FD_OPS_H */
