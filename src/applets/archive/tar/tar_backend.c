@@ -53,15 +53,11 @@
 
 enum bx_tar_mode {
     BX_TAR_MODE_NONE = 0,
-    BX_TAR_MODE_CATENATE,
     BX_TAR_MODE_CREATE,
     BX_TAR_MODE_COMPARE,
     BX_TAR_MODE_TEST_LABEL,
     BX_TAR_MODE_LIST,
     BX_TAR_MODE_EXTRACT,
-    BX_TAR_MODE_APPEND,
-    BX_TAR_MODE_UPDATE,
-    BX_TAR_MODE_DELETE,
 };
 
 enum bx_tar_old_file_mode {
@@ -156,15 +152,11 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_SPARSE,
     BX_TAR_OPT_SPARSE_VERSION,
     BX_TAR_OPT_HOLE_DETECTION,
-    BX_TAR_OPT_MODE_CATENATE,
     BX_TAR_OPT_MODE_CREATE,
     BX_TAR_OPT_MODE_COMPARE,
     BX_TAR_OPT_MODE_TEST_LABEL,
     BX_TAR_OPT_MODE_LIST,
     BX_TAR_OPT_MODE_EXTRACT,
-    BX_TAR_OPT_MODE_APPEND,
-    BX_TAR_OPT_MODE_UPDATE,
-    BX_TAR_OPT_MODE_DELETE,
     BX_TAR_OPT_MODE_UNSUPPORTED,
     BX_TAR_OPT_ARCHIVE_PATH,
     BX_TAR_OPT_DIRECTORY,
@@ -276,16 +268,11 @@ struct bx_tar_short_option_spec {
 };
 
 static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
-    {"--catenate", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CATENATE},
-    {"--concatenate", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CATENATE},
     {"--create", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
-    {"--delete", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_DELETE},
     {"--diff", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {"--compare", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
-    {"--append", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_APPEND},
     {"--test-label", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_TEST_LABEL},
     {"--list", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
-    {"--update", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UPDATE},
     {"--extract", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {"--get", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {"--check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -454,12 +441,9 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
 };
 
 static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
-    {'A', "-A", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CATENATE},
     {'c', "-c", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
     {'d', "-d", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
-    {'r', "-r", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_APPEND},
     {'t', "-t", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
-    {'u', "-u", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UPDATE},
     {'x', "-x", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {'g', "-g", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
     {'G', "-G", BX_TAR_OPTARG_NONE, BX_TAR_OPT_INCREMENTAL},
@@ -741,10 +725,6 @@ static const struct bx_archive_codec* bx_tar_input_required_codec(const struct b
         return bx_tar_codec_from_suffix(options->archive_path);
     }
     return NULL;
-}
-
-static bool bx_tar_output_is_compressed(const struct bx_tar_options* options) {
-    return bx_tar_output_codec(options) != bx_archive_codec_none();
 }
 
 static size_t bx_tar_effective_compress_threads(const struct bx_tar_options* options) {
@@ -3394,283 +3374,6 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
     }
 }
 
-static enum bx_tar_stream_kind bx_tar_stream_kind_from_entry_kind(enum bx_tar_kind kind) {
-    switch (kind) {
-        case BX_TAR_KIND_REG:
-            return BX_TAR_STREAM_KIND_REG;
-        case BX_TAR_KIND_DIR:
-            return BX_TAR_STREAM_KIND_DIR;
-        case BX_TAR_KIND_SYMLINK:
-            return BX_TAR_STREAM_KIND_SYMLINK;
-        case BX_TAR_KIND_HARDLINK:
-            return BX_TAR_STREAM_KIND_HARDLINK;
-        case BX_TAR_KIND_FIFO:
-            return BX_TAR_STREAM_KIND_FIFO;
-        case BX_TAR_KIND_CHAR:
-            return BX_TAR_STREAM_KIND_CHAR;
-        case BX_TAR_KIND_BLOCK:
-            return BX_TAR_STREAM_KIND_BLOCK;
-    }
-    return BX_TAR_STREAM_KIND_REG;
-}
-
-struct bx_tar_stream_counting_sink_user {
-    const struct bx_tar_stream_sink* inner;
-    size_t* bytes_written;
-};
-
-static bool bx_tar_stream_counting_sink_write(void* user, const void* data, size_t len) {
-    struct bx_tar_stream_counting_sink_user* counting_user = user;
-
-    if (!counting_user->inner->write(counting_user->inner->user, data, len)) {
-        return false;
-    }
-    *counting_user->bytes_written += len;
-    return true;
-}
-
-static bool bx_tar_write_parsed_entry_sink(const struct bx_tar_stream_sink* sink,
-                                           size_t* bytes_written_io,
-                                           const struct bx_tar_entry* entry,
-                                           struct bx_diag_ctx* diag) {
-    struct bx_tar_stream_counting_sink_user counting_user = {
-        .inner = sink,
-        .bytes_written = bytes_written_io,
-    };
-    struct bx_tar_stream_sink counting_sink = {
-        .user = &counting_user,
-        .write = bx_tar_stream_counting_sink_write,
-        .callback_owns_errors = sink->callback_owns_errors,
-    };
-
-    return bx_tar_stream_write_raw_entry(&counting_sink,
-                                         entry->name,
-                                         entry->linkname,
-                                         entry->uname,
-                                         entry->gname,
-                                         bx_tar_stream_kind_from_entry_kind(entry->kind),
-                                         entry->mode,
-                                         entry->uid,
-                                         entry->gid,
-                                         entry->rdev,
-                                         entry->data,
-                                         entry->data_len,
-                                         entry->mtime,
-                                         true,
-                                         &entry->metadata,
-                                         diag);
-}
-
-struct bx_tar_rewrite_stream_ctx {
-    const struct bx_tar_reader_stream_options* reader_options;
-    const struct bx_tar_select_plan* delete_plan;
-    bool* matched_members;
-    uintmax_t* occurrence_counts;
-    uintmax_t occurrence;
-    bool* had_selection_errors;
-    const struct bx_archive_fs_list* appended_files;
-    const struct bx_archive_name_list* source_archives;
-    const struct bx_tar_options* options;
-    uint64_t total_bytes_written;
-};
-
-struct bx_tar_update_record {
-    char* name;
-    struct timespec mtime;
-};
-
-struct bx_tar_update_record_list {
-    struct bx_tar_update_record* items;
-    size_t len;
-    size_t cap;
-};
-
-struct bx_tar_update_scan_state {
-    struct bx_tar_update_record_list* records;
-};
-
-struct bx_tar_rewrite_visit_state {
-    const struct bx_tar_rewrite_stream_ctx* ctx;
-    const struct bx_tar_stream_sink* sink;
-    struct bx_tar_stream_options stream_options;
-    size_t bytes_written;
-    struct bx_tar_stream_counting_sink_user counting_user;
-    struct bx_tar_stream_sink counting_sink;
-    struct bx_tar_stream_live_entry current_live_entry;
-    bool current_skip;
-};
-
-static ssize_t bx_tar_rewrite_find_delete_match(const struct bx_tar_select_plan* plan,
-                                                const char* name) {
-    size_t i;
-
-    if (plan == NULL) {
-        return -1;
-    }
-    for (i = 0u; i < plan->len; i++) {
-        if (bx_tar_select_member_matches_name(&plan->members[i], name)) {
-            return (ssize_t)i;
-        }
-    }
-    return -1;
-}
-
-static bool bx_tar_rewrite_stream_begin_entry(void* user,
-                                              const struct bx_tar_entry* entry,
-                                              struct bx_diag_ctx* diag) {
-    struct bx_tar_rewrite_visit_state* state = user;
-    ssize_t match_index;
-    bool occurrence_selected = false;
-
-    state->current_skip = false;
-    match_index = -1;
-    if (state->ctx->delete_plan != NULL) {
-        if (state->ctx->occurrence > 0u) {
-            occurrence_selected = bx_tar_select_plan_match_occurrence(state->ctx->delete_plan,
-                                                                       entry->name,
-                                                                       false,
-                                                                       state->ctx->matched_members,
-                                                                       state->ctx->occurrence,
-                                                                       state->ctx->occurrence_counts,
-                                                                       NULL);
-        }
-        else {
-            match_index = bx_tar_rewrite_find_delete_match(state->ctx->delete_plan, entry->name);
-        }
-    }
-    if (occurrence_selected || match_index >= 0) {
-        if (state->ctx->occurrence == 0u
-            && state->ctx->matched_members != NULL) {
-            state->ctx->matched_members[(size_t)match_index] = true;
-        }
-        state->current_skip = true;
-        return true;
-    }
-
-    if (entry->omit_uid || entry->omit_gid || entry->omit_mtime) {
-        bx_diag(diag, "%s: cannot rewrite deleted pax metadata", entry->name);
-        return false;
-    }
-    if (entry->kind == BX_TAR_KIND_REG && !entry->sparse) {
-        return bx_tar_stream_start_raw_entry(&state->current_live_entry,
-                                             &state->counting_sink,
-                                             entry->name,
-                                             entry->linkname,
-                                             entry->uname,
-                                             entry->gname,
-                                             bx_tar_stream_kind_from_entry_kind(entry->kind),
-                                             entry->mode,
-                                             entry->uid,
-                                             entry->gid,
-                                             entry->rdev,
-                                             entry->size,
-                                             entry->mtime,
-                                             true,
-                                             &entry->metadata,
-                                             diag);
-    }
-    if (entry->kind == BX_TAR_KIND_REG && entry->sparse) {
-        return bx_tar_stream_start_sparse_v1_entry(&state->current_live_entry,
-                                                   &state->counting_sink,
-                                                   entry->name,
-                                                   entry->uname,
-                                                   entry->gname,
-                                                   entry->mode,
-                                                   entry->uid,
-                                                   entry->gid,
-                                                   entry->extents,
-                                                   entry->extent_count,
-                                                   entry->size,
-                                                   entry->data_len,
-                                                   entry->mtime,
-                                                   &entry->metadata,
-                                                   diag);
-    }
-
-    return bx_tar_write_parsed_entry_sink(state->sink, &state->bytes_written, entry, diag);
-}
-
-static bool bx_tar_rewrite_stream_visit_payload(void* user,
-                                                const struct bx_tar_entry* entry,
-                                                const unsigned char* data,
-                                                size_t len,
-                                                struct bx_diag_ctx* diag) {
-    struct bx_tar_rewrite_visit_state* state = user;
-
-    (void)entry;
-    if (state->current_skip || !state->current_live_entry.active) {
-        return true;
-    }
-    return bx_tar_stream_write_raw_entry_chunk(&state->current_live_entry, data, len, diag);
-}
-
-static bool bx_tar_rewrite_stream_end_entry(void* user,
-                                            const struct bx_tar_entry* entry,
-                                            struct bx_diag_ctx* diag) {
-    struct bx_tar_rewrite_visit_state* state = user;
-
-    (void)entry;
-    if (state->current_skip) {
-        state->current_skip = false;
-        return true;
-    }
-    if (!state->current_live_entry.active) {
-        return true;
-    }
-    return bx_tar_stream_finish_raw_entry(&state->current_live_entry, diag);
-}
-
-static bool bx_tar_rewrite_stream_visit_reader(const struct bx_tar_rewrite_stream_ctx* ctx,
-                                               struct bx_tar_rewrite_visit_state* state,
-                                               const struct bx_tar_reader_stream_options* reader_options,
-                                               struct bx_diag_ctx* diag) {
-    struct bx_tar_stream_visitor_ops visitor_ops = {
-        .user = state,
-        .begin_entry = bx_tar_rewrite_stream_begin_entry,
-        .visit_payload = bx_tar_rewrite_stream_visit_payload,
-        .end_entry = bx_tar_rewrite_stream_end_entry,
-        .stream_sparse_payload = true,
-    };
-
-    (void)ctx;
-    return bx_tar_visit_archive_stream(reader_options, &visitor_ops, diag);
-}
-
-static bool bx_tar_source_archive_is_unsupported_compressed(const char* path,
-                                                            struct bx_diag_ctx* diag) {
-    static const unsigned char lzip_magic[] = {'L', 'Z', 'I', 'P'};
-    static const unsigned char compress_magic[] = {0x1f, 0x9d};
-    unsigned char header[6];
-    int fd;
-    ssize_t nread;
-
-    if (path == NULL || strcmp(path, "-") == 0) {
-        return false;
-    }
-
-    fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
-    if (fd < 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return true;
-    }
-    nread = read(fd, header, sizeof(header));
-    close(fd);
-    if (nread < 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return true;
-    }
-
-    if ((size_t)nread >= sizeof(lzip_magic) && memcmp(header, lzip_magic, sizeof(lzip_magic)) == 0) {
-        bx_diag(diag, "%s: unsupported compressed archive format", path);
-        return true;
-    }
-    if ((size_t)nread >= sizeof(compress_magic) && memcmp(header, compress_magic, sizeof(compress_magic)) == 0) {
-        bx_diag(diag, "%s: unsupported compressed archive format", path);
-        return true;
-    }
-    return false;
-}
-
 static int bx_tar_timespec_compare(struct timespec left, struct timespec right) {
     if (left.tv_sec < right.tv_sec) {
         return -1;
@@ -3716,562 +3419,6 @@ static void bx_tar_filter_newer_entries(struct bx_archive_fs_list* list,
         write_index++;
     }
     list->len = write_index;
-}
-
-static void bx_tar_update_record_list_free(struct bx_tar_update_record_list* list) {
-    size_t i;
-
-    for (i = 0u; i < list->len; i++) {
-        free(list->items[i].name);
-    }
-    free(list->items);
-    list->items = NULL;
-    list->len = 0u;
-    list->cap = 0u;
-}
-
-static struct bx_tar_update_record* bx_tar_update_record_list_find(struct bx_tar_update_record_list* list,
-                                                                   const char* name) {
-    size_t i;
-
-    for (i = 0u; i < list->len; i++) {
-        if (strcmp(list->items[i].name, name) == 0) {
-            return &list->items[i];
-        }
-    }
-    return NULL;
-}
-
-static bool bx_tar_update_record_list_note(struct bx_tar_update_record_list* list,
-                                           const char* name,
-                                           struct timespec mtime) {
-    struct bx_tar_update_record* record = bx_tar_update_record_list_find(list, name);
-
-    if (record != NULL) {
-        if (bx_tar_timespec_compare(record->mtime, mtime) < 0) {
-            record->mtime = mtime;
-        }
-        return true;
-    }
-
-    if (list->len == list->cap) {
-        size_t next_cap = list->cap ? list->cap * 2u : 32u;
-        list->items = xrealloc(list->items, next_cap * sizeof(*list->items));
-        list->cap = next_cap;
-    }
-
-    record = &list->items[list->len++];
-    record->name = xstrdup(name);
-    record->mtime = mtime;
-    return true;
-}
-
-static const struct bx_tar_update_record* bx_tar_update_record_list_lookup(
-    const struct bx_tar_update_record_list* list,
-    const char* name) {
-    size_t i;
-
-    for (i = 0u; i < list->len; i++) {
-        if (strcmp(list->items[i].name, name) == 0) {
-            return &list->items[i];
-        }
-    }
-    return NULL;
-}
-
-static bool bx_tar_update_scan_begin_entry(void* user,
-                                           const struct bx_tar_entry* entry,
-                                           struct bx_diag_ctx* diag) {
-    struct bx_tar_update_scan_state* state = user;
-
-    if (entry->omit_mtime) {
-        bx_diag(diag, "%s: cannot compare deleted pax mtime for update", entry->name);
-        return false;
-    }
-    return bx_tar_update_record_list_note(state->records, entry->name, entry->mtime);
-}
-
-static bool bx_tar_update_scan_visit_payload(void* user,
-                                             const struct bx_tar_entry* entry,
-                                             const unsigned char* data,
-                                             size_t len,
-                                             struct bx_diag_ctx* diag) {
-    (void)user;
-    (void)entry;
-    (void)data;
-    (void)len;
-    (void)diag;
-    return true;
-}
-
-static bool bx_tar_update_scan_end_entry(void* user,
-                                         const struct bx_tar_entry* entry,
-                                         struct bx_diag_ctx* diag) {
-    (void)user;
-    (void)entry;
-    (void)diag;
-    return true;
-}
-
-static bool bx_tar_collect_archived_mtimes(const struct bx_tar_reader_stream_options* reader_options,
-                                           struct bx_tar_update_record_list* records,
-                                           struct bx_diag_ctx* diag) {
-    struct bx_tar_update_scan_state state = {
-        .records = records,
-    };
-    struct bx_tar_stream_visitor_ops visitor_ops = {
-        .user = &state,
-        .begin_entry = bx_tar_update_scan_begin_entry,
-        .visit_payload = bx_tar_update_scan_visit_payload,
-        .end_entry = bx_tar_update_scan_end_entry,
-        .stream_sparse_payload = true,
-    };
-
-    return bx_tar_visit_archive_stream(reader_options, &visitor_ops, diag);
-}
-
-static void bx_tar_filter_update_entries(struct bx_archive_fs_list* list,
-                                         const struct bx_tar_update_record_list* records) {
-    size_t read_index;
-    size_t write_index = 0u;
-
-    for (read_index = 0u; read_index < list->len; read_index++) {
-        const struct bx_tar_update_record* record = bx_tar_update_record_list_lookup(
-            records,
-            list->entries[read_index].archive_path
-        );
-        bool keep = record == NULL
-            || bx_tar_timespec_compare(record->mtime, list->entries[read_index].st.st_mtim) < 0;
-
-        if (!keep) {
-            free(list->entries[read_index].source_path);
-            free(list->entries[read_index].archive_path);
-            free(list->entries[read_index].link_target);
-            continue;
-        }
-        if (write_index != read_index) {
-            list->entries[write_index] = list->entries[read_index];
-        }
-        write_index++;
-    }
-    list->len = write_index;
-}
-
-static bool bx_tar_write_catenate_sources_body(const struct bx_tar_rewrite_stream_ctx* ctx,
-                                               struct bx_tar_rewrite_visit_state* state,
-                                               struct bx_diag_ctx* diag) {
-    size_t i;
-
-    if (ctx->source_archives == NULL) {
-        return true;
-    }
-
-    for (i = 0u; i < ctx->source_archives->len; i++) {
-        struct bx_tar_reader_stream_options reader_options = {
-            .archive_path = ctx->source_archives->items[i],
-            .required_codec = bx_tar_codec_from_suffix(ctx->source_archives->items[i]),
-            .seek_mode = ctx->options->seek_mode,
-        };
-
-        if (bx_tar_source_archive_is_unsupported_compressed(reader_options.archive_path, diag)) {
-            return false;
-        }
-        if (!bx_tar_rewrite_stream_visit_reader(ctx, state, &reader_options, diag)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool bx_tar_write_rewrite_stream_body(const struct bx_tar_rewrite_stream_ctx* ctx,
-                                             const struct bx_tar_stream_sink* sink,
-                                             uint64_t* total_bytes_written_out,
-                                             struct bx_diag_ctx* diag) {
-    struct bx_tar_rewrite_visit_state state;
-
-    memset(&state, 0, sizeof(state));
-    *total_bytes_written_out = 0u;
-    state.ctx = ctx;
-    state.sink = sink;
-    state.stream_options = bx_tar_make_stream_options(ctx->options);
-    state.counting_user.inner = sink;
-    state.counting_user.bytes_written = &state.bytes_written;
-    state.counting_sink.user = &state.counting_user;
-    state.counting_sink.write = bx_tar_stream_counting_sink_write;
-    state.counting_sink.callback_owns_errors = sink->callback_owns_errors;
-
-    if (ctx->reader_options != NULL
-        && !bx_tar_rewrite_stream_visit_reader(ctx, &state, ctx->reader_options, diag)) {
-        *total_bytes_written_out = state.bytes_written;
-        return false;
-    }
-    if ((ctx->options->mode == BX_TAR_MODE_APPEND || ctx->options->mode == BX_TAR_MODE_UPDATE)
-        && !bx_tar_stream_write_fs_list_body(ctx->appended_files,
-                                             &state.stream_options,
-                                             sink,
-                                             &state.bytes_written,
-                                             diag)) {
-        *total_bytes_written_out = state.bytes_written;
-        return false;
-    }
-    if (ctx->options->mode == BX_TAR_MODE_CATENATE
-        && !bx_tar_write_catenate_sources_body(ctx, &state, diag)) {
-        *total_bytes_written_out = state.bytes_written;
-        return false;
-    }
-    if (!bx_tar_stream_write_trailer(sink, state.bytes_written, diag)) {
-        *total_bytes_written_out = state.bytes_written;
-        return false;
-    }
-    *total_bytes_written_out = bx_tar_total_archive_size_from_body(state.bytes_written);
-    if (ctx->delete_plan != NULL
-        && bx_tar_select_plan_report_unmatched_occurrence(ctx->delete_plan,
-                                                          ctx->matched_members,
-                                                          ctx->occurrence,
-                                                          ctx->occurrence_counts,
-                                                          diag)) {
-        if (ctx->had_selection_errors != NULL) {
-            *ctx->had_selection_errors = true;
-        }
-    }
-    return true;
-}
-
-static bool bx_tar_rewrite_stream_produce(void* user,
-                                          const struct bx_archive_codec_stream_sink* sink,
-                                          struct bx_diag_ctx* diag) {
-    struct bx_tar_rewrite_stream_ctx* ctx = user;
-    struct bx_tar_codec_stream_sink_adapter adapter = {
-        .sink = sink,
-    };
-    struct bx_tar_stream_sink tar_sink = {
-        .user = &adapter,
-        .write = bx_tar_codec_stream_sink_write,
-        .callback_owns_errors = true,
-    };
-
-    return bx_tar_write_rewrite_stream_body(ctx, &tar_sink, &ctx->total_bytes_written, diag);
-}
-
-static bool bx_tar_write_rewrite_archive_direct(const struct bx_tar_rewrite_stream_ctx* ctx,
-                                                const struct bx_tar_options* options,
-                                                uint64_t* total_bytes_written_out,
-                                                struct bx_diag_ctx* diag) {
-    const struct bx_archive_codec* codec = bx_tar_output_codec(options);
-    struct bx_archive_codec_stream_sink sink = {
-        .user = NULL,
-        .write = bx_tar_file_sink_write,
-    };
-    struct bx_archive_output_file output = {0};
-    struct bx_tar_rewrite_stream_ctx producer_ctx = *ctx;
-    bool ok;
-
-    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
-        return false;
-    }
-    sink.user = output.stream;
-    if (codec == bx_archive_codec_none()) {
-        struct bx_tar_stream_sink tar_sink = {
-            .user = output.stream,
-            .write = bx_tar_file_sink_write,
-        };
-
-        ok = bx_tar_write_rewrite_stream_body(ctx, &tar_sink, total_bytes_written_out, diag);
-    }
-    else {
-        producer_ctx.total_bytes_written = 0u;
-        ok = bx_archive_codec_run_encode_stream(codec,
-                                                bx_tar_rewrite_stream_produce,
-                                                &producer_ctx,
-                                                &sink,
-                                                diag);
-        *total_bytes_written_out = producer_ctx.total_bytes_written;
-    }
-    if (ok && !bx_archive_output_file_finish(&output, diag)) {
-        ok = false;
-    }
-    if (!ok) {
-        bx_archive_output_file_discard(&output);
-    }
-    return ok;
-}
-
-static bool bx_tar_write_rewrite_archive_mt_direct(const struct bx_tar_rewrite_stream_ctx* ctx,
-                                                   const struct bx_tar_options* options,
-                                                   size_t compress_threads,
-                                                   uint64_t* total_bytes_written_out,
-                                                   struct bx_diag_ctx* diag) {
-    struct bx_tar_rewrite_stream_ctx producer_ctx = *ctx;
-    struct bx_archive_codec_stream_sink sink = {
-        .user = NULL,
-        .write = bx_tar_file_sink_write,
-    };
-    struct bx_archive_output_file output = {0};
-    const struct bx_archive_codec* codec = bx_tar_output_codec(options);
-    size_t chunk_size = options->mt_chunk_size != 0u ? (size_t)options->mt_chunk_size : (1u << 20);
-    size_t max_inflight = compress_threads > (SIZE_MAX / 4u) ? compress_threads : compress_threads * 4u;
-    bool ok;
-
-    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
-        return false;
-    }
-    sink.user = output.stream;
-    producer_ctx.total_bytes_written = 0u;
-    ok = bx_archive_codec_run_encode_mt_stream(codec,
-                                               bx_tar_rewrite_stream_produce,
-                                               &producer_ctx,
-                                               &sink,
-                                               &(struct bx_archive_codec_mt_options){
-                                                   .thread_count = compress_threads,
-                                                   .chunk_size = chunk_size,
-                                                   .max_inflight_chunks = max_inflight,
-                                               },
-                                               diag);
-    *total_bytes_written_out = producer_ctx.total_bytes_written;
-    if (ok && !bx_archive_output_file_finish(&output, diag)) {
-        ok = false;
-    }
-    if (!ok) {
-        bx_archive_output_file_discard(&output);
-    }
-    return ok;
-}
-
-static int bx_tar_try_append_plain_in_place(const struct bx_archive_fs_list* appended_files,
-                                            const struct bx_tar_options* options,
-                                            uint64_t* total_bytes_written_out,
-                                            struct bx_diag_ctx* diag) {
-    struct stat st;
-    int fd = -1;
-
-    if (bx_tar_output_is_compressed(options) || strcmp(options->archive_path, "-") == 0) {
-        return -1;
-    }
-
-    *total_bytes_written_out = 0u;
-
-    fd = bx_fd_open_cloexec(options->archive_path, O_RDWR, 0);
-    if (fd < 0) {
-        if (errno == ENOENT) {
-            return bx_tar_write_create_archive_direct(appended_files,
-                                                      options,
-                                                      total_bytes_written_out,
-                                                      diag)
-                ? 1
-                : 0;
-        }
-        bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-        return 0;
-    }
-    if (fstat(fd, &st) != 0) {
-        bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-        close(fd);
-        return 0;
-    }
-    if (!S_ISREG(st.st_mode)) {
-        close(fd);
-        return -1;
-    }
-    close(fd);
-    return -1;
-}
-
-static bool bx_tar_append_target_is_existing_regular_file(const char* archive_path) {
-    struct stat st;
-
-    if (archive_path == NULL || strcmp(archive_path, "-") == 0) {
-        return false;
-    }
-    if (stat(archive_path, &st) != 0) {
-        return false;
-    }
-    return S_ISREG(st.st_mode);
-}
-
-static bool bx_tar_archive_path_exists(const char* archive_path) {
-    struct stat st;
-
-    if (archive_path == NULL || strcmp(archive_path, "-") == 0) {
-        return false;
-    }
-    return stat(archive_path, &st) == 0;
-}
-
-static int bx_tar_catenate_archive(const struct bx_tar_options* options,
-                                   struct bx_diag_ctx* diag) {
-    struct bx_tar_reader_stream_options reader_options = {
-        .archive_path = NULL,
-        .required_codec = bx_tar_input_required_codec(options),
-        .seek_mode = options->seek_mode,
-    };
-    struct bx_tar_rewrite_stream_ctx rewrite_ctx = {
-        .reader_options = NULL,
-        .delete_plan = NULL,
-        .matched_members = NULL,
-        .had_selection_errors = NULL,
-        .appended_files = NULL,
-        .source_archives = &options->source_archives,
-        .options = options,
-    };
-    char* snapshot_path = NULL;
-    uint64_t total_bytes_written = 0u;
-    int rc = 2;
-
-    if (bx_tar_archive_path_exists(options->archive_path)) {
-        if (!bx_archive_snapshot_input_path(options->archive_path, &snapshot_path, diag)) {
-            goto out;
-        }
-        reader_options.archive_path = snapshot_path;
-        rewrite_ctx.reader_options = &reader_options;
-    }
-
-    {
-        size_t compress_threads = bx_tar_effective_compress_threads(options);
-        bool use_mt = compress_threads > 1u
-            && bx_archive_codec_supports_mt_encode(bx_tar_output_codec(options));
-
-        if (!(use_mt
-                  ? bx_tar_write_rewrite_archive_mt_direct(&rewrite_ctx,
-                                                           options,
-                                                           compress_threads,
-                                                           &total_bytes_written,
-                                                           diag)
-                  : bx_tar_write_rewrite_archive_direct(&rewrite_ctx,
-                                                        options,
-                                                        &total_bytes_written,
-                                                        diag))) {
-            goto out;
-        }
-    }
-
-    rc = 0;
-    if (options->report_totals && !bx_tar_report_totals_line(true, total_bytes_written, diag)) {
-        rc = 2;
-    }
-out:
-    if (snapshot_path != NULL) {
-        unlink(snapshot_path);
-        free(snapshot_path);
-    }
-    return rc;
-}
-
-static int bx_tar_update_archive(const struct bx_tar_options* options,
-                                 struct bx_diag_ctx* diag) {
-    struct bx_archive_fs_list appended_files = {0};
-    struct bx_tar_update_record_list archived_mtimes = {0};
-    struct bx_tar_reader_stream_options reader_options = {
-        .archive_path = NULL,
-        .required_codec = bx_tar_input_required_codec(options),
-        .seek_mode = options->seek_mode,
-    };
-    struct bx_tar_rewrite_stream_ctx rewrite_ctx = {
-        .reader_options = NULL,
-        .delete_plan = NULL,
-        .matched_members = NULL,
-        .had_selection_errors = NULL,
-        .appended_files = &appended_files,
-        .source_archives = NULL,
-        .options = options,
-    };
-    char* snapshot_path = NULL;
-    bool had_update_errors = false;
-    bool had_postwrite_errors = false;
-    bool target_exists = bx_tar_archive_path_exists(options->archive_path);
-    uint64_t total_bytes_written = 0u;
-    int rc = 2;
-
-    if (target_exists) {
-        if (!bx_archive_snapshot_input_path(options->archive_path, &snapshot_path, diag)) {
-            goto out;
-        }
-        reader_options.archive_path = snapshot_path;
-        rewrite_ctx.reader_options = &reader_options;
-        if (!bx_tar_collect_archived_mtimes(&reader_options, &archived_mtimes, diag)) {
-            goto out;
-        }
-    }
-
-    if (!bx_tar_create_collect_fs_entries(&appended_files,
-                                          &options->create_options,
-                                          options->sort_name,
-                                          &had_update_errors,
-                                          diag)) {
-        goto out;
-    }
-    if (options->newer_active) {
-        bx_tar_filter_newer_entries(&appended_files, options->newer_time, options->newer_use_ctime);
-    }
-    bx_tar_filter_update_entries(&appended_files, &archived_mtimes);
-
-    if (had_update_errors && bx_tar_append_target_is_existing_regular_file(options->archive_path)) {
-        bx_tar_report_previous_errors(diag);
-        rc = 2;
-        goto out;
-    }
-
-    if (!target_exists) {
-        size_t compress_threads = bx_tar_effective_compress_threads(options);
-        bool use_mt = compress_threads > 1u
-            && bx_archive_codec_supports_mt_encode(bx_tar_output_codec(options));
-
-        rc = (use_mt
-                  ? bx_tar_write_create_archive_mt_direct(&appended_files,
-                                                          options,
-                                                          compress_threads,
-                                                          &total_bytes_written,
-                                                          diag)
-                  : bx_tar_write_create_archive_direct(&appended_files,
-                                                       options,
-                                                       &total_bytes_written,
-                                                       diag))
-            ? 0
-            : 2;
-        goto postwrite;
-    }
-
-    {
-        size_t compress_threads = bx_tar_effective_compress_threads(options);
-        bool use_mt = compress_threads > 1u
-            && bx_archive_codec_supports_mt_encode(bx_tar_output_codec(options));
-
-        if (!(use_mt
-                  ? bx_tar_write_rewrite_archive_mt_direct(&rewrite_ctx,
-                                                           options,
-                                                           compress_threads,
-                                                           &total_bytes_written,
-                                                           diag)
-                  : bx_tar_write_rewrite_archive_direct(&rewrite_ctx,
-                                                        options,
-                                                        &total_bytes_written,
-                                                        diag))) {
-            goto out;
-        }
-    }
-    rc = 0;
-
-postwrite:
-    if (options->report_totals
-        && total_bytes_written > 0u
-        && !bx_tar_report_totals_line(true, total_bytes_written, diag)) {
-        rc = 2;
-    }
-    if (rc == 0 && had_update_errors) {
-        had_postwrite_errors = true;
-    }
-    if (rc == 0 && had_postwrite_errors) {
-        bx_tar_report_previous_errors(diag);
-        rc = 2;
-    }
-
-out:
-    bx_tar_update_record_list_free(&archived_mtimes);
-    if (snapshot_path != NULL) {
-        unlink(snapshot_path);
-        free(snapshot_path);
-    }
-    bx_archive_fs_list_free(&appended_files);
-    return rc;
 }
 
 static bool bx_tar_parse_touch_like_time_arg(const char* text, struct timespec* out) {
@@ -4338,133 +3485,6 @@ static bool bx_tar_parse_touch_like_time_arg(const char* text, struct timespec* 
     return bx_time_build_local_timestamp(year, month, day, hour, minute, second, 0, out);
 }
 
-static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
-                                  struct bx_diag_ctx* diag) {
-    struct bx_archive_fs_list appended_files = {0};
-    struct bx_tar_reader_stream_options reader_options = {
-        .archive_path = NULL,
-        .required_codec = bx_tar_input_required_codec(options),
-        .seek_mode = options->seek_mode,
-    };
-    struct bx_tar_rewrite_stream_ctx rewrite_ctx = {
-        .reader_options = &reader_options,
-        .delete_plan = NULL,
-        .matched_members = NULL,
-        .had_selection_errors = NULL,
-        .appended_files = &appended_files,
-        .options = options,
-    };
-    struct bx_tar_select_plan select_plan = {0};
-    char* snapshot_path = NULL;
-    bool* matched_members = NULL;
-    uintmax_t* occurrence_counts = NULL;
-    bool had_append_errors = false;
-    bool had_postwrite_errors = false;
-    bool had_selection_errors = false;
-    uint64_t total_bytes_written = 0u;
-    int rc = 2;
-    int append_fast_rc = -1;
-
-    if (options->mode == BX_TAR_MODE_DELETE
-        && !bx_tar_select_plan_build(&select_plan,
-                                     &options->create_options,
-                                     &had_selection_errors,
-                                     diag)) {
-        return 2;
-    }
-    if (options->mode == BX_TAR_MODE_DELETE
-        && !bx_tar_validate_occurrence_selection(options, &select_plan, diag)) {
-        bx_tar_select_plan_cleanup(&select_plan);
-        return 2;
-    }
-
-    if (options->mode == BX_TAR_MODE_APPEND) {
-        if (!bx_tar_create_collect_fs_entries(&appended_files,
-                                              &options->create_options,
-                                              options->sort_name,
-                                              &had_append_errors,
-                                              diag)) {
-            goto out;
-        }
-        if (options->newer_active) {
-            bx_tar_filter_newer_entries(&appended_files, options->newer_time, options->newer_use_ctime);
-        }
-        if (had_append_errors && bx_tar_append_target_is_existing_regular_file(options->archive_path)) {
-            bx_tar_report_previous_errors(diag);
-            rc = 2;
-            goto out;
-        }
-        append_fast_rc = bx_tar_try_append_plain_in_place(&appended_files,
-                                                          options,
-                                                          &total_bytes_written,
-                                                          diag);
-        if (append_fast_rc >= 0) {
-            rc = append_fast_rc == 1 ? 0 : 2;
-            goto postwrite;
-        }
-    }
-
-    if (!bx_archive_snapshot_input_path(options->archive_path, &snapshot_path, diag)) {
-        goto out;
-    }
-    reader_options.archive_path = snapshot_path;
-    rewrite_ctx.delete_plan = options->mode == BX_TAR_MODE_DELETE ? &select_plan : NULL;
-    rewrite_ctx.had_selection_errors = &had_selection_errors;
-
-    if (options->mode == BX_TAR_MODE_DELETE) {
-        matched_members = bx_tar_alloc_matched_members(&select_plan);
-        occurrence_counts = bx_tar_alloc_occurrence_counts(&select_plan, options->occurrence);
-        rewrite_ctx.matched_members = matched_members;
-        rewrite_ctx.occurrence_counts = occurrence_counts;
-        rewrite_ctx.occurrence = options->occurrence;
-    }
-    {
-        size_t compress_threads = bx_tar_effective_compress_threads(options);
-        bool use_mt = compress_threads > 1u
-            && bx_archive_codec_supports_mt_encode(bx_tar_output_codec(options));
-
-        if (!(use_mt
-                  ? bx_tar_write_rewrite_archive_mt_direct(&rewrite_ctx,
-                                                           options,
-                                                           compress_threads,
-                                                           &total_bytes_written,
-                                                           diag)
-                  : bx_tar_write_rewrite_archive_direct(&rewrite_ctx,
-                                                        options,
-                                                        &total_bytes_written,
-                                                        diag))) {
-            goto out;
-        }
-    }
-    rc = 0;
-postwrite:
-    if (options->report_totals
-        && total_bytes_written > 0u
-        && !bx_tar_report_totals_line(true, total_bytes_written, diag)) {
-        rc = 2;
-    }
-    if (options->mode == BX_TAR_MODE_APPEND && had_append_errors) {
-        had_postwrite_errors = true;
-    }
-    if (rc == 0 && options->mode == BX_TAR_MODE_DELETE && had_selection_errors) {
-        had_postwrite_errors = true;
-    }
-    if (rc == 0 && had_postwrite_errors) {
-        bx_tar_report_previous_errors(diag);
-        rc = 2;
-    }
-out:
-    free(matched_members);
-    free(occurrence_counts);
-    if (snapshot_path != NULL) {
-        unlink(snapshot_path);
-        free(snapshot_path);
-    }
-    bx_tar_select_plan_cleanup(&select_plan);
-    bx_archive_fs_list_free(&appended_files);
-    return rc;
-}
-
 static bool bx_tar_parse_time_arg(const char* text, struct timespec* out) {
     struct bx_time_epoch_parse_options epoch_options = {
         .allow_trailing_space = false,
@@ -4513,19 +3533,12 @@ static const char* bx_tar_occurrence_mode_option(enum bx_tar_mode mode) {
     switch (mode) {
         case BX_TAR_MODE_CREATE:
             return "-c";
-        case BX_TAR_MODE_APPEND:
-            return "-r";
-        case BX_TAR_MODE_UPDATE:
-            return "-u";
-        case BX_TAR_MODE_CATENATE:
-            return "-A";
         case BX_TAR_MODE_TEST_LABEL:
             return "--test-label";
         case BX_TAR_MODE_NONE:
         case BX_TAR_MODE_COMPARE:
         case BX_TAR_MODE_LIST:
         case BX_TAR_MODE_EXTRACT:
-        case BX_TAR_MODE_DELETE:
             return NULL;
     }
     return NULL;
@@ -4533,7 +3546,7 @@ static const char* bx_tar_occurrence_mode_option(enum bx_tar_mode mode) {
 
 static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
     fprintf(stderr,
-            "%s: You must specify one of the '-Acdtrux', '--delete' or '--test-label' options\n",
+            "%s: You must specify one of the '-cdtx' or '--test-label' options\n",
             diag->progname);
     fprintf(stderr,
             "Try '%s --help' or '%s --usage' for more information.\n",
@@ -4544,7 +3557,7 @@ static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
 
 static bool bx_tar_report_mode_conflict(const struct bx_diag_ctx* diag) {
     fprintf(stderr,
-            "%s: You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option\n",
+            "%s: You may not specify more than one '-cdtx' or '--test-label' option\n",
             diag->progname);
     fprintf(stderr,
             "Try '%s --help' or '%s --usage' for more information.\n",
@@ -4661,8 +3674,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             }
             options->sparse_selectors = true;
             return true;
-        case BX_TAR_OPT_MODE_CATENATE:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_CATENATE, NULL, diag);
         case BX_TAR_OPT_MODE_CREATE:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_CREATE, NULL, diag);
         case BX_TAR_OPT_MODE_COMPARE:
@@ -4679,12 +3690,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return true;
         case BX_TAR_OPT_MODE_EXTRACT:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_EXTRACT, NULL, diag);
-        case BX_TAR_OPT_MODE_APPEND:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_APPEND, NULL, diag);
-        case BX_TAR_OPT_MODE_UPDATE:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_UPDATE, NULL, diag);
-        case BX_TAR_OPT_MODE_DELETE:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_DELETE, NULL, diag);
         case BX_TAR_OPT_MODE_UNSUPPORTED:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_NONE, display, diag);
         case BX_TAR_OPT_ARCHIVE_PATH:
@@ -5032,7 +4037,7 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
 }
 
 static bool bx_tar_add_operand(struct bx_tar_options* options, const char* operand) {
-    if (options->mode == BX_TAR_MODE_CATENATE || options->mode == BX_TAR_MODE_TEST_LABEL) {
+    if (options->mode == BX_TAR_MODE_TEST_LABEL) {
         return bx_archive_name_list_append(&options->source_archives, operand);
     }
     return bx_tar_create_options_add_add_file(&options->create_options, operand);
@@ -5288,9 +4293,7 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         return false;
     }
     if (options->create_options.one_file_system
-        && options->mode != BX_TAR_MODE_CREATE
-        && options->mode != BX_TAR_MODE_APPEND
-        && options->mode != BX_TAR_MODE_UPDATE) {
+        && options->mode != BX_TAR_MODE_CREATE) {
         bx_diag(diag, "--one-file-system requires creating an archive from files");
         return false;
     }
@@ -5319,14 +4322,8 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         bx_diag(diag, "GNU features wanted on incompatible archive format");
         return false;
     }
-    if ((options->mode == BX_TAR_MODE_CREATE
-            || options->mode == BX_TAR_MODE_APPEND
-            || options->mode == BX_TAR_MODE_UPDATE)
+    if (options->mode == BX_TAR_MODE_CREATE
         && !bx_tar_create_has_inputs(options, argc)) {
-        bx_diag(diag, "missing file operand");
-        return false;
-    }
-    if (options->mode == BX_TAR_MODE_CATENATE && options->source_archives.len == 0u) {
         bx_diag(diag, "missing file operand");
         return false;
     }
@@ -5478,27 +4475,12 @@ int bx_tar_run(int argc, char** argv) {
         bx_tar_options_cleanup(&options);
         return rc;
     }
-    if (options.mode == BX_TAR_MODE_CATENATE) {
-        rc = bx_tar_catenate_archive(&options, &diag);
-        bx_tar_options_cleanup(&options);
-        return rc;
-    }
     if (options.mode == BX_TAR_MODE_TEST_LABEL) {
         rc = bx_tar_test_label_archive(&options, &diag);
         bx_tar_options_cleanup(&options);
         return rc;
     }
-    if (options.mode == BX_TAR_MODE_UPDATE) {
-        rc = bx_tar_update_archive(&options, &diag);
-        bx_tar_options_cleanup(&options);
-        return rc;
-    }
-    if (options.mode == BX_TAR_MODE_APPEND || options.mode == BX_TAR_MODE_DELETE) {
-        rc = bx_tar_rewrite_archive(&options, &diag);
-        bx_tar_options_cleanup(&options);
-        return rc;
-    }
-    else {
+    {
         struct bx_tar_select_plan select_plan = {0};
         bool had_selection_errors = false;
         if (!bx_tar_select_plan_build(&select_plan,
