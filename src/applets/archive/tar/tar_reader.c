@@ -632,9 +632,7 @@ static char* bx_tar_header_name_join_dup(const unsigned char* name_field,
 
 /*
  * Old GNU headers use the POSIX prefix field (offset 345) for atime, ctime,
- * sparse, and multivolume metadata.  In particular, incremental dumpdir
- * records have type 'D'; treating that field as a ustar prefix corrupts every
- * member name with the stored atime.
+ * sparse, and multivolume metadata. Do not interpret it as a ustar prefix.
  */
 static bool bx_tar_header_is_oldgnu(const unsigned char* header) {
     static const unsigned char magic[] = {'u', 's', 't', 'a', 'r', ' ', ' ', '\0'};
@@ -736,7 +734,6 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
     }
     entry->mode = 0644u;
     entry->size = size;
-    entry->dumpdir = typeflag == 'D';
     unsigned int deleted = numbers->defined & ~numbers->present;
     entry->omit_uid = (deleted & BX_TAR_PAX_UID) != 0u;
     entry->omit_gid = (deleted & BX_TAR_PAX_GID) != 0u;
@@ -804,7 +801,6 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
             entry->kind = BX_TAR_KIND_REG;
             break;
         case '5':
-        case 'D':
             entry->kind = BX_TAR_KIND_DIR;
             break;
         case '2':
@@ -954,12 +950,7 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
             return false;
         }
 
-        if (entry.dumpdir) {
-            entry.data_len = size;
-            entry.data = xmalloc(size ? size : 1u);
-            memcpy(entry.data, archive->data + payload_start, size);
-        }
-        else if (entry.kind == BX_TAR_KIND_REG) {
+        if (entry.kind == BX_TAR_KIND_REG) {
             if (pax.sparse_enabled && pax.sparse_major == 1 && pax.sparse_minor == 0) {
                 entry.sparse = true;
                 entry.size = pax.sparse_realsize;
@@ -1365,33 +1356,6 @@ static bool bx_tar_stream_input_visit_payload(struct bx_tar_stream_input* input,
     return true;
 }
 
-static bool bx_tar_stream_input_read_payload_buffered(struct bx_tar_stream_input* input,
-                                                      size_t size,
-                                                      unsigned char** data_out,
-                                                      size_t* data_len_out,
-                                                      struct bx_diag_ctx* diag) {
-    unsigned char* data = xmalloc(size ? size : 1u);
-    size_t padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
-    bool eof = false;
-
-    if (size > 0u && !bx_tar_stream_input_read_exact(input, data, size, &eof, diag)) {
-        free(data);
-        return false;
-    }
-    if (eof) {
-        free(data);
-        bx_diag(diag, "truncated archive");
-        return false;
-    }
-    if (padding > 0u && !bx_tar_stream_input_skip(input, padding, diag)) {
-        free(data);
-        return false;
-    }
-    *data_out = data;
-    *data_len_out = size;
-    return true;
-}
-
 static bool bx_tar_stream_input_visit_sparse_payload(struct bx_tar_stream_input* input,
                                                      const struct bx_tar_entry* entry,
                                                      size_t archive_padding,
@@ -1470,7 +1434,6 @@ static bool bx_tar_clone_entry(struct bx_tar_entry* dst,
     dst->omit_mtime = src->omit_mtime;
     dst->data_len = src->data_len;
     dst->size = src->size;
-    dst->dumpdir = src->dumpdir;
     dst->sparse = src->sparse;
     dst->extent_count = src->extent_count;
 
@@ -1499,8 +1462,7 @@ static bool bx_tar_collect_stream_begin_entry(void* user,
                                               const struct bx_tar_entry* entry,
                                               struct bx_diag_ctx* diag) {
     struct bx_tar_collect_stream_state* state = user;
-    bool copy_data = entry->dumpdir
-        || !(entry->kind == BX_TAR_KIND_REG && !entry->sparse);
+    bool copy_data = !(entry->kind == BX_TAR_KIND_REG && !entry->sparse);
 
     bx_archive_buffer_free(&state->current_payload);
     bx_archive_buffer_init(&state->current_payload);
@@ -1704,15 +1666,6 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
         }
         entry.header_block_index = header_block_index;
 
-        if (entry.dumpdir
-            && !bx_tar_stream_input_read_payload_buffered(&input,
-                                                          size,
-                                                          &entry.data,
-                                                          &entry.data_len,
-                                                          diag)) {
-            bx_tar_entry_free(&entry);
-            goto out;
-        }
         if (entry.kind == BX_TAR_KIND_REG
             && pax.sparse_enabled && pax.sparse_major == 1 && pax.sparse_minor == 0) {
             entry.sparse = true;
@@ -1754,8 +1707,7 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
                 goto out;
             }
         }
-        else if (!entry.dumpdir
-                 && entry.kind != BX_TAR_KIND_REG
+        else if (entry.kind != BX_TAR_KIND_REG
                  && !bx_tar_stream_input_skip_payload(&input, size, diag)) {
             bx_tar_entry_free(&entry);
             goto out;
