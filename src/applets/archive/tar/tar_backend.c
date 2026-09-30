@@ -1664,8 +1664,8 @@ static void bx_tar_extract_entry_ids(const struct bx_tar_extract_state* state,
                                      bool* group_restore_out) {
     *owner_out = entry->uid;
     *group_out = entry->gid;
-    *owner_restore_out = state->restore_owner;
-    *group_restore_out = state->restore_owner;
+    *owner_restore_out = state->restore_owner && !entry->omit_uid;
+    *group_restore_out = state->restore_owner && !entry->omit_gid;
 }
 
 static mode_t bx_tar_extract_mode(const struct bx_tar_extract_state* state,
@@ -1713,9 +1713,7 @@ static enum bx_tar_existing_target_action bx_tar_extract_existing_target_action(
     if (state->options->old_file_mode == BX_TAR_OLD_FILES_SKIP) {
         return BX_TAR_EXISTING_TARGET_SKIP;
     }
-    if (state->options->old_file_mode == BX_TAR_OLD_FILES_KEEP_NEWER
-        && !S_ISDIR(st.st_mode)
-        && bx_tar_timespec_compare(st.st_mtim, entry->mtime) >= 0) {
+    if (state->options->old_file_mode == BX_TAR_OLD_FILES_KEEP_NEWER && !S_ISDIR(st.st_mode) && !entry->omit_mtime && bx_tar_timespec_compare(st.st_mtim, entry->mtime) >= 0) {
         fprintf(stderr,
                 "%s: Current '%s' is newer or same age\n",
                 diag->progname,
@@ -2021,7 +2019,7 @@ static bool bx_tar_compare_one_entry(struct bx_tar_compare_state* state,
             return false;
         }
     }
-    if (st.st_mtim.tv_sec != entry->mtime.tv_sec) {
+    if (!entry->omit_mtime && st.st_mtim.tv_sec != entry->mtime.tv_sec) {
         if (!bx_tar_compare_report_stdout(state, diag, "%s: Mod time differs\n", entry->name, NULL)) {
             return false;
         }
@@ -2360,7 +2358,7 @@ static void bx_tar_extract_select_metadata(struct bx_tar_extract_state* state,
     restore->mode = mode;
     restore->set_mode = entry->kind != BX_TAR_KIND_SYMLINK;
     restore->mtime = entry->mtime;
-    restore->set_mtime = !state->options->touch_mtime && entry->kind != BX_TAR_KIND_HARDLINK;
+    restore->set_mtime = !state->options->touch_mtime && !entry->omit_mtime && entry->kind != BX_TAR_KIND_HARDLINK;
     bx_tar_extract_entry_ids(state, entry, &restore->uid, &restore->gid,
                               &restore->set_owner, &restore->set_group);
     bx_tar_metadata_select(&restore->metadata, &entry->metadata, &state->options->metadata);
@@ -2553,12 +2551,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
                 && state->options->old_file_mode != BX_TAR_OLD_FILES_SKIP)) {
             int fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf,
                                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
-            bool recorded = fd >= 0 && bx_archive_pending_dirs_record_fd(&state->dirs,
-                                           fd,
-                                           dest_path,
-                                           extract_mode,
-                                           !state->options->touch_mtime,
-                                           entry->mtime);
+            bool recorded = fd >= 0 && bx_archive_pending_dirs_record_fd(&state->dirs, fd, dest_path, extract_mode, !state->options->touch_mtime && !entry->omit_mtime, entry->mtime);
             int error = errno;
             bx_fd_cleanup(&fd);
             if (!recorded) {
@@ -3241,6 +3234,10 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
         return true;
     }
 
+    if (entry->omit_uid || entry->omit_gid || entry->omit_mtime) {
+        bx_diag(diag, "%s: cannot rewrite deleted pax metadata", entry->name);
+        return false;
+    }
     if (entry->kind == BX_TAR_KIND_REG && !entry->sparse) {
         return bx_tar_stream_start_raw_entry(&state->current_live_entry,
                                              &state->counting_sink,
@@ -3473,7 +3470,10 @@ static bool bx_tar_update_scan_begin_entry(void* user,
                                            struct bx_diag_ctx* diag) {
     struct bx_tar_update_scan_state* state = user;
 
-    (void)diag;
+    if (entry->omit_mtime) {
+        bx_diag(diag, "%s: cannot compare deleted pax mtime for update", entry->name);
+        return false;
+    }
     return bx_tar_update_record_list_note(state->records, entry->name, entry->mtime);
 }
 

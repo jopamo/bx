@@ -38,6 +38,9 @@ struct bx_tar_entry {
     uid_t uid;
     gid_t gid;
     struct timespec mtime;
+    bool omit_uid;
+    bool omit_gid;
+    bool omit_mtime;
     unsigned char* data;
     size_t data_len;
     size_t size;
