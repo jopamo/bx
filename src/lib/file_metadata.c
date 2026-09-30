@@ -96,10 +96,6 @@ void bx_file_metadata_copy(struct bx_file_metadata* dest, const struct bx_file_m
     bx_file_metadata_overlay(dest, source);
 }
 
-static bool bx_metadata_unsupported(int error) {
-    return error == ENOTSUP || error == ENOSYS;
-}
-
 size_t bx_file_metadata_value_bytes(const struct bx_file_metadata* metadata) {
     size_t total = 0u;
     for (size_t i = 0; i < metadata->len; i++) {
@@ -166,19 +162,29 @@ bool bx_file_metadata_apply_flags(int fd, unsigned int set, unsigned int clear) 
     return true;
 }
 
-/* libacl has no default-ACL fd getter. Decode Linux's version-2 xattr into
- * libacl entries so both access and default ACLs use the same text format. */
-static acl_t bx_metadata_default_acl_fd(int fd) {
+static ssize_t bx_metadata_get_xattr(int fd, const char* name, void* value, size_t size);
+
+/* Decode Linux's version-2 ACL xattrs through the pinned-object interface.
+ * ENODATA denotes a mode-derived access ACL or an empty default ACL, not an
+ * unsupported interface. */
+static acl_t bx_metadata_acl_fd(int fd, acl_type_t type) {
     unsigned char* data = xmalloc(65536u);
-    ssize_t size = fgetxattr(fd, "system.posix_acl_default", data, 65536u);
+    ssize_t size = bx_metadata_get_xattr(fd, type == ACL_TYPE_DEFAULT ? "system.posix_acl_default" : "system.posix_acl_access", data, 65536u);
     acl_t acl = NULL;
     if (size < 0) {
-        if (errno == ENODATA)
-            acl = acl_init(0);
+        if (errno == ENODATA) {
+            if (type == ACL_TYPE_DEFAULT)
+                acl = acl_init(0);
+            else {
+                struct stat status;
+                if (fstat(fd, &status) == 0)
+                    acl = acl_from_mode(status.st_mode);
+            }
+        }
         goto out;
     }
     uint32_t version;
-    if (size < 4 || (size - 4) % 8 != 0)
+    if (size < 4 || (size - 4) % 8 != 0 || (type == ACL_TYPE_ACCESS && size == 4))
         goto invalid;
     memcpy(&version, data, sizeof(version));
     if (le32toh(version) != 2)
@@ -241,9 +247,9 @@ out: {
 
 static bool bx_metadata_read_acl(char** text, int fd, acl_type_t type,
                                   bool numeric_ids) {
-    acl_t acl = type == ACL_TYPE_DEFAULT ? bx_metadata_default_acl_fd(fd) : acl_get_fd(fd);
+    acl_t acl = bx_metadata_acl_fd(fd, type);
     if (!acl)
-        return bx_metadata_unsupported(errno);
+        return false;
     char* value = acl_to_any_text(acl, NULL, ',', numeric_ids ? TEXT_NUMERIC_IDS : 0);
     acl_free(acl);
     if (!value)

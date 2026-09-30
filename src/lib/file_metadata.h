@@ -66,7 +66,7 @@ void bx_file_metadata_copy(struct bx_file_metadata* dest,
  * Return SIZE_MAX if their sum cannot be represented. */
 size_t bx_file_metadata_value_bytes(const struct bx_file_metadata* metadata);
 /* Read into an empty model from a borrowed FD, never a pathname. O_PATH xattr
- * access requires kernel support; requested xattr read failures are fatal.
+ * access requires kernel support; requested xattr/ACL read failures are fatal.
  * The filter and context are borrowed only for this call. */
 bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
                            bool symlink, bool directory, bool acls, bool numeric_ids,
