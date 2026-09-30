@@ -27,7 +27,7 @@ void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage) {
     errno = error;
 }
 
-int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const char* destination) {
+int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, mode_t mode) {
     if (stage->fd >= 0 || stage->parent_fd >= 0 || !bx_fd_at_name_is_child(destination)) {
         errno = EINVAL;
         return -1;
@@ -40,9 +40,13 @@ int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const c
         snprintf(name, sizeof(name), ".bx-stage.%ld.%d.%u", (long)getpid(), stage->parent_fd, attempt);
         if (strcmp(name, destination) == 0)
             continue;
-        stage->fd = bx_fd_openat_child_nofollow(stage->parent_fd, name, O_RDWR | O_CREAT | O_EXCL, 0600);
+        stage->fd = bx_fd_openat_child_nofollow(stage->parent_fd, name, O_RDWR | O_CREAT | O_EXCL, mode);
         if (stage->fd >= 0) {
             memcpy(stage->name, name, strlen(name) + 1);
+            struct stat status;
+            if (fstat(stage->fd, &status) != 0)
+                break;
+            stage->mode = status.st_mode & 07777u;
             if (fchmod(stage->fd, 0600) == 0)
                 return 0;
             break;

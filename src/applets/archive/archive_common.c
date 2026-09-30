@@ -93,6 +93,11 @@ bool bx_archive_buffer_read_all(FILE* stream, struct bx_archive_buffer* buffer, 
     unsigned char chunk[8192];
 
     while (true) {
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
         size_t nread = fread(chunk, 1u, sizeof(chunk), stream);
         if (nread > 0u && !bx_archive_buffer_append(buffer, chunk, nread)) {
             bx_diag(diag, "buffer growth failed: %s", strerror(errno));
@@ -229,6 +234,29 @@ bool bx_archive_name_list_read_path(const char* path,
     return ok;
 }
 
+static bool bx_archive_write_payload_bytes(int fd, const unsigned char* data, size_t len) {
+    while (len) {
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            return false;
+        }
+        size_t chunk = len < 65536u ? len : 65536u;
+        ssize_t written = write(fd, data, chunk);
+        if (written < 0) {
+            if (errno == EINTR)
+                continue;
+            return false;
+        }
+        if (written == 0) {
+            errno = EIO;
+            return false;
+        }
+        data += written;
+        len -= (size_t)written;
+    }
+    return true;
+}
+
 bool bx_archive_write_regular_payload(int fd,
                                       const unsigned char* data,
                                       size_t len,
@@ -239,7 +267,7 @@ bool bx_archive_write_regular_payload(int fd,
     bool used_sparse = false;
 
     if (!sparse) {
-        if (!bx_xwrite_all(fd, data, len)) {
+        if (!bx_archive_write_payload_bytes(fd, data, len)) {
             bx_diag(diag, "write error: %s", strerror(errno));
             return false;
         }
@@ -247,10 +275,15 @@ bool bx_archive_write_regular_payload(int fd,
     }
 
     while (offset < len) {
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return false;
+        }
         size_t span = 0u;
 
         if (data[offset] == 0u) {
-            while (offset + span < len && data[offset + span] == 0u) {
+            while (span < 65536u && offset + span < len && data[offset + span] == 0u) {
                 span++;
             }
             if (lseek(fd, (off_t)span, SEEK_CUR) < 0) {
@@ -263,10 +296,10 @@ bool bx_archive_write_regular_payload(int fd,
             continue;
         }
 
-        while (offset + span < len && data[offset + span] != 0u) {
+        while (span < 65536u && offset + span < len && data[offset + span] != 0u) {
             span++;
         }
-        if (!bx_xwrite_all(fd, data + offset, span)) {
+        if (!bx_archive_write_payload_bytes(fd, data + offset, span)) {
             bx_diag(diag, "write error: %s", strerror(errno));
             return false;
         }

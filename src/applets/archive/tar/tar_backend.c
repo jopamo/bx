@@ -2845,7 +2845,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
 
     if (entry->kind == BX_TAR_KIND_REG) {
         bx_tar_extract_clear_current_stream(state);
-        if (bx_fd_staged_file_begin(&state->current_file, state->parent_fd, state->leaf) != 0) {
+        if (bx_fd_staged_file_begin(&state->current_file, state->parent_fd, state->leaf, 0600u) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
             return false;

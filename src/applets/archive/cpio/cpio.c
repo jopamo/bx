@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "applets/archive/cpio/cpio_backend.h"
+#include "applets/archive/archive_temp.h"
 #include "dispatch/applets.h"
 #include "lib/cli_common.h"
 
@@ -32,5 +33,18 @@ int bx_cpio_main(int argc, char** argv) {
         return handled;
     }
 
-    return bx_cpio_run(argc, argv);
+    if (!bx_archive_temp_install_signal_cleanup()) {
+        fprintf(stderr, "%s: failed to install archive temp signal cleanup\n", bx_cli_progname(argc > 0 ? argv[0] : NULL, "cpio"));
+        return 2;
+    }
+    int rc = bx_cpio_run(argc, argv);
+    int pending_signal = bx_archive_temp_pending_signal();
+    if (pending_signal) {
+        bx_archive_temp_cleanup_all();
+        (void)bx_cancel_state_mark_joined(bx_archive_temp_cancel_state());
+        (void)bx_cancel_state_mark_published(bx_archive_temp_cancel_state());
+        bx_archive_temp_clear_pending_signal();
+        return 128 + pending_signal;
+    }
+    return rc;
 }
