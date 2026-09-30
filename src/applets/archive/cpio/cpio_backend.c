@@ -921,11 +921,16 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
     int parent = bx_dir_path_open_parent(root_fd, entry->name, true, 0777, &leaf);
     int fd = -1;
     bool ok = false;
+    struct bx_file_restore restore = {
+        .mode = entry->mode,
+        .mtime = entry->mtime,
+        .set_mtime = options->preserve_mtime,
+    };
     if (parent < 0)
         goto fail;
     if (entry->kind == BX_CPIO_KIND_DIR) {
         if (strcmp(leaf, ".") == 0) {
-            fd = bx_fd_dup_cloexec(parent);
+            fd = bx_fd_openat_cloexec(parent, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
         }
         else {
             if (bx_fd_mkdirat_child(parent, leaf, 0777) != 0 && errno != EEXIST)
@@ -951,7 +956,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                     goto fail;
                 if (!bx_archive_write_regular_payload(state->materialized_fd, entry->data, entry->data_len, options->sparse, diag))
                     goto done;
-                if (options->preserve_mtime && !bx_archive_set_fd_mtime(state->materialized_fd, entry->name, entry->mtime, diag))
+                if (!bx_archive_restore_fd(&restore, state->materialized_fd, entry->name, false, false, diag))
                     goto done;
             }
             if (!bx_cpio_link_materialized(root_fd, state, parent, leaf, diag))
@@ -971,7 +976,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                     goto fail;
                 if (!bx_archive_write_regular_payload(fd, entry->data, entry->data_len, options->sparse, diag))
                     goto done;
-                if (options->preserve_mtime && !bx_archive_set_fd_mtime(fd, entry->name, entry->mtime, diag))
+                if (!bx_archive_restore_fd(&restore, fd, entry->name, false, false, diag))
                     goto done;
                 if (state != NULL) {
                     state->materialized_fd = fd;
@@ -995,7 +1000,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                         errno = ESTALE;
                         goto fail;
                     }
-                    if (!bx_archive_set_fd_mtime(fd, entry->name, entry->mtime, diag))
+                    if (!bx_archive_restore_fd(&restore, fd, entry->name, false, false, diag))
                         goto done;
                 }
             }
@@ -1060,7 +1065,7 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
         bx_diag(diag, "write error: %s", strerror(errno));
         status = 2;
     }
-    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, diag))
+    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, root_fd, diag))
         status = 2;
     bx_archive_pending_dirs_free(&dirs);
     if (!bx_cpio_hardlink_states_free(&hardlinks, diag))
@@ -1129,7 +1134,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
             break;
         }
     }
-    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, diag))
+    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, root_fd, diag))
         status = 2;
 done:
     bx_archive_pending_dirs_free(&dirs);

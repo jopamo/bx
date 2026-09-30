@@ -2,6 +2,7 @@
 #define BX_LIB_DIR_PATH_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <sys/types.h>
 
 /*
@@ -13,6 +14,23 @@
  * On failure return -1, preserve errno and leave *leaf unchanged.
  */
 int bx_dir_path_open_parent(int root_fd, const char* path, bool create, mode_t mode, char** leaf);
+
+enum bx_dir_path_policy {
+    BX_DIR_PATH_CONFINED = 0,
+    BX_DIR_PATH_ALLOW_EXTERNAL = 1,
+    BX_DIR_PATH_REPLACE_NON_DIRS = 2,
+};
+
+/* Resolve an applet-approved destination from a borrowed anchor. Only the
+ * explicit external policy permits absolute paths or "..". Intermediate
+ * symlinks are never followed; replacement, if requested, unlinks them.
+ * Returns an owned parent fd and leaf. Descriptor use is independent of depth. */
+int bx_dir_path_open_destination_parent(int root_fd, const char* path,
+                                        unsigned policy, bool create,
+                                        mode_t mode, char** leaf);
+ptrdiff_t bx_dir_path_depth(const char* path, ptrdiff_t base);
+/* Create a mode-0700 directory from a single-child template ending in XXXXXX. */
+bool bx_dir_path_mkdtemp_at(int parent_fd, char* name);
 
 /* Open the parent of an explicitly selected source operand, without following
  * symlinks in any component. Unlike extraction paths, absolute paths and ".."

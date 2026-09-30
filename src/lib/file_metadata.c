@@ -5,11 +5,11 @@
 #include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/acl.h>
+#include <sys/stat.h>
 #include <sys/xattr.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -262,32 +262,110 @@ static acl_t bx_metadata_acl_from_text(const char* text) {
     return acl;
 }
 
-static bool bx_metadata_apply_xattr(const struct bx_file_xattr* attr, int fd,
-                                     const char* path, bool path_fd) {
-    int rc = path_fd ? setxattr(path, attr->name, attr->value, attr->size, 0)
-        : fd >= 0 ? fsetxattr(fd, attr->name, attr->value, attr->size, 0)
-                   : lsetxattr(path, attr->name, attr->value, attr->size, 0);
+static int bx_metadata_set_xattr(int fd, const char* name, const void* value, size_t size) {
+    int rc = fsetxattr(fd, name, value, size, 0);
+#ifdef __NR_setxattrat
+    if (rc < 0 && errno == EBADF) {
+        struct {
+            _Alignas(8) uint64_t value;
+            uint32_t size;
+            uint32_t flags;
+        } args = {.value = (uintptr_t)value, .size = (uint32_t)size};
+        rc = (int)syscall(__NR_setxattrat, fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW,
+                           name, &args, sizeof(args));
+    }
+#endif
+    return rc;
+}
+
+/* libacl has no default-ACL fd setter. Encode the same Linux xattr format
+ * used by the fd reader; empty-path writes also support O_PATH references. */
+static int bx_metadata_set_acl(int fd, acl_t acl, bool defaults, bool path_fd) {
+    if (!defaults && !path_fd)
+        return acl_set_fd(fd, acl);
+    int count = acl_entries(acl);
+    if (count < 0)
+        return -1;
+    if (count > (65536 - 4) / 8) {
+        errno = E2BIG;
+        return -1;
+    }
+    size_t size = 4u + (size_t)count * 8u;
+    unsigned char* data = xmalloc(size);
+    uint32_t version = htole32(2);
+    memcpy(data, &version, sizeof(version));
+    acl_entry_t entry;
+    int rc = -1;
+    for (int i = 0; i < count; i++) {
+        acl_tag_t tag;
+        acl_permset_t perms;
+        if (acl_get_entry(acl, i ? ACL_NEXT_ENTRY : ACL_FIRST_ENTRY, &entry) != 1
+            || acl_get_tag_type(entry, &tag) != 0 || acl_get_permset(entry, &perms) != 0)
+            goto out;
+        uint32_t id = UINT32_MAX;
+        if (tag == ACL_USER || tag == ACL_GROUP) {
+            void* qualifier = acl_get_qualifier(entry);
+            if (!qualifier)
+                goto out;
+            id = tag == ACL_USER ? *(uid_t*)qualifier : *(gid_t*)qualifier;
+            acl_free(qualifier);
+        }
+        uint16_t bits = 0;
+        const acl_perm_t permissions[] = {ACL_READ, ACL_WRITE, ACL_EXECUTE};
+        for (size_t j = 0; j < sizeof(permissions) / sizeof(permissions[0]); j++) {
+            int present = acl_get_perm(perms, permissions[j]);
+            if (present < 0)
+                goto out;
+            if (present)
+                bits |= permissions[j];
+        }
+        uint16_t wire_tag = htole16(tag), wire_bits = htole16(bits);
+        uint32_t wire_id = htole32(id);
+        unsigned char* dest = data + 4u + (size_t)i * 8u;
+        memcpy(dest, &wire_tag, sizeof(wire_tag));
+        memcpy(dest + 2, &wire_bits, sizeof(wire_bits));
+        memcpy(dest + 4, &wire_id, sizeof(wire_id));
+    }
+    rc = bx_metadata_set_xattr(fd,
+        defaults ? "system.posix_acl_default" : "system.posix_acl_access", data, size);
+out:
+    {
+        int error = errno;
+        free(data);
+        errno = error;
+    }
+    return rc;
+}
+
+static bool bx_metadata_delete_default_acl(int fd) {
+    int rc = fremovexattr(fd, "system.posix_acl_default");
+#ifdef __NR_removexattrat
+    if (rc < 0 && errno == EBADF)
+        rc = (int)syscall(__NR_removexattrat, fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW,
+                           "system.posix_acl_default");
+#endif
+    return rc == 0 || errno == ENODATA;
+}
+
+static bool bx_metadata_apply_xattr(const struct bx_file_xattr* attr, int fd) {
+    int rc = bx_metadata_set_xattr(fd, attr->name, attr->value, attr->size);
     return rc == 0;
 }
 
 bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
-                            const char* path, bool symlink, bool directory,
+                            bool symlink, bool directory,
                             mode_t mode) {
-    char descriptor_path[64];
-    const char* acl_path = path;
-    bool path_fd = fd >= 0 && (fcntl(fd, F_GETFL) & O_PATH) != 0;
-    if (fd >= 0) {
-        snprintf(descriptor_path, sizeof(descriptor_path), "/proc/self/fd/%d", fd);
-        acl_path = descriptor_path;
-    }
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0)
+        return false;
+    bool path_fd = (flags & O_PATH) != 0;
     if (metadata->restore_acls && !symlink) {
         acl_t access = metadata->acl_access
             ? bx_metadata_acl_from_text(metadata->acl_access)
             : acl_from_mode(mode & 0777u);
         if (!access)
             return false;
-        int rc = fd >= 0 && !path_fd ? acl_set_fd(fd, access)
-                          : acl_set_file(acl_path, ACL_TYPE_ACCESS, access);
+        int rc = bx_metadata_set_acl(fd, access, false, path_fd);
         int error = errno;
         acl_free(access);
         if (rc != 0) {
@@ -299,7 +377,7 @@ bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
                 acl_t defaults = bx_metadata_acl_from_text(metadata->acl_default);
                 if (!defaults)
                     return false;
-                rc = acl_set_file(acl_path, ACL_TYPE_DEFAULT, defaults);
+                rc = bx_metadata_set_acl(fd, defaults, true, path_fd);
                 error = errno;
                 acl_free(defaults);
                 if (rc != 0) {
@@ -307,7 +385,7 @@ bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
                     return false;
                 }
             }
-            else if (acl_delete_def_file(acl_path) != 0 && errno != ENODATA)
+            else if (!bx_metadata_delete_default_acl(fd))
                 return false;
         }
     }
@@ -318,9 +396,52 @@ bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
             capabilities = attr;
             continue;
         }
-        if (!bx_metadata_apply_xattr(attr, fd, path_fd ? acl_path : path, path_fd))
+        if (!bx_metadata_apply_xattr(attr, fd))
             return false;
     }
     return !capabilities
-        || bx_metadata_apply_xattr(capabilities, fd, path_fd ? acl_path : path, path_fd);
+        || bx_metadata_apply_xattr(capabilities, fd);
+}
+
+enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* restore,
+                                               int fd,
+                                               bool symlink, bool directory) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0)
+        return BX_FILE_RESTORE_STAT_ERROR;
+    bool path_fd = (flags & O_PATH) != 0;
+    if (restore->set_owner || restore->set_group) {
+        uid_t uid = restore->set_owner ? restore->uid : (uid_t)-1;
+        gid_t gid = restore->set_group ? restore->gid : (gid_t)-1;
+        int rc = path_fd ? fchownat(fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)
+                         : fchown(fd, uid, gid);
+        if (rc != 0)
+            return BX_FILE_RESTORE_STAT_ERROR;
+    }
+    if (restore->set_mode && !symlink) {
+        int rc;
+        if (path_fd) {
+#ifdef SYS_fchmodat2
+            rc = (int)syscall(SYS_fchmodat2, fd, "", restore->mode & 07777u, AT_EMPTY_PATH);
+#else
+            errno = ENOTSUP;
+            rc = -1;
+#endif
+        }
+        else
+            rc = fchmod(fd, restore->mode & 07777u);
+        if (rc != 0)
+            return BX_FILE_RESTORE_STAT_ERROR;
+    }
+    if (!bx_file_metadata_apply(&restore->metadata, fd, symlink, directory,
+                                 restore->mode))
+        return BX_FILE_RESTORE_METADATA_ERROR;
+    if (restore->set_mtime) {
+        struct timespec times[2] = {restore->mtime, restore->mtime};
+        int rc = path_fd ? utimensat(fd, "", times, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)
+                         : futimens(fd, times);
+        if (rc != 0)
+            return BX_FILE_RESTORE_STAT_ERROR;
+    }
+    return BX_FILE_RESTORE_OK;
 }
