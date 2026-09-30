@@ -733,24 +733,6 @@ static void bx_tar_stream_seen_list_free(struct bx_tar_hardlink_seen_list* seen)
     seen->cap = 0u;
 }
 
-static const char* bx_tar_stream_effective_owner_name(struct bx_tar_stream_name_caches* caches,
-                                                      uid_t uid,
-                                                      const char* mapped_name) {
-    if (mapped_name != NULL) {
-        return mapped_name;
-    }
-    return bx_tar_stream_user_name(caches, uid);
-}
-
-static const char* bx_tar_stream_effective_group_name(struct bx_tar_stream_name_caches* caches,
-                                                      gid_t gid,
-                                                      const char* mapped_name) {
-    if (mapped_name != NULL) {
-        return mapped_name;
-    }
-    return bx_tar_stream_group_name(caches, gid);
-}
-
 static bool bx_tar_stream_apply_mode_text(mode_t initial_mode,
                                           bool is_directory,
                                           const char* mode_text,
@@ -905,35 +887,11 @@ static bool bx_tar_stream_write_opened_fs_entry(struct bx_tar_stream_fs_write_st
     mode_t mode = fs_entry->st->st_mode & 07777u;
     uid_t uid = options->owner_set ? options->owner : fs_entry->st->st_uid;
     gid_t gid = options->group_set ? options->group : fs_entry->st->st_gid;
-    const char* mapped_uname = NULL;
-    const char* mapped_gname = NULL;
     const char* uname = NULL;
     const char* gname = NULL;
     struct timespec mtime = options->fixed_mtime ? options->mtime : fs_entry->st->st_mtim;
     size_t file_size = (size_t)fs_entry->st->st_size;
 
-    if (!options->owner_set && options->owner_map != NULL) {
-        const char* source_name = bx_tar_stream_user_name(&state->name_caches, fs_entry->st->st_uid);
-
-        if (bx_tar_id_map_apply_owner(options->owner_map,
-                                      fs_entry->st->st_uid,
-                                      source_name,
-                                      &uid,
-                                      &mapped_uname)) {
-            uname = bx_tar_stream_effective_owner_name(&state->name_caches, uid, mapped_uname);
-        }
-    }
-    if (!options->group_set && options->group_map != NULL) {
-        const char* source_name = bx_tar_stream_group_name(&state->name_caches, fs_entry->st->st_gid);
-
-        if (bx_tar_id_map_apply_group(options->group_map,
-                                      fs_entry->st->st_gid,
-                                      source_name,
-                                      &gid,
-                                      &mapped_gname)) {
-            gname = bx_tar_stream_effective_group_name(&state->name_caches, gid, mapped_gname);
-        }
-    }
     if (!options->numeric_owner) {
         if (uname == NULL) {
             uname = bx_tar_stream_user_name(&state->name_caches, uid);
