@@ -8,6 +8,7 @@ struct bx_tar_metadata_options {
     bool xattrs;
     bool acls;
     bool selinux;
+    bool file_flags;
     struct bx_archive_name_list include;
     struct bx_archive_name_list exclude;
 };

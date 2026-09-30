@@ -243,6 +243,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_SELINUX_OFF,
     BX_TAR_OPT_ACLS_ON,
     BX_TAR_OPT_ACLS_OFF,
+    BX_TAR_OPT_FILE_FLAGS,
     BX_TAR_OPT_WARNING,
     BX_TAR_OPT_IGNORE_FAILED_READ,
     BX_TAR_OPT_ONE_FILE_SYSTEM,
@@ -364,6 +365,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--same-order", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_ON},
     {"--no-acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_OFF},
+    {"--file-flags", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILE_FLAGS},
     {"--no-selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SELINUX_OFF},
     {"--no-xattrs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XATTRS_OFF},
     {"--selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SELINUX_ON},
@@ -4626,6 +4628,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_ACLS_OFF:
             options->metadata.acls = false;
             return true;
+        case BX_TAR_OPT_FILE_FLAGS:
+            options->metadata.file_flags = true;
+            return true;
         case BX_TAR_OPT_SELINUX_ON:
             options->format_ustar = false;
             options->metadata.selinux = true;
@@ -4881,8 +4886,7 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         i++;
     }
 
-    if (options->format_ustar
-        && (options->metadata.xattrs || options->metadata.acls || options->metadata.selinux)) {
+    if (options->format_ustar && (options->metadata.xattrs || options->metadata.acls || options->metadata.selinux || options->metadata.file_flags)) {
         bx_diag(diag, "metadata requires pax format");
         return false;
     }
@@ -4892,6 +4896,10 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
             return false;
         }
         return bx_tar_report_missing_mode(diag);
+    }
+    if (options->metadata.file_flags && options->mode != BX_TAR_MODE_CREATE) {
+        bx_diag(diag, "--file-flags currently requires --create");
+        return false;
     }
     if (options->create_options.one_file_system
         && options->mode != BX_TAR_MODE_CREATE

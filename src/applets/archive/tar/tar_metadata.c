@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fnmatch.h>
+#include <linux/fs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,10 +59,38 @@ bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd,
                               const struct bx_tar_metadata_options* options) {
     if (!options)
         return true;
-    return bx_file_metadata_read(metadata, fd, symlink, directory, options->acls,
-                               numeric_ids, options->xattrs || options->selinux
-                                   ? bx_tar_metadata_collect_filter : NULL,
-                               options);
+    if (!bx_file_metadata_read(metadata, fd, symlink, directory, options->acls, numeric_ids, options->xattrs || options->selinux ? bx_tar_metadata_collect_filter : NULL, options))
+        return false;
+    if (options->file_flags) {
+        unsigned int flags;
+        bool applicable;
+        if (!bx_file_metadata_read_flags(fd, &flags, &applicable))
+            return false;
+        if (applicable) {
+            const struct {
+                unsigned int bit;
+                const char* set;
+                const char* clear;
+            } names[] = {
+                {FS_APPEND_FL, "sappnd", "nosappnd"}, {FS_IMMUTABLE_FL, "schg", "noschg"}, {FS_NODUMP_FL, "nodump", "dump"},
+                {FS_NOATIME_FL, "noatime", "atime"},  {FS_SYNC_FL, "sync", "nosync"},      {FS_DIRSYNC_FL, "dirsync", "nodirsync"},
+            };
+            char text[128];
+            size_t length = 0u;
+            for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+                const char* name = flags & names[i].bit ? names[i].set : names[i].clear;
+                if (i)
+                    text[length++] = ',';
+                size_t size = strlen(name);
+                memcpy(text + length, name, size);
+                length += size;
+            }
+            text[length] = '\0';
+            free(metadata->file_flags);
+            metadata->file_flags = xstrdup(text);
+        }
+    }
+    return true;
 }
 
 bool bx_tar_metadata_parse(struct bx_file_metadata* metadata, const char* key,
@@ -87,6 +116,8 @@ bool bx_tar_metadata_parse(struct bx_file_metadata* metadata, const char* key,
         slot = &metadata->acl_access;
     else if (strcmp(key, "SCHILY.acl.default") == 0)
         slot = &metadata->acl_default;
+    else if (strcmp(key, "SCHILY.fflags") == 0)
+        slot = &metadata->file_flags;
     if (slot) {
         if (memchr(value, '\0', len) || len > 65536u) {
             errno = EINVAL;
@@ -120,8 +151,7 @@ bool bx_tar_pax_append(struct bx_archive_buffer* pax, const char* key,
 }
 
 bool bx_tar_metadata_present(const struct bx_file_metadata* metadata) {
-    return metadata && (metadata->len || metadata->acl_access
-                         || metadata->acl_default);
+    return metadata && (metadata->len || metadata->acl_access || metadata->acl_default || metadata->file_flags);
 }
 
 bool bx_tar_metadata_write(struct bx_archive_buffer* pax,
@@ -135,10 +165,7 @@ bool bx_tar_metadata_write(struct bx_archive_buffer* pax,
         if (!bx_tar_pax_append(pax, key, attr->value, attr->size))
             return false;
     }
-    return (!metadata->acl_access
-            || bx_tar_pax_append(pax, "SCHILY.acl.access", metadata->acl_access,
-                                  strlen(metadata->acl_access)))
-        && (!metadata->acl_default
-            || bx_tar_pax_append(pax, "SCHILY.acl.default", metadata->acl_default,
-                                  strlen(metadata->acl_default)));
+    return (!metadata->acl_access || bx_tar_pax_append(pax, "SCHILY.acl.access", metadata->acl_access, strlen(metadata->acl_access))) &&
+           (!metadata->acl_default || bx_tar_pax_append(pax, "SCHILY.acl.default", metadata->acl_default, strlen(metadata->acl_default))) &&
+           (!metadata->file_flags || bx_tar_pax_append(pax, "SCHILY.fflags", metadata->file_flags, strlen(metadata->file_flags)));
 }
