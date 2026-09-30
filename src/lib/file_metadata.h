@@ -52,6 +52,10 @@ typedef bool (*bx_file_xattr_filter)(const char* name, const void* user);
 void bx_file_metadata_free(struct bx_file_metadata* metadata);
 bool bx_file_metadata_set(struct bx_file_metadata* metadata, const char* name,
                           const void* value, size_t size);
+void bx_file_metadata_remove(struct bx_file_metadata* metadata, const char* name);
+/* Replace represented fields with owned copies, retaining unrepresented fields.
+ * Empty attribute values and empty ACL text are represented fields. */
+void bx_file_metadata_overlay(struct bx_file_metadata* dest, const struct bx_file_metadata* source);
 void bx_file_metadata_copy(struct bx_file_metadata* dest,
                            const struct bx_file_metadata* source);
 /* Read into an empty model from a borrowed FD, never a pathname. O_PATH xattr

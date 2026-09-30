@@ -22,6 +22,8 @@
 #define BX_TAR_READER_FILE_CHUNK_SIZE (256u * 1024u)
 #define BX_TAR_PAX_TEXT_LIMIT (1024u * 1024u)
 #define BX_TAR_PAX_RECORD_LIMIT (BX_TAR_PAX_TEXT_LIMIT + 1024u)
+#define BX_TAR_PAX_METADATA_LIMIT (1024u * 1024u)
+#define BX_TAR_PAX_XATTR_LIMIT 1024u
 
 enum bx_tar_pax_number {
     BX_TAR_PAX_SIZE = 1u,
@@ -49,6 +51,7 @@ struct bx_tar_pax_info {
     int sparse_minor;
     size_t sparse_realsize;
     bool sparse_enabled;
+    bool omit_selinux;
     bool active;
 };
 
@@ -465,6 +468,17 @@ static struct bx_tar_pax_info bx_tar_pax_effective_info(const struct bx_tar_pax_
     return result;
 }
 
+static bool bx_tar_pax_metadata_bounded(const struct bx_file_metadata* metadata) {
+    if (metadata->len > BX_TAR_PAX_XATTR_LIMIT)
+        return false;
+    size_t size = metadata->acl_access ? strlen(metadata->acl_access) + 1u : 0u;
+    if (metadata->acl_default)
+        size += strlen(metadata->acl_default) + 1u;
+    for (size_t i = 0; i < metadata->len; i++)
+        size += strlen(metadata->xattrs[i].name) + 1u + metadata->xattrs[i].size;
+    return size <= BX_TAR_PAX_METADATA_LIMIT;
+}
+
 static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax, char* record, size_t record_len, bool skip_owner_group_names, struct bx_tar_pax_info* global) {
     const char* key;
     const char* value;
@@ -512,13 +526,23 @@ static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax, char* record, s
         target->active = true;
         return true;
     }
-    /* Global vendor metadata still needs its own scoped merge semantics. */
+    if (strncmp(key, "SCHILY.", 7u) == 0 || strcmp(key, "RHT.security.selinux") == 0) {
+        target->active = true;
+        bool legacy_selinux = strcmp(key, "RHT.security.selinux") == 0;
+        if (legacy_selinux && value_len == 0u) {
+            bx_file_metadata_remove(&target->metadata, "security.selinux");
+            target->omit_selinux = true;
+            return true;
+        }
+        if (!bx_tar_metadata_parse(&target->metadata, key, value, value_len))
+            return false;
+        if (legacy_selinux || strcmp(key, "SCHILY.xattr.security.selinux") == 0)
+            target->omit_selinux = false;
+        return bx_tar_pax_metadata_bounded(&target->metadata);
+    }
+    /* GNU sparse records describe one member, not a global template. */
     if (global)
         return true;
-    if (strncmp(key, "SCHILY.", 7u) == 0 || strcmp(key, "RHT.security.selinux") == 0) {
-        pax->active = true;
-        return bx_tar_metadata_parse(&pax->metadata, key, value, value_len);
-    }
     if (strcmp(key, "GNU.sparse.name") == 0) {
         if (memchr(value, '\0', value_len) || value_len > BX_TAR_PAX_TEXT_LIMIT)
             return false;
@@ -656,6 +680,7 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
                                              unsigned char typeflag,
                                              const struct bx_tar_pax_info* pax,
                                              const struct bx_tar_pax_numbers* numbers,
+                                             const struct bx_file_metadata* global_metadata,
                                              char** gnu_long_name,
                                              char** gnu_long_link,
                                              bool skip_owner_group_names,
@@ -692,7 +717,15 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
         }
     }
     entry->name = name;
-    bx_file_metadata_copy(&entry->metadata, &pax->metadata);
+    bx_file_metadata_copy(&entry->metadata, global_metadata);
+    bx_file_metadata_overlay(&entry->metadata, &pax->metadata);
+    if (pax->omit_selinux)
+        bx_file_metadata_remove(&entry->metadata, "security.selinux");
+    /* Empty access text suppresses inheritance; it is not an applicable ACL. */
+    if (entry->metadata.acl_access && !*entry->metadata.acl_access) {
+        free(entry->metadata.acl_access);
+        entry->metadata.acl_access = NULL;
+    }
     entry->mode = 0644u;
     entry->size = size;
     entry->dumpdir = typeflag == 'D';
@@ -893,7 +926,7 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
             continue;
         }
 
-        if (!bx_tar_prepare_entry_from_header(header, size, typeflag, &effective, &effective.numbers, &gnu_long_name, &gnu_long_link, false, false, &entry, diag)) {
+        if (!bx_tar_prepare_entry_from_header(header, size, typeflag, &effective, &effective.numbers, &global.metadata, &gnu_long_name, &gnu_long_link, false, false, &entry, diag)) {
             bx_tar_pax_info_clear(&pax);
             free(gnu_long_name);
             free(gnu_long_link);
@@ -1644,8 +1677,8 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
             continue;
         }
 
-        if (!bx_tar_prepare_entry_from_header(header, size, typeflag, &effective, &effective.numbers, &gnu_long_name, &gnu_long_link, options->skip_owner_group_names, options->skip_owner_group_ids,
-                                              &entry, diag)) {
+        if (!bx_tar_prepare_entry_from_header(header, size, typeflag, &effective, &effective.numbers, &global.metadata, &gnu_long_name, &gnu_long_link, options->skip_owner_group_names,
+                                              options->skip_owner_group_ids, &entry, diag)) {
             goto out;
         }
         entry.header_block_index = header_block_index;
