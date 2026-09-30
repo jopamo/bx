@@ -337,6 +337,30 @@ bool bx_fd_device_from_numbers(uintmax_t major_number, uintmax_t minor_number, d
     return true;
 }
 
+int bx_fd_next_data_extent(int fd, off_t offset, off_t size, off_t* begin, off_t* end) {
+    if (!begin || !end || offset < 0 || size < 0 || offset > size) {
+        errno = EINVAL;
+        return -1;
+    }
+    off_t data = lseek(fd, offset, SEEK_DATA);
+    if (data < 0)
+        return errno == ENXIO ? 0 : -1;
+    if (data < offset || data >= size) {
+        errno = ESTALE;
+        return -1;
+    }
+    off_t hole = lseek(fd, data, SEEK_HOLE);
+    if (hole < 0)
+        return -1;
+    if (hole <= data || hole > size) {
+        errno = ESTALE;
+        return -1;
+    }
+    *begin = data;
+    *end = hole;
+    return 1;
+}
+
 int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode) {
     return bx_fd_mknodat(dirfd, path, S_IFIFO | mode, 0);
 }

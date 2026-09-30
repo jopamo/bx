@@ -107,6 +107,8 @@ struct bx_tar_options {
     bool absolute_names;
     bool touch_mtime;
     bool sort_name;
+    bool sparse;
+    bool sparse_selectors;
     const char* starting_file;
     bool format_ustar;
     bool numeric_owner;
@@ -149,6 +151,9 @@ enum bx_tar_option_arg_mode {
 
 enum bx_tar_option_effect {
     BX_TAR_OPT_NOOP = 0,
+    BX_TAR_OPT_SPARSE,
+    BX_TAR_OPT_SPARSE_VERSION,
+    BX_TAR_OPT_HOLE_DETECTION,
     BX_TAR_OPT_MODE_CATENATE,
     BX_TAR_OPT_MODE_CREATE,
     BX_TAR_OPT_MODE_COMPARE,
@@ -283,15 +288,15 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--listed-incremental", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
     {"--incremental", BX_TAR_OPTARG_NONE, BX_TAR_OPT_INCREMENTAL},
-    {"--hole-detection", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--hole-detection", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_HOLE_DETECTION},
     {"--ignore-failed-read", BX_TAR_OPTARG_NONE, BX_TAR_OPT_IGNORE_FAILED_READ},
     {"--level", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--no-check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_OFF},
     {"--seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_ON},
     {"--occurrence", BX_TAR_OPTARG_OPTIONAL, BX_TAR_OPT_OCCURRENCE},
-    {"--sparse-version", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--sparse", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--sparse-version", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_SPARSE_VERSION},
+    {"--sparse", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SPARSE},
     {"--add-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ADD_FILE},
     {"--directory", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
     {"--exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE},
@@ -455,7 +460,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'g', "-g", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
     {'G', "-G", BX_TAR_OPTARG_NONE, BX_TAR_OPT_INCREMENTAL},
     {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_ON},
-    {'S', "-S", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'S', "-S", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SPARSE},
     {'C', "-C", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
     {'X', "-X", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_FROM},
     {'T', "-T", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FILES_FROM},
@@ -514,6 +519,7 @@ bx_tar_make_stream_options(const struct bx_tar_options* options) {
         .metadata = &options->metadata,
         .format_ustar = options->format_ustar,
         .old_gnu = options->incremental_plan != NULL,
+        .sparse = options->sparse,
         .numeric_owner = options->numeric_owner,
         .owner_set = options->owner_set,
         .group_set = options->group_set,
@@ -4590,6 +4596,17 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
     switch (effect) {
         case BX_TAR_OPT_NOOP:
             return true;
+        case BX_TAR_OPT_SPARSE:
+            options->sparse = true;
+            return true;
+        case BX_TAR_OPT_SPARSE_VERSION:
+        case BX_TAR_OPT_HOLE_DETECTION:
+            if (strcmp(value, effect == BX_TAR_OPT_SPARSE_VERSION ? "1.0" : "seek") != 0) {
+                bx_diag(diag, "%s: unsupported value '%s'", display, value);
+                return false;
+            }
+            options->sparse_selectors = true;
+            return true;
         case BX_TAR_OPT_MODE_CATENATE:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_CATENATE, NULL, diag);
         case BX_TAR_OPT_MODE_CREATE:
@@ -5170,7 +5187,15 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         i++;
     }
 
-    if (options->format_ustar && (options->metadata.xattrs || options->metadata.acls || options->metadata.selinux || options->metadata.file_flags)) {
+    if (options->sparse_selectors && !options->sparse) {
+        bx_diag(diag, "sparse selectors require --sparse");
+        return false;
+    }
+    if (options->sparse && (options->mode != BX_TAR_MODE_CREATE || options->incremental_snapshot_path != NULL)) {
+        bx_diag(diag, "--sparse is supported only for ordinary creation");
+        return false;
+    }
+    if (options->format_ustar && (options->sparse || options->metadata.xattrs || options->metadata.acls || options->metadata.selinux || options->metadata.file_flags)) {
         bx_diag(diag, "metadata requires pax format");
         return false;
     }

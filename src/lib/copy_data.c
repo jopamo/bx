@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "copy_data.h"
+#include "lib/fd_ops.h"
 #include "lib/xreadwrite.h"
 
 static bool is_all_zeros(const char* buf, size_t size) {
@@ -114,12 +115,13 @@ static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) 
     }
 
     while (offset < src_stat.st_size) {
-        off_t data_offset = lseek(src_fd, offset, SEEK_DATA);
-        if (data_offset < 0) {
-            if (errno == ENXIO) {
-                preserved_hole = true;
-                break;
-            }
+        off_t data_offset, hole_offset;
+        int extent = bx_fd_next_data_extent(src_fd, offset, src_stat.st_size, &data_offset, &hole_offset);
+        if (extent == 0) {
+            preserved_hole = true;
+            break;
+        }
+        if (extent < 0) {
             if (offset == 0 && bx_copy_sparse_auto_seek_unsupported(errno)) {
                 if (lseek(src_fd, 0, SEEK_SET) < 0) {
                     return BX_COPY_DATA_READ_ERROR;
@@ -129,25 +131,6 @@ static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) 
                 }
                 return BX_COPY_DATA_SUCCESS;
             }
-            *handled_out = true;
-            return BX_COPY_DATA_READ_ERROR;
-        }
-
-        off_t hole_offset = lseek(src_fd, data_offset, SEEK_HOLE);
-        if (hole_offset < 0) {
-            if (offset == 0 && bx_copy_sparse_auto_seek_unsupported(errno)) {
-                if (lseek(src_fd, 0, SEEK_SET) < 0) {
-                    return BX_COPY_DATA_READ_ERROR;
-                }
-                if (lseek(dest_fd, 0, SEEK_SET) < 0) {
-                    return BX_COPY_DATA_WRITE_ERROR;
-                }
-                return BX_COPY_DATA_SUCCESS;
-            }
-            *handled_out = true;
-            return BX_COPY_DATA_READ_ERROR;
-        }
-        if (hole_offset <= data_offset) {
             *handled_out = true;
             return BX_COPY_DATA_READ_ERROR;
         }

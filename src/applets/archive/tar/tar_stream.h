@@ -15,6 +15,7 @@ struct bx_tar_stream_options {
     const struct bx_tar_metadata_options* metadata;
     bool format_ustar;
     bool old_gnu;
+    bool sparse;
     bool numeric_owner;
     bool owner_set;
     bool group_set;
