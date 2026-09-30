@@ -13,6 +13,7 @@
 
 #include "applets/archive/archive_common.h"
 #include "applets/archive/archive_fs.h"
+#include "applets/archive/archive_temp.h"
 #include "applets/archive/cpio/cpio_backend.h"
 #include "applets/archive/cpio/cpio_bounds.h"
 #include "bx/libbx.h"
@@ -918,14 +919,20 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                                 struct bx_cpio_hardlink_state_list* hardlinks,
                                 struct bx_diag_ctx* diag) {
     char* leaf = NULL;
-    int parent = bx_dir_path_open_destination_parent(root_fd, entry->name, BX_DIR_PATH_NO_MOUNT_CROSSING, true, 0777, &leaf);
+    int parent = -1;
     int fd = -1;
+    struct bx_fd_staged_file stage = BX_FD_STAGED_FILE_INIT;
     bool ok = false;
     struct bx_file_restore restore = {
         .mode = entry->mode,
         .mtime = entry->mtime,
         .set_mtime = options->preserve_mtime,
     };
+    if (bx_archive_temp_pending_signal()) {
+        errno = EINTR;
+        goto fail;
+    }
+    parent = bx_dir_path_open_destination_parent(root_fd, entry->name, BX_DIR_PATH_NO_MOUNT_CROSSING, true, 0777, &leaf);
     if (parent < 0)
         goto fail;
     if (entry->kind == BX_CPIO_KIND_DIR) {
@@ -960,25 +967,36 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 if (!bx_archive_restore_fd(&restore, state->materialized_fd, entry->name, false, false, diag))
                     goto done;
             }
+            if (bx_archive_temp_pending_signal()) {
+                errno = EINTR;
+                goto fail;
+            }
             if (!bx_cpio_link_materialized(root_fd, state, parent, leaf, diag))
                 goto fail;
             free(state->materialized_path);
             state->materialized_path = xstrdup(entry->name);
         }
         else {
-            /* Never truncate an existing inode: it may be a symlink or have
-             * links outside this extraction. Exclusive creation closes the race
-             * between removing the old entry and opening its replacement. */
-            if (bx_fd_unlinkat_child(parent, leaf, 0) != 0 && errno != ENOENT)
-                goto fail;
             if (entry->kind == BX_CPIO_KIND_REG) {
-                fd = bx_fd_openat_child_nofollow(parent, leaf, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
-                if (fd < 0)
+                if (bx_fd_staged_file_begin(&stage, parent, leaf, entry->mode & 07777u) != 0)
                     goto fail;
-                if (!bx_archive_write_regular_payload(fd, entry->data, entry->data_len, options->sparse, diag))
+                restore.mode = stage.mode;
+                restore.set_mode = true;
+                if (!bx_archive_write_regular_payload(stage.fd, entry->data, entry->data_len, options->sparse, diag))
                     goto done;
-                if (!bx_archive_restore_fd(&restore, fd, entry->name, false, false, diag))
+                if (!bx_archive_restore_fd(&restore, stage.fd, entry->name, false, false, diag))
                     goto done;
+                if (state != NULL) {
+                    fd = bx_fd_dup_cloexec(stage.fd);
+                    if (fd < 0)
+                        goto fail;
+                }
+                if (bx_archive_temp_pending_signal()) {
+                    errno = EINTR;
+                    goto fail;
+                }
+                if (bx_fd_staged_file_publish(&stage, leaf) != 0)
+                    goto fail;
                 if (state != NULL) {
                     state->materialized_fd = fd;
                     fd = -1;
@@ -986,10 +1004,14 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 }
             }
             else if (entry->kind == BX_CPIO_KIND_SYMLINK) {
+                if (bx_fd_unlinkat_child(parent, leaf, 0) != 0 && errno != ENOENT)
+                    goto fail;
                 if (bx_fd_symlinkat_child(entry->link_target, parent, leaf) != 0)
                     goto fail;
             }
             else if (entry->kind == BX_CPIO_KIND_FIFO) {
+                if (bx_fd_unlinkat_child(parent, leaf, 0) != 0 && errno != ENOENT)
+                    goto fail;
                 if (bx_fd_mkfifoat(parent, leaf, entry->mode & 07777u) != 0)
                     goto fail;
                 if (options->preserve_mtime) {
@@ -1012,6 +1034,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
 fail:
     bx_diag(diag, "%s: %s", entry->name, strerror(errno));
 done:
+    bx_fd_staged_file_discard(&stage);
     if (!bx_fd_close(&fd, entry->name, diag))
         ok = false;
     bx_fd_cleanup(&parent);
