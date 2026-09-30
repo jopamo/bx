@@ -65,6 +65,7 @@ typedef bool (*bx_archive_fs_visit_fn)(const struct bx_archive_fs_visit_entry* e
 struct bx_archive_pending_metadata_entry {
     struct bx_file_restore restore;
     char* path;
+    size_t boundary_prefix;
     dev_t dev;
     ino_t ino;
     mode_t type;
@@ -122,7 +123,13 @@ void bx_archive_pending_metadata_free(struct bx_archive_pending_metadata* dirs);
  * Paths are approved destinations relative to root_fd unless explicitly absolute.
  * Bound records to 1048576 entries and 256 MiB of owned snapshot data.
  * Order snapshots by producer sequence; origin marks regular-inode creation. */
-bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs, int fd, const char* path, const struct bx_file_restore* restore, uint64_t order, uint64_t origin);
+bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs,
+                                           int fd,
+                                           const char* path,
+                                           size_t boundary_prefix,
+                                           const struct bx_file_restore* restore,
+                                           uint64_t order,
+                                           uint64_t origin);
 bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs, int root_fd, struct bx_diag_ctx* diag);
 bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
                             const char* path, bool symlink, bool directory,

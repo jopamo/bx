@@ -410,11 +410,17 @@ void bx_archive_pending_metadata_free(struct bx_archive_pending_metadata* dirs) 
     dirs->bytes = 0u;
 }
 
-bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs, int fd, const char* path, const struct bx_file_restore* restore, uint64_t order, uint64_t origin) {
+bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs,
+                                           int fd,
+                                           const char* path,
+                                           size_t boundary_prefix,
+                                           const struct bx_file_restore* restore,
+                                           uint64_t order,
+                                           uint64_t origin) {
     struct bx_archive_pending_metadata_entry* entry;
     struct stat status;
     int stat_rc = fstat(fd, &status);
-    if (stat_rc != 0 || (!S_ISDIR(status.st_mode) && !S_ISREG(status.st_mode)) || origin > order) {
+    if (stat_rc != 0 || (!S_ISDIR(status.st_mode) && !S_ISREG(status.st_mode)) || origin > order || !path || boundary_prefix > strlen(path) || (boundary_prefix && path[boundary_prefix - 1] != '/')) {
         int error = stat_rc != 0 ? errno : EINVAL;
         errno = error;
         return false;
@@ -445,6 +451,7 @@ bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* d
     entry->origin = origin;
     dirs->len++;
     entry->path = xstrdup(path);
+    entry->boundary_prefix = boundary_prefix;
     entry->dev = status.st_dev;
     entry->ino = status.st_ino;
     entry->type = status.st_mode & S_IFMT;
@@ -459,7 +466,7 @@ bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* d
 /* -2 means the saved object no longer occupies this approved location. */
 static int bx_archive_pending_metadata_entry_open(int root_fd, const char* path, unsigned policy, const struct bx_archive_pending_metadata_entry* expected) {
     char* leaf = NULL;
-    int parent = bx_dir_path_open_destination_parent(root_fd, path, policy, false, 0, &leaf);
+    int parent = bx_dir_path_open_destination_parent_from(root_fd, path, expected->boundary_prefix, policy, false, 0, &leaf);
     if (parent < 0)
         return (errno == ENOENT || errno == ENOTDIR || errno == ELOOP) ? -2 : -1;
     int fd = -1;

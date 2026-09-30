@@ -862,7 +862,7 @@ static bool bx_cpio_hardlink_states_free(struct bx_cpio_hardlink_state_list* lis
  * A later member may have replaced the recorded source name. */
 static bool bx_cpio_link_materialized(int root_fd, const struct bx_cpio_hardlink_state* state, int parent, const char* leaf, struct bx_diag_ctx* diag) {
     char* source_leaf = NULL;
-    int source_parent = bx_dir_path_open_parent(root_fd, state->materialized_path, false, 0, &source_leaf);
+    int source_parent = bx_dir_path_open_destination_parent(root_fd, state->materialized_path, BX_DIR_PATH_NO_MOUNT_CROSSING, false, 0, &source_leaf);
     if (source_parent < 0)
         return false;
     struct stat expected, linked;
@@ -918,7 +918,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                                 struct bx_cpio_hardlink_state_list* hardlinks,
                                 struct bx_diag_ctx* diag) {
     char* leaf = NULL;
-    int parent = bx_dir_path_open_parent(root_fd, entry->name, true, 0777, &leaf);
+    int parent = bx_dir_path_open_destination_parent(root_fd, entry->name, BX_DIR_PATH_NO_MOUNT_CROSSING, true, 0777, &leaf);
     int fd = -1;
     bool ok = false;
     struct bx_file_restore restore = {
@@ -938,7 +938,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 goto fail;
             fd = bx_fd_openat_child_nofollow(parent, leaf, O_RDONLY | O_DIRECTORY, 0);
         }
-        if (fd < 0 || !bx_archive_pending_metadata_record_fd(dirs, fd, entry->name, &restore, dirs->len, 0u))
+        if (fd < 0 || !bx_archive_pending_metadata_record_fd(dirs, fd, entry->name, 0, &restore, dirs->len, 0u))
             goto fail;
     }
     else {
@@ -1020,7 +1020,7 @@ done:
 }
 
 static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, const struct bx_cpio_options* options, int argc, char** argv, struct bx_diag_ctx* diag) {
-    struct bx_archive_pending_metadata dirs = {0};
+    struct bx_archive_pending_metadata dirs = {.path_policy = BX_DIR_PATH_NO_MOUNT_CROSSING};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
     char list_output_buffer[8192];
     struct bx_line_writer list_writer;
@@ -1080,7 +1080,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
     size_t name_count = 0;
     struct bx_archive_fs_list files = {0};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
-    struct bx_archive_pending_metadata dirs = {0};
+    struct bx_archive_pending_metadata dirs = {.path_policy = BX_DIR_PATH_NO_MOUNT_CROSSING};
     int status = 2;
     int root_fd = -1;
     if (!bx_cpio_read_name_list(options, &names, &name_count, diag))

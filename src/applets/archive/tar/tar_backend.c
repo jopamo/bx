@@ -1056,6 +1056,7 @@ static bool bx_tar_write_create_archive_stream_mt_direct(bx_tar_stream_fs_entry_
 }
 
 struct bx_tar_pending_link {
+    size_t boundary_prefix;
     char* path;
     char* target;
     char* leaf;
@@ -1095,6 +1096,7 @@ struct bx_tar_extract_state {
     int status;
     int current_fd;
     char* current_dest_path;
+    size_t boundary_prefix;
     mode_t current_mode_bits;
     bool current_sparse;
     size_t current_sparse_extent_index;
@@ -1206,7 +1208,7 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
     state->current_fd = -1;
     state->root_fd = -1;
     state->parent_fd = -1;
-    state->dirs.path_policy = BX_DIR_PATH_ALLOW_EXTERNAL | BX_DIR_PATH_REPLACE_NON_DIRS;
+    state->dirs.path_policy = BX_DIR_PATH_ALLOW_EXTERNAL | BX_DIR_PATH_REPLACE_NON_DIRS | BX_DIR_PATH_NO_MOUNT_CROSSING;
 }
 
 static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
@@ -1389,8 +1391,7 @@ static bool bx_tar_dumpdir_apply_renames(struct bx_tar_extract_state* state,
                 pattern = next_pattern;
             }
             char* leaf = NULL;
-            int parent_fd = bx_dir_path_open_destination_parent(state->root_fd, pattern,
-                                state->dirs.path_policy, false, 0, &leaf);
+            int parent_fd = bx_dir_path_open_destination_parent_from(state->root_fd, pattern, state->boundary_prefix, state->dirs.path_policy, false, 0, &leaf);
             bool created = parent_fd >= 0 && bx_dir_path_mkdtemp_at(parent_fd, leaf);
             int error = errno;
             bx_fd_cleanup(&parent_fd);
@@ -1452,11 +1453,8 @@ static bool bx_tar_dumpdir_apply_renames(struct bx_tar_extract_state* state,
             target_path = target[0] == '\0' ? xstrdup(target_name) : bx_tar_dumpdir_join_extract_root(extract_dir, target_name);
             char* source_leaf = NULL;
             char* target_leaf = NULL;
-            int source_parent = bx_dir_path_open_destination_parent(state->root_fd, source_path,
-                                    state->dirs.path_policy, false, 0, &source_leaf);
-            int target_parent = source_parent < 0 ? -1
-                : bx_dir_path_open_destination_parent(state->root_fd, target_path,
-                                    state->dirs.path_policy, false, 0, &target_leaf);
+            int source_parent = bx_dir_path_open_destination_parent_from(state->root_fd, source_path, state->boundary_prefix, state->dirs.path_policy, false, 0, &source_leaf);
+            int target_parent = source_parent < 0 ? -1 : bx_dir_path_open_destination_parent_from(state->root_fd, target_path, state->boundary_prefix, state->dirs.path_policy, false, 0, &target_leaf);
             int rc = target_parent < 0 ? -1
                 : renameat(source_parent, source_leaf, target_parent, target_leaf);
             int error = errno;
@@ -1487,8 +1485,7 @@ static bool bx_tar_dumpdir_apply_renames(struct bx_tar_extract_state* state,
     if (temporary_path != NULL) {
         if (ok) {
             char* leaf = NULL;
-            int parent = bx_dir_path_open_destination_parent(state->root_fd, temporary_path,
-                                state->dirs.path_policy, false, 0, &leaf);
+            int parent = bx_dir_path_open_destination_parent_from(state->root_fd, temporary_path, state->boundary_prefix, state->dirs.path_policy, false, 0, &leaf);
             if (parent < 0) {
                 bx_diag(diag, "%s: %s", temporary_path, strerror(errno));
                 ok = false;
@@ -1511,8 +1508,7 @@ static bool bx_tar_dumpdir_should_remove(const struct bx_tar_dumpdir* dumpdir, c
 
 static bool bx_tar_dumpdir_purge_directory(struct bx_tar_extract_state* state, const struct bx_tar_dumpdir* dumpdir, const char* directory, bool report_removed, FILE* report_stream, struct bx_diag_ctx* diag) {
     char* leaf = NULL;
-    int parent = bx_dir_path_open_destination_parent(state->root_fd, directory,
-                        state->dirs.path_policy, false, 0, &leaf);
+    int parent = bx_dir_path_open_destination_parent_from(state->root_fd, directory, state->boundary_prefix, state->dirs.path_policy, false, 0, &leaf);
     int fd = parent < 0 ? -1
         : bx_fd_openat_cloexec(parent, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
     int error = errno;
@@ -2430,7 +2426,7 @@ static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
         return false;
     }
     bool deferred = state->options->metadata.file_flags && S_ISREG(status.st_mode);
-    bool ok = deferred ? bx_archive_pending_metadata_record_fd(&state->dirs, fd, path, &selected, state->sequence, state->sequence)
+    bool ok = deferred ? bx_archive_pending_metadata_record_fd(&state->dirs, fd, path, state->boundary_prefix, &selected, state->sequence, state->sequence)
                        : bx_archive_restore_fd(&selected, fd, path, S_ISLNK(status.st_mode), S_ISDIR(status.st_mode), diag);
     if (deferred && !ok)
         bx_diag(diag, "%s: cannot defer metadata: %s", path, strerror(errno));
@@ -2510,6 +2506,7 @@ static bool bx_tar_extract_queue_link(struct bx_tar_extract_state* state, const 
     link.omit_mtime = entry->omit_mtime;
     link.bytes = bytes;
     link.sequence = state->sequence;
+    link.boundary_prefix = state->boundary_prefix;
     state->links = xrealloc(state->links, (state->link_count + 1u) * sizeof(*state->links));
     state->links[state->link_count++] = link;
     state->link_bytes += bytes;
@@ -2538,7 +2535,7 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
             }
             struct bx_tar_pending_link* link = &state->links[i];
             char* leaf = NULL;
-            int parent = bx_dir_path_open_destination_parent(state->root_fd, link->path, state->dirs.path_policy, false, 0, &leaf);
+            int parent = bx_dir_path_open_destination_parent_from(state->root_fd, link->path, link->boundary_prefix, state->dirs.path_policy, false, 0, &leaf);
             struct stat parent_status;
             bool stale = parent < 0 && bx_tar_link_missing(errno);
             if (parent >= 0 && fstat(parent, &parent_status) == 0)
@@ -2557,7 +2554,7 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                 continue;
             }
             char* source_leaf = NULL;
-            int source_parent = bx_dir_path_open_destination_parent(state->root_fd, link->target, state->dirs.path_policy, false, 0, &source_leaf);
+            int source_parent = bx_dir_path_open_destination_parent_from(state->root_fd, link->target, link->boundary_prefix, state->dirs.path_policy, false, 0, &source_leaf);
             int source = source_parent < 0 ? -1 : bx_fd_openat_cloexec(source_parent, source_leaf, O_PATH | O_NOFOLLOW, 0);
             int error = errno;
             struct stat expected;
@@ -2606,7 +2603,7 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                             bx_diag(diag, "%s: %s", link->path, strerror(errno));
                         if (ok && (link->sequence > sequence || (state->options->metadata.file_flags && S_ISREG(linked.st_mode) && link->sequence >= origin))) {
                             if (state->options->metadata.file_flags && S_ISREG(linked.st_mode)) {
-                                ok = bx_archive_pending_metadata_record_fd(&state->dirs, fd, link->path, &link->restore, link->sequence, origin);
+                                ok = bx_archive_pending_metadata_record_fd(&state->dirs, fd, link->path, link->boundary_prefix, &link->restore, link->sequence, origin);
                                 if (!ok)
                                     bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));
                             }
@@ -2723,8 +2720,10 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
     extract_mode = bx_tar_extract_mode(state, entry->mode);
 
     dest_path = extract_dir ? bx_path_join(extract_dir, clean_name.text) : xstrdup(clean_name.text);
-    state->parent_fd = bx_dir_path_open_destination_parent(state->root_fd, dest_path,
-                            state->dirs.path_policy, true, 0777u, &state->leaf);
+    state->boundary_prefix = extract_dir ? strlen(extract_dir) : 0;
+    if (state->boundary_prefix && extract_dir[state->boundary_prefix - 1] != '/')
+        state->boundary_prefix++;
+    state->parent_fd = bx_dir_path_open_destination_parent_from(state->root_fd, dest_path, state->boundary_prefix, state->dirs.path_policy, true, 0777u, &state->leaf);
     if (state->parent_fd < 0) {
         bx_diag(diag, "%s: %s", dest_path, strerror(errno));
         bx_tar_release_mapped_name(&clean_name);
@@ -2786,8 +2785,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
             bx_fd_cleanup(&state->parent_fd);
             free(state->leaf);
             state->leaf = NULL;
-            state->parent_fd = bx_dir_path_open_destination_parent(state->root_fd, dest_path,
-                                    state->dirs.path_policy, true, 0777u, &state->leaf);
+            state->parent_fd = bx_dir_path_open_destination_parent_from(state->root_fd, dest_path, state->boundary_prefix, state->dirs.path_policy, true, 0777u, &state->leaf);
             if (state->parent_fd < 0) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
                 free(dest_path);
@@ -2818,7 +2816,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
                                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
             struct bx_file_restore restore = {0};
             bool selected = bx_tar_extract_select_metadata(state, entry, extract_mode, &restore, dest_path, diag);
-            bool recorded = selected && fd >= 0 && bx_archive_pending_metadata_record_fd(&state->dirs, fd, dest_path, &restore, state->sequence, 0u);
+            bool recorded = selected && fd >= 0 && bx_archive_pending_metadata_record_fd(&state->dirs, fd, dest_path, state->boundary_prefix, &restore, state->sequence, 0u);
             int error = errno;
             bx_file_metadata_free(&restore.metadata);
             bx_fd_cleanup(&fd);
