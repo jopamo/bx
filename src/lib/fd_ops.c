@@ -79,6 +79,39 @@ int bx_fd_openat_regular_verified(int parent_fd, const char* name,
     return fd;
 }
 
+int bx_fd_openat_metadata(int parent_fd, const char* name) {
+    int locator = bx_fd_openat_child_nofollow(parent_fd, name, O_PATH, 0);
+    if (locator < 0)
+        return -1;
+    struct stat expected, opened;
+    if (fstat(locator, &expected) != 0)
+        goto fail;
+    if (!S_ISREG(expected.st_mode) && !S_ISDIR(expected.st_mode) && !S_ISFIFO(expected.st_mode))
+        return locator;
+    int fd = bx_fd_openat_child_nofollow(parent_fd, name,
+                                         O_RDONLY | O_NONBLOCK | O_NOCTTY, 0);
+    if (fd < 0) {
+        if (errno == EACCES)
+            return locator;
+        goto fail;
+    }
+    if (bx_fd_fstat_expected(fd, &expected, &opened) != 0) {
+        int error = errno;
+        close(fd);
+        errno = error;
+        goto fail;
+    }
+    close(locator);
+    return fd;
+fail:
+    {
+        int error = errno;
+        close(locator);
+        errno = error;
+    }
+    return -1;
+}
+
 int bx_fd_open_write(const char* path, int flags, mode_t mode, struct bx_diag_ctx* diag) {
     int fd = bx_fd_open_cloexec(path, O_WRONLY | flags, mode);
     if (fd < 0) {

@@ -11,6 +11,7 @@
 
 #include "applets/archive/archive_fs.h"
 #include "bx/libbx.h"
+#include "lib/dir_path.h"
 #include "lib/fd_ops.h"
 #include "lib/mount_identity.h"
 #include "lib/path_ops.h"
@@ -395,259 +396,10 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                                            diag);
 }
 
-void bx_archive_parent_dir_cache_cleanup(struct bx_archive_parent_dir_cache* cache) {
-    if (cache == NULL) {
-        return;
-    }
-    free(cache->last_parent);
-    cache->last_parent = NULL;
-    cache->last_parent_len = 0u;
-}
-
-void bx_archive_parent_dir_cache_invalidate(struct bx_archive_parent_dir_cache* cache) {
-    bx_archive_parent_dir_cache_cleanup(cache);
-}
-
-bool bx_archive_parent_dir_cache_matches_parent(const struct bx_archive_parent_dir_cache* cache,
-                                                const char* parent) {
-    return cache != NULL
-        && cache->last_parent != NULL
-        && parent != NULL
-        && cache->last_parent_len == strlen(parent)
-        && strcmp(cache->last_parent, parent) == 0;
-}
-
-void bx_archive_parent_dir_cache_remember_parent(struct bx_archive_parent_dir_cache* cache,
-                                                 const char* parent) {
-    if (cache == NULL) {
-        return;
-    }
-
-    free(cache->last_parent);
-    cache->last_parent = xstrdup(parent);
-    cache->last_parent_len = strlen(parent);
-}
-
-static bool
-bx_archive_parent_dir_cache_matches_path_parent(const struct bx_archive_parent_dir_cache* cache,
-                                                const char* path) {
-    const char* slash;
-
-    if (cache == NULL || cache->last_parent == NULL || path == NULL) {
-        return false;
-    }
-
-    slash = strrchr(path, '/');
-    if (slash == NULL) {
-        return cache->last_parent_len == 1u && cache->last_parent[0] == '.';
-    }
-    if (slash == path) {
-        return cache->last_parent_len == 1u && cache->last_parent[0] == '/';
-    }
-
-    return cache->last_parent_len == (size_t)(slash - path)
-        && memcmp(cache->last_parent, path, cache->last_parent_len) == 0;
-}
-
-bool bx_archive_remove_path_tree(const char* path, struct bx_diag_ctx* diag) {
-    struct stat st;
-
-    if (lstat(path, &st) != 0) {
-        if (errno == ENOENT) {
-            return true;
-        }
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return false;
-    }
-
-    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-        if (unlink(path) != 0) {
-            bx_diag(diag, "%s: %s", path, strerror(errno));
-            return false;
-        }
-        return true;
-    }
-
-    {
-        DIR* dir = opendir(path);
-        struct dirent* ent;
-
-        if (dir == NULL) {
-            bx_diag(diag, "%s: %s", path, strerror(errno));
-            return false;
-        }
-        while ((ent = readdir(dir)) != NULL) {
-            char* child_path;
-            bool ok;
-
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
-                continue;
-            }
-            child_path = bx_path_join(path, ent->d_name);
-            ok = bx_archive_remove_path_tree(child_path, diag);
-            free(child_path);
-            if (!ok) {
-                closedir(dir);
-                return false;
-            }
-        }
-        closedir(dir);
-    }
-
-    if (rmdir(path) != 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return false;
-    }
-    return true;
-}
-
-static bool bx_archive_ensure_parent_dirs_impl(const char* path,
-                                               struct bx_archive_parent_dir_cache* cache,
-                                               bool safe_existing,
-                                               struct bx_diag_ctx* diag) {
-    char* parent;
-    char* cursor;
-    size_t i;
-
-    if (bx_archive_parent_dir_cache_matches_path_parent(cache, path)) {
-        return true;
-    }
-
-    parent = bx_path_parent_dir_dup(path);
-    if (parent == NULL) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return false;
-    }
-    if (strcmp(parent, ".") == 0 || strcmp(parent, "/") == 0) {
-        free(parent);
-        return true;
-    }
-
-    cursor = xstrdup(parent);
-
-    if (cursor[0] == '/') {
-        i = 1u;
-    }
-    else {
-        i = 0u;
-    }
-
-    for (; cursor[i] != '\0'; i++) {
-        struct stat st;
-
-        if (cursor[i] != '/') {
-            continue;
-        }
-        cursor[i] = '\0';
-        if (cursor[0] == '\0') {
-            cursor[i] = '/';
-            continue;
-        }
-        if (!safe_existing) {
-            if (mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
-                bx_diag(diag, "%s: %s", cursor, strerror(errno));
-                free(parent);
-                free(cursor);
-                return false;
-            }
-            cursor[i] = '/';
-            continue;
-        }
-        if (lstat(cursor, &st) != 0) {
-            if (errno != ENOENT) {
-                bx_diag(diag, "%s: %s", cursor, strerror(errno));
-                free(parent);
-                free(cursor);
-                return false;
-            }
-            if (mkdir(cursor, 0777u) != 0) {
-                bx_diag(diag, "%s: %s", cursor, strerror(errno));
-                free(parent);
-                free(cursor);
-                return false;
-            }
-        }
-        else if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-            bx_archive_parent_dir_cache_invalidate(cache);
-            if (!bx_archive_remove_path_tree(cursor, diag) || mkdir(cursor, 0777u) != 0) {
-                if (errno != 0 && !S_ISDIR(st.st_mode)) {
-                    bx_diag(diag, "%s: %s", cursor, strerror(errno));
-                }
-                free(parent);
-                free(cursor);
-                return false;
-            }
-        }
-        cursor[i] = '/';
-    }
-
-    if (safe_existing) {
-        struct stat st;
-
-        if (lstat(cursor, &st) != 0) {
-            if (errno != ENOENT) {
-                bx_diag(diag, "%s: %s", cursor, strerror(errno));
-                free(parent);
-                free(cursor);
-                return false;
-            }
-            if (mkdir(cursor, 0777u) != 0) {
-                bx_diag(diag, "%s: %s", cursor, strerror(errno));
-                free(parent);
-                free(cursor);
-                return false;
-            }
-        }
-        else if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-            bx_archive_parent_dir_cache_invalidate(cache);
-            if (!bx_archive_remove_path_tree(cursor, diag) || mkdir(cursor, 0777u) != 0) {
-                if (errno != 0 && !S_ISDIR(st.st_mode)) {
-                    bx_diag(diag, "%s: %s", cursor, strerror(errno));
-                }
-                free(parent);
-                free(cursor);
-                return false;
-            }
-        }
-    }
-    else if (mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
-        bx_diag(diag, "%s: %s", cursor, strerror(errno));
-        free(parent);
-        free(cursor);
-        return false;
-    }
-
-    bx_archive_parent_dir_cache_remember_parent(cache, parent);
-    free(parent);
-    free(cursor);
-    return true;
-}
-
-bool bx_archive_ensure_parent_dirs_cached(const char* path,
-                                          struct bx_archive_parent_dir_cache* cache,
-                                          struct bx_diag_ctx* diag) {
-    return bx_archive_ensure_parent_dirs_impl(path, cache, false, diag);
-}
-
-bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {
-    return bx_archive_ensure_parent_dirs_cached(path, NULL, diag);
-}
-
-bool bx_archive_ensure_parent_dirs_safe_cached(const char* path,
-                                               struct bx_archive_parent_dir_cache* cache,
-                                               struct bx_diag_ctx* diag) {
-    return bx_archive_ensure_parent_dirs_impl(path, cache, true, diag);
-}
-
-bool bx_archive_ensure_parent_dirs_safe(const char* path, struct bx_diag_ctx* diag) {
-    return bx_archive_ensure_parent_dirs_safe_cached(path, NULL, diag);
-}
-
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
     size_t i;
     for (i = 0u; i < dirs->len; i++) {
-        bx_file_metadata_free(&dirs->entries[i].metadata);
-        close(dirs->entries[i].fd);
+        bx_file_metadata_free(&dirs->entries[i].restore.metadata);
         free(dirs->entries[i].path);
     }
     free(dirs->entries);
@@ -656,7 +408,7 @@ void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
     dirs->cap = 0u;
 }
 
-static bool bx_archive_pending_dirs_record_owned(struct bx_archive_pending_dirs* dirs,
+bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
                                     int fd,
                                     const char* path,
                                     mode_t mode,
@@ -664,12 +416,9 @@ static bool bx_archive_pending_dirs_record_owned(struct bx_archive_pending_dirs*
                                     struct timespec mtime) {
     struct bx_archive_pending_dir* entry;
     struct stat status;
-    if (fd < 0)
-        return false;
     int stat_rc = fstat(fd, &status);
     if (stat_rc != 0 || !S_ISDIR(status.st_mode)) {
         int error = stat_rc != 0 ? errno : ENOTDIR;
-        close(fd);
         errno = error;
         return false;
     }
@@ -678,81 +427,122 @@ static bool bx_archive_pending_dirs_record_owned(struct bx_archive_pending_dirs*
         dirs->entries = xrealloc(dirs->entries, next_cap * sizeof(*dirs->entries));
         dirs->cap = next_cap;
     }
-    entry = &dirs->entries[dirs->len++];
+    entry = &dirs->entries[dirs->len];
     memset(entry, 0, sizeof(*entry));
+    entry->order = dirs->len++;
     entry->path = xstrdup(path);
-    entry->fd = fd;
-    entry->mode = mode;
-    entry->mtime = mtime;
-    entry->set_mtime = set_mtime;
+    entry->dev = status.st_dev;
+    entry->ino = status.st_ino;
+    entry->depth = bx_dir_path_depth(path, dirs->root_depth);
+    entry->restore.mode = mode;
+    entry->restore.set_mode = true;
+    entry->restore.mtime = mtime;
+    entry->restore.set_mtime = set_mtime;
     return true;
+}
+
+static int bx_archive_pending_dir_open(int root_fd, const char* path, unsigned policy) {
+    char* leaf = NULL;
+    int parent = bx_dir_path_open_destination_parent(root_fd, path, policy, false, 0, &leaf);
+    if (parent < 0)
+        return -1;
+    int fd = bx_fd_openat_cloexec(parent, leaf,
+                                  O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK, 0);
+    int error = errno;
+    close(parent);
+    free(leaf);
+    errno = error;
+    return fd;
 }
 
 bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
-                                    const char* path, mode_t mode,
+                                    int root_fd, const char* path, mode_t mode,
                                     bool set_mtime, struct timespec mtime) {
-    int fd = bx_fd_open_cloexec(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK, 0);
-    return bx_archive_pending_dirs_record_owned(dirs, fd, path, mode, set_mtime, mtime);
-}
-
-bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
-                                       int fd, const char* path, mode_t mode,
-                                       bool set_mtime, struct timespec mtime) {
-    return bx_archive_pending_dirs_record_owned(dirs, bx_fd_dup_cloexec(fd), path, mode, set_mtime, mtime);
-}
-
-bool bx_archive_set_path_mtime(const char* path,
-                               struct timespec mtime,
-                               bool nofollow,
-                               struct bx_diag_ctx* diag) {
-    struct timespec times[2];
-    int flags = nofollow ? AT_SYMLINK_NOFOLLOW : 0;
-
-    times[0] = mtime;
-    times[1] = mtime;
-    if (utimensat(AT_FDCWD, path, times, flags) != 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
+    int fd = bx_archive_pending_dir_open(root_fd, path, dirs->path_policy);
+    if (fd < 0)
         return false;
-    }
-    return true;
+    bool ok = bx_archive_pending_dirs_record_fd(dirs, fd, path, mode, set_mtime, mtime);
+    int error = errno;
+    close(fd);
+    errno = error;
+    return ok;
 }
 
-bool bx_archive_set_fd_mtime(int fd,
-                             const char* path,
-                             struct timespec mtime,
-                             struct bx_diag_ctx* diag) {
-    struct timespec times[2];
-
-    times[0] = mtime;
-    times[1] = mtime;
-    if (futimens(fd, times) != 0) {
+bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
+                            const char* path, bool symlink, bool directory,
+                            struct bx_diag_ctx* diag) {
+    enum bx_file_restore_result result = bx_file_restore_fd(restore, fd, symlink, directory);
+    if (result == BX_FILE_RESTORE_METADATA_ERROR)
+        bx_diag(diag, "%s: cannot restore metadata: %s", path, strerror(errno));
+    else if (result != BX_FILE_RESTORE_OK)
         bx_diag(diag, "%s: %s", path, strerror(errno));
-        return false;
-    }
-    return true;
+    return result == BX_FILE_RESTORE_OK;
+}
+
+static int bx_archive_pending_dir_identity_compare(const void* left, const void* right) {
+    const struct bx_archive_pending_dir* a = left;
+    const struct bx_archive_pending_dir* b = right;
+    if (a->dev != b->dev)
+        return a->dev < b->dev ? -1 : 1;
+    if (a->ino != b->ino)
+        return a->ino < b->ino ? -1 : 1;
+    return (a->order > b->order) - (a->order < b->order);
+}
+
+static int bx_archive_pending_dir_depth_compare(const void* left, const void* right) {
+    const struct bx_archive_pending_dir* a = left;
+    const struct bx_archive_pending_dir* b = right;
+    if (a->depth != b->depth)
+        return a->depth < b->depth ? -1 : 1;
+    return (a->order > b->order) - (a->order < b->order);
 }
 
 bool bx_archive_pending_dirs_apply(struct bx_archive_pending_dirs* dirs,
+                                   int root_fd,
                                    struct bx_diag_ctx* diag) {
+    /* Collapse aliases and duplicate headers before depth sorting; keep the last. */
+    if (dirs->len > 1u) {
+        qsort(dirs->entries, dirs->len, sizeof(*dirs->entries), bx_archive_pending_dir_identity_compare);
+        size_t kept = 0u;
+        for (size_t i = 0u; i < dirs->len; i++) {
+            struct bx_archive_pending_dir* entry = &dirs->entries[i];
+            if (i + 1u < dirs->len && entry->dev == entry[1].dev && entry->ino == entry[1].ino) {
+                bx_file_metadata_free(&entry->restore.metadata);
+                free(entry->path);
+            }
+            else
+                dirs->entries[kept++] = *entry;
+        }
+        dirs->len = kept;
+        qsort(dirs->entries, dirs->len, sizeof(*dirs->entries), bx_archive_pending_dir_depth_compare);
+    }
     while (dirs->len > 0u) {
         struct bx_archive_pending_dir* entry = &dirs->entries[dirs->len - 1u];
-        if (bx_fd_fchmod(entry->fd, entry->mode & 07777u) != 0) {
+        int fd = bx_archive_pending_dir_open(root_fd, entry->path, dirs->path_policy);
+        if (fd < 0) {
+            /* A later archive member may have removed or replaced this path. */
+            if (errno == ENOENT || errno == ENOTDIR || errno == ELOOP) {
+                bx_file_metadata_free(&entry->restore.metadata);
+                free(entry->path);
+                dirs->len--;
+                continue;
+            }
             bx_diag(diag, "%s: %s", entry->path, strerror(errno));
             return false;
         }
-        if (!bx_file_metadata_apply(&entry->metadata, entry->fd, entry->path,
-                                     false, true, entry->mode)) {
-            bx_diag(diag, "%s: cannot restore metadata: %s", entry->path, strerror(errno));
+        struct stat status;
+        if (fstat(fd, &status) != 0) {
+            bx_diag(diag, "%s: %s", entry->path, strerror(errno));
+            close(fd);
             return false;
         }
-        if (entry->set_mtime && !bx_archive_set_fd_mtime(entry->fd, entry->path, entry->mtime, diag)) {
-            return false;
-        }
-        bool closed = bx_fd_close(&entry->fd, entry->path, diag);
-        bx_file_metadata_free(&entry->metadata);
+        bool same = status.st_dev == entry->dev && status.st_ino == entry->ino;
+        bool ok = !same || bx_archive_restore_fd(&entry->restore, fd, entry->path, false, true, diag);
+        bool closed = bx_fd_close(&fd, entry->path, diag);
+        bx_file_metadata_free(&entry->restore.metadata);
         free(entry->path);
         dirs->len--;
-        if (!closed)
+        if (!ok || !closed)
             return false;
     }
     return true;

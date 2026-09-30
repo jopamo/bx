@@ -9,10 +9,12 @@
 
 #include "remove_ops.h"
 #include "lib/dir_cycle.h"
+#include "lib/dir_path.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
 #include "bx/diag.h"
+#include "bx/libbx.h"
 
 static void bx_remove_diag_changed(const char* path, struct bx_diag_ctx* diag) {
     bx_diag(diag, "refusing to remove '%s': path changed during recursive removal", path);
@@ -314,6 +316,129 @@ bx_remove_recursive_impl(const char* path, const struct stat* expected, bool one
 
 bool bx_remove_recursive(const char* path, struct bx_diag_ctx* diag) {
     return bx_remove_recursive_impl(path, NULL, false, 0, diag, NULL, NULL);
+}
+
+struct bx_remove_at_entry {
+    struct bx_remove_at_entry* next;
+    char* relative;
+    char* display;
+    struct stat status;
+    bool scanned;
+};
+
+static struct bx_remove_at_entry* bx_remove_at_entry_new(const char* relative,
+                                                         const char* display,
+                                                         const struct stat* status) {
+    struct bx_remove_at_entry* entry = xmalloc(sizeof(*entry));
+    *entry = (struct bx_remove_at_entry){
+        .relative = xstrdup(relative), .display = xstrdup(display), .status = *status,
+    };
+    return entry;
+}
+
+static void bx_remove_at_entry_free(struct bx_remove_at_entry* entry) {
+    free(entry->relative);
+    free(entry->display);
+    free(entry);
+}
+
+bool bx_remove_recursive_at(int parent_fd, const char* name, const char* display_path,
+                             const struct stat* expected, struct bx_diag_ctx* diag) {
+    struct stat status;
+    if (bx_fd_fstatat_child_nofollow(parent_fd, name, &status) != 0) {
+        if (errno == ENOENT)
+            return true;
+        bx_perror_path(diag, display_path);
+        return false;
+    }
+    if (!bx_remove_stat_matches_expected(display_path, expected, &status, diag))
+        return false;
+    struct bx_remove_at_entry* stack = bx_remove_at_entry_new(name, display_path, &status);
+    bool ok = true;
+    while (stack && ok) {
+        struct bx_remove_at_entry* entry = stack;
+        char* leaf = NULL;
+        int parent = bx_dir_path_open_parent(parent_fd, entry->relative, false, 0, &leaf);
+        if (parent < 0) {
+            bx_perror_path(diag, entry->display);
+            ok = false;
+            break;
+        }
+        if (!bx_remove_verify_child_entry(parent, leaf, entry->display, &entry->status, diag)) {
+            ok = false;
+        }
+        else if (entry->scanned || !S_ISDIR(entry->status.st_mode)) {
+            if (bx_fd_unlinkat_child(parent, leaf, entry->scanned ? AT_REMOVEDIR : 0) != 0) {
+                bx_perror_path(diag, entry->display);
+                ok = false;
+            }
+            stack = entry->next;
+            bx_remove_at_entry_free(entry);
+        }
+        else {
+            for (struct bx_remove_at_entry* ancestor = entry->next; ancestor; ancestor = ancestor->next) {
+                if (ancestor->scanned && bx_same_file(&ancestor->status, &entry->status)) {
+                    bx_remove_diag_cycle(entry->display, diag);
+                    ok = false;
+                    break;
+                }
+            }
+            int fd = ok ? bx_remove_open_dir_child(parent, leaf, entry->display,
+                                                     &entry->status, &status, diag) : -1;
+            DIR* stream = fd >= 0 ? fdopendir(fd) : NULL;
+            if (!stream) {
+                if (fd >= 0) {
+                    bx_perror_path(diag, entry->display);
+                    close(fd);
+                }
+                ok = false;
+            }
+            else {
+                /* Save names and identities, not descriptors, before descending. */
+                entry->scanned = true;
+                while (ok) {
+                    errno = 0;
+                    struct dirent* child = readdir(stream);
+                    if (!child) {
+                        if (errno) {
+                            bx_perror_path(diag, entry->display);
+                            ok = false;
+                        }
+                        break;
+                    }
+                    if (bx_path_is_dot_or_dotdot(child->d_name))
+                        continue;
+                    char* display = bx_path_join(entry->display, child->d_name);
+                    if (bx_fd_fstatat_child_nofollow(fd, child->d_name, &status) != 0) {
+                        if (errno != ENOENT) {
+                            bx_perror_path(diag, display);
+                            ok = false;
+                        }
+                    }
+                    else {
+                        char* relative = bx_path_join(entry->relative, child->d_name);
+                        struct bx_remove_at_entry* next = bx_remove_at_entry_new(relative, display, &status);
+                        next->next = stack;
+                        stack = next;
+                        free(relative);
+                    }
+                    free(display);
+                }
+                if (closedir(stream) != 0) {
+                    bx_perror_path(diag, entry->display);
+                    ok = false;
+                }
+            }
+        }
+        close(parent);
+        free(leaf);
+    }
+    while (stack) {
+        struct bx_remove_at_entry* next = stack->next;
+        bx_remove_at_entry_free(stack);
+        stack = next;
+    }
+    return ok;
 }
 
 bool bx_remove_recursive_expected(const char* path, const struct stat* expected, struct bx_diag_ctx* diag) {

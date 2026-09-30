@@ -62,23 +62,21 @@ typedef bool (*bx_archive_fs_visit_fn)(const struct bx_archive_fs_visit_entry* e
                                        struct bx_diag_ctx* diag);
 
 struct bx_archive_pending_dir {
-    struct bx_file_metadata metadata;
+    struct bx_file_restore restore;
     char* path;
-    int fd;
-    mode_t mode;
-    struct timespec mtime;
-    bool set_mtime;
+    dev_t dev;
+    ino_t ino;
+    ptrdiff_t depth;
+    size_t order;
 };
 
 struct bx_archive_pending_dirs {
     struct bx_archive_pending_dir* entries;
     size_t len;
     size_t cap;
-};
-
-struct bx_archive_parent_dir_cache {
-    char* last_parent;
-    size_t last_parent_len;
+    unsigned path_policy;
+    /* Absolute anchor depth when absolute and relative locators coexist. */
+    ptrdiff_t root_depth;
 };
 
 void bx_archive_fs_list_free(struct bx_archive_fs_list* list);
@@ -115,43 +113,24 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                             bool sort_children,
                             struct bx_diag_ctx* diag);
 
-void bx_archive_parent_dir_cache_cleanup(struct bx_archive_parent_dir_cache* cache);
-void bx_archive_parent_dir_cache_invalidate(struct bx_archive_parent_dir_cache* cache);
-bool bx_archive_parent_dir_cache_matches_parent(const struct bx_archive_parent_dir_cache* cache,
-                                                const char* parent);
-void bx_archive_parent_dir_cache_remember_parent(struct bx_archive_parent_dir_cache* cache,
-                                                 const char* parent);
-
-bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag);
-bool bx_archive_ensure_parent_dirs_cached(const char* path,
-                                          struct bx_archive_parent_dir_cache* cache,
-                                          struct bx_diag_ctx* diag);
-bool bx_archive_ensure_parent_dirs_safe(const char* path, struct bx_diag_ctx* diag);
-bool bx_archive_ensure_parent_dirs_safe_cached(const char* path,
-                                               struct bx_archive_parent_dir_cache* cache,
-                                               struct bx_diag_ctx* diag);
-bool bx_archive_remove_path_tree(const char* path, struct bx_diag_ctx* diag);
-
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs);
+/* Paths are applet-approved destinations, relative to the borrowed root_fd
+ * unless explicitly absolute. No descriptor is retained by a record. */
 bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
+                                    int root_fd,
                                     const char* path,
                                     mode_t mode,
                                     bool set_mtime,
                                     struct timespec mtime);
-/* Borrows fd; retains a CLOEXEC duplicate for deferred metadata. */
+/* Borrows fd for type checking; records metadata without retaining it. */
 bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
                                        int fd, const char* path, mode_t mode,
                                        bool set_mtime, struct timespec mtime);
 bool bx_archive_pending_dirs_apply(struct bx_archive_pending_dirs* dirs,
+                                   int root_fd,
                                    struct bx_diag_ctx* diag);
-
-bool bx_archive_set_path_mtime(const char* path,
-                               struct timespec mtime,
-                               bool nofollow,
-                               struct bx_diag_ctx* diag);
-bool bx_archive_set_fd_mtime(int fd,
-                             const char* path,
-                             struct timespec mtime,
-                             struct bx_diag_ctx* diag);
+bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
+                            const char* path, bool symlink, bool directory,
+                            struct bx_diag_ctx* diag);
 
 #endif /* BX_APPLETS_ARCHIVE_ARCHIVE_FS_H */
