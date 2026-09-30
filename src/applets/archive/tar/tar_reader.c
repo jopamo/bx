@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "applets/archive/archive_codec.h"
+#include "applets/archive/archive_temp.h"
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_metadata.h"
 #include "bx/libbx.h"
@@ -950,7 +951,17 @@ static bool bx_tar_stream_input_read_some(struct bx_tar_stream_input* input,
                                           size_t len,
                                           size_t* nread_out,
                                           struct bx_diag_ctx* diag) {
-    return bx_archive_codec_input_read_some(input->codec_input, buffer, len, nread_out, diag);
+    if (bx_archive_temp_pending_signal())
+        goto interrupted;
+    if (!bx_archive_codec_input_read_some(input->codec_input, buffer, len, nread_out, diag))
+        return false;
+    if (!bx_archive_temp_pending_signal())
+        return true;
+
+interrupted:
+    errno = EINTR;
+    bx_diag(diag, "read error: %s", strerror(errno));
+    return false;
 }
 
 static bool bx_tar_stream_input_read_exact(struct bx_tar_stream_input* input,
