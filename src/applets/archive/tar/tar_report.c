@@ -3,9 +3,29 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/sysmacros.h>
 
 #include "applets/archive/tar/tar_report.h"
+#include "applets/archive/tar/tar_reader.h"
 #include "lib/fd_ops.h"
+
+bool bx_tar_report_metadata_line(FILE* stream, const struct bx_tar_entry* entry, struct bx_diag_ctx* diag) {
+    static const char types[] = {'-', 'd', 'l', 'h', 'p', 'c', 'b'};
+    char type = (unsigned)entry->kind < sizeof(types) ? types[entry->kind] : '?';
+    bool selinux = false, capabilities = false;
+    for (size_t i = 0; i < entry->metadata.len; i++) {
+        const char* name = entry->metadata.xattrs[i].name;
+        selinux |= strcmp(name, "security.selinux") == 0;
+        capabilities |= strcmp(name, "security.capability") == 0;
+    }
+    unsigned omitted = (entry->omit_uid ? 1u : 0u) | (entry->omit_gid ? 2u : 0u) | (entry->omit_mtime ? 4u : 0u);
+    return bx_tar_report_printf(stream, diag,
+                                "  type=%c mode=%04o uid=%ju gid=%ju size=%zu mtime_sec=%jd mtime_nsec=%09ld omitted=%u acl=%u default_acl=%u xattrs=%zu selinux=%u capabilities=%u flags=%u sparse=%u "
+                                "sparse_extents=%zu device=%u:%u\n",
+                                type, (unsigned)(entry->mode & 07777u), (uintmax_t)entry->uid, (uintmax_t)entry->gid, entry->size, (intmax_t)entry->mtime.tv_sec, entry->mtime.tv_nsec, omitted,
+                                entry->metadata.acl_access != NULL, entry->metadata.acl_default != NULL, entry->metadata.len, selinux, capabilities, entry->metadata.file_flags != NULL, entry->sparse,
+                                entry->extent_count, major(entry->rdev), minor(entry->rdev));
+}
 
 bool bx_tar_report_output_init(struct bx_tar_report_output* output,
                                const char* index_file_path,

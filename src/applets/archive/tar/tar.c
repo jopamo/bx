@@ -66,6 +66,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
                     "      --selinux, --no-selinux\n"
                     "                        enable or disable SELinux contexts\n"
                     "      --file-flags      capture or restore Linux inode flags\n"
+                    "      --preserve-all    require all supported filesystem metadata\n"
+                    "      -vv              list numeric fields and metadata presence\n"
                     "                        append, immutable, nodump, noatime, sync, dirsync\n"
                     "                        on regular files/directories; read failures are fatal\n"
                     "      --format=pax      write metadata in POSIX extended headers\n"

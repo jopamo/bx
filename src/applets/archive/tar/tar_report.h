@@ -14,6 +14,8 @@ struct bx_tar_report_output {
     bool line_file_active;
     struct bx_line_writer_file line_file;
 };
+struct bx_tar_entry;
+bool bx_tar_report_metadata_line(FILE* stream, const struct bx_tar_entry* entry, struct bx_diag_ctx* diag);
 
 bool bx_tar_report_output_init(struct bx_tar_report_output* output,
                                const char* index_file_path,
