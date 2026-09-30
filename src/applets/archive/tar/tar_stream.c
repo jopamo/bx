@@ -1034,8 +1034,12 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
     else {
         int flags = S_ISDIR(entry->st->st_mode) && needs_metadata
             ? O_RDONLY | O_DIRECTORY : O_PATH;
-        fd = borrowed ? entry->source_fd
-            : bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name, flags | O_NOFOLLOW, 0);
+        if (borrowed)
+            fd = entry->source_fd;
+        else if (needs_metadata && S_ISFIFO(entry->st->st_mode))
+            fd = bx_fd_openat_metadata(entry->source_parent_fd, entry->source_name);
+        else
+            fd = bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name, flags | O_NOFOLLOW, 0);
         if (fd >= 0 && bx_fd_fstat_expected(fd, entry->st, &opened) != 0) {
             int error = errno;
             if (!borrowed)
