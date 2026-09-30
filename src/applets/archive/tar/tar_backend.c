@@ -128,7 +128,6 @@ struct bx_tar_options {
     int compress_threads;
     uintmax_t mt_chunk_size;
     const char* one_top_level;
-    struct bx_tar_transform_rule name_transform;
     struct bx_tar_create_options create_options;
     uintmax_t occurrence;
 };
@@ -214,7 +213,6 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_STARTING_FILE,
     BX_TAR_OPT_STRIP_COMPONENTS,
     BX_TAR_OPT_ONE_TOP_LEVEL,
-    BX_TAR_OPT_TRANSFORM,
     BX_TAR_OPT_FORMAT,
     BX_TAR_OPT_SORT,
     BX_TAR_OPT_MTIME,
@@ -396,8 +394,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--one-file-system", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ONE_FILE_SYSTEM},
     {"--absolute-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ABSOLUTE_NAMES_ON},
     {"--strip-components", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STRIP_COMPONENTS},
-    {"--transform", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_TRANSFORM},
-    {"--xform", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_TRANSFORM},
     {"--checkpoint", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--checkpoint-action", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--full-time", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -1158,7 +1154,6 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
         .absolute_names = options->absolute_names,
         .strip_components = options->strip_components,
         .one_top_level = options->one_top_level,
-        .transform = options->name_transform.active ? &options->name_transform : NULL,
     };
     state->current_file = (struct bx_fd_staged_file)BX_FD_STAGED_FILE_INIT;
     state->root_fd = -1;
@@ -1200,7 +1195,6 @@ static void bx_tar_list_state_init(struct bx_tar_list_state* state,
         .absolute_names = options->absolute_names,
         .strip_components = options->strip_components,
         .one_top_level = options->one_top_level,
-        .transform = options->name_transform.active ? &options->name_transform : NULL,
     };
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
     state->occurrence_counts = bx_tar_alloc_occurrence_counts(select_plan, options->occurrence);
@@ -1226,7 +1220,6 @@ static void bx_tar_compare_state_init(struct bx_tar_compare_state* state,
         .absolute_names = options->absolute_names,
         .strip_components = options->strip_components,
         .one_top_level = options->one_top_level,
-        .transform = options->name_transform.active ? &options->name_transform : NULL,
     };
 }
 
@@ -2329,7 +2322,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
                                  stripped_dotdot,
                                  &state->warned_dotdot);
     if (entry->kind == BX_TAR_KIND_DIR && clean_name.text[0] == '\0'
-        && state->name_policy.strip_components == 0u && state->name_policy.transform == NULL
+        && state->name_policy.strip_components == 0u
         && state->name_policy.one_top_level == NULL
         && (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "./") == 0)) {
         bx_tar_release_mapped_name(&clean_name);
@@ -3537,8 +3530,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_ONE_TOP_LEVEL:
             options->one_top_level = value;
             return true;
-        case BX_TAR_OPT_TRANSFORM:
-            return bx_tar_transform_rule_init(&options->name_transform, value, diag);
         case BX_TAR_OPT_FORMAT:
             if (strcmp(value, "ustar") != 0 && strcmp(value, "pax") != 0
                 && strcmp(value, "posix") != 0) {
@@ -3647,7 +3638,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
 static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_archive_name_list_free(&options->metadata.include);
     bx_archive_name_list_free(&options->metadata.exclude);
-    bx_tar_transform_rule_cleanup(&options->name_transform);
     bx_tar_create_options_cleanup(&options->create_options);
     bx_tar_id_map_cleanup(&options->owner_map);
     bx_tar_id_map_cleanup(&options->group_map);
