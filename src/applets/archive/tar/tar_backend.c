@@ -52,7 +52,6 @@ enum bx_tar_mode {
     BX_TAR_MODE_NONE = 0,
     BX_TAR_MODE_CREATE,
     BX_TAR_MODE_COMPARE,
-    BX_TAR_MODE_TEST_LABEL,
     BX_TAR_MODE_LIST,
     BX_TAR_MODE_EXTRACT,
 };
@@ -131,7 +130,6 @@ struct bx_tar_options {
     const char* one_top_level;
     struct bx_tar_transform_rule name_transform;
     struct bx_tar_create_options create_options;
-    struct bx_archive_name_list source_archives;
     uintmax_t occurrence;
 };
 
@@ -148,7 +146,6 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_HOLE_DETECTION,
     BX_TAR_OPT_MODE_CREATE,
     BX_TAR_OPT_MODE_COMPARE,
-    BX_TAR_OPT_MODE_TEST_LABEL,
     BX_TAR_OPT_MODE_LIST,
     BX_TAR_OPT_MODE_EXTRACT,
     BX_TAR_OPT_MODE_UNSUPPORTED,
@@ -263,7 +260,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--create", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
     {"--diff", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {"--compare", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
-    {"--test-label", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_TEST_LABEL},
     {"--list", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {"--extract", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {"--get", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
@@ -375,7 +371,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--portability", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--posix", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--pax-option", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--label", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--auto-compress", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_ON},
     {"--use-compress-program", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
     {"--bzip2", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
@@ -450,7 +445,6 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'B', "-B", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'i', "-i", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'H', "-H", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FORMAT},
-    {'V', "-V", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {'a', "-a", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_ON},
     {'I', "-I", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
     {'j', "-j", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
@@ -3178,8 +3172,6 @@ static const char* bx_tar_occurrence_mode_option(enum bx_tar_mode mode) {
     switch (mode) {
         case BX_TAR_MODE_CREATE:
             return "-c";
-        case BX_TAR_MODE_TEST_LABEL:
-            return "--test-label";
         case BX_TAR_MODE_NONE:
         case BX_TAR_MODE_COMPARE:
         case BX_TAR_MODE_LIST:
@@ -3191,7 +3183,7 @@ static const char* bx_tar_occurrence_mode_option(enum bx_tar_mode mode) {
 
 static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
     fprintf(stderr,
-            "%s: You must specify one of the '-cdtx' or '--test-label' options\n",
+            "%s: You must specify one of the '-cdtx' options\n",
             diag->progname);
     fprintf(stderr,
             "Try '%s --help' or '%s --usage' for more information.\n",
@@ -3202,7 +3194,7 @@ static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
 
 static bool bx_tar_report_mode_conflict(const struct bx_diag_ctx* diag) {
     fprintf(stderr,
-            "%s: You may not specify more than one '-cdtx' or '--test-label' option\n",
+            "%s: You may not specify more than one '-cdtx' option\n",
             diag->progname);
     fprintf(stderr,
             "Try '%s --help' or '%s --usage' for more information.\n",
@@ -3321,8 +3313,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_tar_set_mode_option(options, BX_TAR_MODE_CREATE, NULL, diag);
         case BX_TAR_OPT_MODE_COMPARE:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_COMPARE, NULL, diag);
-        case BX_TAR_OPT_MODE_TEST_LABEL:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_TEST_LABEL, NULL, diag);
         case BX_TAR_OPT_MODE_LIST:
             if (!bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, NULL, diag)) {
                 return false;
@@ -3659,7 +3649,6 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_archive_name_list_free(&options->metadata.exclude);
     bx_tar_transform_rule_cleanup(&options->name_transform);
     bx_tar_create_options_cleanup(&options->create_options);
-    bx_archive_name_list_free(&options->source_archives);
     bx_tar_id_map_cleanup(&options->owner_map);
     bx_tar_id_map_cleanup(&options->group_map);
     free(options->index_file_path);
@@ -3670,61 +3659,7 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
 }
 
 static bool bx_tar_add_operand(struct bx_tar_options* options, const char* operand) {
-    if (options->mode == BX_TAR_MODE_TEST_LABEL) {
-        return bx_archive_name_list_append(&options->source_archives, operand);
-    }
     return bx_tar_create_options_add_add_file(&options->create_options, operand);
-}
-
-static int bx_tar_test_label_archive(const struct bx_tar_options* options,
-                                     struct bx_diag_ctx* diag) {
-    struct bx_tar_reader_stream_options reader_options = {
-        .archive_path = options->archive_path,
-        .required_codec = bx_tar_input_required_codec(options),
-        .seek_mode = options->seek_mode,
-    };
-    struct bx_tar_report_output report_output = {0};
-    char* label = NULL;
-    int rc = 0;
-    size_t i;
-
-    if (!bx_tar_read_volume_label_stream(&reader_options, &label, diag)) {
-        free(label);
-        return 2;
-    }
-    if (!bx_tar_report_output_init(&report_output, options->index_file_path, stdout, diag)) {
-        free(label);
-        return 2;
-    }
-    if (options->source_archives.len == 0u) {
-        if (label != NULL) {
-            if (!bx_tar_report_printf(report_output.stream, diag, "%s\n", label)) {
-                bx_tar_report_output_cleanup(&report_output);
-                free(label);
-                return 2;
-            }
-        }
-        if (!bx_tar_report_output_finish(&report_output, diag)) {
-            free(label);
-            return 2;
-        }
-        free(label);
-        return 0;
-    }
-
-    rc = 1;
-    for (i = 0u; i < options->source_archives.len; i++) {
-        if (label != NULL && strcmp(label, options->source_archives.items[i]) == 0) {
-            rc = 0;
-            break;
-        }
-    }
-    if (!bx_tar_report_output_finish(&report_output, diag)) {
-        free(label);
-        return 2;
-    }
-    free(label);
-    return rc;
 }
 
 static bool bx_tar_report_fs_entries(FILE* stream,
@@ -4067,11 +4002,6 @@ int bx_tar_run(int argc, char** argv) {
             rc = 2;
         }
         bx_archive_fs_list_free(&files);
-        bx_tar_options_cleanup(&options);
-        return rc;
-    }
-    if (options.mode == BX_TAR_MODE_TEST_LABEL) {
-        rc = bx_tar_test_label_archive(&options, &diag);
         bx_tar_options_cleanup(&options);
         return rc;
     }

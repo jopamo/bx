@@ -44,7 +44,6 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
                     "                        (old kernels: device boundary; bind mounts may cross)\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
     fprintf(stream, "  -d                    compare archive members against the filesystem\n");
-    fprintf(stream, "      --test-label      print or match the archive volume label\n");
     fprintf(stream, "      --occurrence[=N]  process only the Nth occurrence of each named member\n");
     fprintf(stream, "  -k, --keep-old-files  do not overwrite existing files; report an error\n");
     fprintf(stream, "      --skip-old-files  do not overwrite existing files; continue\n");
