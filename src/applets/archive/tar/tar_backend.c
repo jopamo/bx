@@ -123,6 +123,8 @@ struct bx_tar_options {
     enum bx_tar_owner_policy owner_policy;
     enum bx_tar_permission_policy permission_policy;
     struct bx_tar_metadata_options metadata;
+    bool preserve_all;
+    const char* preservation_conflict;
     bool no_mt;
     enum bx_archive_codec_seek_mode seek_mode;
     char* mode_text;
@@ -251,6 +253,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_ACLS_ON,
     BX_TAR_OPT_ACLS_OFF,
     BX_TAR_OPT_FILE_FLAGS,
+    BX_TAR_OPT_PRESERVE_ALL,
     BX_TAR_OPT_WARNING,
     BX_TAR_OPT_IGNORE_FAILED_READ,
     BX_TAR_OPT_ONE_FILE_SYSTEM,
@@ -373,6 +376,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_ON},
     {"--no-acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_OFF},
     {"--file-flags", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILE_FLAGS},
+    {"--preserve-all", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PRESERVE_ALL},
     {"--no-selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SELINUX_OFF},
     {"--no-xattrs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XATTRS_OFF},
     {"--selinux", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SELINUX_ON},
@@ -3141,7 +3145,7 @@ static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
         bx_tar_release_mapped_name(&clean_name);
         return false;
     }
-    if (!bx_tar_list_report_dumpdir(state, entry, diag)) {
+    if ((state->options->verbose_count >= 2u && !bx_tar_report_metadata_line(state->report_stream, entry, diag)) || !bx_tar_list_report_dumpdir(state, entry, diag)) {
         bx_tar_release_mapped_name(&clean_name);
         return false;
     }
@@ -3258,7 +3262,7 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         .required_codec = bx_tar_input_required_codec(options),
         .seek_mode = options->seek_mode,
         .skip_owner_group_names = options->owner_map.len == 0u && options->group_map.len == 0u,
-        .skip_owner_group_ids = options->owner_map.len == 0u && options->group_map.len == 0u,
+        .skip_owner_group_ids = options->mode == BX_TAR_MODE_LIST && options->verbose_count < 2u,
     };
     struct bx_tar_report_output report_output = {0};
     bool need_report_output = options->mode == BX_TAR_MODE_LIST
@@ -4612,6 +4616,38 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
                                        const char* value,
                                        struct bx_diag_ctx* diag) {
     switch (effect) {
+        case BX_TAR_OPT_OWNER_RESTORE_OFF:
+        case BX_TAR_OPT_PERMISSIONS_OFF:
+        case BX_TAR_OPT_XATTRS_OFF:
+        case BX_TAR_OPT_ACLS_OFF:
+        case BX_TAR_OPT_SELINUX_OFF:
+        case BX_TAR_OPT_XATTRS_INCLUDE:
+        case BX_TAR_OPT_XATTRS_EXCLUDE:
+        case BX_TAR_OPT_TOUCH_MTIME_ON:
+        case BX_TAR_OPT_IGNORE_FAILED_READ:
+        case BX_TAR_OPT_TO_STDOUT:
+        case BX_TAR_OPT_OWNER:
+        case BX_TAR_OPT_GROUP:
+        case BX_TAR_OPT_OWNER_MAP:
+        case BX_TAR_OPT_GROUP_MAP:
+        case BX_TAR_OPT_MODE:
+        case BX_TAR_OPT_MTIME:
+        case BX_TAR_OPT_KEEP_OLD_FILES:
+        case BX_TAR_OPT_SKIP_OLD_FILES:
+        case BX_TAR_OPT_KEEP_NEWER_FILES:
+        case BX_TAR_OPT_LISTED_INCREMENTAL:
+        case BX_TAR_OPT_INCREMENTAL:
+            if (!options->preservation_conflict)
+                options->preservation_conflict = display;
+            break;
+        case BX_TAR_OPT_FORMAT:
+            if (!options->preservation_conflict && strcmp(value, "ustar") == 0)
+                options->preservation_conflict = display;
+            break;
+        default:
+            break;
+    }
+    switch (effect) {
         case BX_TAR_OPT_NOOP:
             return true;
         case BX_TAR_OPT_SPARSE:
@@ -4950,6 +4986,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_FILE_FLAGS:
             options->metadata.file_flags = true;
             return true;
+        case BX_TAR_OPT_PRESERVE_ALL:
+            options->preserve_all = true;
+            return true;
         case BX_TAR_OPT_SELINUX_ON:
             options->format_ustar = false;
             options->metadata.selinux = true;
@@ -5205,6 +5244,22 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         i++;
     }
 
+    if (options->preserve_all) {
+        if (options->preservation_conflict) {
+            bx_diag(diag, "--preserve-all cannot be combined with %s", options->preservation_conflict);
+            return false;
+        }
+        if (options->mode != BX_TAR_MODE_CREATE && options->mode != BX_TAR_MODE_EXTRACT) {
+            bx_diag(diag, "--preserve-all requires --create or --extract");
+            return false;
+        }
+        options->numeric_owner = true;
+        options->owner_policy = BX_TAR_OWNER_FORCE;
+        options->permission_policy = BX_TAR_PERMISSIONS_FORCE;
+        options->metadata.xattrs = options->metadata.acls = options->metadata.selinux = options->metadata.file_flags = true;
+        if (!bx_archive_name_list_append(&options->metadata.include, "*"))
+            return false;
+    }
     if (options->sparse_selectors && !options->sparse) {
         bx_diag(diag, "sparse selectors require --sparse");
         return false;
