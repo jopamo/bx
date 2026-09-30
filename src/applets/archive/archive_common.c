@@ -99,6 +99,11 @@ bool bx_archive_buffer_read_all(FILE* stream, struct bx_archive_buffer* buffer, 
             return false;
         }
         size_t nread = fread(chunk, 1u, sizeof(chunk), stream);
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
         if (nread > 0u && !bx_archive_buffer_append(buffer, chunk, nread)) {
             bx_diag(diag, "buffer growth failed: %s", strerror(errno));
             return false;
