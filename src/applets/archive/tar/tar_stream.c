@@ -1039,8 +1039,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
                                          struct bx_diag_ctx* diag) {
     const struct bx_tar_metadata_options* metadata = state->options->metadata;
     bool symlink = S_ISLNK(entry->st->st_mode);
-    bool needs_metadata = metadata
-        && (metadata->xattrs || metadata->selinux || (metadata->acls && !symlink));
+    bool needs_metadata = metadata && (metadata->xattrs || metadata->selinux || metadata->file_flags || (metadata->acls && !symlink));
     struct stat opened;
     bool borrowed = symlink && entry->source_fd >= 0;
     int fd;

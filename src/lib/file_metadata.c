@@ -5,11 +5,13 @@
 #include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fs.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/acl.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <sys/xattr.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -24,6 +26,7 @@ void bx_file_metadata_free(struct bx_file_metadata* metadata) {
     free(metadata->xattrs);
     free(metadata->acl_access);
     free(metadata->acl_default);
+    free(metadata->file_flags);
     memset(metadata, 0, sizeof(*metadata));
 }
 
@@ -79,6 +82,10 @@ void bx_file_metadata_overlay(struct bx_file_metadata* dest, const struct bx_fil
         free(dest->acl_default);
         dest->acl_default = xstrdup(source->acl_default);
     }
+    if (source->file_flags) {
+        free(dest->file_flags);
+        dest->file_flags = xstrdup(source->file_flags);
+    }
     dest->restore_acls |= source->restore_acls;
 }
 
@@ -91,6 +98,22 @@ void bx_file_metadata_copy(struct bx_file_metadata* dest, const struct bx_file_m
 
 static bool bx_metadata_unsupported(int error) {
     return error == ENOTSUP || error == ENOSYS;
+}
+
+bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable) {
+    struct stat status;
+    *flags = 0u;
+    *applicable = false;
+    if (fstat(fd, &status) != 0)
+        return false;
+    if (!S_ISREG(status.st_mode) && !S_ISDIR(status.st_mode))
+        return true;
+    *applicable = true;
+    int value = 0;
+    if (ioctl(fd, FS_IOC_GETFLAGS, &value) != 0)
+        return false;
+    *flags = (unsigned int)value;
+    return true;
 }
 
 /* libacl has no default-ACL fd getter. Decode Linux's version-2 xattr into

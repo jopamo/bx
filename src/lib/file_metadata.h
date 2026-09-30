@@ -19,6 +19,7 @@ struct bx_file_metadata {
     size_t len;
     char* acl_access;
     char* acl_default;
+    char* file_flags;
     bool restore_acls;
 };
 
@@ -64,6 +65,9 @@ void bx_file_metadata_copy(struct bx_file_metadata* dest,
 bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
                            bool symlink, bool directory, bool acls, bool numeric_ids,
                            bx_file_xattr_filter filter, const void* user);
+/* Read Linux inode flags from a borrowed fd. The interface applies only to
+ * regular files and directories; other object types report applicable=false. */
+bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable);
 /* Borrow a verified inode fd. No pathname reconstruction or fallback.
  * O_PATH operations require empty-path kernel support; failure is fatal.
  * Apply after chown/chmod and data writes, which can clear inode metadata.
