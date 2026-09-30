@@ -242,7 +242,7 @@ int bx_fd_openat_metadata(int parent_fd, const char* name) {
     struct stat expected, opened;
     if (fstat(locator, &expected) != 0)
         goto fail;
-    if (!S_ISREG(expected.st_mode) && !S_ISDIR(expected.st_mode) && !S_ISFIFO(expected.st_mode))
+    if (!S_ISREG(expected.st_mode) && !S_ISDIR(expected.st_mode))
         return locator;
     int fd = bx_fd_openat_child_nofollow(parent_fd, name,
                                          O_RDONLY | O_NONBLOCK | O_NOCTTY, 0);

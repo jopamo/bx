@@ -1334,7 +1334,8 @@ static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
         immediate.flags_set = immediate.flags_clear = 0u;
         immediate.mode = 0600u;
     }
-    bool ok = bx_archive_restore_fd(&immediate, fd, path, S_ISLNK(status.st_mode), S_ISDIR(status.st_mode), diag);
+    bool ok = S_ISREG(status.st_mode) || S_ISDIR(status.st_mode) ? bx_archive_restore_fd(&immediate, fd, path, false, S_ISDIR(status.st_mode), diag)
+                                                                 : bx_archive_restore_leaf(&immediate, state->parent_fd, state->leaf, &status, path, diag);
     /* Final snapshots must remain reopenable until links and restrictive flags
      * are complete. ACL replay can have changed the temporary access mask. */
     if (ok && deferred && fchmod(fd, 0600u) != 0) {
@@ -1503,10 +1504,15 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                 if (action == BX_TAR_EXISTING_TARGET_ERROR)
                     ok = false;
                 else if (action == BX_TAR_EXISTING_TARGET_PROCEED) {
+                    if (!S_ISREG(expected.st_mode) && link->sequence > sequence && !bx_file_restore_leaf_supported(&link->restore, expected.st_mode & S_IFMT)) {
+                        bx_diag(diag, "%s: cannot restore metadata: %s", link->path, strerror(errno));
+                        ok = false;
+                    }
                     struct stat destination;
-                    bool already_linked = fstatat(parent, leaf, &destination, AT_SYMLINK_NOFOLLOW) == 0 && destination.st_dev == expected.st_dev && destination.st_ino == expected.st_ino &&
+                    bool already_linked = ok && fstatat(parent, leaf, &destination, AT_SYMLINK_NOFOLLOW) == 0 && destination.st_dev == expected.st_dev && destination.st_ino == expected.st_ino &&
                                           (destination.st_mode & S_IFMT) == (expected.st_mode & S_IFMT);
-                    ok = already_linked || bx_tar_extract_prepare_final_non_dir_target(state, &entry, link->path, diag);
+                    if (ok)
+                        ok = already_linked || bx_tar_extract_prepare_final_non_dir_target(state, &entry, link->path, diag);
                     if (ok && !already_linked && bx_fd_linkat_child(source_parent, source_leaf, parent, leaf, 0) != 0) {
                         bx_diag(diag, "%s: %s", link->path, strerror(errno));
                         ok = false;
@@ -1523,8 +1529,10 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                                 if (!ok)
                                     bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));
                             }
+                            else if (S_ISREG(linked.st_mode))
+                                ok = bx_archive_restore_fd(&link->restore, fd, link->path, false, false, diag);
                             else
-                                ok = bx_archive_restore_fd(&link->restore, fd, link->path, S_ISLNK(linked.st_mode), false, diag);
+                                ok = bx_archive_restore_leaf(&link->restore, parent, leaf, &linked, link->path, diag);
                         }
                         if (ok && link->sequence > sequence)
                             ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, origin, 1048576u);
@@ -1639,6 +1647,24 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
     state->boundary_prefix = extract_dir ? strlen(extract_dir) : 0;
     if (state->boundary_prefix && extract_dir[state->boundary_prefix - 1] != '/')
         state->boundary_prefix++;
+    mode_t leaf_type = entry->kind == BX_TAR_KIND_SYMLINK ? S_IFLNK
+                       : entry->kind == BX_TAR_KIND_FIFO  ? S_IFIFO
+                       : entry->kind == BX_TAR_KIND_CHAR  ? S_IFCHR
+                       : entry->kind == BX_TAR_KIND_BLOCK ? S_IFBLK
+                                                          : 0;
+    if (leaf_type) {
+        struct bx_file_restore selected = {0};
+        bool selected_ok = bx_tar_extract_select_metadata(state, entry, extract_mode, &selected, dest_path, diag);
+        bool supported = selected_ok && bx_file_restore_leaf_supported(&selected, leaf_type);
+        if (selected_ok && !supported)
+            bx_diag(diag, "%s: cannot restore metadata: %s", dest_path, strerror(errno));
+        bx_file_metadata_free(&selected.metadata);
+        if (!supported) {
+            bx_tar_release_mapped_name(&clean_name);
+            free(dest_path);
+            return false;
+        }
+    }
     state->parent_fd = bx_dir_path_open_destination_parent_from(state->root_fd, dest_path, state->boundary_prefix, state->dirs.path_policy, true, 0777u, &state->leaf);
     if (state->parent_fd < 0) {
         bx_diag(diag, "%s: %s", dest_path, strerror(errno));
@@ -1800,7 +1826,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
         }
     }
 
-    int fd = bx_fd_openat_metadata(state->parent_fd, state->leaf);
+    int fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf, O_PATH | O_NOFOLLOW, 0);
     if (fd < 0) {
         bx_diag(diag, "%s: %s", dest_path, strerror(errno));
         free(dest_path);

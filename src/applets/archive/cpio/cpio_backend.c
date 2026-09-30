@@ -1011,15 +1011,14 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 if (bx_fd_mkfifoat(parent, leaf, entry->mode & 07777u) != 0)
                     goto fail;
                 if (options->preserve_mtime) {
-                    fd = bx_fd_openat_child_nofollow(parent, leaf, O_RDONLY | O_NONBLOCK, 0);
                     struct stat fifo;
-                    if (fd < 0 || fstat(fd, &fifo) != 0)
+                    if (fstatat(parent, leaf, &fifo, AT_SYMLINK_NOFOLLOW) != 0)
                         goto fail;
                     if (!S_ISFIFO(fifo.st_mode)) {
                         errno = ESTALE;
                         goto fail;
                     }
-                    if (!bx_archive_restore_fd(&restore, fd, entry->name, false, false, diag))
+                    if (!bx_archive_restore_leaf(&restore, parent, leaf, &fifo, entry->name, diag))
                         goto done;
                 }
             }
