@@ -1,4 +1,3 @@
-#include <regex.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,161 +6,6 @@
 #include "applets/archive/tar/tar_names.h"
 #include "bx/libbx.h"
 #include "lib/path_ops.h"
-
-static bool bx_tar_transform_parse_part(const char** cursor,
-                                        char delimiter,
-                                        bool regex_text,
-                                        char** out) {
-    struct bx_archive_buffer buffer;
-    const char* p = *cursor;
-
-    bx_archive_buffer_init(&buffer);
-    while (*p != '\0') {
-        if (*p == delimiter) {
-            p++;
-            break;
-        }
-        if (*p == '\\' && p[1] != '\0') {
-            p++;
-            if (*p == delimiter || !regex_text) {
-                bx_archive_buffer_append_byte(&buffer, (unsigned char)*p);
-            }
-            else {
-                bx_archive_buffer_append_byte(&buffer, '\\');
-                bx_archive_buffer_append_byte(&buffer, (unsigned char)*p);
-            }
-            p++;
-            continue;
-        }
-        bx_archive_buffer_append_byte(&buffer, (unsigned char)*p);
-        p++;
-    }
-
-    if (p == *cursor || p[-1] != delimiter) {
-        bx_archive_buffer_free(&buffer);
-        return false;
-    }
-
-    bx_archive_buffer_append_byte(&buffer, '\0');
-    *out = xstrdup((const char*)buffer.data);
-    bx_archive_buffer_free(&buffer);
-    *cursor = p;
-    return true;
-}
-
-bool bx_tar_transform_rule_init(struct bx_tar_transform_rule* rule,
-                                const char* spec,
-                                struct bx_diag_ctx* diag) {
-    char delimiter;
-    const char* cursor;
-    char* pattern = NULL;
-    int reg_flags = 0;
-
-    bx_tar_transform_rule_cleanup(rule);
-
-    if (spec == NULL || spec[0] != 's' || spec[1] == '\0') {
-        bx_diag(diag, "invalid transform expression '%s'", spec ? spec : "");
-        return false;
-    }
-
-    delimiter = spec[1];
-    cursor = spec + 2;
-
-    if (!bx_tar_transform_parse_part(&cursor, delimiter, true, &pattern)
-        || !bx_tar_transform_parse_part(&cursor, delimiter, false, &rule->replacement)) {
-        free(pattern);
-        bx_tar_transform_rule_cleanup(rule);
-        bx_diag(diag, "invalid transform expression '%s'", spec);
-        return false;
-    }
-
-    while (*cursor != '\0') {
-        if (*cursor == 'g') {
-            rule->global = true;
-            cursor++;
-            continue;
-        }
-        free(pattern);
-        bx_tar_transform_rule_cleanup(rule);
-        bx_diag(diag, "invalid transform flags '%s'", cursor);
-        return false;
-    }
-
-    if (regcomp(&rule->regex, pattern, reg_flags) != 0) {
-        free(pattern);
-        bx_tar_transform_rule_cleanup(rule);
-        bx_diag(diag, "invalid transform expression '%s'", spec);
-        return false;
-    }
-
-    free(pattern);
-    rule->active = true;
-    return true;
-}
-
-void bx_tar_transform_rule_cleanup(struct bx_tar_transform_rule* rule) {
-    if (!rule->active) {
-        free(rule->replacement);
-        rule->replacement = NULL;
-        rule->global = false;
-        return;
-    }
-
-    regfree(&rule->regex);
-    free(rule->replacement);
-    rule->replacement = NULL;
-    rule->global = false;
-    rule->active = false;
-}
-
-static char* bx_tar_transform_apply(const struct bx_tar_transform_rule* rule,
-                                    const char* input) {
-    struct bx_archive_buffer output;
-    const char* cursor = input;
-
-    if (rule == NULL || !rule->active) {
-        return xstrdup(input);
-    }
-
-    bx_archive_buffer_init(&output);
-    while (true) {
-        regmatch_t match;
-        int rc = regexec(&rule->regex, cursor, 1, &match, 0);
-        size_t prefix_len;
-        size_t match_len;
-
-        if (rc != 0) {
-            bx_archive_buffer_append(&output, cursor, strlen(cursor));
-            break;
-        }
-
-        prefix_len = (size_t)match.rm_so;
-        match_len = (size_t)(match.rm_eo - match.rm_so);
-        bx_archive_buffer_append(&output, cursor, prefix_len);
-        bx_archive_buffer_append(&output, rule->replacement, strlen(rule->replacement));
-
-        cursor += match.rm_eo;
-        if (!rule->global) {
-            bx_archive_buffer_append(&output, cursor, strlen(cursor));
-            break;
-        }
-
-        if (match_len == 0u && *cursor != '\0') {
-            bx_archive_buffer_append_byte(&output, (unsigned char)*cursor);
-            cursor++;
-        }
-        if (*cursor == '\0') {
-            break;
-        }
-    }
-
-    bx_archive_buffer_append_byte(&output, '\0');
-    {
-        char* result = xstrdup((const char*)output.data);
-        bx_archive_buffer_free(&output);
-        return result;
-    }
-}
 
 static const char* bx_tar_map_member_name_borrow_ptr(const char* stored_name,
                                                      const struct bx_tar_name_policy* policy) {
@@ -173,9 +17,6 @@ static const char* bx_tar_map_member_name_borrow_ptr(const char* stored_name,
     }
     if (policy != NULL) {
         if (policy->strip_components != 0u || policy->one_top_level != NULL) {
-            return NULL;
-        }
-        if (policy->transform != NULL && policy->transform->active) {
             return NULL;
         }
     }
@@ -214,7 +55,6 @@ struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
                                                  bool* stripped_dotdot) {
     struct bx_path_components components = {0};
     struct bx_archive_buffer output;
-    char* transformed = NULL;
     const char* name;
     bool leading_slash = false;
     size_t start_index = 0u;
@@ -232,8 +72,7 @@ struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
         }
     }
 
-    transformed = bx_tar_transform_apply(policy ? policy->transform : NULL, stored_name);
-    name = transformed;
+    name = stored_name;
 
     while (*name == '/') {
         if (policy != NULL && policy->absolute_names && policy->one_top_level == NULL) {
@@ -293,6 +132,5 @@ struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
 
     bx_archive_buffer_free(&output);
     bx_path_components_free(&components);
-    free(transformed);
     return result;
 }
