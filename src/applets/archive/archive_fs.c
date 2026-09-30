@@ -508,15 +508,22 @@ done: {
 }
 }
 
-bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
-                            const char* path, bool symlink, bool directory,
-                            struct bx_diag_ctx* diag) {
-    enum bx_file_restore_result result = bx_file_restore_fd(restore, fd, symlink, directory);
+static bool bx_archive_restore_result(enum bx_file_restore_result result, const char* path, struct bx_diag_ctx* diag) {
     if (result == BX_FILE_RESTORE_METADATA_ERROR)
         bx_diag(diag, "%s: cannot restore metadata: %s", path, strerror(errno));
     else if (result != BX_FILE_RESTORE_OK)
         bx_diag(diag, "%s: %s", path, strerror(errno));
     return result == BX_FILE_RESTORE_OK;
+}
+
+bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd, const char* path, bool symlink, bool directory, struct bx_diag_ctx* diag) {
+    return bx_archive_restore_result(bx_file_restore_fd(restore, fd, symlink, directory), path, diag);
+}
+
+bool bx_archive_restore_leaf(const struct bx_file_restore* restore, int parent_fd, const char* leaf, const struct stat* expected, const char* path, struct bx_diag_ctx* diag) {
+    struct bx_file_metadata_target target;
+    enum bx_file_restore_result result = bx_file_metadata_target_leaf(&target, parent_fd, leaf, expected) ? bx_file_restore_target(restore, &target) : BX_FILE_RESTORE_STAT_ERROR;
+    return bx_archive_restore_result(result, path, diag);
 }
 
 static int bx_archive_pending_metadata_entry_identity_compare(const void* left, const void* right) {

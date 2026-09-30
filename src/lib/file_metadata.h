@@ -63,6 +63,11 @@ enum bx_file_restore_result {
     BX_FILE_RESTORE_METADATA_ERROR,
 };
 
+/* Probe required leaf interfaces without referring to an existing object.
+ * Call before filesystem mutation. Unsupported flags/interfaces are fatal. */
+bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_t type);
+enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target);
+
 /* Borrow an inode fd. Ownership precedes mode, ACLs/xattrs, timestamps and flags.
  * O_PATH uses empty-path operations (chmod requires fchmodat2). Symlinks
  * require O_PATH and are never followed. */
@@ -95,7 +100,7 @@ bool bx_file_metadata_apply_flags(int fd, unsigned int set, unsigned int clear);
 /* Borrow a verified inode fd. No pathname reconstruction or fallback.
  * O_PATH operations require empty-path kernel support; failure is fatal.
  * Apply after chown/chmod and data writes, which can clear inode metadata.
- * ACLs precede xattrs; security.capability is applied last. */
+ * ACLs precede ordinary xattrs, SELinux labels and capabilities, in that order. */
 bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
                             bool symlink, bool directory,
                             mode_t mode);
