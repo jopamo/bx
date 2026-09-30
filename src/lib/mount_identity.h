@@ -14,6 +14,8 @@ struct bx_mount_identity {
 /* Read the identity of the pinned inode. Old kernels fall back to st_dev,
  * which cannot distinguish bind mounts of the same filesystem. */
 bool bx_mount_identity_read(int fd, struct bx_mount_identity* identity);
+/* Borrow a parent and inspect one no-follow leaf, without opening the object. */
+bool bx_mount_identity_read_at(int parent_fd, const char* name, struct bx_mount_identity* identity);
 /* Do not silently downgrade a mount-aware traversal partway through. */
 bool bx_mount_identity_compare(const struct bx_mount_identity* root,
                                const struct bx_mount_identity* entry,

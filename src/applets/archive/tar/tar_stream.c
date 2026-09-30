@@ -770,11 +770,13 @@ static bool bx_tar_stream_write_fs_raw_entry(
     struct timespec mtime,
     struct bx_diag_ctx* diag) {
     struct bx_file_metadata metadata = {0};
-    if (!bx_tar_metadata_collect(&metadata, source_fd,
-                                  S_ISLNK(fs_entry->st->st_mode),
-                                  S_ISDIR(fs_entry->st->st_mode),
-                                  state->options->numeric_owner,
-                                  state->options->metadata)) {
+    const struct bx_tar_metadata_options* options = state->options->metadata;
+    bool symlink = S_ISLNK(fs_entry->st->st_mode);
+    bool requested = options && (options->xattrs || options->selinux || options->file_flags || (options->acls && !symlink));
+    struct bx_file_metadata_target target;
+    bool descriptor = S_ISREG(fs_entry->st->st_mode) || S_ISDIR(fs_entry->st->st_mode);
+    if (requested && (!(descriptor ? bx_file_metadata_target_fd(&target, source_fd) : bx_file_metadata_target_leaf(&target, fs_entry->source_parent_fd, fs_entry->source_name, fs_entry->st)) ||
+                      !bx_tar_metadata_collect_target(&metadata, &target, state->options->numeric_owner, options))) {
         bx_diag(diag, "%s: cannot read metadata: %s", fs_entry->source_path, strerror(errno));
         bx_file_metadata_free(&metadata);
         return false;
@@ -842,7 +844,7 @@ static bool bx_tar_stream_write_sparse_fs_entry(struct bx_tar_stream_fs_write_st
         compact_size += (size_t)(end - begin);
         offset = end;
     } while (offset < source->st->st_size);
-    if (!bx_tar_metadata_collect(&metadata, fd, false, false, state->options->numeric_owner, state->options->metadata))
+    if (!bx_tar_metadata_collect(&metadata, fd, state->options->numeric_owner, state->options->metadata))
         goto fail;
     if (!bx_tar_stream_start_sparse_v1_entry(&entry, state->sink, source->archive_path, uname, gname, mode, uid, gid, extents, count, (size_t)source->st->st_size, compact_size, mtime, &metadata,
                                              diag))
@@ -1036,8 +1038,6 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
             ? O_RDONLY | O_DIRECTORY : O_PATH;
         if (borrowed)
             fd = entry->source_fd;
-        else if (needs_metadata && S_ISFIFO(entry->st->st_mode))
-            fd = bx_fd_openat_metadata(entry->source_parent_fd, entry->source_name);
         else
             fd = bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name, flags | O_NOFOLLOW, 0);
         if (fd >= 0 && bx_fd_fstat_expected(fd, entry->st, &opened) != 0) {
@@ -1052,8 +1052,8 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         bx_diag(diag, "%s: %s", entry->source_path, strerror(errno));
         return false;
     }
-    /* Metadata and payload refer to this opened inode. A streaming symlink
-     * borrows the walker's FD; buffered inputs must acquire their own. */
+    /* Regular payload/metadata share this fd. Special-object metadata uses
+     * the verified parent/leaf; the locator still pins link-target capture. */
     struct bx_archive_fs_visit_entry verified = *entry;
     verified.st = &opened;
     char* target = symlink && !borrowed ? bx_path_readlinkat_dup(fd, "") : NULL;
@@ -1072,14 +1072,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         }
         /* Reading may change atime. Identity pinning does not freeze contents,
          * link counts, or metadata; compare the state used for this entry. */
-        else if (after.st_dev != opened.st_dev || after.st_ino != opened.st_ino
-                 || after.st_mode != opened.st_mode || after.st_uid != opened.st_uid
-                 || after.st_gid != opened.st_gid || after.st_nlink != opened.st_nlink
-                 || after.st_rdev != opened.st_rdev || after.st_size != opened.st_size
-                 || after.st_mtim.tv_sec != opened.st_mtim.tv_sec
-                 || after.st_mtim.tv_nsec != opened.st_mtim.tv_nsec
-                 || after.st_ctim.tv_sec != opened.st_ctim.tv_sec
-                 || after.st_ctim.tv_nsec != opened.st_ctim.tv_nsec) {
+        else if (!bx_file_metadata_stat_unchanged(&opened, &after)) {
             errno = ESTALE;
             bx_diag(diag, "%s: file changed while reading", entry->source_path);
             ok = false;

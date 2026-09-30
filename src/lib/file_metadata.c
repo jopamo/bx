@@ -18,6 +18,82 @@
 
 #include "bx/libbx.h"
 
+bool bx_file_metadata_stat_unchanged(const struct stat* a, const struct stat* b) {
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_mode == b->st_mode && a->st_uid == b->st_uid && a->st_gid == b->st_gid && a->st_nlink == b->st_nlink && a->st_rdev == b->st_rdev &&
+           a->st_size == b->st_size && a->st_mtim.tv_sec == b->st_mtim.tv_sec && a->st_mtim.tv_nsec == b->st_mtim.tv_nsec && a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
+           a->st_ctim.tv_nsec == b->st_ctim.tv_nsec;
+}
+
+bool bx_file_metadata_target_fd(struct bx_file_metadata_target* target, int fd) {
+    struct bx_file_metadata_target value = {.fd = fd};
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fstat(fd, &value.status) != 0)
+        return false;
+    if ((flags & O_PATH) || (!S_ISREG(value.status.st_mode) && !S_ISDIR(value.status.st_mode))) {
+        errno = EOPNOTSUPP;
+        return false;
+    }
+    if (!bx_mount_identity_read(fd, &value.identity))
+        return false;
+    *target = value;
+    return true;
+}
+
+bool bx_file_metadata_target_leaf(struct bx_file_metadata_target* target, int parent_fd, const char* name, const struct stat* expected) {
+    if (parent_fd < 0 || !name || !*name || strchr(name, '/') || strcmp(name, ".") == 0 || strcmp(name, "..") == 0 || !expected) {
+        errno = EINVAL;
+        return false;
+    }
+    struct stat parent;
+    if (fstat(parent_fd, &parent) != 0)
+        return false;
+    if (!S_ISDIR(parent.st_mode)) {
+        errno = ENOTDIR;
+        return false;
+    }
+    struct bx_file_metadata_target value = {.fd = parent_fd, .name = name};
+    if (fstatat(parent_fd, name, &value.status, AT_SYMLINK_NOFOLLOW) != 0)
+        return false;
+    if (!bx_file_metadata_stat_unchanged(expected, &value.status)) {
+        errno = ESTALE;
+        return false;
+    }
+    if (!S_ISLNK(value.status.st_mode) && !S_ISFIFO(value.status.st_mode) && !S_ISCHR(value.status.st_mode) && !S_ISBLK(value.status.st_mode)) {
+        errno = EOPNOTSUPP;
+        return false;
+    }
+    if (!bx_mount_identity_read_at(parent_fd, name, &value.identity))
+        return false;
+    if (!value.identity.has_mount) {
+        errno = EOPNOTSUPP;
+        return false;
+    }
+    *target = value;
+    return bx_file_metadata_target_verify(target, true);
+}
+
+bool bx_file_metadata_target_verify(const struct bx_file_metadata_target* target, bool unchanged) {
+    struct stat status;
+    struct bx_mount_identity identity;
+    int rc = target->name ? fstatat(target->fd, target->name, &status, AT_SYMLINK_NOFOLLOW) : fstat(target->fd, &status);
+    if (rc != 0) {
+        if (target->name && errno == ENOENT)
+            errno = ESTALE;
+        return false;
+    }
+    if (!(target->name ? bx_mount_identity_read_at(target->fd, target->name, &identity) : bx_mount_identity_read(target->fd, &identity)))
+        return false;
+    bool same;
+    if (!bx_mount_identity_compare(&target->identity, &identity, &same))
+        return false;
+    if (!same || status.st_ino != target->status.st_ino || (status.st_mode & S_IFMT) != (target->status.st_mode & S_IFMT) ||
+        (unchanged && !bx_file_metadata_stat_unchanged(&target->status, &status))) {
+        errno = ESTALE;
+        return false;
+    }
+    return true;
+}
+
 void bx_file_metadata_free(struct bx_file_metadata* metadata) {
     for (size_t i = 0; i < metadata->len; i++) {
         free(metadata->xattrs[i].name);
@@ -162,24 +238,21 @@ bool bx_file_metadata_apply_flags(int fd, unsigned int set, unsigned int clear) 
     return true;
 }
 
-static ssize_t bx_metadata_get_xattr(int fd, const char* name, void* value, size_t size);
+static ssize_t bx_metadata_get_xattr(const struct bx_file_metadata_target* target, const char* name, void* value, size_t size);
 
 /* Decode Linux's version-2 ACL xattrs through the pinned-object interface.
  * ENODATA denotes a mode-derived access ACL or an empty default ACL, not an
  * unsupported interface. */
-static acl_t bx_metadata_acl_fd(int fd, acl_type_t type) {
+static acl_t bx_metadata_acl_target(const struct bx_file_metadata_target* target, acl_type_t type) {
     unsigned char* data = xmalloc(65536u);
-    ssize_t size = bx_metadata_get_xattr(fd, type == ACL_TYPE_DEFAULT ? "system.posix_acl_default" : "system.posix_acl_access", data, 65536u);
+    ssize_t size = bx_metadata_get_xattr(target, type == ACL_TYPE_DEFAULT ? "system.posix_acl_default" : "system.posix_acl_access", data, 65536u);
     acl_t acl = NULL;
     if (size < 0) {
         if (errno == ENODATA) {
             if (type == ACL_TYPE_DEFAULT)
                 acl = acl_init(0);
-            else {
-                struct stat status;
-                if (fstat(fd, &status) == 0)
-                    acl = acl_from_mode(status.st_mode);
-            }
+            else
+                acl = acl_from_mode(target->status.st_mode);
         }
         goto out;
     }
@@ -245,9 +318,8 @@ out: {
 }
 }
 
-static bool bx_metadata_read_acl(char** text, int fd, acl_type_t type,
-                                  bool numeric_ids) {
-    acl_t acl = bx_metadata_acl_fd(fd, type);
+static bool bx_metadata_read_acl(char** text, const struct bx_file_metadata_target* target, acl_type_t type, bool numeric_ids) {
+    acl_t acl = bx_metadata_acl_target(target, type);
     if (!acl)
         return false;
     char* value = acl_to_any_text(acl, NULL, ',', numeric_ids ? TEXT_NUMERIC_IDS : 0);
@@ -259,62 +331,63 @@ static bool bx_metadata_read_acl(char** text, int fd, acl_type_t type,
     return true;
 }
 
-/* Newer kernels can support empty-path xattr operations on O_PATH FDs even
- * where the older f*xattr interfaces reject them. Never retry by pathname. */
-static ssize_t bx_metadata_list_xattrs(int fd, char* names, size_t size) {
-    ssize_t rc = flistxattr(fd, names, size);
+static ssize_t bx_metadata_list_xattrs(const struct bx_file_metadata_target* target, char* names, size_t size) {
+    if (!target->name)
+        return flistxattr(target->fd, names, size);
 #ifdef SYS_listxattrat
-    if (rc < 0 && errno == EBADF)
-        rc = syscall(SYS_listxattrat, fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW, names, size);
+    return syscall(SYS_listxattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, names, size);
+#else
+    errno = EOPNOTSUPP;
+    return -1;
 #endif
-    return rc;
 }
 
-static ssize_t bx_metadata_get_xattr(int fd, const char* name, void* value, size_t size) {
-    ssize_t rc = fgetxattr(fd, name, value, size);
+static ssize_t bx_metadata_get_xattr(const struct bx_file_metadata_target* target, const char* name, void* value, size_t size) {
+    if (!target->name)
+        return fgetxattr(target->fd, name, value, size);
 #ifdef SYS_getxattrat
-    if (rc < 0 && errno == EBADF) {
-        /* Linux xattr_args ABI, also aligned to eight bytes on 32-bit targets.
-         * Keep this usable with libc headers that do not declare xattrat yet. */
-        struct {
-            _Alignas(8) uint64_t value;
-            uint32_t size;
-            uint32_t flags;
-        } args = {.value = (uintptr_t)value, .size = (uint32_t)size};
-        rc = syscall(SYS_getxattrat, fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW,
-                       name, &args, sizeof(args));
-    }
+    /* Linux xattr_args ABI, including eight-byte alignment on 32-bit targets. */
+    struct {
+        _Alignas(8) uint64_t value;
+        uint32_t size;
+        uint32_t flags;
+    } args = {.value = (uintptr_t)value, .size = (uint32_t)size};
+    return syscall(SYS_getxattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, name, &args, sizeof(args));
+#else
+    errno = EOPNOTSUPP;
+    return -1;
 #endif
-    return rc;
 }
 
-bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
-                           bool symlink, bool directory, bool acls, bool numeric_ids,
-                           bx_file_xattr_filter filter, const void* user) {
-    if (fd < 0 && (filter || (acls && !symlink))) {
-        errno = EBADF;
+bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool acls, bool numeric_ids, bx_file_xattr_filter filter, const void* user) {
+    if (!bx_file_metadata_target_verify(target, true))
         return false;
-    }
+    bool symlink = S_ISLNK(target->status.st_mode);
+    bool directory = S_ISDIR(target->status.st_mode);
     if (acls && !symlink) {
-        if (!bx_metadata_read_acl(&metadata->acl_access, fd, ACL_TYPE_ACCESS, numeric_ids)
-            || (directory && !bx_metadata_read_acl(&metadata->acl_default, fd,
-                                                    ACL_TYPE_DEFAULT, numeric_ids)))
+        if (!bx_metadata_read_acl(&metadata->acl_access, target, ACL_TYPE_ACCESS, numeric_ids) || (directory && !bx_metadata_read_acl(&metadata->acl_default, target, ACL_TYPE_DEFAULT, numeric_ids)))
             return false;
     }
     if (!filter)
-        return true;
+        return bx_file_metadata_target_verify(target, true);
     /* Linux bounds the name list and each value at 64 KiB. Read each in one
      * syscall, avoiding a size-query/read race when another writer changes it. */
     char* names = xmalloc(65536u);
     unsigned char* value = xmalloc(65536u);
-    ssize_t size = bx_metadata_list_xattrs(fd, names, 65536u);
+    ssize_t size = bx_metadata_list_xattrs(target, names, 65536u);
     bool ok = size >= 0;
     for (ssize_t pos = 0; ok && pos < size;) {
         const char* name = names + pos;
-        pos += (ssize_t)strlen(name) + 1;
+        size_t length = strnlen(name, (size_t)(size - pos));
+        if (length == (size_t)(size - pos) || !length) {
+            errno = EINVAL;
+            ok = false;
+            break;
+        }
+        pos += (ssize_t)length + 1;
         if (!filter(name, user))
             continue;
-        ssize_t len = bx_metadata_get_xattr(fd, name, value, 65536u);
+        ssize_t len = bx_metadata_get_xattr(target, name, value, 65536u);
         if (len < 0) {
             ok = false;
             break;
@@ -324,15 +397,8 @@ bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
     int error = errno;
     free(value);
     free(names);
-    /* EBADF here can mean a valid O_PATH descriptor whose xattr operations
-     * the kernel does not support, rather than a closed descriptor. */
-    if (!ok && error == EBADF) {
-        int flags = fcntl(fd, F_GETFL);
-        if (flags >= 0 && (flags & O_PATH))
-            error = EOPNOTSUPP;
-    }
     errno = error;
-    return ok;
+    return ok && bx_file_metadata_target_verify(target, true);
 }
 
 /* POSIX draft ACL text can carry a fourth, numeric-ID field (star). Linux

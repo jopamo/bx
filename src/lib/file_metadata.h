@@ -3,8 +3,27 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+
+#include "lib/mount_identity.h"
+
+/* Borrows fd and name. A leaf target borrows a verified parent, never an
+ * object fd; its name is exactly one component. No target owns descriptors. */
+struct bx_file_metadata_target {
+    int fd;
+    const char* name;
+    struct stat status;
+    struct bx_mount_identity identity;
+};
+
+bool bx_file_metadata_target_fd(struct bx_file_metadata_target* target, int fd);
+bool bx_file_metadata_target_leaf(struct bx_file_metadata_target* target, int parent_fd, const char* name, const struct stat* expected);
+/* Always check identity; unchanged also checks capture-relevant stat state. */
+bool bx_file_metadata_target_verify(const struct bx_file_metadata_target* target, bool unchanged);
+/* Compare captured state, excluding atime changes caused by reading. */
+bool bx_file_metadata_stat_unchanged(const struct stat* before, const struct stat* after);
 
 struct bx_file_xattr {
     char* name;
@@ -65,12 +84,10 @@ void bx_file_metadata_copy(struct bx_file_metadata* dest,
 /* Names, values and text, including string terminators but not xattr slots.
  * Return SIZE_MAX if their sum cannot be represented. */
 size_t bx_file_metadata_value_bytes(const struct bx_file_metadata* metadata);
-/* Read into an empty model from a borrowed FD, never a pathname. O_PATH xattr
- * access requires kernel support; requested xattr/ACL read failures are fatal.
- * The filter and context are borrowed only for this call. */
-bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
-                           bool symlink, bool directory, bool acls, bool numeric_ids,
-                           bx_file_xattr_filter filter, const void* user);
+/* Read into an empty model through a verified target. Leaf reads use xattrat
+ * with no-follow semantics and require mount identity. Capture brackets the
+ * batch with identity/stat checks; interface failures are not absence. */
+bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool acls, bool numeric_ids, bx_file_xattr_filter filter, const void* user);
 /* Read Linux inode flags from a borrowed fd. The interface applies only to
  * regular files and directories; other object types report applicable=false. */
 bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable);
