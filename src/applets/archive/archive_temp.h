@@ -10,6 +10,8 @@ void bx_archive_temp_untrack(const char* path);
 void bx_archive_temp_cleanup_all(void);
 bool bx_archive_temp_install_signal_cleanup(void);
 int bx_archive_temp_pending_signal(void);
+int bx_archive_temp_signal_fd(void);
+/* Reset only before archive work starts or after all archive workers join. */
 void bx_archive_temp_clear_pending_signal(void);
 struct bx_cancel_state* bx_archive_temp_cancel_state(void);
 

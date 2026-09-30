@@ -517,16 +517,9 @@ static bool bx_tar_create_load_pattern_file(struct bx_tar_create_filter_state* s
     int fd = bx_tar_create_probe(state, dir_fd, dir_path, name, true);
     if (fd < 0)
         return !state->probe_failed;
-    FILE* stream = fdopen(fd, "rb");
-    if (!stream) {
-        int error = errno;
-        close(fd);
-        bx_tar_create_handle_fs_error(dir_path, BX_ARCHIVE_FS_ERROR_OPENDIR, error, state);
-        return false;
-    }
     struct bx_archive_name_list loaded = {0};
-    bool ok = bx_archive_name_list_read_stream(stream, '\n', &loaded, state->diag);
-    if (fclose(stream) != 0) {
+    bool ok = bx_archive_name_list_read_fd(fd, '\n', &loaded, state->diag);
+    if (close(fd) != 0) {
         bx_tar_create_handle_fs_error(dir_path, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno, state);
         ok = false;
     }
