@@ -33,6 +33,9 @@ struct bx_file_restore {
     bool set_group;
     bool set_mode;
     bool set_mtime;
+    unsigned int flags_set;
+    unsigned int flags_clear;
+    bool flags_present;
 };
 
 enum bx_file_restore_result {
@@ -41,7 +44,7 @@ enum bx_file_restore_result {
     BX_FILE_RESTORE_METADATA_ERROR,
 };
 
-/* Borrow an inode fd. Ownership precedes mode, ACLs/xattrs and timestamps.
+/* Borrow an inode fd. Ownership precedes mode, ACLs/xattrs, timestamps and flags.
  * O_PATH uses empty-path operations (chmod requires fchmodat2). Symlinks
  * require O_PATH and are never followed. */
 enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* restore,
@@ -55,10 +58,13 @@ bool bx_file_metadata_set(struct bx_file_metadata* metadata, const char* name,
                           const void* value, size_t size);
 void bx_file_metadata_remove(struct bx_file_metadata* metadata, const char* name);
 /* Replace represented fields with owned copies, retaining unrepresented fields.
- * Empty attribute values and empty ACL text are represented fields. */
+ * Empty attribute values and empty ACL/flag text are represented fields. */
 void bx_file_metadata_overlay(struct bx_file_metadata* dest, const struct bx_file_metadata* source);
 void bx_file_metadata_copy(struct bx_file_metadata* dest,
                            const struct bx_file_metadata* source);
+/* Names, values and text, including string terminators but not xattr slots.
+ * Return SIZE_MAX if their sum cannot be represented. */
+size_t bx_file_metadata_value_bytes(const struct bx_file_metadata* metadata);
 /* Read into an empty model from a borrowed FD, never a pathname. O_PATH xattr
  * access requires kernel support; requested xattr read failures are fatal.
  * The filter and context are borrowed only for this call. */
@@ -68,6 +74,7 @@ bool bx_file_metadata_read(struct bx_file_metadata* metadata, int fd,
 /* Read Linux inode flags from a borrowed fd. The interface applies only to
  * regular files and directories; other object types report applicable=false. */
 bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable);
+bool bx_file_metadata_apply_flags(int fd, unsigned int set, unsigned int clear);
 /* Borrow a verified inode fd. No pathname reconstruction or fallback.
  * O_PATH operations require empty-path kernel support; failure is fatal.
  * Apply after chown/chmod and data writes, which can clear inode metadata.

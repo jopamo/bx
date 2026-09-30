@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "applets/archive/archive_fs.h"
+#include "applets/archive/archive_temp.h"
 #include "bx/libbx.h"
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
@@ -396,7 +397,7 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                                            diag);
 }
 
-void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
+void bx_archive_pending_metadata_free(struct bx_archive_pending_metadata* dirs) {
     size_t i;
     for (i = 0u; i < dirs->len; i++) {
         bx_file_metadata_free(&dirs->entries[i].restore.metadata);
@@ -406,20 +407,31 @@ void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
     dirs->entries = NULL;
     dirs->len = 0u;
     dirs->cap = 0u;
+    dirs->bytes = 0u;
 }
 
-bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
-                                    int fd,
-                                    const char* path,
-                                    mode_t mode,
-                                    bool set_mtime,
-                                    struct timespec mtime) {
-    struct bx_archive_pending_dir* entry;
+bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs, int fd, const char* path, const struct bx_file_restore* restore, uint64_t order, uint64_t origin) {
+    struct bx_archive_pending_metadata_entry* entry;
     struct stat status;
     int stat_rc = fstat(fd, &status);
-    if (stat_rc != 0 || !S_ISDIR(status.st_mode)) {
-        int error = stat_rc != 0 ? errno : ENOTDIR;
+    if (stat_rc != 0 || (!S_ISDIR(status.st_mode) && !S_ISREG(status.st_mode)) || origin > order) {
+        int error = stat_rc != 0 ? errno : EINVAL;
         errno = error;
+        return false;
+    }
+    size_t bytes = sizeof(*entry) + strlen(path) + 1u;
+    const struct bx_file_metadata* metadata = &restore->metadata;
+    size_t values = bx_file_metadata_value_bytes(metadata);
+    const size_t limit = 256u * 1024u * 1024u;
+    bool oversized = bytes > limit || metadata->len > limit / sizeof(*metadata->xattrs);
+    if (!oversized) {
+        size_t slots = metadata->len * sizeof(*metadata->xattrs);
+        oversized = slots > limit - bytes || values > limit - bytes - slots;
+        if (!oversized)
+            bytes += slots + values;
+    }
+    if (dirs->len >= 1048576u || oversized || bytes > 256u * 1024u * 1024u - dirs->bytes) {
+        errno = E2BIG;
         return false;
     }
     if (dirs->len == dirs->cap) {
@@ -429,43 +441,64 @@ bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
     }
     entry = &dirs->entries[dirs->len];
     memset(entry, 0, sizeof(*entry));
-    entry->order = dirs->len++;
+    entry->order = order;
+    entry->origin = origin;
+    dirs->len++;
     entry->path = xstrdup(path);
     entry->dev = status.st_dev;
     entry->ino = status.st_ino;
+    entry->type = status.st_mode & S_IFMT;
     entry->depth = bx_dir_path_depth(path, dirs->root_depth);
-    entry->restore.mode = mode;
-    entry->restore.set_mode = true;
-    entry->restore.mtime = mtime;
-    entry->restore.set_mtime = set_mtime;
+    entry->restore = *restore;
+    entry->restore.metadata = (struct bx_file_metadata){0};
+    bx_file_metadata_copy(&entry->restore.metadata, metadata);
+    dirs->bytes += bytes;
     return true;
 }
 
-static int bx_archive_pending_dir_open(int root_fd, const char* path, unsigned policy) {
+/* -2 means the saved object no longer occupies this approved location. */
+static int bx_archive_pending_metadata_entry_open(int root_fd, const char* path, unsigned policy, const struct bx_archive_pending_metadata_entry* expected) {
     char* leaf = NULL;
     int parent = bx_dir_path_open_destination_parent(root_fd, path, policy, false, 0, &leaf);
     if (parent < 0)
-        return -1;
-    int fd = bx_fd_openat_cloexec(parent, leaf,
-                                  O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK, 0);
+        return (errno == ENOENT || errno == ENOTDIR || errno == ELOOP) ? -2 : -1;
+    int fd = -1;
+    struct stat status;
+    {
+        int locator = bx_fd_openat_cloexec(parent, leaf, O_PATH | O_NOFOLLOW, 0);
+        bool missing = locator < 0 && (errno == ENOENT || errno == ENOTDIR || errno == ELOOP);
+        bool found = locator >= 0 && fstat(locator, &status) == 0;
+        int error = errno;
+        if (locator >= 0)
+            close(locator);
+        errno = error;
+        if (missing || (found && (status.st_dev != expected->dev || status.st_ino != expected->ino || (status.st_mode & S_IFMT) != expected->type))) {
+            fd = -2;
+            goto done;
+        }
+        if (!found)
+            goto done;
+    }
+    int flags = O_RDONLY | O_NOFOLLOW | O_NONBLOCK;
+    if (expected->type == S_IFDIR)
+        flags |= O_DIRECTORY;
+    fd = bx_fd_openat_cloexec(parent, leaf, flags, 0);
+    if (fd >= 0) {
+        struct stat opened;
+        if (bx_fd_fstat_expected(fd, &status, &opened) != 0) {
+            int error = errno;
+            close(fd);
+            fd = error == ESTALE ? -2 : -1;
+            errno = error;
+        }
+    }
+done: {
     int error = errno;
     close(parent);
     free(leaf);
     errno = error;
     return fd;
 }
-
-bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
-                                    int root_fd, const char* path, mode_t mode,
-                                    bool set_mtime, struct timespec mtime) {
-    int fd = bx_archive_pending_dir_open(root_fd, path, dirs->path_policy);
-    if (fd < 0)
-        return false;
-    bool ok = bx_archive_pending_dirs_record_fd(dirs, fd, path, mode, set_mtime, mtime);
-    int error = errno;
-    close(fd);
-    errno = error;
-    return ok;
 }
 
 bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
@@ -479,71 +512,138 @@ bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
     return result == BX_FILE_RESTORE_OK;
 }
 
-static int bx_archive_pending_dir_identity_compare(const void* left, const void* right) {
-    const struct bx_archive_pending_dir* a = left;
-    const struct bx_archive_pending_dir* b = right;
+static int bx_archive_pending_metadata_entry_identity_compare(const void* left, const void* right) {
+    const struct bx_archive_pending_metadata_entry* a = left;
+    const struct bx_archive_pending_metadata_entry* b = right;
     if (a->dev != b->dev)
         return a->dev < b->dev ? -1 : 1;
     if (a->ino != b->ino)
         return a->ino < b->ino ? -1 : 1;
+    if (a->type != b->type)
+        return a->type < b->type ? -1 : 1;
     return (a->order > b->order) - (a->order < b->order);
 }
 
-static int bx_archive_pending_dir_depth_compare(const void* left, const void* right) {
-    const struct bx_archive_pending_dir* a = left;
-    const struct bx_archive_pending_dir* b = right;
+struct bx_archive_pending_metadata_group {
+    size_t first;
+    size_t end;
+    size_t location;
+    ptrdiff_t depth;
+};
+
+static int bx_archive_pending_metadata_entry_depth_compare(const void* left, const void* right) {
+    const struct bx_archive_pending_metadata_group* a = left;
+    const struct bx_archive_pending_metadata_group* b = right;
     if (a->depth != b->depth)
         return a->depth < b->depth ? -1 : 1;
-    return (a->order > b->order) - (a->order < b->order);
+    return (a->first > b->first) - (a->first < b->first);
 }
 
-bool bx_archive_pending_dirs_apply(struct bx_archive_pending_dirs* dirs,
-                                   int root_fd,
-                                   struct bx_diag_ctx* diag) {
-    /* Collapse aliases and duplicate headers before depth sorting; keep the last. */
-    if (dirs->len > 1u) {
-        qsort(dirs->entries, dirs->len, sizeof(*dirs->entries), bx_archive_pending_dir_identity_compare);
-        size_t kept = 0u;
-        for (size_t i = 0u; i < dirs->len; i++) {
-            struct bx_archive_pending_dir* entry = &dirs->entries[i];
-            if (i + 1u < dirs->len && entry->dev == entry[1].dev && entry->ino == entry[1].ino) {
-                bx_file_metadata_free(&entry->restore.metadata);
-                free(entry->path);
+bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs, int root_fd, struct bx_diag_ctx* diag) {
+    if (!dirs->len)
+        return true;
+    qsort(dirs->entries, dirs->len, sizeof(*dirs->entries), bx_archive_pending_metadata_entry_identity_compare);
+    struct bx_archive_pending_metadata_group* groups = xmalloc(dirs->len * sizeof(*groups));
+    size_t count = 0;
+    bool ok = true;
+    for (size_t first = 0; first < dirs->len;) {
+        size_t end = first + 1u;
+        while (end < dirs->len && dirs->entries[end].dev == dirs->entries[first].dev && dirs->entries[end].ino == dirs->entries[first].ino && dirs->entries[end].type == dirs->entries[first].type)
+            end++;
+        size_t location = first;
+        bool live = end == first + 1u;
+        /* Choose a live, deepest locator before restrictive ancestor metadata. */
+        if (!live) {
+            for (size_t i = first; i < end; i++) {
+                if (bx_archive_temp_pending_signal()) {
+                    bx_diag(diag, "metadata finalization interrupted");
+                    ok = false;
+                    goto done;
+                }
+                struct bx_archive_pending_metadata_entry* entry = &dirs->entries[i];
+                int fd = bx_archive_pending_metadata_entry_open(root_fd, entry->path, dirs->path_policy, entry);
+                if (fd == -2)
+                    continue;
+                if (fd < 0) {
+                    bx_diag(diag, "%s: %s", entry->path, strerror(errno));
+                    ok = false;
+                    goto done;
+                }
+                if (!live || entry->depth >= dirs->entries[location].depth)
+                    location = i;
+                live = true;
+                if (!bx_fd_close(&fd, entry->path, diag)) {
+                    ok = false;
+                    goto done;
+                }
             }
-            else
-                dirs->entries[kept++] = *entry;
         }
-        dirs->len = kept;
-        qsort(dirs->entries, dirs->len, sizeof(*dirs->entries), bx_archive_pending_dir_depth_compare);
+        if (live)
+            groups[count++] = (struct bx_archive_pending_metadata_group){first, end, location, dirs->entries[location].depth};
+        first = end;
     }
-    while (dirs->len > 0u) {
-        struct bx_archive_pending_dir* entry = &dirs->entries[dirs->len - 1u];
-        int fd = bx_archive_pending_dir_open(root_fd, entry->path, dirs->path_policy);
+    qsort(groups, count, sizeof(*groups), bx_archive_pending_metadata_entry_depth_compare);
+    while (count) {
+        if (bx_archive_temp_pending_signal()) {
+            bx_diag(diag, "metadata finalization interrupted");
+            ok = false;
+            goto done;
+        }
+        struct bx_archive_pending_metadata_group* group = &groups[--count];
+        struct bx_archive_pending_metadata_entry* location = &dirs->entries[group->location];
+        int fd = bx_archive_pending_metadata_entry_open(root_fd, location->path, dirs->path_policy, location);
+        if (fd == -2)
+            continue;
         if (fd < 0) {
-            /* A later archive member may have removed or replaced this path. */
-            if (errno == ENOENT || errno == ENOTDIR || errno == ELOOP) {
-                bx_file_metadata_free(&entry->restore.metadata);
-                free(entry->path);
-                dirs->len--;
-                continue;
+            bx_diag(diag, "%s: %s", location->path, strerror(errno));
+            ok = false;
+            goto done;
+        }
+        bool directory = location->type == S_IFDIR;
+        size_t first = directory ? group->end - 1u : group->first;
+        if (!directory) {
+            uint64_t origin = 0u;
+            for (size_t i = first; i < group->end; i++)
+                if (dirs->entries[i].origin > origin)
+                    origin = dirs->entries[i].origin;
+            while (first < group->end && dirs->entries[first].order < origin)
+                first++;
+        }
+        unsigned int set = 0u, clear = 0u;
+        for (size_t i = first; ok && i < group->end; i++) {
+            if (bx_archive_temp_pending_signal()) {
+                bx_diag(diag, "metadata finalization interrupted");
+                ok = false;
+                break;
             }
-            bx_diag(diag, "%s: %s", entry->path, strerror(errno));
-            return false;
+            struct bx_file_restore restore = dirs->entries[i].restore;
+            if (restore.flags_present) {
+                if (!(restore.flags_set | restore.flags_clear))
+                    set = clear = 0u;
+                else {
+                    set = (set & ~restore.flags_clear) | restore.flags_set;
+                    clear = (clear & ~restore.flags_set) | restore.flags_clear;
+                }
+            }
+            restore.flags_set = restore.flags_clear = 0u;
+            ok = bx_archive_restore_fd(&restore, fd, location->path, false, directory, diag);
         }
-        struct stat status;
-        if (fstat(fd, &status) != 0) {
-            bx_diag(diag, "%s: %s", entry->path, strerror(errno));
-            close(fd);
-            return false;
+        if (ok && bx_archive_temp_pending_signal()) {
+            bx_diag(diag, "metadata finalization interrupted");
+            ok = false;
         }
-        bool same = status.st_dev == entry->dev && status.st_ino == entry->ino;
-        bool ok = !same || bx_archive_restore_fd(&entry->restore, fd, entry->path, false, true, diag);
-        bool closed = bx_fd_close(&fd, entry->path, diag);
-        bx_file_metadata_free(&entry->restore.metadata);
-        free(entry->path);
-        dirs->len--;
-        if (!ok || !closed)
-            return false;
+        if (ok && !bx_file_metadata_apply_flags(fd, set, clear)) {
+            bx_diag(diag, "%s: cannot restore file flags: %s", location->path, strerror(errno));
+            ok = false;
+        }
+        if (!bx_fd_close(&fd, location->path, diag))
+            ok = false;
+        if (!ok)
+            goto done;
     }
-    return true;
+done:
+    free(groups);
+    if (ok)
+        bx_archive_pending_metadata_free(dirs);
+    return ok;
 }

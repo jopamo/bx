@@ -914,7 +914,7 @@ done: {
 static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                                 const struct bx_cpio_options* options,
                                 int root_fd,
-                                struct bx_archive_pending_dirs* dirs,
+                                struct bx_archive_pending_metadata* dirs,
                                 struct bx_cpio_hardlink_state_list* hardlinks,
                                 struct bx_diag_ctx* diag) {
     char* leaf = NULL;
@@ -929,6 +929,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
     if (parent < 0)
         goto fail;
     if (entry->kind == BX_CPIO_KIND_DIR) {
+        restore.set_mode = true;
         if (strcmp(leaf, ".") == 0) {
             fd = bx_fd_openat_cloexec(parent, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
         }
@@ -937,7 +938,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 goto fail;
             fd = bx_fd_openat_child_nofollow(parent, leaf, O_RDONLY | O_DIRECTORY, 0);
         }
-        if (fd < 0 || !bx_archive_pending_dirs_record_fd(dirs, fd, entry->name, entry->mode, options->preserve_mtime, entry->mtime))
+        if (fd < 0 || !bx_archive_pending_metadata_record_fd(dirs, fd, entry->name, &restore, dirs->len, 0u))
             goto fail;
     }
     else {
@@ -1019,7 +1020,7 @@ done:
 }
 
 static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, const struct bx_cpio_options* options, int argc, char** argv, struct bx_diag_ctx* diag) {
-    struct bx_archive_pending_dirs dirs = {0};
+    struct bx_archive_pending_metadata dirs = {0};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
     char list_output_buffer[8192];
     struct bx_line_writer list_writer;
@@ -1065,9 +1066,9 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
         bx_diag(diag, "write error: %s", strerror(errno));
         status = 2;
     }
-    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, root_fd, diag))
+    if (status == 0 && !bx_archive_pending_metadata_apply(&dirs, root_fd, diag))
         status = 2;
-    bx_archive_pending_dirs_free(&dirs);
+    bx_archive_pending_metadata_free(&dirs);
     if (!bx_cpio_hardlink_states_free(&hardlinks, diag))
         status = 2;
     bx_fd_cleanup(&root_fd);
@@ -1079,7 +1080,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
     size_t name_count = 0;
     struct bx_archive_fs_list files = {0};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
-    struct bx_archive_pending_dirs dirs = {0};
+    struct bx_archive_pending_metadata dirs = {0};
     int status = 2;
     int root_fd = -1;
     if (!bx_cpio_read_name_list(options, &names, &name_count, diag))
@@ -1134,10 +1135,10 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
             break;
         }
     }
-    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, root_fd, diag))
+    if (status == 0 && !bx_archive_pending_metadata_apply(&dirs, root_fd, diag))
         status = 2;
 done:
-    bx_archive_pending_dirs_free(&dirs);
+    bx_archive_pending_metadata_free(&dirs);
     if (!bx_cpio_hardlink_states_free(&hardlinks, diag))
         status = 2;
     bx_archive_fs_list_free(&files);

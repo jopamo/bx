@@ -471,14 +471,7 @@ static struct bx_tar_pax_info bx_tar_pax_effective_info(const struct bx_tar_pax_
 static bool bx_tar_pax_metadata_bounded(const struct bx_file_metadata* metadata) {
     if (metadata->len > BX_TAR_PAX_XATTR_LIMIT)
         return false;
-    size_t size = metadata->acl_access ? strlen(metadata->acl_access) + 1u : 0u;
-    if (metadata->acl_default)
-        size += strlen(metadata->acl_default) + 1u;
-    if (metadata->file_flags)
-        size += strlen(metadata->file_flags) + 1u;
-    for (size_t i = 0; i < metadata->len; i++)
-        size += strlen(metadata->xattrs[i].name) + 1u + metadata->xattrs[i].size;
-    return size <= BX_TAR_PAX_METADATA_LIMIT;
+    return bx_file_metadata_value_bytes(metadata) <= BX_TAR_PAX_METADATA_LIMIT;
 }
 
 static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax, char* record, size_t record_len, bool skip_owner_group_names, struct bx_tar_pax_info* global) {

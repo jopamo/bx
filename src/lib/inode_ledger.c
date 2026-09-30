@@ -23,7 +23,7 @@ static size_t bx_inode_slot(const struct bx_inode_ledger* set, const struct stat
     return index;
 }
 
-bool bx_inode_ledger_lookup(const struct bx_inode_ledger* set, const struct stat* status, uint64_t* sequence) {
+bool bx_inode_ledger_lookup(const struct bx_inode_ledger* set, const struct stat* status, uint64_t* sequence, uint64_t* origin) {
     if (!set->cap)
         return false;
     const struct bx_inode_ledger_slot* slot = &set->slots[bx_inode_slot(set, status)];
@@ -31,16 +31,19 @@ bool bx_inode_ledger_lookup(const struct bx_inode_ledger* set, const struct stat
         return false;
     if (sequence)
         *sequence = slot->sequence;
+    if (origin)
+        *origin = slot->origin;
     return true;
 }
 
-bool bx_inode_ledger_record(struct bx_inode_ledger* set, const struct stat* status, uint64_t sequence, size_t limit) {
-    if (!(status->st_mode & S_IFMT)) {
+bool bx_inode_ledger_record(struct bx_inode_ledger* set, const struct stat* status, uint64_t sequence, uint64_t origin, size_t limit) {
+    if (!(status->st_mode & S_IFMT) || origin > sequence) {
         errno = EINVAL;
         return false;
     }
-    if (bx_inode_ledger_lookup(set, status, NULL)) {
+    if (bx_inode_ledger_lookup(set, status, NULL, NULL)) {
         set->slots[bx_inode_slot(set, status)].sequence = sequence;
+        set->slots[bx_inode_slot(set, status)].origin = origin;
         return true;
     }
     if (set->len >= limit) {
@@ -70,6 +73,7 @@ bool bx_inode_ledger_record(struct bx_inode_ledger* set, const struct stat* stat
         .ino = status->st_ino,
         .type = status->st_mode & S_IFMT,
         .sequence = sequence,
+        .origin = origin,
     };
     set->len++;
     return true;

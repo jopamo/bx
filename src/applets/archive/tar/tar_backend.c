@@ -1070,7 +1070,7 @@ struct bx_tar_extract_state {
     FILE* report_stream;
     const struct bx_tar_select_plan* select_plan;
     bool incremental_mode;
-    struct bx_archive_pending_dirs dirs;
+    struct bx_archive_pending_metadata dirs;
     struct bx_inode_ledger restored;
     struct bx_tar_pending_link* links;
     size_t link_count;
@@ -1215,7 +1215,7 @@ static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
     free(state->occurrence_counts);
     bx_fd_cleanup(&state->parent_fd);
     free(state->leaf);
-    bx_archive_pending_dirs_free(&state->dirs);
+    bx_archive_pending_metadata_free(&state->dirs);
     bx_inode_ledger_free(&state->restored);
     for (size_t i = 0; i < state->link_count; i++) {
         free(state->links[i].path);
@@ -2383,9 +2383,12 @@ static bool bx_tar_extract_sparse_payload(struct bx_tar_extract_state* state,
     return true;
 }
 
-static void bx_tar_extract_select_metadata(struct bx_tar_extract_state* state,
-                                            const struct bx_tar_entry* entry,
-                                            mode_t mode, struct bx_file_restore* restore) {
+static bool bx_tar_extract_select_metadata(struct bx_tar_extract_state* state,
+                                           const struct bx_tar_entry* entry,
+                                           mode_t mode,
+                                           struct bx_file_restore* restore,
+                                           const char* path,
+                                           struct bx_diag_ctx* diag) {
     restore->mode = mode;
     restore->set_mode = entry->kind != BX_TAR_KIND_SYMLINK;
     restore->mtime = entry->mtime;
@@ -2393,6 +2396,12 @@ static void bx_tar_extract_select_metadata(struct bx_tar_extract_state* state,
     bx_tar_extract_entry_ids(state, entry, &restore->uid, &restore->gid,
                               &restore->set_owner, &restore->set_group);
     bx_tar_metadata_select(&restore->metadata, &entry->metadata, &state->options->metadata);
+    restore->flags_present = state->options->metadata.file_flags && entry->metadata.file_flags != NULL;
+    if (restore->flags_present && !bx_tar_metadata_decode_flags(entry->metadata.file_flags, &restore->flags_set, &restore->flags_clear)) {
+        bx_diag(diag, "%s: invalid or unsupported file flags: %s", path, strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
@@ -2400,15 +2409,21 @@ static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
                                      const char* path, mode_t mode,
                                      struct bx_diag_ctx* diag) {
     struct bx_file_restore selected = {0};
-    bx_tar_extract_select_metadata(state, entry, mode, &selected);
+    if (!bx_tar_extract_select_metadata(state, entry, mode, &selected, path, diag)) {
+        bx_file_metadata_free(&selected.metadata);
+        return false;
+    }
     struct stat status;
     if (fstat(fd, &status) != 0) {
         bx_file_metadata_free(&selected.metadata);
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
-    bool ok = bx_archive_restore_fd(&selected, fd, path,
-                                     S_ISLNK(status.st_mode), S_ISDIR(status.st_mode), diag);
+    bool deferred = state->options->metadata.file_flags && S_ISREG(status.st_mode);
+    bool ok = deferred ? bx_archive_pending_metadata_record_fd(&state->dirs, fd, path, &selected, state->sequence, state->sequence)
+                       : bx_archive_restore_fd(&selected, fd, path, S_ISLNK(status.st_mode), S_ISDIR(status.st_mode), diag);
+    if (deferred && !ok)
+        bx_diag(diag, "%s: cannot defer metadata: %s", path, strerror(errno));
     bx_file_metadata_free(&selected.metadata);
     return ok;
 }
@@ -2443,7 +2458,7 @@ static bool bx_tar_extract_cancel_links(struct bx_tar_extract_state* state, stru
 
 static bool bx_tar_extract_record_inode(struct bx_tar_extract_state* state, int fd, const char* path, struct bx_diag_ctx* diag) {
     struct stat status;
-    if (fstat(fd, &status) == 0 && bx_inode_ledger_record(&state->restored, &status, state->sequence, 1048576u))
+    if (fstat(fd, &status) == 0 && bx_inode_ledger_record(&state->restored, &status, state->sequence, state->sequence, 1048576u))
         return true;
     bx_diag(diag, "%s: cannot record restored inode (limit 1048576): %s", path, strerror(errno));
     return false;
@@ -2456,16 +2471,22 @@ static bool bx_tar_extract_queue_link(struct bx_tar_extract_state* state, const 
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
-    bx_tar_extract_select_metadata(state, entry, mode, &link.restore);
+    if (!bx_tar_extract_select_metadata(state, entry, mode, &link.restore, path, diag)) {
+        bx_file_metadata_free(&link.restore.metadata);
+        return false;
+    }
     size_t bytes = sizeof(link) + strlen(path) + strlen(target) + strlen(state->leaf) + 3u;
     const struct bx_file_metadata* metadata = &link.restore.metadata;
-    for (size_t i = 0; i < metadata->len; i++)
-        bytes += sizeof(metadata->xattrs[i]) + strlen(metadata->xattrs[i].name) + 1u + metadata->xattrs[i].size;
-    if (metadata->acl_access)
-        bytes += strlen(metadata->acl_access) + 1u;
-    if (metadata->acl_default)
-        bytes += strlen(metadata->acl_default) + 1u;
-    if (state->link_count >= 4096u || bytes > 16u * 1024u * 1024u - state->link_bytes) {
+    size_t values = bx_file_metadata_value_bytes(metadata);
+    const size_t limit = 16u * 1024u * 1024u;
+    bool oversized = bytes > limit || metadata->len > limit / sizeof(*metadata->xattrs);
+    if (!oversized) {
+        size_t slots = metadata->len * sizeof(*metadata->xattrs);
+        oversized = slots > limit - bytes || values > limit - bytes - slots;
+        if (!oversized)
+            bytes += slots + values;
+    }
+    if (state->link_count >= 4096u || oversized || bytes > 16u * 1024u * 1024u - state->link_bytes) {
         bx_file_metadata_free(&link.restore.metadata);
         bx_diag(diag, "%s: unresolved hard-link limit exceeded (4096 links, 16 MiB)", path);
         return false;
@@ -2532,8 +2553,8 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
             struct stat expected;
             bool waiting = source < 0 && bx_tar_link_missing(error);
             bool ok = source >= 0 && fstat(source, &expected) == 0;
-            uint64_t sequence = 0;
-            if (ok && !bx_inode_ledger_lookup(&state->restored, &expected, &sequence))
+            uint64_t sequence = 0, origin = 0;
+            if (ok && !bx_inode_ledger_lookup(&state->restored, &expected, &sequence, &origin))
                 waiting = true;
             if (waiting) {
                 bx_fd_cleanup(&source);
@@ -2573,10 +2594,17 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                         ok = fd >= 0 && bx_fd_fstat_expected(fd, &expected, &linked) == 0;
                         if (!ok)
                             bx_diag(diag, "%s: %s", link->path, strerror(errno));
+                        if (ok && (link->sequence > sequence || (state->options->metadata.file_flags && S_ISREG(linked.st_mode) && link->sequence >= origin))) {
+                            if (state->options->metadata.file_flags && S_ISREG(linked.st_mode)) {
+                                ok = bx_archive_pending_metadata_record_fd(&state->dirs, fd, link->path, &link->restore, link->sequence, origin);
+                                if (!ok)
+                                    bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));
+                            }
+                            else
+                                ok = bx_archive_restore_fd(&link->restore, fd, link->path, S_ISLNK(linked.st_mode), false, diag);
+                        }
                         if (ok && link->sequence > sequence)
-                            ok = bx_archive_restore_fd(&link->restore, fd, link->path, S_ISLNK(linked.st_mode), false, diag);
-                        if (ok && link->sequence > sequence)
-                            ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, 1048576u);
+                            ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, origin, 1048576u);
                         if (fd >= 0 && !bx_fd_close(&fd, link->path, diag))
                             ok = false;
                     }
@@ -2778,17 +2806,19 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
                 && state->options->old_file_mode != BX_TAR_OLD_FILES_SKIP)) {
             int fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf,
                                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
-            bool recorded = fd >= 0 && bx_archive_pending_dirs_record_fd(&state->dirs, fd, dest_path, extract_mode, !state->options->touch_mtime && !entry->omit_mtime, entry->mtime);
+            struct bx_file_restore restore = {0};
+            bool selected = bx_tar_extract_select_metadata(state, entry, extract_mode, &restore, dest_path, diag);
+            bool recorded = selected && fd >= 0 && bx_archive_pending_metadata_record_fd(&state->dirs, fd, dest_path, &restore, state->sequence, 0u);
             int error = errno;
+            bx_file_metadata_free(&restore.metadata);
             bx_fd_cleanup(&fd);
             if (!recorded) {
                 errno = error;
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+                if (selected)
+                    bx_diag(diag, "%s: cannot defer metadata: %s", dest_path, strerror(errno));
                 free(dest_path);
                 return false;
             }
-            bx_tar_extract_select_metadata(state, entry, extract_mode,
-                                             &state->dirs.entries[state->dirs.len - 1u].restore);
         }
         free(dest_path);
         bx_tar_extract_clear_current_stream(state);
@@ -2797,9 +2827,9 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
 
     if (entry->kind == BX_TAR_KIND_REG) {
         int fd;
+        mode_t create_mode = state->options->metadata.file_flags ? 0600u : extract_mode;
 
-        fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf,
-                                   O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, extract_mode);
+        fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, create_mode);
         if (fd < 0) {
             if (errno != EEXIST && errno != EISDIR) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
@@ -2812,13 +2842,18 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
                 bx_tar_extract_clear_current_stream(state);
                 return true;
             }
-            fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf,
-                                       O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, extract_mode);
+            fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, create_mode);
             if (fd < 0) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
                 free(dest_path);
                 return false;
             }
+        }
+        if (state->options->metadata.file_flags && fchmod(fd, 0600u) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            close(fd);
+            free(dest_path);
+            return false;
         }
         bx_tar_extract_clear_current_stream(state);
         state->current_fd = fd;
@@ -2995,7 +3030,7 @@ static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
             bx_diag(diag, "%s: unresolved hard link to '%s' (target not restored)", state->links[i].path, state->links[i].target);
         return 2;
     }
-    if (!bx_archive_pending_dirs_apply(&state->dirs, state->root_fd, diag)) {
+    if (!bx_archive_pending_metadata_apply(&state->dirs, state->root_fd, diag)) {
         return 2;
     }
     if (state->status == 2) {
@@ -5112,8 +5147,12 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         }
         return bx_tar_report_missing_mode(diag);
     }
-    if (options->metadata.file_flags && options->mode != BX_TAR_MODE_CREATE) {
-        bx_diag(diag, "--file-flags currently requires --create");
+    if (options->metadata.file_flags && options->mode != BX_TAR_MODE_CREATE && options->mode != BX_TAR_MODE_EXTRACT) {
+        bx_diag(diag, "--file-flags requires --create or --extract");
+        return false;
+    }
+    if (options->metadata.file_flags && options->to_stdout) {
+        bx_diag(diag, "--file-flags cannot be combined with --to-stdout");
         return false;
     }
     if (options->create_options.one_file_system
