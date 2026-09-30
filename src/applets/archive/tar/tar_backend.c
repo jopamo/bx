@@ -2227,11 +2227,6 @@ static int bx_tar_timespec_compare(struct timespec left, struct timespec right) 
     return 0;
 }
 
-static struct timespec bx_tar_entry_stat_time(const struct bx_archive_fs_entry* entry,
-                                              bool use_ctime) {
-    return use_ctime ? entry->st.st_ctim : entry->st.st_mtim;
-}
-
 static void bx_tar_filter_newer_entries(struct bx_archive_fs_list* list,
                                         struct timespec cutoff,
                                         bool use_ctime) {
@@ -2239,10 +2234,7 @@ static void bx_tar_filter_newer_entries(struct bx_archive_fs_list* list,
     size_t write_index = 0u;
 
     for (read_index = 0u; read_index < list->len; read_index++) {
-        bool keep = bx_tar_timespec_compare(
-            bx_tar_entry_stat_time(&list->entries[read_index], use_ctime),
-            cutoff
-        ) > 0;
+        bool keep = bx_tar_timespec_compare(list->entries[read_index].st.st_mtim, cutoff) > 0 || (use_ctime && bx_tar_timespec_compare(list->entries[read_index].st.st_ctim, cutoff) > 0);
 
         if (!keep) {
             free(list->entries[read_index].source_path);
