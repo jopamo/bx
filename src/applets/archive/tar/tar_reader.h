@@ -20,6 +20,8 @@ enum bx_tar_kind {
     BX_TAR_KIND_SYMLINK,
     BX_TAR_KIND_HARDLINK,
     BX_TAR_KIND_FIFO,
+    BX_TAR_KIND_CHAR,
+    BX_TAR_KIND_BLOCK,
 };
 
 struct bx_tar_sparse_extent {
@@ -37,6 +39,7 @@ struct bx_tar_entry {
     mode_t mode;
     uid_t uid;
     gid_t gid;
+    dev_t rdev;
     struct timespec mtime;
     bool omit_uid;
     bool omit_gid;

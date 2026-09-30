@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/eventfd.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
@@ -325,6 +326,15 @@ int bx_fd_mknodat(int dirfd, const char* path, mode_t mode, dev_t dev) {
         return -1;
     }
     return mknodat(dirfd, path, mode, dev);
+}
+
+bool bx_fd_device_from_numbers(uintmax_t major_number, uintmax_t minor_number, dev_t* device) {
+    if (!device || major_number > 0xfffu || minor_number > 0xfffffu) {
+        errno = EINVAL;
+        return false;
+    }
+    *device = makedev((unsigned int)major_number, (unsigned int)minor_number);
+    return true;
 }
 
 int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode) {

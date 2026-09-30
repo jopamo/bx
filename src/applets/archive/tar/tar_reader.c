@@ -16,6 +16,7 @@
 #include "applets/archive/tar/tar_metadata.h"
 #include "bx/libbx.h"
 #include "lib/checked_math.h"
+#include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
 
@@ -245,6 +246,18 @@ static bool bx_tar_header_checksum_valid(const unsigned char* header) {
         signed_sum += (int8_t)byte;
     }
     return recorded == unsigned_sum || (signed_sum >= 0 && recorded == (size_t)signed_sum);
+}
+
+static bool bx_tar_device_field(const unsigned char* field, size_t* value) {
+    size_t i = 0;
+    *value = 0;
+    while (i < 8u && (field[i] == ' ' || field[i] == '\0'))
+        i++;
+    while (i < 8u && field[i] >= '0' && field[i] <= '7')
+        *value = (*value << 3) | (size_t)(field[i++] - '0');
+    while (i < 8u && (field[i] == ' ' || field[i] == '\0'))
+        i++;
+    return i == 8u;
 }
 
 static bool bx_tar_header_payload_size(const unsigned char* header, const struct bx_tar_pax_numbers* numbers, size_t* size, struct bx_diag_ctx* diag) {
@@ -803,6 +816,18 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
         case '6':
             entry->kind = BX_TAR_KIND_FIFO;
             break;
+        case '3':
+        case '4': {
+            size_t major_number, minor_number;
+            if (size != 0u || !bx_tar_device_field(header + 329, &major_number) || !bx_tar_device_field(header + 337, &minor_number) ||
+                !bx_fd_device_from_numbers(major_number, minor_number, &entry->rdev)) {
+                bx_diag(diag, "%s: invalid device metadata", entry->name);
+                bx_tar_entry_free(entry);
+                return false;
+            }
+            entry->kind = typeflag == '3' ? BX_TAR_KIND_CHAR : BX_TAR_KIND_BLOCK;
+            break;
+        }
         default:
             bx_tar_entry_free(entry);
             bx_diag(diag, "unsupported tar entry type");
@@ -1436,6 +1461,7 @@ static bool bx_tar_clone_entry(struct bx_tar_entry* dst,
     dst->mode = src->mode;
     dst->uid = src->uid;
     dst->gid = src->gid;
+    dst->rdev = src->rdev;
     dst->uname = src->uname ? xstrdup(src->uname) : NULL;
     dst->gname = src->gname ? xstrdup(src->gname) : NULL;
     dst->mtime = src->mtime;

@@ -2,6 +2,7 @@
 #define BX_COMMON_FD_OPS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -77,6 +78,8 @@ int bx_fd_linkat(int olddirfd, const char* oldpath, int newdirfd, const char* ne
 int bx_fd_symlinkat(const char* target, int linkdirfd, const char* linkpath);
 int bx_fd_mkdirat(int dirfd, const char* path, mode_t mode);
 int bx_fd_mknodat(int dirfd, const char* path, mode_t mode, dev_t dev);
+/* Reject numbers outside Linux's 12-bit major / 20-bit minor encoding. */
+bool bx_fd_device_from_numbers(uintmax_t major_number, uintmax_t minor_number, dev_t* device);
 int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode);
 int bx_fd_utimensat(int dirfd, const char* path, const struct timespec times[2], int flags);
 int bx_fd_fchmod(int fd, mode_t mode);
