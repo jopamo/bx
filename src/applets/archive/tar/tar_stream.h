@@ -7,7 +7,6 @@
 #include <time.h>
 
 #include "applets/archive/archive_fs.h"
-#include "applets/archive/tar/tar_id_map.h"
 #include "applets/archive/tar/tar_metadata.h"
 #include "bx/diag.h"
 
@@ -23,8 +22,6 @@ struct bx_tar_stream_options {
     uid_t owner;
     gid_t group;
     struct timespec mtime;
-    const struct bx_tar_id_map* owner_map;
-    const struct bx_tar_id_map* group_map;
 };
 
 struct bx_tar_sparse_extent;

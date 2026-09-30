@@ -18,7 +18,6 @@
 #include "applets/archive/archive_temp.h"
 #include "applets/archive/tar/tar_backend.h"
 #include "applets/archive/tar/tar_create.h"
-#include "applets/archive/tar/tar_id_map.h"
 #include "applets/archive/tar/tar_names.h"
 #include "applets/archive/tar/tar_report.h"
 #include "applets/archive/tar/tar_reader.h"
@@ -108,8 +107,6 @@ struct bx_tar_options {
     bool group_set;
     uid_t owner;
     gid_t group;
-    struct bx_tar_id_map owner_map;
-    struct bx_tar_id_map group_map;
     bool fixed_mtime;
     struct timespec mtime;
     enum bx_tar_owner_policy owner_policy;
@@ -219,8 +216,6 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_MODE,
     BX_TAR_OPT_OWNER,
     BX_TAR_OPT_GROUP,
-    BX_TAR_OPT_GROUP_MAP,
-    BX_TAR_OPT_OWNER_MAP,
     BX_TAR_OPT_OWNER_RESTORE_ON,
     BX_TAR_OPT_OWNER_RESTORE_OFF,
     BX_TAR_OPT_PERMISSIONS_ON,
@@ -326,8 +321,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--group", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_GROUP},
     {"--numeric-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NUMERIC_OWNER},
     {"--owner", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_OWNER},
-    {"--group-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_GROUP_MAP},
-    {"--owner-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_OWNER_MAP},
     {"--mode", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MODE},
     {"--mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MTIME},
     {"--touch", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TOUCH_MTIME_ON},
@@ -490,8 +483,6 @@ bx_tar_make_stream_options(const struct bx_tar_options* options) {
         .owner = options->owner,
         .group = options->group,
         .mtime = options->mtime,
-        .owner_map = &options->owner_map,
-        .group_map = &options->group_map,
     };
 }
 
@@ -2873,7 +2864,7 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         .archive_path = options->archive_path,
         .required_codec = bx_tar_input_required_codec(options),
         .seek_mode = options->seek_mode,
-        .skip_owner_group_names = options->owner_map.len == 0u && options->group_map.len == 0u,
+        .skip_owner_group_names = true,
         .skip_owner_group_ids = options->mode == BX_TAR_MODE_LIST && options->verbose_count < 2u,
     };
     struct bx_tar_report_output report_output = {0};
@@ -3271,8 +3262,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_TO_STDOUT:
         case BX_TAR_OPT_OWNER:
         case BX_TAR_OPT_GROUP:
-        case BX_TAR_OPT_OWNER_MAP:
-        case BX_TAR_OPT_GROUP_MAP:
         case BX_TAR_OPT_MODE:
         case BX_TAR_OPT_MTIME:
         case BX_TAR_OPT_KEEP_OLD_FILES:
@@ -3571,10 +3560,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             }
             options->group_set = true;
             return true;
-        case BX_TAR_OPT_GROUP_MAP:
-            return bx_tar_id_map_load_group(&options->group_map, value, diag);
-        case BX_TAR_OPT_OWNER_MAP:
-            return bx_tar_id_map_load_owner(&options->owner_map, value, diag);
         case BX_TAR_OPT_OWNER_RESTORE_ON:
             options->owner_policy = BX_TAR_OWNER_FORCE;
             return true;
@@ -3639,8 +3624,6 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_archive_name_list_free(&options->metadata.include);
     bx_archive_name_list_free(&options->metadata.exclude);
     bx_tar_create_options_cleanup(&options->create_options);
-    bx_tar_id_map_cleanup(&options->owner_map);
-    bx_tar_id_map_cleanup(&options->group_map);
     free(options->index_file_path);
     options->index_file_path = NULL;
     bx_tar_clear_unsupported_external_compress_program(options);
