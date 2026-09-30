@@ -107,17 +107,15 @@ void bx_tar_metadata_select(struct bx_file_metadata* selected,
     }
 }
 
-bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd,
-                              bool symlink, bool directory, bool numeric_ids,
-                              const struct bx_tar_metadata_options* options) {
+bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool numeric_ids, const struct bx_tar_metadata_options* options) {
     if (!options)
         return true;
-    if (!bx_file_metadata_read(metadata, fd, symlink, directory, options->acls, numeric_ids, options->xattrs || options->selinux ? bx_tar_metadata_collect_filter : NULL, options))
+    if (!bx_file_metadata_read_target(metadata, target, options->acls, numeric_ids, options->xattrs || options->selinux ? bx_tar_metadata_collect_filter : NULL, options))
         return false;
-    if (options->file_flags) {
+    if (options->file_flags && !target->name) {
         unsigned int flags;
         bool applicable;
-        if (!bx_file_metadata_read_flags(fd, &flags, &applicable))
+        if (!bx_file_metadata_read_flags(target->fd, &flags, &applicable))
             return false;
         if (applicable) {
             char text[128];
@@ -135,7 +133,14 @@ bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd,
             metadata->file_flags = xstrdup(text);
         }
     }
-    return true;
+    return bx_file_metadata_target_verify(target, true);
+}
+
+bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd, bool numeric_ids, const struct bx_tar_metadata_options* options) {
+    if (!options || (!options->xattrs && !options->selinux && !options->file_flags && !options->acls))
+        return true;
+    struct bx_file_metadata_target target;
+    return bx_file_metadata_target_fd(&target, fd) && bx_tar_metadata_collect_target(metadata, &target, numeric_ids, options);
 }
 
 bool bx_tar_metadata_parse(struct bx_file_metadata* metadata, const char* key,
