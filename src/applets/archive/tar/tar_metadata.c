@@ -9,6 +9,59 @@
 
 #include "bx/libbx.h"
 
+static const struct {
+    unsigned int bit;
+    const char* set;
+    const char* clear;
+    const char* alias_set;
+    const char* alias_clear;
+} bx_tar_flag_names[] = {
+    {FS_APPEND_FL, "sappnd", "nosappnd", "sappend", "nosappend"},
+    {FS_IMMUTABLE_FL, "schg", "noschg", "simmutable", "nosimmutable"},
+    {FS_NODUMP_FL, "nodump", "dump", NULL, NULL},
+    {FS_NOATIME_FL, "noatime", "atime", NULL, NULL},
+    {FS_SYNC_FL, "sync", "nosync", NULL, NULL},
+    {FS_DIRSYNC_FL, "dirsync", "nodirsync", NULL, NULL},
+};
+
+bool bx_tar_metadata_decode_flags(const char* text, unsigned int* set, unsigned int* clear) {
+    *set = *clear = 0u;
+    if (!text)
+        return true;
+    while (*text) {
+        text += strspn(text, " ,\t");
+        size_t length = strcspn(text, " ,\t");
+        if (!length)
+            break;
+        bool found = false;
+        for (size_t i = 0; i < sizeof(bx_tar_flag_names) / sizeof(bx_tar_flag_names[0]); i++) {
+            const char* tokens[] = {bx_tar_flag_names[i].set, bx_tar_flag_names[i].clear, bx_tar_flag_names[i].alias_set, bx_tar_flag_names[i].alias_clear};
+            for (size_t j = 0; j < sizeof(tokens) / sizeof(tokens[0]); j++) {
+                if (tokens[j] && strlen(tokens[j]) == length && memcmp(tokens[j], text, length) == 0) {
+                    if (j & 1u)
+                        *clear |= bx_tar_flag_names[i].bit;
+                    else
+                        *set |= bx_tar_flag_names[i].bit;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+                break;
+        }
+        if (!found) {
+            errno = ENOTSUP;
+            return false;
+        }
+        text += length;
+    }
+    if (*set & *clear) {
+        errno = EINVAL;
+        return false;
+    }
+    return true;
+}
+
 static bool bx_tar_metadata_matches(const struct bx_archive_name_list* masks,
                                      const char* name) {
     for (size_t i = 0; i < masks->len; i++) {
@@ -67,18 +120,10 @@ bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd,
         if (!bx_file_metadata_read_flags(fd, &flags, &applicable))
             return false;
         if (applicable) {
-            const struct {
-                unsigned int bit;
-                const char* set;
-                const char* clear;
-            } names[] = {
-                {FS_APPEND_FL, "sappnd", "nosappnd"}, {FS_IMMUTABLE_FL, "schg", "noschg"}, {FS_NODUMP_FL, "nodump", "dump"},
-                {FS_NOATIME_FL, "noatime", "atime"},  {FS_SYNC_FL, "sync", "nosync"},      {FS_DIRSYNC_FL, "dirsync", "nodirsync"},
-            };
             char text[128];
             size_t length = 0u;
-            for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-                const char* name = flags & names[i].bit ? names[i].set : names[i].clear;
+            for (size_t i = 0; i < sizeof(bx_tar_flag_names) / sizeof(bx_tar_flag_names[0]); i++) {
+                const char* name = flags & bx_tar_flag_names[i].bit ? bx_tar_flag_names[i].set : bx_tar_flag_names[i].clear;
                 if (i)
                     text[length++] = ',';
                 size_t size = strlen(name);

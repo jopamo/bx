@@ -61,7 +61,7 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
                     "      --acls, --no-acls  enable or disable POSIX access/default ACLs\n"
                     "      --selinux, --no-selinux\n"
                     "                        enable or disable SELinux contexts\n"
-                    "      --file-flags      capture Linux inode flags (create only)\n"
+                    "      --file-flags      capture or restore Linux inode flags\n"
                     "                        append, immutable, nodump, noatime, sync, dirsync\n"
                     "                        on regular files/directories; read failures are fatal\n"
                     "      --format=pax      write metadata in POSIX extended headers\n"

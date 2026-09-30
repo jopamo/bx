@@ -11,6 +11,7 @@ struct bx_inode_ledger_slot {
     ino_t ino;
     mode_t type;
     uint64_t sequence;
+    uint64_t origin;
 };
 
 /* Zero-initialize. Stores identities, never descriptors or paths. */
@@ -20,9 +21,11 @@ struct bx_inode_ledger {
     size_t cap;
 };
 
-bool bx_inode_ledger_lookup(const struct bx_inode_ledger* set, const struct stat* status, uint64_t* sequence);
-/* Existing identities succeed without consuming the caller's count limit. */
-bool bx_inode_ledger_record(struct bx_inode_ledger* set, const struct stat* status, uint64_t sequence, size_t limit);
+/* Producer sequence numbers, not kernel inode generations. Outputs are optional. */
+bool bx_inode_ledger_lookup(const struct bx_inode_ledger* set, const struct stat* status, uint64_t* sequence, uint64_t* origin);
+/* Existing identities succeed without consuming the caller's count limit.
+ * A new materialization supplies a new origin; aliases retain that origin. */
+bool bx_inode_ledger_record(struct bx_inode_ledger* set, const struct stat* status, uint64_t sequence, uint64_t origin, size_t limit);
 void bx_inode_ledger_free(struct bx_inode_ledger* set);
 
 #endif

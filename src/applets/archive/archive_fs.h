@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -61,19 +62,22 @@ typedef bool (*bx_archive_fs_visit_fn)(const struct bx_archive_fs_visit_entry* e
                                        void* user_data,
                                        struct bx_diag_ctx* diag);
 
-struct bx_archive_pending_dir {
+struct bx_archive_pending_metadata_entry {
     struct bx_file_restore restore;
     char* path;
     dev_t dev;
     ino_t ino;
+    mode_t type;
     ptrdiff_t depth;
-    size_t order;
+    uint64_t order;
+    uint64_t origin;
 };
 
-struct bx_archive_pending_dirs {
-    struct bx_archive_pending_dir* entries;
+struct bx_archive_pending_metadata {
+    struct bx_archive_pending_metadata_entry* entries;
     size_t len;
     size_t cap;
+    size_t bytes;
     unsigned path_policy;
     /* Absolute anchor depth when absolute and relative locators coexist. */
     ptrdiff_t root_depth;
@@ -113,22 +117,13 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                             bool sort_children,
                             struct bx_diag_ctx* diag);
 
-void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs);
-/* Paths are applet-approved destinations, relative to the borrowed root_fd
- * unless explicitly absolute. No descriptor is retained by a record. */
-bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
-                                    int root_fd,
-                                    const char* path,
-                                    mode_t mode,
-                                    bool set_mtime,
-                                    struct timespec mtime);
-/* Borrows fd for type checking; records metadata without retaining it. */
-bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
-                                       int fd, const char* path, mode_t mode,
-                                       bool set_mtime, struct timespec mtime);
-bool bx_archive_pending_dirs_apply(struct bx_archive_pending_dirs* dirs,
-                                   int root_fd,
-                                   struct bx_diag_ctx* diag);
+void bx_archive_pending_metadata_free(struct bx_archive_pending_metadata* dirs);
+/* Borrows a regular-file/directory fd and copies metadata without retaining it.
+ * Paths are approved destinations relative to root_fd unless explicitly absolute.
+ * Bound records to 1048576 entries and 256 MiB of owned snapshot data.
+ * Order snapshots by producer sequence; origin marks regular-inode creation. */
+bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs, int fd, const char* path, const struct bx_file_restore* restore, uint64_t order, uint64_t origin);
+bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs, int root_fd, struct bx_diag_ctx* diag);
 bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
                             const char* path, bool symlink, bool directory,
                             struct bx_diag_ctx* diag);

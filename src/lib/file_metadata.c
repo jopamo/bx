@@ -100,6 +100,27 @@ static bool bx_metadata_unsupported(int error) {
     return error == ENOTSUP || error == ENOSYS;
 }
 
+size_t bx_file_metadata_value_bytes(const struct bx_file_metadata* metadata) {
+    size_t total = 0u;
+    for (size_t i = 0; i < metadata->len; i++) {
+        size_t name = strlen(metadata->xattrs[i].name) + 1u;
+        size_t value = metadata->xattrs[i].size;
+        if (value > SIZE_MAX - name || total > SIZE_MAX - name - value)
+            return SIZE_MAX;
+        total += name + value;
+    }
+    const char* texts[] = {metadata->acl_access, metadata->acl_default, metadata->file_flags};
+    for (size_t i = 0; i < sizeof(texts) / sizeof(texts[0]); i++) {
+        if (texts[i]) {
+            size_t length = strlen(texts[i]) + 1u;
+            if (total > SIZE_MAX - length)
+                return SIZE_MAX;
+            total += length;
+        }
+    }
+    return total;
+}
+
 bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable) {
     struct stat status;
     *flags = 0u;
@@ -113,6 +134,35 @@ bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable) 
     if (ioctl(fd, FS_IOC_GETFLAGS, &value) != 0)
         return false;
     *flags = (unsigned int)value;
+    return true;
+}
+
+bool bx_file_metadata_apply_flags(int fd, unsigned int set, unsigned int clear) {
+    if (set & clear) {
+        errno = EINVAL;
+        return false;
+    }
+    if (!(set | clear))
+        return true;
+    unsigned int original;
+    bool applicable;
+    if (!bx_file_metadata_read_flags(fd, &original, &applicable))
+        return false;
+    if (!applicable) {
+        errno = ENOTSUP;
+        return false;
+    }
+    unsigned int wanted = (original & ~clear) | set;
+    int value = (int)wanted;
+    if (wanted != original && ioctl(fd, FS_IOC_SETFLAGS, &value) != 0)
+        return false;
+    unsigned int observed;
+    if (!bx_file_metadata_read_flags(fd, &observed, &applicable))
+        return false;
+    if (((observed ^ wanted) & (set | clear)) != 0u) {
+        errno = ENOTSUP;
+        return false;
+    }
     return true;
 }
 
@@ -489,5 +539,5 @@ enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* res
         if (rc != 0)
             return BX_FILE_RESTORE_STAT_ERROR;
     }
-    return BX_FILE_RESTORE_OK;
+    return bx_file_metadata_apply_flags(fd, restore->flags_set, restore->flags_clear) ? BX_FILE_RESTORE_OK : BX_FILE_RESTORE_METADATA_ERROR;
 }
