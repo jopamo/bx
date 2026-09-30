@@ -42,6 +42,7 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --one-file-system do not descend into other mounts when creating\n"
                     "                        (old kernels: device boundary; bind mounts may cross)\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
+    fprintf(stream, "                        cannot combine with filesystem restoration controls\n");
     fprintf(stream, "      --occurrence[=N]  process only the Nth occurrence of each named member\n");
     fprintf(stream, "  -k, --keep-old-files  do not overwrite existing files; report an error\n");
     fprintf(stream, "      --skip-old-files  do not overwrite existing files; continue\n");
@@ -59,10 +60,10 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
                     "      --selinux, --no-selinux\n"
                     "                        enable or disable SELinux contexts\n"
                     "      --file-flags      capture or restore Linux inode flags\n"
-                    "      --preserve-all    require all supported filesystem metadata\n"
-                    "      -vv              list numeric fields and metadata presence\n"
                     "                        append, immutable, nodump, noatime, sync, dirsync\n"
                     "                        on regular files/directories; read failures are fatal\n"
+                    "      --preserve-all    require all supported filesystem metadata\n"
+                    "      -vv              list numeric fields and metadata presence\n"
                     "      --format=pax      write metadata in POSIX extended headers\n"
                     "                        PAX is automatic when ustar cannot represent values\n"
                     "      --format=ustar    fail if names or metadata require extended headers\n");
@@ -74,6 +75,7 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -n, --seek            archive is seekable\n");
     fprintf(stream, "  -v                    report processed member names\n");
     fprintf(stream, "      --index-file=FILE write listing or verbose output to FILE\n");
+    fprintf(stream, "                        creation requires -v; extraction requires -v or --block-number\n");
     fprintf(stream, "      --block-number    prefix archive-read reports with parser block numbers\n");
     fprintf(stream, "      --totals          write final byte totals to standard error\n");
     fprintf(stream, "      --show-transformed-names\n");
@@ -94,8 +96,11 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --compress-threads=N\n");
     fprintf(stream, "                        override gzip compression workers for archive output\n");
     fprintf(stream, "      --mt-chunk-size=SIZE\n");
-    fprintf(stream, "                        set multithreaded gzip member chunk size\n");
+    fprintf(stream, "                        set member chunk size; requires multiple gzip workers\n");
     fprintf(stream, "      --no-mt           disable multithreaded gzip archive output\n");
+    fprintf(stream, "                        gzip worker controls require creation with gzip output\n");
+    fprintf(stream, "Creation metadata overrides and extraction restoration controls are mode-specific.\n");
+    fprintf(stream, "Metadata preservation requires creation or extraction, not listing.\n");
     fprintf(stream, "\n");
     fprintf(stream, "Regular archive-file output uses best-effort staged-temp cleanup on HUP/INT/TERM.\n");
     fprintf(stream, "SIGKILL cannot be intercepted, so it may still leave a staged temp file behind.\n");

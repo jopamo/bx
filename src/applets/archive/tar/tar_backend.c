@@ -76,6 +76,10 @@ enum bx_tar_permission_policy {
 
 struct bx_tar_options {
     enum bx_tar_mode mode;
+    const char* invalid_mode_option[BX_TAR_MODE_EXTRACT + 1];
+    const char* gzip_output_option;
+    const char* filesystem_option;
+    bool mt_chunk_size_set;
     bool saw_mode_option;
     const char* archive_path;
     bool to_stdout;
@@ -2446,11 +2450,91 @@ static bool bx_tar_set_old_file_mode(struct bx_tar_options* options,
     return true;
 }
 
+static unsigned int bx_tar_option_modes(enum bx_tar_option_effect effect) {
+    const unsigned int create = 1u << BX_TAR_MODE_CREATE;
+    const unsigned int list = 1u << BX_TAR_MODE_LIST;
+    const unsigned int extract = 1u << BX_TAR_MODE_EXTRACT;
+
+    switch (effect) {
+        case BX_TAR_OPT_FORMAT:
+        case BX_TAR_OPT_SORT:
+        case BX_TAR_OPT_MTIME:
+        case BX_TAR_OPT_MODE:
+        case BX_TAR_OPT_OWNER:
+        case BX_TAR_OPT_GROUP:
+        case BX_TAR_OPT_NUMERIC_OWNER:
+        case BX_TAR_OPT_NEWER:
+        case BX_TAR_OPT_NEWER_MTIME:
+        case BX_TAR_OPT_IGNORE_FAILED_READ:
+        case BX_TAR_OPT_EXCLUDE_CACHES:
+        case BX_TAR_OPT_EXCLUDE_CACHES_ALL:
+        case BX_TAR_OPT_EXCLUDE_CACHES_UNDER:
+        case BX_TAR_OPT_EXCLUDE_IGNORE:
+        case BX_TAR_OPT_EXCLUDE_IGNORE_RECURSIVE:
+        case BX_TAR_OPT_EXCLUDE_TAG:
+        case BX_TAR_OPT_EXCLUDE_TAG_ALL:
+        case BX_TAR_OPT_EXCLUDE_TAG_UNDER:
+        case BX_TAR_OPT_EXCLUDE_VCS_IGNORES:
+        case BX_TAR_OPT_THREADS:
+        case BX_TAR_OPT_COMPRESS_THREADS:
+        case BX_TAR_OPT_MT_CHUNK_SIZE:
+        case BX_TAR_OPT_NO_MT:
+            return create;
+        case BX_TAR_OPT_TO_STDOUT:
+        case BX_TAR_OPT_TOUCH_MTIME_ON:
+        case BX_TAR_OPT_OWNER_RESTORE_ON:
+        case BX_TAR_OPT_OWNER_RESTORE_OFF:
+        case BX_TAR_OPT_PERMISSIONS_ON:
+        case BX_TAR_OPT_PERMISSIONS_OFF:
+        case BX_TAR_OPT_KEEP_OLD_FILES:
+        case BX_TAR_OPT_SKIP_OLD_FILES:
+        case BX_TAR_OPT_KEEP_NEWER_FILES:
+        case BX_TAR_OPT_OVERWRITE:
+        case BX_TAR_OPT_UNLINK_FIRST:
+        case BX_TAR_OPT_RECURSIVE_UNLINK:
+            return extract;
+        case BX_TAR_OPT_SEEK_ON:
+        case BX_TAR_OPT_SEEK_OFF:
+        case BX_TAR_OPT_STARTING_FILE:
+        case BX_TAR_OPT_STRIP_COMPONENTS:
+        case BX_TAR_OPT_ONE_TOP_LEVEL:
+        case BX_TAR_OPT_REPORT_MAPPED_NAMES:
+        case BX_TAR_OPT_BLOCK_NUMBER:
+            return list | extract;
+        case BX_TAR_OPT_XATTRS_ON:
+        case BX_TAR_OPT_XATTRS_OFF:
+        case BX_TAR_OPT_XATTRS_INCLUDE:
+        case BX_TAR_OPT_XATTRS_EXCLUDE:
+        case BX_TAR_OPT_ACLS_ON:
+        case BX_TAR_OPT_ACLS_OFF:
+        case BX_TAR_OPT_SELINUX_ON:
+        case BX_TAR_OPT_SELINUX_OFF:
+            return create | extract;
+        default:
+            return create | list | extract;
+    }
+}
+
 static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
                                        enum bx_tar_option_effect effect,
                                        const char* display,
                                        const char* value,
                                        struct bx_diag_ctx* diag) {
+    unsigned int modes = bx_tar_option_modes(effect);
+    for (unsigned int mode = BX_TAR_MODE_CREATE; mode <= BX_TAR_MODE_EXTRACT; mode++) {
+        if (!(modes & (1u << mode)) && options->invalid_mode_option[mode] == NULL)
+            options->invalid_mode_option[mode] = display;
+    }
+    if ((modes == (1u << BX_TAR_MODE_EXTRACT) && effect != BX_TAR_OPT_TO_STDOUT) || modes == ((1u << BX_TAR_MODE_CREATE) | (1u << BX_TAR_MODE_EXTRACT))) {
+        if (options->filesystem_option == NULL)
+            options->filesystem_option = display;
+    }
+    if (effect == BX_TAR_OPT_THREADS || effect == BX_TAR_OPT_COMPRESS_THREADS || effect == BX_TAR_OPT_MT_CHUNK_SIZE || effect == BX_TAR_OPT_NO_MT) {
+        if (options->gzip_output_option == NULL)
+            options->gzip_output_option = display;
+        if (effect == BX_TAR_OPT_MT_CHUNK_SIZE)
+            options->mt_chunk_size_set = true;
+    }
     switch (effect) {
         case BX_TAR_OPT_OWNER_RESTORE_OFF:
         case BX_TAR_OPT_PERMISSIONS_OFF:
@@ -3038,6 +3122,33 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         && !bx_tar_create_has_inputs(options, argc)) {
         bx_diag(diag, "missing file operand");
         return false;
+    }
+    const char* mode_name = options->mode == BX_TAR_MODE_CREATE ? "create" : options->mode == BX_TAR_MODE_LIST ? "list" : "extract";
+    if (options->invalid_mode_option[options->mode] != NULL) {
+        bx_diag(diag, "%s is not supported with --%s", options->invalid_mode_option[options->mode], mode_name);
+        return false;
+    }
+    if (options->to_stdout && options->filesystem_option != NULL) {
+        bx_diag(diag, "%s cannot be combined with --to-stdout", options->filesystem_option);
+        return false;
+    }
+    if (options->gzip_output_option != NULL && bx_tar_output_codec(options) != bx_archive_codec_gzip()) {
+        bx_diag(diag, "%s requires gzip output", options->gzip_output_option);
+        return false;
+    }
+    if (options->mt_chunk_size_set && bx_tar_effective_compress_threads(options) <= 1u) {
+        bx_diag(diag, "--mt-chunk-size requires multithreaded gzip output");
+        return false;
+    }
+    if (options->mode != BX_TAR_MODE_LIST && !options->verbose_reports) {
+        if (options->index_file_path != NULL && !(options->mode == BX_TAR_MODE_EXTRACT && options->report_block_numbers)) {
+            bx_diag(diag, "--index-file requires --verbose with --%s", mode_name);
+            return false;
+        }
+        if (options->report_mapped_names) {
+            bx_diag(diag, "--show-transformed-names requires --verbose with --extract");
+            return false;
+        }
     }
     return true;
 }
