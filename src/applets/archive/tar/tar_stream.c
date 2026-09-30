@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "applets/archive/archive_common.h"
+#include "applets/archive/archive_temp.h"
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
@@ -881,6 +882,85 @@ static bool bx_tar_stream_write_fs_raw_entry(
     return ok;
 }
 
+static bool bx_tar_stream_write_sparse_fs_entry(struct bx_tar_stream_fs_write_state* state,
+                                                const struct bx_archive_fs_visit_entry* source,
+                                                int fd,
+                                                mode_t mode,
+                                                uid_t uid,
+                                                gid_t gid,
+                                                const char* uname,
+                                                const char* gname,
+                                                struct timespec mtime,
+                                                struct bx_diag_ctx* diag) {
+    struct bx_tar_sparse_extent* extents = NULL;
+    size_t count = 0, cap = 0, compact_size = 0;
+    off_t offset = 0;
+    bool ok = false;
+    struct bx_file_metadata metadata = {0};
+    struct bx_tar_stream_live_entry entry = {0};
+    if (source->st->st_size < 0 || (uintmax_t)source->st->st_size > SIZE_MAX) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    do {
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            goto fail;
+        }
+        off_t begin, end;
+        int result = bx_fd_next_data_extent(fd, offset, source->st->st_size, &begin, &end);
+        if (result < 0)
+            goto fail;
+        if (result == 0)
+            break;
+        if (count == 65536u) {
+            errno = E2BIG;
+            goto fail;
+        }
+        if (count == cap) {
+            cap = cap ? cap * 2u : 16u;
+            extents = xrealloc(extents, cap * sizeof(*extents));
+        }
+        extents[count++] = (struct bx_tar_sparse_extent){.offset = (size_t)begin, .size = (size_t)(end - begin)};
+        compact_size += (size_t)(end - begin);
+        offset = end;
+    } while (offset < source->st->st_size);
+    if (!bx_tar_metadata_collect(&metadata, fd, false, false, state->options->numeric_owner, state->options->metadata))
+        goto fail;
+    if (!bx_tar_stream_start_sparse_v1_entry(&entry, state->sink, source->archive_path, uname, gname, mode, uid, gid, extents, count, (size_t)source->st->st_size, compact_size, mtime, &metadata,
+                                             diag))
+        goto out;
+    for (size_t i = 0; i < count; i++) {
+        size_t remaining = extents[i].size;
+        if (lseek(fd, (off_t)extents[i].offset, SEEK_SET) < 0)
+            goto fail;
+        while (remaining) {
+            if (bx_archive_temp_pending_signal()) {
+                errno = EINTR;
+                goto fail;
+            }
+            size_t chunk = remaining < state->file_buffer_size ? remaining : state->file_buffer_size;
+            ssize_t got = bx_xread(fd, state->file_buffer, chunk);
+            if (got <= 0) {
+                if (got == 0)
+                    errno = ESTALE;
+                goto fail;
+            }
+            if (!bx_tar_stream_write_raw_entry_chunk(&entry, state->file_buffer, (size_t)got, diag))
+                goto out;
+            remaining -= (size_t)got;
+        }
+    }
+    ok = bx_tar_stream_finish_raw_entry(&entry, diag);
+    goto out;
+fail:
+    bx_diag(diag, "%s: cannot archive sparse file: %s", source->source_path, strerror(errno));
+out:
+    bx_file_metadata_free(&metadata);
+    free(extents);
+    return ok;
+}
+
 static bool bx_tar_stream_write_opened_fs_entry(struct bx_tar_stream_fs_write_state* state,
                                          const struct bx_archive_fs_visit_entry* fs_entry,
                                          int source_fd,
@@ -1026,6 +1106,9 @@ static bool bx_tar_stream_write_opened_fs_entry(struct bx_tar_stream_fs_write_st
         bx_diag(diag, "%s: unsupported file type", fs_entry->source_path);
         return false;
     }
+
+    if (options->sparse)
+        return bx_tar_stream_write_sparse_fs_entry(state, fs_entry, source_fd, mode, uid, gid, uname, gname, mtime, diag);
 
     if (!bx_tar_stream_write_fs_raw_entry(state,
                                           fs_entry,

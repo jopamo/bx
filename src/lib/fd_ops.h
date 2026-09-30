@@ -80,6 +80,9 @@ int bx_fd_mkdirat(int dirfd, const char* path, mode_t mode);
 int bx_fd_mknodat(int dirfd, const char* path, mode_t mode, dev_t dev);
 /* Reject numbers outside Linux's 12-bit major / 20-bit minor encoding. */
 bool bx_fd_device_from_numbers(uintmax_t major_number, uintmax_t minor_number, dev_t* device);
+/* Discover one data extent within a captured logical size. Return 1 for an
+ * extent, 0 for no remaining data, or -1 with errno. Changes the fd offset. */
+int bx_fd_next_data_extent(int fd, off_t offset, off_t size, off_t* begin, off_t* end);
 int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode);
 int bx_fd_utimensat(int dirfd, const char* path, const struct timespec times[2], int flags);
 int bx_fd_fchmod(int fd, mode_t mode);

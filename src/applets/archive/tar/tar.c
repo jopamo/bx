@@ -27,6 +27,10 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
                     "                        stdout/pipes may contain partial data on failure\n");
     fprintf(stream, "  -C DIR                change to DIR before processing files\n");
     fprintf(stream, "  -T FILE               read create inputs from FILE\n");
+    fprintf(stream, "  -S, --sparse          discover data extents and write GNU sparse 1.0 PAX\n"
+                    "                        creation only; unsupported discovery fails\n"
+                    "      --hole-detection=seek, --sparse-version=1.0\n"
+                    "                        select the supported sparse mechanism and format\n");
     fprintf(stream, "      --add-file=FILE   add FILE even when its name begins with '-'\n");
     fprintf(stream, "      --null            read -T input as NUL-delimited names\n");
     fprintf(stream, "      --verbatim-files-from\n");
