@@ -783,6 +783,10 @@ static bool bx_tar_create_include_path(const struct bx_archive_fs_visit_entry* e
         && bx_tar_create_is_vcs_dir_name(bx_path_basename_ptr(archive_path))) {
         return false;
     }
+    if (S_ISSOCK(st->st_mode)) {
+        bx_diag(state->diag, "%s: socket ignored", source_path);
+        return false;
+    }
     bool probes = state->exclude_caches || state->exclude_caches_all || state->exclude_caches_under
         || state->exclude_tag_files->len || state->exclude_tag_all_files->len
         || state->exclude_tag_under_files->len || state->exclude_ignore_files->len
