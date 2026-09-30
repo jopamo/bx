@@ -26,12 +26,16 @@ enum bx_dir_path_policy {
  * explicit external policy permits absolute paths or "..". Intermediate
  * symlinks are never followed; replacement, if requested, unlinks them.
  * NO_MOUNT_CROSSING checks every component and existing final object against
- * the starting directory ("/" for absolute paths), requiring mount IDs to
- * distinguish bind mounts. Returns an owned parent fd and leaf. Descriptor
- * use is independent of depth. */
+ * the anchor's mount, requiring mount IDs to distinguish bind mounts.
+ * Absolute paths retain the "/" namespace but may route through existing
+ * ancestors to that mount; do not mutate objects before reaching it.
+ * Returns an owned parent fd and leaf. Descriptor use is independent of depth. */
 int bx_dir_path_open_destination_parent(int root_fd, const char* path,
                                         unsigned policy, bool create,
                                         mode_t mode, char** leaf);
+/* The trusted prefix ends at a separator and selects an explicit destination
+ * anchor before mount enforcement begins. Preserve component-wise lookup. */
+int bx_dir_path_open_destination_parent_from(int root_fd, const char* path, size_t boundary_prefix, unsigned policy, bool create, mode_t mode, char** leaf);
 ptrdiff_t bx_dir_path_depth(const char* path, ptrdiff_t base);
 /* Create a mode-0700 directory from a single-child template ending in XXXXXX. */
 bool bx_dir_path_mkdtemp_at(int parent_fd, char* name);

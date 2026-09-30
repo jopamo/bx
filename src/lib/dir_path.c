@@ -25,10 +25,13 @@ static bool bx_dir_path_check_mount(int fd, const struct bx_mount_identity* boun
     return same;
 }
 
-static bool bx_dir_path_check_leaf_mount(int parent, const char* name, const struct bx_mount_identity* boundary) {
+static bool bx_dir_path_check_leaf_mount(int parent, const char* name, const struct bx_mount_identity* boundary, bool allow_missing) {
     int fd = bx_fd_openat_cloexec(parent, name, O_PATH | O_NOFOLLOW, 0);
-    if (fd < 0)
-        return errno == ENOENT;
+    if (fd < 0) {
+        if (errno == ENOENT && !allow_missing)
+            errno = EXDEV;
+        return errno == ENOENT && allow_missing;
+    }
     bool ok = bx_dir_path_check_mount(fd, boundary);
     int error = errno;
     close(fd);
@@ -36,12 +39,37 @@ static bool bx_dir_path_check_leaf_mount(int parent, const char* name, const str
     return ok;
 }
 
+static bool bx_dir_path_begin_boundary(int fd, struct bx_mount_identity* boundary) {
+    if (!bx_mount_identity_read(fd, boundary))
+        return false;
+    if (!boundary->has_mount) {
+        errno = EOPNOTSUPP;
+        return false;
+    }
+    return true;
+}
+
 /* Consumes parent and path on both success and failure. Public entry points
  * enforce their different source/extraction policies before this walk. */
-static int bx_dir_path_walk_parent(int parent, char* path, int flags, bool create, bool replace, mode_t mode, char** leaf, const struct bx_mount_identity* boundary) {
+static int
+bx_dir_path_walk_parent(int parent, char* path, int flags, bool create, bool replace, mode_t mode, char** leaf, bool guarded, size_t boundary_prefix, const struct bx_mount_identity* absolute_anchor) {
+    struct bx_mount_identity identity;
+    const struct bx_mount_identity* boundary = NULL;
+    if (absolute_anchor) {
+        bool same;
+        if (!bx_dir_path_begin_boundary(parent, &identity) || !bx_mount_identity_compare(absolute_anchor, &identity, &same))
+            goto fail;
+        if (same)
+            boundary = absolute_anchor;
+    }
     char* component = path;
     char* separator;
     while ((separator = strchr(component, '/')) != NULL) {
+        if (guarded && !boundary && !absolute_anchor && (size_t)(component - path) >= boundary_prefix) {
+            if (!bx_dir_path_begin_boundary(parent, &identity))
+                goto fail;
+            boundary = &identity;
+        }
         *separator = '\0';
         if (!*component || strcmp(component, ".") == 0) {
             component = separator + 1;
@@ -49,7 +77,11 @@ static int bx_dir_path_walk_parent(int parent, char* path, int flags, bool creat
         }
         int child = bx_fd_openat_cloexec(parent, component, flags | O_DIRECTORY | O_NOFOLLOW, 0);
         if (child < 0 && create && replace && (errno == ENOTDIR || errno == ELOOP)) {
-            if (boundary && !bx_dir_path_check_leaf_mount(parent, component, boundary))
+            if (absolute_anchor && !boundary) {
+                errno = EXDEV;
+                goto fail;
+            }
+            if (boundary && !bx_dir_path_check_leaf_mount(parent, component, boundary, false))
                 goto fail;
             struct stat status;
             if (fstatat(parent, component, &status, AT_SYMLINK_NOFOLLOW) != 0)
@@ -61,13 +93,26 @@ static int bx_dir_path_walk_parent(int parent, char* path, int flags, bool creat
             }
         }
         if (child < 0 && errno == ENOENT && create) {
+            if (absolute_anchor && !boundary) {
+                errno = EXDEV;
+                goto fail;
+            }
             if (bx_fd_mkdirat_child(parent, component, mode) != 0 && errno != EEXIST)
                 goto fail;
             child = bx_fd_openat_cloexec(parent, component, flags | O_DIRECTORY | O_NOFOLLOW, 0);
         }
         if (child < 0)
             goto fail;
-        if (boundary && !bx_dir_path_check_mount(child, boundary)) {
+        bool allowed = true;
+        if (absolute_anchor && !boundary) {
+            bool same;
+            allowed = bx_dir_path_begin_boundary(child, &identity) && bx_mount_identity_compare(absolute_anchor, &identity, &same);
+            if (allowed && same)
+                boundary = absolute_anchor;
+        }
+        else if (boundary)
+            allowed = bx_dir_path_check_mount(child, boundary);
+        if (!allowed) {
             int error = errno;
             close(child);
             errno = error;
@@ -78,7 +123,19 @@ static int bx_dir_path_walk_parent(int parent, char* path, int flags, bool creat
         component = separator + 1;
     }
     const char* name = *component ? component : ".";
-    if (boundary && !bx_dir_path_check_leaf_mount(parent, name, boundary))
+    bool seeking_absolute = absolute_anchor && !boundary;
+    if (seeking_absolute)
+        boundary = absolute_anchor;
+    if (guarded && !boundary) {
+        if ((size_t)(component - path) < boundary_prefix) {
+            errno = EINVAL;
+            goto fail;
+        }
+        if (!bx_dir_path_begin_boundary(parent, &identity))
+            goto fail;
+        boundary = &identity;
+    }
+    if (boundary && !bx_dir_path_check_leaf_mount(parent, name, boundary, !seeking_absolute))
         goto fail;
     *leaf = xstrdup(name);
     free(path);
@@ -101,9 +158,12 @@ int bx_dir_path_open_parent(int root_fd, const char* path, bool create, mode_t m
 int bx_dir_path_open_destination_parent(int root_fd, const char* path,
                                         unsigned policy, bool create,
                                         mode_t mode, char** leaf) {
-    if (root_fd < 0 || path == NULL || !*path || leaf == NULL
-        || (!(policy & BX_DIR_PATH_ALLOW_EXTERNAL)
-            && (bx_path_is_absolute(path) || bx_path_has_parent_reference(path)))) {
+    return bx_dir_path_open_destination_parent_from(root_fd, path, 0, policy, create, mode, leaf);
+}
+
+int bx_dir_path_open_destination_parent_from(int root_fd, const char* path, size_t boundary_prefix, unsigned policy, bool create, mode_t mode, char** leaf) {
+    if (root_fd < 0 || path == NULL || !*path || leaf == NULL || boundary_prefix > strlen(path) || (boundary_prefix && path[boundary_prefix - 1] != '/') ||
+        (!(policy & BX_DIR_PATH_ALLOW_EXTERNAL) && (bx_path_is_absolute(path) || bx_path_has_parent_reference(path)))) {
         errno = EINVAL;
         return -1;
     }
@@ -118,18 +178,17 @@ int bx_dir_path_open_destination_parent(int root_fd, const char* path,
         : bx_fd_dup_cloexec(root_fd);
     if (parent < 0)
         return -1;
-    struct bx_mount_identity boundary;
     bool guarded = (policy & BX_DIR_PATH_NO_MOUNT_CROSSING) != 0;
-    if (guarded) {
-        bool read = bx_mount_identity_read(parent, &boundary);
-        if (!read || !boundary.has_mount) {
-            int error = read ? EOPNOTSUPP : errno;
-            close(parent);
-            errno = error;
-            return -1;
-        }
+    struct bx_mount_identity anchor;
+    bool absolute = guarded && !boundary_prefix && path[0] == '/';
+    if (absolute && !bx_dir_path_begin_boundary(root_fd, &anchor)) {
+        int error = errno;
+        close(parent);
+        errno = error;
+        return -1;
     }
-    return bx_dir_path_walk_parent(parent, bx_path_strip_trailing_slashes_dup(path), O_PATH, create, policy & BX_DIR_PATH_REPLACE_NON_DIRS, mode, leaf, guarded ? &boundary : NULL);
+    return bx_dir_path_walk_parent(parent, bx_path_strip_trailing_slashes_dup(path), O_PATH, create, policy & BX_DIR_PATH_REPLACE_NON_DIRS, mode, leaf, guarded, boundary_prefix,
+                                   absolute ? &anchor : NULL);
 }
 
 ptrdiff_t bx_dir_path_depth(const char* path, ptrdiff_t base) {
@@ -191,7 +250,7 @@ int bx_dir_path_open_source_parent_at(int start_fd, const char* path, char** lea
         return -1;
     char* name = NULL;
     char* components = bx_path_strip_trailing_slashes_dup(path);
-    int parent = bx_dir_path_walk_parent(root, components, O_PATH, false, false, 0, &name, NULL);
+    int parent = bx_dir_path_walk_parent(root, components, O_PATH, false, false, 0, &name, false, 0, NULL);
     if (parent < 0)
         return -1;
     if (path[len - 1] == '/') {
