@@ -134,7 +134,7 @@ enum bx_tar_option_arg_mode {
 };
 
 enum bx_tar_option_effect {
-    BX_TAR_OPT_NOOP = 0,
+    BX_TAR_OPT_INVALID = 0,
     BX_TAR_OPT_SPARSE,
     BX_TAR_OPT_SPARSE_VERSION,
     BX_TAR_OPT_HOLE_DETECTION,
@@ -226,7 +226,6 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_ACLS_OFF,
     BX_TAR_OPT_FILE_FLAGS,
     BX_TAR_OPT_PRESERVE_ALL,
-    BX_TAR_OPT_WARNING,
     BX_TAR_OPT_IGNORE_FAILED_READ,
     BX_TAR_OPT_ONE_FILE_SYSTEM,
     BX_TAR_OPT_OCCURRENCE,
@@ -260,7 +259,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--add-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ADD_FILE},
     {"--directory", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
     {"--exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE},
-    {"--exclude-backups", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--exclude-caches", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_CACHES},
     {"--exclude-caches-all", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_CACHES_ALL},
     {"--exclude-caches-under", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_CACHES_UNDER},
@@ -290,12 +288,9 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--wildcards", BX_TAR_OPTARG_NONE, BX_TAR_OPT_WILDCARDS_ON},
     {"--wildcards-match-slash", BX_TAR_OPTARG_NONE, BX_TAR_OPT_WILDCARDS_MATCH_SLASH_ON},
     {"--keep-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_KEEP_OLD_FILES},
-    {"--keep-directory-symlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--keep-newer-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_KEEP_NEWER_FILES},
-    {"--no-overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--one-top-level", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ONE_TOP_LEVEL},
     {"--overwrite", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OVERWRITE},
-    {"--overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--recursive-unlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSIVE_UNLINK},
     {"--threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_THREADS},
     {"--compress-threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_THREADS},
@@ -303,15 +298,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--no-mt", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_MT},
     {"--skip-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SKIP_OLD_FILES},
     {"--unlink-first", BX_TAR_OPTARG_NONE, BX_TAR_OPT_UNLINK_FIRST},
-    {"--verify", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--ignore-command-error", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-ignore-command-error", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--to-stdout", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TO_STDOUT},
-    {"--to-command", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--atime-preserve", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--clamp-mtime", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--delay-directory-restore", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-delay-directory-restore", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--group", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_GROUP},
     {"--numeric-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NUMERIC_OWNER},
     {"--owner", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_OWNER},
@@ -323,11 +310,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--preserve-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_ON},
     {"--same-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_ON},
     {"--same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OWNER_RESTORE_ON},
-    {"--set-mtime-command", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--set-mtime-format", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--sort", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_SORT},
-    {"--preserve-order", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--same-order", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_ON},
     {"--no-acls", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ACLS_OFF},
     {"--file-flags", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILE_FLAGS},
@@ -340,28 +323,15 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--xattrs-include", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_XATTRS_INCLUDE},
     {"--file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ARCHIVE_PATH},
     {"--format", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FORMAT},
-    {"--old-archive", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--portability", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--posix", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--pax-option", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--auto-compress", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_ON},
     {"--use-compress-program", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
     {"--bzip2", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
     {"--xz", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XZ_ON},
-    {"--lzip", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--lzma", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--lzop", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--zstd", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ZSTD_ON},
-    {"--compress", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--uncompress", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--gzip", BX_TAR_OPTARG_NONE, BX_TAR_OPT_GZIP_ON},
     {"--gunzip", BX_TAR_OPTARG_NONE, BX_TAR_OPT_GZIP_ON},
     {"--ungzip", BX_TAR_OPTARG_NONE, BX_TAR_OPT_GZIP_ON},
     {"--no-auto-compress", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_OFF},
-    {"--backup", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--suffix", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--hard-dereference", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--dereference", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--starting-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STARTING_FILE},
     {"--newer-mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER_MTIME},
     {"--newer", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER},
@@ -369,28 +339,13 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--one-file-system", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ONE_FILE_SYSTEM},
     {"--absolute-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ABSOLUTE_NAMES_ON},
     {"--strip-components", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STRIP_COMPONENTS},
-    {"--checkpoint", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--checkpoint-action", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--full-time", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--index-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_INDEX_FILE},
-    {"--check-links", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-quote-chars", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--quote-chars", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--quoting-style", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--block-number", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BLOCK_NUMBER},
-    {"--show-defaults", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--show-omitted-dirs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--show-snapshot-field-ranges", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--show-transformed-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REPORT_MAPPED_NAMES},
     {"--show-stored-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REPORT_MAPPED_NAMES},
     {"--totals", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TOTALS},
-    {"--utc", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--verbose", BX_TAR_OPTARG_NONE, BX_TAR_OPT_VERBOSE},
-    {"--warning", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_WARNING},
-    {"--interactive", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--confirmation", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--restrict", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {NULL, BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {NULL, BX_TAR_OPTARG_NONE, BX_TAR_OPT_INVALID},
 };
 
 static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
@@ -403,8 +358,6 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'X', "-X", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_FROM},
     {'T', "-T", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FILES_FROM},
     {'k', "-k", BX_TAR_OPTARG_NONE, BX_TAR_OPT_KEEP_OLD_FILES},
-    {'U', "-U", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {'W', "-W", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'O', "-O", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TO_STDOUT},
     {'m', "-m", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TOUCH_MTIME_ON},
     {'p', "-p", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_ON},
@@ -413,21 +366,14 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'I', "-I", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
     {'j', "-j", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
     {'J', "-J", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XZ_ON},
-    {'Z', "-Z", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'z', "-z", BX_TAR_OPTARG_NONE, BX_TAR_OPT_GZIP_ON},
-    {'h', "-h", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'K', "-K", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STARTING_FILE},
     {'N', "-N", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER},
-    {'l', "-l", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'P', "-P", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ABSOLUTE_NAMES_ON},
-    {'s', "-s", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {'R', "-R", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'v', "-v", BX_TAR_OPTARG_NONE, BX_TAR_OPT_VERBOSE},
-    {'w', "-w", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'o', "-o", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OWNER_RESTORE_OFF},
     {'f', "-f", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ARCHIVE_PATH},
-    {'?', "-?", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {'\0', NULL, BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'\0', NULL, BX_TAR_OPTARG_NONE, BX_TAR_OPT_INVALID},
 };
 
 static const char* bx_tar_progname(char** argv, int argc) {
@@ -2524,11 +2470,6 @@ static bool bx_tar_parse_time_arg(const char* text, struct timespec* out) {
     return bx_tar_parse_touch_like_time_arg(text, out);
 }
 
-static bool bx_tar_warning_keyword_supported(const char* text) {
-    return strcmp(text, "decompress-program") == 0
-        || strcmp(text, "no-decompress-program") == 0;
-}
-
 static const struct bx_tar_long_option_spec* bx_tar_find_long_option(const char* arg, size_t name_len) {
     size_t i;
     for (i = 0u; bx_tar_long_options[i].name != NULL; i++) {
@@ -2679,8 +2620,8 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             break;
     }
     switch (effect) {
-        case BX_TAR_OPT_NOOP:
-            return true;
+        case BX_TAR_OPT_INVALID:
+            return false;
         case BX_TAR_OPT_SPARSE:
             options->sparse = true;
             return true;
@@ -3006,12 +2947,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_archive_name_list_append(effect == BX_TAR_OPT_XATTRS_INCLUDE
                                                   ? &options->metadata.include
                                                   : &options->metadata.exclude, value);
-        case BX_TAR_OPT_WARNING:
-            if (!bx_tar_warning_keyword_supported(value)) {
-                bx_diag(diag, "invalid argument '%s' for '--warning'", value);
-                return false;
-            }
-            return true;
     }
 
     return true;
