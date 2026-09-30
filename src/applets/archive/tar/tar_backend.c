@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
@@ -77,8 +76,6 @@ enum bx_tar_permission_policy {
 
 struct bx_tar_options {
     enum bx_tar_mode mode;
-    const char* unsupported_external_compress_option;
-    char* unsupported_external_compress_program;
     bool saw_mode_option;
     const char* archive_path;
     bool to_stdout;
@@ -195,7 +192,6 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_ZSTD_ON,
     BX_TAR_OPT_SEEK_ON,
     BX_TAR_OPT_SEEK_OFF,
-    BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM,
     BX_TAR_OPT_AUTO_COMPRESS_ON,
     BX_TAR_OPT_AUTO_COMPRESS_OFF,
     BX_TAR_OPT_ABSOLUTE_NAMES_ON,
@@ -324,7 +320,6 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ARCHIVE_PATH},
     {"--format", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FORMAT},
     {"--auto-compress", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_ON},
-    {"--use-compress-program", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
     {"--bzip2", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
     {"--xz", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XZ_ON},
     {"--zstd", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ZSTD_ON},
@@ -363,7 +358,6 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'p', "-p", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_ON},
     {'H', "-H", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FORMAT},
     {'a', "-a", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_ON},
-    {'I', "-I", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
     {'j', "-j", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
     {'J', "-J", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XZ_ON},
     {'z', "-z", BX_TAR_OPTARG_NONE, BX_TAR_OPT_GZIP_ON},
@@ -430,143 +424,9 @@ static bool bx_tar_validate_mode_arg(const char* text, struct bx_diag_ctx* diag)
     return false;
 }
 
-static void bx_tar_clear_unsupported_external_compress_program(struct bx_tar_options* options) {
-    free(options->unsupported_external_compress_program);
-    options->unsupported_external_compress_program = NULL;
-    options->unsupported_external_compress_option = NULL;
-}
-
 static void bx_tar_set_codec_option(struct bx_tar_options* options,
                                     const struct bx_archive_codec* codec) {
-    bx_tar_clear_unsupported_external_compress_program(options);
     options->codec = codec;
-}
-
-static bool bx_tar_set_unsupported_external_compress_program(struct bx_tar_options* options,
-                                                             const char* display,
-                                                             const char* value) {
-    bx_tar_clear_unsupported_external_compress_program(options);
-    options->unsupported_external_compress_program = xstrdup(value);
-    options->unsupported_external_compress_option = display;
-    return true;
-}
-
-static bool bx_tar_internal_xz_threads_arg_supported(const char* text) {
-    char* end = NULL;
-    long value;
-
-    if (text == NULL || *text == '\0') {
-        return false;
-    }
-    errno = 0;
-    value = strtol(text, &end, 10);
-    return errno == 0
-        && end != NULL
-        && *end == '\0'
-        && value >= 0
-        && value <= INT_MAX;
-}
-
-static bool bx_tar_internal_xz_short_token_supported(const char* token, char** saveptr) {
-    size_t i;
-
-    for (i = 1u; token[i] != '\0'; i++) {
-        switch (token[i]) {
-            case 'd':
-            case 'c':
-            case 'z':
-            case 'k':
-                break;
-            case 'T': {
-                const char* threads = token[i + 1u] != '\0'
-                    ? token + i + 1u
-                    : strtok_r(NULL, " \t\r\n", saveptr);
-
-                return bx_tar_internal_xz_threads_arg_supported(threads);
-            }
-            default:
-                return false;
-        }
-    }
-
-    return true;
-}
-
-static bool bx_tar_internal_xz_token_supported(const char* token, char** saveptr) {
-    if (strcmp(token, "--decompress") == 0 || strcmp(token, "--uncompress") == 0) {
-        return true;
-    }
-    if (strcmp(token, "--stdout") == 0 || strcmp(token, "--compress") == 0) {
-        return true;
-    }
-    if (strcmp(token, "--keep") == 0) {
-        return true;
-    }
-    if (strcmp(token, "--threads") == 0) {
-        return bx_tar_internal_xz_threads_arg_supported(strtok_r(NULL, " \t\r\n", saveptr));
-    }
-    if (strncmp(token, "--threads=", 10u) == 0) {
-        return bx_tar_internal_xz_threads_arg_supported(token + 10u);
-    }
-    if (token[0] == '-' && token[1] != '\0' && token[1] != '-') {
-        return bx_tar_internal_xz_short_token_supported(token, saveptr);
-    }
-    return false;
-}
-
-static bool bx_tar_try_set_internal_xz_compress_program(struct bx_tar_options* options,
-                                                        const char* value,
-                                                        bool* recognized_out) {
-    char* copy;
-    char* saveptr = NULL;
-    char* token;
-    const char* program;
-
-    *recognized_out = false;
-    if (value == NULL) {
-        return true;
-    }
-
-    copy = xstrdup(value);
-    token = strtok_r(copy, " \t\r\n", &saveptr);
-    if (token == NULL) {
-        free(copy);
-        return true;
-    }
-
-    program = bx_path_basename_ptr(token);
-    if (strcmp(program, "xz") != 0
-        && strcmp(program, "unxz") != 0
-        && strcmp(program, "xzcat") != 0) {
-        free(copy);
-        return true;
-    }
-
-    while ((token = strtok_r(NULL, " \t\r\n", &saveptr)) != NULL) {
-        if (!bx_tar_internal_xz_token_supported(token, &saveptr)) {
-            free(copy);
-            return true;
-        }
-    }
-
-    bx_tar_set_codec_option(options, bx_archive_codec_xz());
-    *recognized_out = true;
-    free(copy);
-    return true;
-}
-
-static bool bx_tar_apply_external_compress_program(struct bx_tar_options* options,
-                                                   const char* display,
-                                                   const char* value) {
-    bool recognized = false;
-
-    if (!bx_tar_try_set_internal_xz_compress_program(options, value, &recognized)) {
-        return false;
-    }
-    if (recognized) {
-        return true;
-    }
-    return bx_tar_set_unsupported_external_compress_program(options, display, value);
 }
 
 static const struct bx_archive_codec* bx_tar_codec_from_suffix(const char* path) {
@@ -2809,8 +2669,6 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_SEEK_OFF:
             options->seek_mode = BX_ARCHIVE_CODEC_SEEK_DISABLE;
             return true;
-        case BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM:
-            return bx_tar_apply_external_compress_program(options, display, value);
         case BX_TAR_OPT_AUTO_COMPRESS_ON:
             options->auto_compress = true;
             return true;
@@ -2958,7 +2816,6 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_tar_create_options_cleanup(&options->create_options);
     free(options->index_file_path);
     options->index_file_path = NULL;
-    bx_tar_clear_unsupported_external_compress_program(options);
     free(options->mode_text);
     options->mode_text = NULL;
 }
@@ -3163,15 +3020,6 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
     if (options->create_options.one_file_system
         && options->mode != BX_TAR_MODE_CREATE) {
         bx_diag(diag, "--one-file-system requires creating an archive from files");
-        return false;
-    }
-    if (options->unsupported_external_compress_option != NULL) {
-        bx_diag(diag,
-                "external compression programs are not supported: %s %s",
-                options->unsupported_external_compress_option,
-                options->unsupported_external_compress_program != NULL
-                    ? options->unsupported_external_compress_program
-                    : "");
         return false;
     }
     if (options->archive_path == NULL) {
