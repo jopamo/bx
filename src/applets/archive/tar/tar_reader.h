@@ -13,6 +13,7 @@
 #include "lib/file_metadata.h"
 
 #define BX_TAR_BLOCK_SIZE 512u
+#define BX_TAR_SPARSE_EXTENT_LIMIT 65536u
 
 enum bx_tar_kind {
     BX_TAR_KIND_REG = 0,

@@ -830,7 +830,7 @@ static bool bx_tar_stream_write_sparse_fs_entry(struct bx_tar_stream_fs_write_st
             goto fail;
         if (result == 0)
             break;
-        if (count == 65536u) {
+        if (count == BX_TAR_SPARSE_EXTENT_LIMIT) {
             errno = E2BIG;
             goto fail;
         }
