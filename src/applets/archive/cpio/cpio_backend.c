@@ -21,6 +21,8 @@
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
+#include "lib/inode_ledger.h"
+#include "lib/mode_parse.h"
 #include "lib/line_writer.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
@@ -102,16 +104,24 @@ struct bx_cpio_inode_map_list {
 };
 
 struct bx_cpio_hardlink_state {
-    uint64_t ino;
-    uint64_t device;
-    int materialized_fd;
-    char* materialized_path;
+    size_t location;
+    uint64_t origin;
+};
+
+struct bx_cpio_alias {
+    size_t record;
+    size_t previous;
 };
 
 struct bx_cpio_hardlink_state_list {
     struct bx_cpio_hardlink_state* items;
     size_t len;
     size_t cap;
+    struct bx_inode_ledger groups;
+    struct bx_inode_ledger materialized;
+    struct bx_cpio_alias* aliases;
+    size_t alias_len;
+    size_t alias_cap;
 };
 
 static const char* bx_cpio_progname(char** argv, int argc) {
@@ -820,51 +830,107 @@ static bool bx_cpio_entry_selected(const struct bx_cpio_options* options,
     return false;
 }
 
-static struct bx_cpio_hardlink_state* bx_cpio_get_hardlink_state(struct bx_cpio_hardlink_state_list* list,
-                                                                  uint64_t device, uint64_t ino) {
-    size_t i;
-    for (i = 0u; i < list->len; i++) {
-        if (list->items[i].ino == ino && list->items[i].device == device) {
-            return &list->items[i];
-        }
+static struct bx_cpio_hardlink_state* bx_cpio_get_hardlink_state(struct bx_cpio_hardlink_state_list* list, uint64_t device, uint64_t ino) {
+    struct stat key = {.st_dev = (dev_t)device, .st_ino = (ino_t)ino, .st_mode = S_IFREG};
+    if ((uint64_t)key.st_dev != device || (uint64_t)key.st_ino != ino) {
+        errno = EOVERFLOW;
+        return NULL;
     }
+    uint64_t index;
+    if (bx_inode_ledger_lookup(&list->groups, &key, &index, NULL))
+        return &list->items[index - 1u];
+    if (!bx_inode_ledger_record(&list->groups, &key, list->len + 1u, 0u, BX_ARCHIVE_PENDING_METADATA_LIMIT))
+        return NULL;
     if (list->len == list->cap) {
-        size_t next_cap = list->cap ? list->cap * 2u : 8u;
-        list->items = xrealloc(list->items, next_cap * sizeof(*list->items));
-        list->cap = next_cap;
+        size_t next = list->cap ? list->cap * 2u : 16u;
+        list->items = xrealloc(list->items, next * sizeof(*list->items));
+        list->cap = next;
     }
-    memset(&list->items[list->len], 0, sizeof(*list->items));
-    list->items[list->len].ino = ino;
-    list->items[list->len].device = device;
-    list->items[list->len].materialized_fd = -1;
+    list->items[list->len] = (struct bx_cpio_hardlink_state){.location = SIZE_MAX};
     return &list->items[list->len++];
 }
 
-static bool bx_cpio_hardlink_states_free(struct bx_cpio_hardlink_state_list* list, struct bx_diag_ctx* diag) {
-    size_t i;
-    bool ok = true;
-    for (i = 0u; i < list->len; i++) {
-        if (!bx_fd_close(&list->items[i].materialized_fd, list->items[i].materialized_path, diag))
-            ok = false;
-        free(list->items[i].materialized_path);
-    }
+static void bx_cpio_hardlink_states_free(struct bx_cpio_hardlink_state_list* list) {
     free(list->items);
-    list->items = NULL;
-    list->len = 0u;
-    list->cap = 0u;
-    return ok;
+    free(list->aliases);
+    bx_inode_ledger_free(&list->groups);
+    bx_inode_ledger_free(&list->materialized);
+    *list = (struct bx_cpio_hardlink_state_list){0};
 }
 
-/* Link privately, then verify against the retained file before publication.
- * A later member may have replaced the recorded source name. */
-static bool bx_cpio_link_materialized(int root_fd, const struct bx_cpio_hardlink_state* state, int parent, const char* leaf, struct bx_diag_ctx* diag) {
+static int bx_cpio_open_live_alias(struct bx_cpio_hardlink_state_list* list, struct bx_cpio_hardlink_state* state, struct bx_archive_pending_metadata* pending, int root_fd, bool writable) {
+    while (state->location != SIZE_MAX) {
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            return -1;
+        }
+        const struct bx_cpio_alias* alias = &list->aliases[state->location];
+        const struct bx_archive_pending_metadata_entry* record = &pending->entries[alias->record];
+        int fd = bx_archive_pending_metadata_open_fd(root_fd, pending->path_policy, record, writable);
+        if (fd >= 0) {
+            struct stat status;
+            uint64_t origin;
+            if (fstat(fd, &status) != 0) {
+                int error = errno;
+                close(fd);
+                errno = error;
+                return -1;
+            }
+            if (bx_inode_ledger_lookup(&list->materialized, &status, NULL, &origin) && origin == state->origin)
+                return fd;
+            close(fd);
+            fd = -2;
+        }
+        if (fd != -2)
+            return -1;
+        state->location = alias->previous;
+    }
+    errno = ESTALE;
+    return -1;
+}
+
+static bool bx_cpio_record_regular(struct bx_cpio_hardlink_state_list* list,
+                                   struct bx_cpio_hardlink_state* state,
+                                   struct bx_archive_pending_metadata* pending,
+                                   int fd,
+                                   const char* path,
+                                   const struct bx_file_restore* restore) {
+    struct stat status;
+    if (fstat(fd, &status) != 0)
+        return false;
+    uint64_t order = pending->len + 1u;
+    uint64_t origin = state && state->origin ? state->origin : order;
+    if (!bx_inode_ledger_record(&list->materialized, &status, order, origin, BX_ARCHIVE_PENDING_METADATA_LIMIT))
+        return false;
+    if (state && list->alias_len >= BX_ARCHIVE_PENDING_METADATA_LIMIT) {
+        errno = E2BIG;
+        return false;
+    }
+    size_t record = pending->len;
+    if (!bx_archive_pending_metadata_record_fd(pending, fd, path, 0, restore, order, origin))
+        return false;
+    if (state) {
+        if (list->alias_len == list->alias_cap) {
+            size_t next = list->alias_cap ? list->alias_cap * 2u : 16u;
+            list->aliases = xrealloc(list->aliases, next * sizeof(*list->aliases));
+            list->alias_cap = next;
+        }
+        list->aliases[list->alias_len] = (struct bx_cpio_alias){.record = record, .previous = state->location};
+        state->location = list->alias_len++;
+        state->origin = origin;
+    }
+    return true;
+}
+
+/* Link privately, then verify against the transiently pinned live alias. */
+static bool bx_cpio_link_materialized(int root_fd, const struct bx_archive_pending_metadata_entry* source, int source_fd, int parent, const char* leaf, struct bx_diag_ctx* diag) {
     char* source_leaf = NULL;
-    int source_parent = bx_dir_path_open_destination_parent(root_fd, state->materialized_path, BX_DIR_PATH_NO_MOUNT_CROSSING, false, 0, &source_leaf);
+    int source_parent = bx_dir_path_open_destination_parent(root_fd, source->path, BX_DIR_PATH_NO_MOUNT_CROSSING, false, 0, &source_leaf);
     if (source_parent < 0)
         return false;
     struct stat expected, linked;
     bool ok = false;
-    if (fstat(state->materialized_fd, &expected) != 0)
+    if (fstat(source_fd, &expected) != 0)
         goto done;
     static unsigned long serial;
     char temporary[80];
@@ -913,6 +979,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                                 int root_fd,
                                 struct bx_archive_pending_metadata* dirs,
                                 struct bx_cpio_hardlink_state_list* hardlinks,
+                                struct bx_cpio_hardlink_state* state,
                                 struct bx_diag_ctx* diag) {
     char* leaf = NULL;
     int parent = -1;
@@ -923,6 +990,10 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
         .mode = entry->mode,
         .mtime = entry->mtime,
         .set_mtime = options->preserve_mtime,
+        .set_owner = options->owner_override,
+        .set_group = options->owner_override,
+        .uid = options->owner,
+        .gid = options->group,
     };
     if (bx_archive_temp_pending_signal()) {
         errno = EINTR;
@@ -949,28 +1020,29 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
             errno = EINVAL;
             goto fail;
         }
-        struct bx_cpio_hardlink_state* state = NULL;
-        if (entry->kind == BX_CPIO_KIND_REG && entry->nlink > 1)
-            state = bx_cpio_get_hardlink_state(hardlinks, entry->device, entry->ino);
-        if (state != NULL && state->materialized_fd >= 0) {
-            /* Empty members are aliases. A later data member fills the inode
-             * already owned by this group, including its earlier empty aliases. */
+        if (state && state->origin) {
+            fd = bx_cpio_open_live_alias(hardlinks, state, dirs, root_fd, entry->data_len > 0);
+            if (fd < 0)
+                goto fail;
+            /* Published aliases share later payload changes. Keep the inode
+             * extractor-owned and writable until every group header ends. */
             if (entry->data_len > 0) {
-                if (bx_fd_ftruncate(state->materialized_fd, 0) != 0 || bx_fd_lseek(state->materialized_fd, 0, SEEK_SET) < 0)
+                if (bx_fd_ftruncate(fd, 0) != 0 || bx_fd_lseek(fd, 0, SEEK_SET) < 0)
                     goto fail;
-                if (!bx_archive_write_regular_payload(state->materialized_fd, entry->data, entry->data_len, options->sparse, diag))
-                    goto done;
-                if (!bx_archive_restore_fd(&restore, state->materialized_fd, entry->name, diag))
+                if (!bx_archive_write_regular_payload(fd, entry->data, entry->data_len, options->sparse, diag))
                     goto done;
             }
+            restore.mode = entry->mode & ~bx_mode_current_umask();
+            restore.set_mode = true;
             if (bx_archive_temp_pending_signal()) {
                 errno = EINTR;
                 goto fail;
             }
-            if (!bx_cpio_link_materialized(root_fd, state, parent, leaf, diag))
+            const struct bx_cpio_alias* alias = &hardlinks->aliases[state->location];
+            if (!bx_cpio_link_materialized(root_fd, &dirs->entries[alias->record], fd, parent, leaf, diag))
                 goto fail;
-            free(state->materialized_path);
-            state->materialized_path = xstrdup(entry->name);
+            if (!bx_cpio_record_regular(hardlinks, state, dirs, fd, entry->name, &restore))
+                goto fail;
         }
         else {
             if (entry->kind == BX_CPIO_KIND_REG) {
@@ -980,24 +1052,16 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 restore.set_mode = true;
                 if (!bx_archive_write_regular_payload(stage.fd, entry->data, entry->data_len, options->sparse, diag))
                     goto done;
-                if (!bx_archive_restore_fd(&restore, stage.fd, entry->name, diag))
+                if (!bx_archive_prepare_regular_fd(&restore, stage.fd, entry->name, diag))
                     goto done;
-                if (state != NULL) {
-                    fd = bx_fd_dup_cloexec(stage.fd);
-                    if (fd < 0)
-                        goto fail;
-                }
+                if (!bx_cpio_record_regular(hardlinks, state, dirs, stage.fd, entry->name, &restore))
+                    goto fail;
                 if (bx_archive_temp_pending_signal()) {
                     errno = EINTR;
                     goto fail;
                 }
                 if (bx_fd_staged_file_publish(&stage, leaf) != 0)
                     goto fail;
-                if (state != NULL) {
-                    state->materialized_fd = fd;
-                    fd = -1;
-                    state->materialized_path = xstrdup(entry->name);
-                }
             }
             else if (entry->kind == BX_CPIO_KIND_SYMLINK) {
                 if (bx_fd_unlinkat_child(parent, leaf, 0) != 0 && errno != ENOENT)
@@ -1010,18 +1074,19 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                     goto fail;
                 if (bx_fd_mkfifoat(parent, leaf, entry->mode & 07777u) != 0)
                     goto fail;
-                if (options->preserve_mtime) {
-                    struct stat fifo;
-                    if (fstatat(parent, leaf, &fifo, AT_SYMLINK_NOFOLLOW) != 0)
-                        goto fail;
-                    if (!S_ISFIFO(fifo.st_mode)) {
-                        errno = ESTALE;
-                        goto fail;
-                    }
-                    if (!bx_archive_restore_leaf(&restore, parent, leaf, &fifo, entry->name, diag))
-                        goto done;
-                }
             }
+        }
+        if ((entry->kind == BX_CPIO_KIND_SYMLINK || entry->kind == BX_CPIO_KIND_FIFO) && (restore.set_mtime || restore.set_owner || restore.set_group)) {
+            struct stat status;
+            if (bx_fd_fstatat_child_nofollow(parent, leaf, &status) != 0)
+                goto fail;
+            mode_t type = entry->kind == BX_CPIO_KIND_SYMLINK ? S_IFLNK : S_IFIFO;
+            if ((status.st_mode & S_IFMT) != type) {
+                errno = ESTALE;
+                goto fail;
+            }
+            if (!bx_archive_restore_leaf(&restore, parent, leaf, &status, entry->name, diag))
+                goto done;
         }
     }
     ok = true;
@@ -1069,7 +1134,16 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
                 ok = bx_xwrite_all(STDOUT_FILENO, entry->data, entry->data_len);
         }
         else {
-            if (!bx_cpio_extract_one(entry, options, root_fd, &dirs, &hardlinks, diag)) {
+            struct bx_cpio_hardlink_state* state = NULL;
+            if (entry->kind == BX_CPIO_KIND_REG && entry->nlink > 1) {
+                state = bx_cpio_get_hardlink_state(&hardlinks, entry->device, entry->ino);
+                if (!state) {
+                    bx_diag(diag, "%s: %s", entry->name, strerror(errno));
+                    status = 2;
+                    break;
+                }
+            }
+            if (!bx_cpio_extract_one(entry, options, root_fd, &dirs, &hardlinks, state, diag)) {
                 status = 2;
                 break;
             }
@@ -1087,8 +1161,7 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
     if (status == 0 && !bx_archive_pending_metadata_apply(&dirs, root_fd, diag))
         status = 2;
     bx_archive_pending_metadata_free(&dirs);
-    if (!bx_cpio_hardlink_states_free(&hardlinks, diag))
-        status = 2;
+    bx_cpio_hardlink_states_free(&hardlinks);
     bx_fd_cleanup(&root_fd);
     return status;
 }
@@ -1123,6 +1196,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
             .link_target = file->link_target,
         };
         struct bx_archive_buffer data = {0};
+        struct bx_cpio_hardlink_state* state = NULL;
         if (S_ISDIR(file->st.st_mode)) {
             entry.kind = BX_CPIO_KIND_DIR;
         }
@@ -1134,8 +1208,13 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         }
         else if (S_ISREG(file->st.st_mode)) {
             entry.kind = BX_CPIO_KIND_REG;
-            struct bx_cpio_hardlink_state* state = entry.nlink > 1 ? bx_cpio_get_hardlink_state(&hardlinks, entry.device, entry.ino) : NULL;
-            if ((state == NULL || state->materialized_fd < 0) && !bx_cpio_read_file(file->source_path, &data, diag)) {
+            state = entry.nlink > 1 ? bx_cpio_get_hardlink_state(&hardlinks, entry.device, entry.ino) : NULL;
+            if (entry.nlink > 1 && !state) {
+                status = 2;
+                bx_diag(diag, "%s: %s", entry.name, strerror(errno));
+                break;
+            }
+            if ((state == NULL || !state->origin) && !bx_cpio_read_file(file->source_path, &data, diag)) {
                 bx_archive_buffer_free(&data);
                 status = 2;
                 break;
@@ -1146,7 +1225,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         else {
             continue;
         }
-        bool ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, diag);
+        bool ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, state, diag);
         bx_archive_buffer_free(&data);
         if (!ok) {
             status = 2;
@@ -1157,8 +1236,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         status = 2;
 done:
     bx_archive_pending_metadata_free(&dirs);
-    if (!bx_cpio_hardlink_states_free(&hardlinks, diag))
-        status = 2;
+    bx_cpio_hardlink_states_free(&hardlinks);
     bx_archive_fs_list_free(&files);
     bx_cpio_free_name_list(names, name_count);
     bx_fd_cleanup(&root_fd);
