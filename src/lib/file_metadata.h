@@ -44,6 +44,9 @@ enum bx_file_acl_mask {
     BX_FILE_ACL_ALL = BX_FILE_ACL_ACCESS | BX_FILE_ACL_DEFAULT,
 };
 enum bx_file_xattr_class bx_file_xattr_classify(const char* name);
+/* Validate selected label/capability values without interpreting ordinary
+ * xattrs. ACL wire values use the dedicated decoder below. */
+bool bx_file_xattr_validate(enum bx_file_xattr_class kind, const void* value, size_t size);
 
 /* Zero-initialize before use. Owns all strings and byte arrays; free remains
  * valid after partial failure. Copies own their storage independently. */

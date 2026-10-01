@@ -112,7 +112,7 @@ bool bx_tar_metadata_select(struct bx_file_metadata* selected, const struct bx_f
                 goto fail;
             selected->restore_acls |= access ? BX_FILE_ACL_ACCESS : BX_FILE_ACL_DEFAULT;
         }
-        else if (!bx_file_metadata_set(selected, attr->name, attr->value, attr->size))
+        else if (!bx_file_xattr_validate(kind, attr->value, attr->size) || !bx_file_metadata_set(selected, attr->name, attr->value, attr->size))
             goto fail;
     }
     return true;
