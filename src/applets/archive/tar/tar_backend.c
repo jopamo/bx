@@ -1114,20 +1114,6 @@ static enum bx_tar_existing_target_action bx_tar_extract_existing_target_action(
     return BX_TAR_EXISTING_TARGET_PROCEED;
 }
 
-static bool bx_tar_extract_remove_empty_dir_default(struct bx_tar_extract_state* state,
-                                                    const char* path,
-                                                    struct bx_diag_ctx* diag) {
-    if (unlinkat(state->parent_fd, state->leaf, AT_REMOVEDIR) == 0) {
-        return true;
-    }
-    if (errno == ENOTEMPTY || errno == EEXIST) {
-        bx_diag(diag, "%s: %s", path, strerror(EEXIST));
-        return false;
-    }
-    bx_diag(diag, "%s: %s", path, strerror(errno));
-    return false;
-}
-
 static bool bx_tar_extract_prepare_final_non_dir_target(struct bx_tar_extract_state* state, const struct bx_tar_entry* entry, const char* dest_path, struct bx_diag_ctx* diag) {
     struct stat st;
 
@@ -1149,16 +1135,32 @@ static bool bx_tar_extract_prepare_final_non_dir_target(struct bx_tar_extract_st
         bx_diag(diag, "%s: %s", dest_path, strerror(EISDIR));
         return false;
     }
-    if (state->options->old_file_mode == BX_TAR_OLD_FILES_UNLINK_FIRST) {
-        if (unlinkat(state->parent_fd, state->leaf, AT_REMOVEDIR) != 0) {
-            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            return false;
-        }
-        return true;
-    }
-
     (void)entry;
-    return bx_tar_extract_remove_empty_dir_default(state, dest_path, diag);
+    if (bx_fd_empty_directory_at(state->parent_fd, state->leaf, &st) == 0)
+        return true;
+    int error = errno;
+    if (state->options->old_file_mode != BX_TAR_OLD_FILES_UNLINK_FIRST && (error == ENOTEMPTY || error == EEXIST))
+        error = EEXIST;
+    bx_diag(diag, "%s: %s", dest_path, strerror(error));
+    return false;
+}
+
+static bool bx_tar_extract_publish(struct bx_fd_staged_file* stage, const char* leaf, const char* path, struct bx_diag_ctx* diag) {
+    struct stat existing;
+    int found = bx_fd_fstatat_child_nofollow(stage->parent_fd, leaf, &existing);
+    int result;
+    if (found != 0 && errno != ENOENT)
+        result = -1;
+    else if (found == 0 && S_ISDIR(existing.st_mode))
+        result = bx_fd_staged_file_publish_over_directory(stage, leaf, &existing);
+    else
+        result = bx_fd_staged_file_publish(stage, leaf);
+    if (result == 0)
+        return true;
+    bx_diag(diag, "%s: %s", path, strerror(errno));
+    if (stage->displaced_directory)
+        bx_diag(diag, "%s: rollback failed; previous directory retained at sibling %s", path, stage->name);
+    return false;
 }
 
 static bool bx_tar_extract_prepare_final_dir_target(struct bx_tar_extract_state* state,
@@ -1530,10 +1532,8 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                     }
                     if (ok && !already_linked) {
                         ok = bx_tar_extract_prepare_final_non_dir_target(state, &entry, link->path, diag);
-                        if (ok && bx_fd_staged_file_publish(&stage, leaf) != 0) {
-                            bx_diag(diag, "%s: %s", link->path, strerror(errno));
-                            ok = false;
-                        }
+                        if (ok)
+                            ok = bx_tar_extract_publish(&stage, leaf, link->path, diag);
                     }
                     if (ok && link->sequence > sequence)
                         ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, origin, 1048576u);
@@ -1784,8 +1784,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state, co
         ok = true;
         goto special_done;
     }
-    if (bx_fd_staged_file_publish(&stage, state->leaf) != 0) {
-        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+    if (!bx_tar_extract_publish(&stage, state->leaf, dest_path, diag)) {
         goto special_done;
     }
     ok = bx_tar_extract_record_inode(state, &candidate, dest_path, diag);
@@ -1902,9 +1901,9 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
             bx_tar_extract_clear_current_stream(state);
             return true;
         }
-        bool removed = state->options->recursive_unlink ? bx_remove_recursive_at(state->current_file.parent_fd, state->current_leaf, dest_path, &existing, diag)
-                                                        : bx_fd_unlinkat_child(state->current_file.parent_fd, state->current_leaf, AT_REMOVEDIR) == 0;
-        if (!removed) {
+        bool ready = state->options->recursive_unlink ? bx_remove_recursive_at(state->current_file.parent_fd, state->current_leaf, dest_path, &existing, diag)
+                                                        : bx_fd_empty_directory_at(state->current_file.parent_fd, state->current_leaf, &existing) == 0;
+        if (!ready) {
             int error = errno == ENOTEMPTY || errno == EEXIST ? EEXIST : errno;
             bx_diag(diag, "%s: %s", dest_path, strerror(error));
             state->status = 2;
@@ -1912,8 +1911,7 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
             return true;
         }
     }
-    if (bx_fd_staged_file_publish(&state->current_file, state->current_leaf) != 0) {
-        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+    if (!bx_tar_extract_publish(&state->current_file, state->current_leaf, dest_path, diag)) {
         bx_tar_extract_clear_current_stream(state);
         return false;
     }

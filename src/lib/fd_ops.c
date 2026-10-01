@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 
 #include <fcntl.h>
+#include <dirent.h>
+#include <linux/fs.h>
 #include <poll.h>
 #include <limits.h>
 #include <signal.h>
@@ -136,9 +138,10 @@ ssize_t bx_fd_input_pread(struct bx_fd_input* input, void* data, size_t len, off
 void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage) {
     int error = errno;
     bx_fd_cleanup(&stage->fd);
-    if (stage->name[0])
+    if (stage->name[0] && !stage->displaced_directory)
         bx_fd_unlinkat_child(stage->parent_fd, stage->name, 0);
     stage->name[0] = '\0';
+    stage->displaced_directory = false;
     bx_fd_cleanup(&stage->parent_fd);
     errno = error;
 }
@@ -236,23 +239,88 @@ int bx_fd_staged_link_begin(struct bx_fd_staged_file* stage, int parent, const c
     return bx_fd_staged_begin(stage, parent, destination, bx_fd_staged_create_link, &source);
 }
 
-int bx_fd_staged_file_publish(struct bx_fd_staged_file* stage, const char* destination) {
+static int bx_fd_staged_close_verified(struct bx_fd_staged_file* stage, const char* destination, struct stat* pinned) {
     if (stage->fd < 0 || stage->parent_fd < 0 || !stage->name[0] || !bx_fd_at_name_is_child(destination)) {
         errno = EINVAL;
         return -1;
     }
-    struct stat named, pinned;
-    if (bx_fd_fstatat_child_nofollow(stage->parent_fd, stage->name, &named) != 0 || bx_fd_fstat_expected(stage->fd, &named, &pinned) != 0)
+    struct stat named;
+    if (bx_fd_fstatat_child_nofollow(stage->parent_fd, stage->name, &named) != 0 || bx_fd_fstat_expected(stage->fd, &named, pinned) != 0)
         return -1;
     int fd = stage->fd;
     stage->fd = -1;
-    if (close(fd) != 0)
+    return close(fd);
+}
+
+int bx_fd_staged_file_publish(struct bx_fd_staged_file* stage, const char* destination) {
+    struct stat pinned;
+    if (bx_fd_staged_close_verified(stage, destination, &pinned) != 0)
         return -1;
     if (bx_fd_renameat_child(stage->parent_fd, stage->name, stage->parent_fd, destination) != 0)
         return -1;
     /* Rename leaves both names when they already refer to the same inode. */
     if (pinned.st_nlink > 1 && bx_fd_unlinkat_child(stage->parent_fd, stage->name, 0) != 0 && errno != ENOENT)
         return -1;
+    stage->name[0] = '\0';
+    return 0;
+}
+
+int bx_fd_empty_directory_at(int parent, const char* name, const struct stat* expected) {
+    int fd = bx_fd_openat_child_nofollow(parent, name, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0)
+        return -1;
+    struct stat status;
+    if (bx_fd_fstat_expected(fd, expected, &status) != 0) {
+        int error = errno;
+        close(fd);
+        errno = error;
+        return -1;
+    }
+    DIR* dir = fdopendir(fd);
+    if (!dir) {
+        int error = errno;
+        close(fd);
+        errno = error;
+        return -1;
+    }
+    int error = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent* entry = readdir(dir);
+        if (!entry) {
+            error = errno;
+            break;
+        }
+        if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..")) {
+            error = ENOTEMPTY;
+            break;
+        }
+    }
+    if (closedir(dir) != 0 && !error)
+        error = errno;
+    errno = error;
+    return error ? -1 : 0;
+}
+
+int bx_fd_staged_file_publish_over_directory(struct bx_fd_staged_file* stage, const char* destination, const struct stat* expected) {
+    if (bx_fd_empty_directory_at(stage->parent_fd, destination, expected) != 0)
+        return -1;
+    struct stat pinned;
+    if (bx_fd_staged_close_verified(stage, destination, &pinned) != 0)
+        return -1;
+    if (bx_fd_renameat2(stage->parent_fd, stage->name, stage->parent_fd, destination, RENAME_EXCHANGE) != 0)
+        return -1;
+    if (bx_fd_unlinkat_child(stage->parent_fd, stage->name, AT_REMOVEDIR) != 0) {
+        int error = errno;
+        if (bx_fd_renameat2(stage->parent_fd, stage->name, stage->parent_fd, destination, RENAME_EXCHANGE) != 0) {
+            stage->displaced_directory = true;
+            errno = EUCLEAN;
+        }
+        else {
+            errno = error;
+        }
+        return -1;
+    }
     stage->name[0] = '\0';
     return 0;
 }

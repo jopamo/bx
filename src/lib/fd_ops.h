@@ -152,6 +152,8 @@ struct bx_fd_staged_file {
     /* Regular writer, or an O_PATH identity reference for a special leaf/link. */
     int fd;
     mode_t mode;
+    /* A failed rollback leaves the old directory at name; never discard it. */
+    bool displaced_directory;
     char name[80];
 };
 #define BX_FD_STAGED_FILE_INIT {.parent_fd = -1, .fd = -1}
@@ -168,6 +170,12 @@ int bx_fd_staged_link_begin(struct bx_fd_staged_file* stage, int parent, const c
  * Pre-publication failure leaves the destination unchanged
  * and retains the private name for discard. No durability barrier is implied. */
 int bx_fd_staged_file_publish(struct bx_fd_staged_file* stage, const char* destination);
+/* Verify a directory without removing it. Nonempty directories return ENOTEMPTY. */
+int bx_fd_empty_directory_at(int parent, const char* name, const struct stat* expected);
+/* Exchange with a verified empty directory, then remove the displaced directory.
+ * Removal failure rolls back. Failed rollback returns EUCLEAN and retains the
+ * old directory at name with displaced_directory set for caller diagnostics. */
+int bx_fd_staged_file_publish_over_directory(struct bx_fd_staged_file* stage, const char* destination, const struct stat* expected);
 void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage);
 
 #endif /* BX_COMMON_FD_OPS_H */
