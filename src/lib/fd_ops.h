@@ -68,6 +68,7 @@ int bx_fd_set_nonblocking(int fd, bool enabled);
 
 enum bx_fd_input_ownership {
     BX_FD_INPUT_BORROWED,
+    BX_FD_INPUT_DUPLICATE_BORROWED,
     BX_FD_INPUT_OWNED,
 };
 
@@ -75,12 +76,14 @@ struct bx_fd_input {
     int fd;
     int relay[2];
     mode_t type;
-    bool owned;
+    bool owned; /* Descriptor lifetime only; duplicates still borrow shared flags. */
 };
 #define BX_FD_INPUT_INIT {.fd = -1, .relay = {-1, -1}}
 /* OWNED transfers the fd on success and requires exclusive ownership of its
  * open file description. BORROWED never changes shared status flags or closes
- * the source. Other borrowed streams must remain nonblocking for their lifetime;
+ * the source. DUPLICATE_BORROWED retains an owned duplicate without changing
+ * the borrowed open file description. Other borrowed streams must remain
+ * nonblocking for their lifetime;
  * storage files, pipes/FIFOs, sockets and Linux null/zero/full devices need no
  * flag changes. Initialization failure leaves the source with its caller. */
 int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownership ownership);
