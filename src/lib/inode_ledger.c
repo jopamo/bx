@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "lib/inode_ledger.h"
 
 #include <errno.h>
