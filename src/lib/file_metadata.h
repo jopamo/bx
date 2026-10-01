@@ -91,8 +91,9 @@ void bx_file_metadata_copy(struct bx_file_metadata* dest,
 size_t bx_file_metadata_value_bytes(const struct bx_file_metadata* metadata);
 /* Read into an empty model through a verified target. Leaf reads use xattrat
  * with no-follow semantics and require mount identity. Capture brackets the
- * batch with identity/stat checks; interface failures are not absence. */
-bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool acls, bool numeric_ids, bx_file_xattr_filter filter, const void* user);
+ * batch with identity/stat checks; interface failures are not absence.
+ * ACL qualifiers are always numeric. */
+bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool acls, bx_file_xattr_filter filter, const void* user);
 /* Read Linux inode flags from a borrowed fd. The interface applies only to
  * regular files and directories; other object types report applicable=false. */
 bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable);

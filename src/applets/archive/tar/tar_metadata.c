@@ -107,10 +107,10 @@ void bx_tar_metadata_select(struct bx_file_metadata* selected,
     }
 }
 
-bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool numeric_ids, const struct bx_tar_metadata_options* options) {
+bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, const struct bx_tar_metadata_options* options) {
     if (!options)
         return true;
-    if (!bx_file_metadata_read_target(metadata, target, options->acls, numeric_ids, options->xattrs || options->selinux ? bx_tar_metadata_collect_filter : NULL, options))
+    if (!bx_file_metadata_read_target(metadata, target, options->acls, options->xattrs || options->selinux ? bx_tar_metadata_collect_filter : NULL, options))
         return false;
     if (options->file_flags && !target->name) {
         unsigned int flags;
@@ -136,11 +136,11 @@ bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const str
     return bx_file_metadata_target_verify(target, true);
 }
 
-bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd, bool numeric_ids, const struct bx_tar_metadata_options* options) {
+bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd, const struct bx_tar_metadata_options* options) {
     if (!options || (!options->xattrs && !options->selinux && !options->file_flags && !options->acls))
         return true;
     struct bx_file_metadata_target target;
-    return bx_file_metadata_target_fd(&target, fd) && bx_tar_metadata_collect_target(metadata, &target, numeric_ids, options);
+    return bx_file_metadata_target_fd(&target, fd) && bx_tar_metadata_collect_target(metadata, &target, options);
 }
 
 bool bx_tar_metadata_parse(struct bx_file_metadata* metadata, const char* key,
