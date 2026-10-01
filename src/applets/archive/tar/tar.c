@@ -40,7 +40,7 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --no-recursion    archive directory entries without descending\n");
     fprintf(stream, "                        creation never follows source or parent symlinks\n");
     fprintf(stream, "      --one-file-system do not descend into other mounts when creating\n"
-                    "                        (old kernels: device boundary; bind mounts may cross)\n");
+                    "                        requires kernel mount identity; no device fallback\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
     fprintf(stream, "                        cannot combine with filesystem restoration controls\n");
     fprintf(stream, "      --occurrence[=N]  process only the Nth occurrence of each named member\n");
