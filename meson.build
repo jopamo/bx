@@ -1503,7 +1503,7 @@ if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
 system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
-systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
+systemwide_disabled_applet_names = ['ps', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
 install_bx_path = join_paths(install_bx_bindir, 'bx')
