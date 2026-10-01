@@ -389,6 +389,16 @@ static void bx_tar_release_mapped_name(struct bx_tar_mapped_name* name) {
     name->text = NULL;
 }
 
+static struct bx_tar_mapped_name bx_tar_map_entry_name(const struct bx_tar_entry* entry, const struct bx_tar_name_policy* policy, bool* stripped_absolute, bool* stripped_dotdot) {
+    struct bx_tar_mapped_name name = bx_tar_map_member_name(entry->name, policy, stripped_absolute, stripped_dotdot);
+    if (entry->kind == BX_TAR_KIND_DIR && name.text[0] == '\0' && policy->strip_components == 0u && policy->one_top_level == NULL &&
+        (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "./") == 0)) {
+        bx_tar_release_mapped_name(&name);
+        name.text = ".";
+    }
+    return name;
+}
+
 static struct bx_tar_stream_options
 bx_tar_make_stream_options(const struct bx_tar_options* options) {
     return (struct bx_tar_stream_options){
@@ -1582,13 +1592,8 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state, co
         return true;
     }
 
-    clean_name = bx_tar_map_member_name(entry->name, &state->name_policy, &stripped_absolute, &stripped_dotdot);
+    clean_name = bx_tar_map_entry_name(entry, &state->name_policy, &stripped_absolute, &stripped_dotdot);
     bx_tar_warn_name_adjustments(diag, stripped_absolute, &state->warned_absolute, stripped_dotdot, &state->warned_dotdot);
-    if (entry->kind == BX_TAR_KIND_DIR && clean_name.text[0] == '\0' && state->name_policy.strip_components == 0u && state->name_policy.one_top_level == NULL &&
-        (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "./") == 0)) {
-        bx_tar_release_mapped_name(&clean_name);
-        clean_name.text = ".";
-    }
     if (clean_name.text[0] == '\0') {
         bx_tar_report_empty_name(entry, diag);
         bx_tar_release_mapped_name(&clean_name);
@@ -1969,7 +1974,7 @@ static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
                                              NULL)) {
         return true;
     }
-    clean_name = bx_tar_map_member_name(entry->name,
+    clean_name = bx_tar_map_entry_name(entry,
                                         &state->name_policy,
                                         &stripped_absolute,
                                         &stripped_dotdot);
