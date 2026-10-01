@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fs.h>
+#include <linux/capability.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,88 @@ enum bx_file_xattr_class bx_file_xattr_classify(const char* name) {
     if (strcmp(name, "security.capability") == 0)
         return BX_FILE_XATTR_CAPABILITY;
     return BX_FILE_XATTR_ORDINARY;
+}
+
+struct bx_metadata_capabilities {
+    uint64_t permitted;
+    uint64_t inheritable;
+    uint32_t root;
+    bool effective;
+};
+
+static uint32_t bx_metadata_le32(const unsigned char* data) {
+    uint32_t value;
+    memcpy(&value, data, sizeof(value));
+    return le32toh(value);
+}
+
+static bool bx_metadata_cap_decode(const void* value, size_t size, struct bx_metadata_capabilities* caps) {
+    if (!value || size < 4) {
+        errno = EINVAL;
+        return false;
+    }
+    const unsigned char* data = value;
+    uint32_t magic = bx_metadata_le32(data), revision = magic & VFS_CAP_REVISION_MASK;
+    size_t required;
+    switch (revision) {
+        case VFS_CAP_REVISION_1:
+            required = XATTR_CAPS_SZ_1;
+            break;
+        case VFS_CAP_REVISION_2:
+            required = XATTR_CAPS_SZ_2;
+            break;
+        case VFS_CAP_REVISION_3:
+            required = XATTR_CAPS_SZ_3;
+            break;
+        default:
+            errno = EOPNOTSUPP;
+            return false;
+    }
+    if (size != required) {
+        errno = EINVAL;
+        return false;
+    }
+    if (magic & ~(VFS_CAP_REVISION_MASK | VFS_CAP_FLAGS_EFFECTIVE)) {
+        errno = EOPNOTSUPP;
+        return false;
+    }
+    *caps = (struct bx_metadata_capabilities){
+        .permitted = bx_metadata_le32(data + 4),
+        .inheritable = bx_metadata_le32(data + 8),
+        .effective = (magic & VFS_CAP_FLAGS_EFFECTIVE) != 0,
+    };
+    if (revision != VFS_CAP_REVISION_1) {
+        caps->permitted |= (uint64_t)bx_metadata_le32(data + 12) << 32;
+        caps->inheritable |= (uint64_t)bx_metadata_le32(data + 16) << 32;
+    }
+    if (revision == VFS_CAP_REVISION_3) {
+        caps->root = bx_metadata_le32(data + 20);
+        if (caps->root == UINT32_MAX) {
+            errno = EINVAL;
+            return false;
+        }
+    }
+    return true;
+}
+
+static size_t bx_metadata_label_length(const unsigned char* value, size_t size) {
+    return size && value[size - 1] == 0 ? size - 1 : size;
+}
+
+bool bx_file_xattr_validate(enum bx_file_xattr_class kind, const void* value, size_t size) {
+    if (kind == BX_FILE_XATTR_ORDINARY)
+        return true;
+    if (kind == BX_FILE_XATTR_CAPABILITY) {
+        struct bx_metadata_capabilities caps;
+        return bx_metadata_cap_decode(value, size, &caps);
+    }
+    if (kind == BX_FILE_XATTR_SELINUX && value && size && size <= 65536u) {
+        size_t length = bx_metadata_label_length(value, size);
+        if (length && !memchr(value, 0, length))
+            return true;
+    }
+    errno = EINVAL;
+    return false;
 }
 
 bool bx_file_metadata_stat_unchanged(const struct stat* a, const struct stat* b) {
@@ -436,8 +519,13 @@ bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struc
             break;
         }
         enum bx_file_xattr_class kind = bx_file_xattr_classify(name);
+        if (kind == BX_FILE_XATTR_CAPABILITY && !S_ISREG(target->status.st_mode)) {
+            errno = EOPNOTSUPP;
+            ok = false;
+            break;
+        }
         ok = kind == BX_FILE_XATTR_ACL_ACCESS || kind == BX_FILE_XATTR_ACL_DEFAULT ? bx_file_metadata_set_acl_xattr(metadata, name, value, (size_t)len)
-                                                                                   : bx_file_metadata_set(metadata, name, value, (size_t)len);
+                                                                                   : bx_file_xattr_validate(kind, value, (size_t)len) && bx_file_metadata_set(metadata, name, value, (size_t)len);
     }
     int error = errno;
     free(value);
@@ -596,6 +684,32 @@ static bool bx_metadata_apply_xattr(const struct bx_file_xattr* attr, const stru
     return rc == 0;
 }
 
+static bool bx_metadata_apply_semantic(const struct bx_file_xattr* attr, const struct bx_file_metadata_target* target) {
+    if (!bx_metadata_apply_xattr(attr, target))
+        return false;
+    enum bx_file_xattr_class kind = bx_file_xattr_classify(attr->name);
+    size_t capacity = kind == BX_FILE_XATTR_CAPABILITY ? XATTR_CAPS_SZ_3 : 65536u;
+    unsigned char* observed = xmalloc(capacity);
+    ssize_t size = bx_metadata_get_xattr(target, attr->name, observed, capacity);
+    bool ok = size >= 0 && bx_file_xattr_validate(kind, observed, (size_t)size);
+    if (ok && kind == BX_FILE_XATTR_CAPABILITY) {
+        struct bx_metadata_capabilities expected, actual;
+        ok = bx_metadata_cap_decode(attr->value, attr->size, &expected) && bx_metadata_cap_decode(observed, (size_t)size, &actual);
+        if (ok)
+            ok = expected.permitted == actual.permitted && expected.inheritable == actual.inheritable && expected.root == actual.root && expected.effective == actual.effective;
+    }
+    else if (ok) {
+        size_t expected = bx_metadata_label_length(attr->value, attr->size), actual = bx_metadata_label_length(observed, (size_t)size);
+        ok = expected == actual && memcmp(attr->value, observed, expected) == 0;
+    }
+    if (size >= 0 && !ok && bx_file_xattr_validate(kind, observed, (size_t)size))
+        errno = EOPNOTSUPP;
+    int error = errno;
+    free(observed);
+    errno = error;
+    return ok;
+}
+
 static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool symlink, bool directory, mode_t mode) {
     int rc, error;
     if ((metadata->restore_acls & BX_FILE_ACL_ACCESS) && !symlink) {
@@ -642,10 +756,10 @@ static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const str
         if (!bx_metadata_apply_xattr(attr, target))
             return false;
     }
-    return (!selinux || bx_metadata_apply_xattr(selinux, target)) && (!capabilities || bx_metadata_apply_xattr(capabilities, target));
+    return (!selinux || bx_metadata_apply_semantic(selinux, target)) && (!capabilities || bx_metadata_apply_semantic(capabilities, target));
 }
 
-static bool bx_metadata_acl_supported(const struct bx_file_metadata* metadata, mode_t type) {
+static bool bx_metadata_supported(const struct bx_file_metadata* metadata, mode_t type) {
     if (metadata->restore_acls & ~(unsigned int)BX_FILE_ACL_ALL) {
         errno = EINVAL;
         return false;
@@ -660,6 +774,12 @@ static bool bx_metadata_acl_supported(const struct bx_file_metadata* metadata, m
             errno = EINVAL;
             return false;
         }
+        if (kind == BX_FILE_XATTR_CAPABILITY && type != S_IFREG) {
+            errno = EOPNOTSUPP;
+            return false;
+        }
+        if (!bx_file_xattr_validate(kind, metadata->xattrs[i].value, metadata->xattrs[i].size))
+            return false;
     }
     return true;
 }
@@ -669,7 +789,7 @@ bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_
         errno = EINVAL;
         return false;
     }
-    if (!bx_metadata_acl_supported(&restore->metadata, type))
+    if (!bx_metadata_supported(&restore->metadata, type))
         return false;
     if (restore->flags_set || restore->flags_clear) {
         errno = EOPNOTSUPP;
@@ -693,6 +813,23 @@ bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_
             uint32_t flags;
         } args = {0};
         int rc = (int)syscall(SYS_setxattrat, -1, "leaf", AT_SYMLINK_NOFOLLOW, "user.bx", &args, sizeof(args));
+        if (rc != -1 || errno != EBADF)
+            return false;
+#else
+        errno = EOPNOTSUPP;
+        return false;
+#endif
+    }
+    for (size_t i = 0; i < restore->metadata.len; i++) {
+        if (bx_file_xattr_classify(restore->metadata.xattrs[i].name) != BX_FILE_XATTR_SELINUX)
+            continue;
+#ifdef SYS_getxattrat
+        struct {
+            _Alignas(8) uint64_t value;
+            uint32_t size;
+            uint32_t flags;
+        } args = {0};
+        int rc = (int)syscall(SYS_getxattrat, -1, "leaf", AT_SYMLINK_NOFOLLOW, "security.selinux", &args, sizeof(args));
         if (rc != -1 || errno != EBADF)
             return false;
 #else
@@ -747,7 +884,7 @@ static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_rest
 enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target) {
     if (!bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
-    if (!bx_metadata_acl_supported(&restore->metadata, target->status.st_mode & S_IFMT))
+    if (!bx_metadata_supported(&restore->metadata, target->status.st_mode & S_IFMT))
         return BX_FILE_RESTORE_METADATA_ERROR;
     if (target->name && !bx_file_restore_leaf_supported(restore, target->status.st_mode & S_IFMT))
         return BX_FILE_RESTORE_METADATA_ERROR;
@@ -772,7 +909,7 @@ enum bx_file_restore_result bx_file_restore_prepare_regular(const struct bx_file
         errno = EINVAL;
         return BX_FILE_RESTORE_STAT_ERROR;
     }
-    if (!bx_metadata_acl_supported(&restore->metadata, S_IFREG))
+    if (!bx_metadata_supported(&restore->metadata, S_IFREG))
         return BX_FILE_RESTORE_METADATA_ERROR;
     struct bx_file_restore immediate = *restore;
     immediate.flags_set = immediate.flags_clear = 0u;
