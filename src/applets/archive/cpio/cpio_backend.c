@@ -923,7 +923,7 @@ static bool bx_cpio_record_regular(struct bx_cpio_hardlink_state_list* list,
 }
 
 /* Link privately, then verify against the transiently pinned live alias. */
-static bool bx_cpio_link_materialized(int root_fd, const struct bx_archive_pending_metadata_entry* source, int source_fd, int parent, const char* leaf, struct bx_diag_ctx* diag) {
+static bool bx_cpio_link_materialized(int root_fd, const struct bx_archive_pending_metadata_entry* source, int source_fd, int parent, const char* leaf) {
     char* source_leaf = NULL;
     int source_parent = bx_dir_path_open_destination_parent(root_fd, source->path, BX_DIR_PATH_NO_MOUNT_CROSSING, false, 0, &source_leaf);
     if (source_parent < 0)
@@ -932,39 +932,16 @@ static bool bx_cpio_link_materialized(int root_fd, const struct bx_archive_pendi
     bool ok = false;
     if (fstat(source_fd, &expected) != 0)
         goto done;
-    static unsigned long serial;
-    char temporary[80];
-    for (unsigned attempt = 0; attempt < 128; attempt++) {
-        snprintf(temporary, sizeof(temporary), ".bx-cpio-link.%ld.%lu", (long)getpid(), serial++);
-        if (strcmp(temporary, leaf) == 0)
-            continue;
-        if (bx_fd_linkat_child(source_parent, source_leaf, parent, temporary, 0) != 0) {
-            if (errno == EEXIST)
-                continue;
-            goto done;
+    struct bx_fd_staged_file stage = BX_FD_STAGED_FILE_INIT;
+    if (bx_fd_staged_link_begin(&stage, parent, leaf, source_parent, source_leaf) == 0) {
+        if (bx_fd_fstat_expected(stage.fd, &expected, &linked) == 0) {
+            if (bx_archive_temp_pending_signal())
+                errno = EINTR;
+            else
+                ok = bx_fd_staged_file_publish(&stage, leaf) == 0;
         }
-        if (bx_fd_fstatat_child_nofollow(parent, temporary, &linked) != 0)
-            goto discard;
-        if (!S_ISREG(linked.st_mode) || linked.st_dev != expected.st_dev || linked.st_ino != expected.st_ino) {
-            errno = ESTALE;
-            goto discard;
-        }
-        if (bx_fd_renameat_child(parent, temporary, parent, leaf) == 0) {
-            /* rename is a no-op when both names already link the same inode. */
-            if (bx_fd_unlinkat_child(parent, temporary, 0) != 0 && errno != ENOENT)
-                goto done;
-            ok = true;
-            goto done;
-        }
-    discard: {
-        int error = errno;
-        if (bx_fd_unlinkat_child(parent, temporary, 0) != 0)
-            bx_diag(diag, "%s: cleanup failed: %s", temporary, strerror(errno));
-        errno = error;
-        goto done;
     }
-    }
-    errno = EEXIST;
+    bx_fd_staged_file_discard(&stage);
 done: {
     int error = errno;
     close(source_parent);
@@ -1039,7 +1016,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 goto fail;
             }
             const struct bx_cpio_alias* alias = &hardlinks->aliases[state->location];
-            if (!bx_cpio_link_materialized(root_fd, &dirs->entries[alias->record], fd, parent, leaf, diag))
+            if (!bx_cpio_link_materialized(root_fd, &dirs->entries[alias->record], fd, parent, leaf))
                 goto fail;
             if (!bx_cpio_record_regular(hardlinks, state, dirs, fd, entry->name, &restore))
                 goto fail;
@@ -1064,29 +1041,37 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                     goto fail;
             }
             else if (entry->kind == BX_CPIO_KIND_SYMLINK) {
-                if (bx_fd_unlinkat_child(parent, leaf, 0) != 0 && errno != ENOENT)
-                    goto fail;
-                if (bx_fd_symlinkat_child(entry->link_target, parent, leaf) != 0)
+                if (bx_fd_staged_symlink_begin(&stage, parent, leaf, entry->link_target) != 0)
                     goto fail;
             }
             else if (entry->kind == BX_CPIO_KIND_FIFO) {
-                if (bx_fd_unlinkat_child(parent, leaf, 0) != 0 && errno != ENOENT)
-                    goto fail;
-                if (bx_fd_mkfifoat(parent, leaf, entry->mode & 07777u) != 0)
+                if (bx_fd_staged_node_begin(&stage, parent, leaf, S_IFIFO | (entry->mode & 07777u), 0) != 0)
                     goto fail;
             }
         }
         if ((entry->kind == BX_CPIO_KIND_SYMLINK || entry->kind == BX_CPIO_KIND_FIFO) && (restore.set_mtime || restore.set_owner || restore.set_group)) {
             struct stat status;
-            if (bx_fd_fstatat_child_nofollow(parent, leaf, &status) != 0)
+            if (fstat(stage.fd, &status) != 0)
                 goto fail;
             mode_t type = entry->kind == BX_CPIO_KIND_SYMLINK ? S_IFLNK : S_IFIFO;
             if ((status.st_mode & S_IFMT) != type) {
                 errno = ESTALE;
                 goto fail;
             }
-            if (!bx_archive_restore_leaf(&restore, parent, leaf, &status, entry->name, diag))
+            if (entry->kind == BX_CPIO_KIND_FIFO && (restore.set_owner || restore.set_group)) {
+                restore.mode = stage.mode;
+                restore.set_mode = true;
+            }
+            if (!bx_archive_restore_leaf(&restore, stage.parent_fd, stage.name, &status, entry->name, diag))
                 goto done;
+        }
+        if (entry->kind == BX_CPIO_KIND_SYMLINK || entry->kind == BX_CPIO_KIND_FIFO) {
+            if (bx_archive_temp_pending_signal()) {
+                errno = EINTR;
+                goto fail;
+            }
+            if (bx_fd_staged_file_publish(&stage, leaf) != 0)
+                goto fail;
         }
     }
     ok = true;

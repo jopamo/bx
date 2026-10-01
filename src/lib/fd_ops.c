@@ -143,7 +143,9 @@ void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage) {
     errno = error;
 }
 
-int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, mode_t mode) {
+typedef int (*bx_fd_staged_create_fn)(struct bx_fd_staged_file* stage, const char* name, const void* context);
+
+static int bx_fd_staged_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, bx_fd_staged_create_fn create, const void* context) {
     if (stage->fd >= 0 || stage->parent_fd >= 0 || !bx_fd_at_name_is_child(destination)) {
         errno = EINVAL;
         return -1;
@@ -156,16 +158,15 @@ int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const c
         snprintf(name, sizeof(name), ".bx-stage.%ld.%d.%u", (long)getpid(), stage->parent_fd, attempt);
         if (strcmp(name, destination) == 0)
             continue;
-        stage->fd = bx_fd_openat_child_nofollow(stage->parent_fd, name, O_RDWR | O_CREAT | O_EXCL, mode);
-        if (stage->fd >= 0) {
+        if (create(stage, name, context) == 0) {
             memcpy(stage->name, name, strlen(name) + 1);
+            if (stage->fd < 0)
+                stage->fd = bx_fd_openat_child_nofollow(stage->parent_fd, name, O_PATH, 0);
             struct stat status;
-            if (fstat(stage->fd, &status) != 0)
+            if (stage->fd < 0 || fstat(stage->fd, &status) != 0)
                 break;
             stage->mode = status.st_mode & 07777u;
-            if (fchmod(stage->fd, 0600) == 0)
-                return 0;
-            break;
+            return 0;
         }
         if (errno != EEXIST)
             break;
@@ -176,16 +177,81 @@ int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const c
     return -1;
 }
 
+static int bx_fd_staged_create_regular(struct bx_fd_staged_file* stage, const char* name, const void* context) {
+    const mode_t* mode = context;
+    stage->fd = bx_fd_openat_child_nofollow(stage->parent_fd, name, O_RDWR | O_CREAT | O_EXCL, *mode);
+    return stage->fd < 0 ? -1 : 0;
+}
+
+int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, mode_t mode) {
+    if (bx_fd_staged_begin(stage, parent, destination, bx_fd_staged_create_regular, &mode) != 0)
+        return -1;
+    if (fchmod(stage->fd, 0600) == 0)
+        return 0;
+    int error = errno;
+    bx_fd_staged_file_discard(stage);
+    errno = error;
+    return -1;
+}
+
+static int bx_fd_staged_create_symlink(struct bx_fd_staged_file* stage, const char* name, const void* target) {
+    return bx_fd_symlinkat_child(target, stage->parent_fd, name);
+}
+
+int bx_fd_staged_symlink_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, const char* target) {
+    return bx_fd_staged_begin(stage, parent, destination, bx_fd_staged_create_symlink, target);
+}
+
+struct bx_fd_staged_node {
+    mode_t mode;
+    dev_t device;
+};
+
+static int bx_fd_staged_create_node(struct bx_fd_staged_file* stage, const char* name, const void* context) {
+    const struct bx_fd_staged_node* node = context;
+    return bx_fd_mknodat(stage->parent_fd, name, node->mode, node->device);
+}
+
+int bx_fd_staged_node_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, mode_t mode, dev_t device) {
+    if (!S_ISFIFO(mode) && !S_ISCHR(mode) && !S_ISBLK(mode)) {
+        errno = EINVAL;
+        return -1;
+    }
+    const struct bx_fd_staged_node node = {.mode = mode, .device = device};
+    return bx_fd_staged_begin(stage, parent, destination, bx_fd_staged_create_node, &node);
+}
+
+struct bx_fd_staged_link {
+    int parent;
+    const char* name;
+};
+
+static int bx_fd_staged_create_link(struct bx_fd_staged_file* stage, const char* name, const void* context) {
+    const struct bx_fd_staged_link* source = context;
+    return bx_fd_linkat_child(source->parent, source->name, stage->parent_fd, name, 0);
+}
+
+int bx_fd_staged_link_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, int source_parent, const char* source_name) {
+    const struct bx_fd_staged_link source = {.parent = source_parent, .name = source_name};
+    return bx_fd_staged_begin(stage, parent, destination, bx_fd_staged_create_link, &source);
+}
+
 int bx_fd_staged_file_publish(struct bx_fd_staged_file* stage, const char* destination) {
     if (stage->fd < 0 || stage->parent_fd < 0 || !stage->name[0] || !bx_fd_at_name_is_child(destination)) {
         errno = EINVAL;
         return -1;
     }
+    struct stat named, pinned;
+    if (bx_fd_fstatat_child_nofollow(stage->parent_fd, stage->name, &named) != 0 || bx_fd_fstat_expected(stage->fd, &named, &pinned) != 0)
+        return -1;
     int fd = stage->fd;
     stage->fd = -1;
     if (close(fd) != 0)
         return -1;
     if (bx_fd_renameat_child(stage->parent_fd, stage->name, stage->parent_fd, destination) != 0)
+        return -1;
+    /* Rename leaves both names when they already refer to the same inode. */
+    if (pinned.st_nlink > 1 && bx_fd_unlinkat_child(stage->parent_fd, stage->name, 0) != 0 && errno != ENOENT)
         return -1;
     stage->name[0] = '\0';
     return 0;
