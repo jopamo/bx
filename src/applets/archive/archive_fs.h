@@ -139,8 +139,9 @@ bool bx_archive_pending_metadata_record_alias_fd(struct bx_archive_pending_metad
                                                  uint64_t origin);
 bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs, int root_fd, struct bx_diag_ctx* diag);
 bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
-                            const char* path, bool symlink, bool directory,
+                            const char* path,
                             struct bx_diag_ctx* diag);
+bool bx_archive_prepare_regular_fd(const struct bx_file_restore* restore, int fd, const char* path, struct bx_diag_ctx* diag);
 bool bx_archive_restore_leaf(const struct bx_file_restore* restore, int parent_fd, const char* leaf, const struct stat* expected, const char* path, struct bx_diag_ctx* diag);
 
 #endif /* BX_APPLETS_ARCHIVE_ARCHIVE_FS_H */

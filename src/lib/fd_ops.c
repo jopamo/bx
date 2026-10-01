@@ -247,8 +247,6 @@ int bx_fd_openat_metadata(int parent_fd, const char* name) {
     int fd = bx_fd_openat_child_nofollow(parent_fd, name,
                                          O_RDONLY | O_NONBLOCK | O_NOCTTY, 0);
     if (fd < 0) {
-        if (errno == EACCES)
-            return locator;
         goto fail;
     }
     if (bx_fd_fstat_expected(fd, &expected, &opened) != 0) {

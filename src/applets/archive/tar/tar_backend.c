@@ -1313,10 +1313,7 @@ static bool bx_tar_extract_select_metadata(struct bx_tar_extract_state* state,
     return true;
 }
 
-static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
-                                     const struct bx_tar_entry* entry, int fd,
-                                     const char* path, mode_t mode,
-                                     struct bx_diag_ctx* diag) {
+static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state, const struct bx_tar_entry* entry, int fd, const char* path, mode_t mode, struct bx_diag_ctx* diag) {
     struct bx_file_restore selected = {0};
     if (!bx_tar_extract_select_metadata(state, entry, mode, &selected, path, diag)) {
         bx_file_metadata_free(&selected.metadata);
@@ -1328,20 +1325,10 @@ static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
-    bool deferred = state->options->metadata.file_flags && S_ISREG(status.st_mode);
-    struct bx_file_restore immediate = selected;
-    if (deferred) {
-        immediate.flags_set = immediate.flags_clear = 0u;
-        immediate.mode = 0600u;
-    }
-    bool ok = S_ISREG(status.st_mode) || S_ISDIR(status.st_mode) ? bx_archive_restore_fd(&immediate, fd, path, false, S_ISDIR(status.st_mode), diag)
-                                                                 : bx_archive_restore_leaf(&immediate, state->parent_fd, state->leaf, &status, path, diag);
-    /* Final snapshots must remain reopenable until links and restrictive flags
-     * are complete. ACL replay can have changed the temporary access mask. */
-    if (ok && deferred && fchmod(fd, 0600u) != 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        ok = false;
-    }
+    bool deferred = S_ISREG(status.st_mode);
+    bool ok = deferred                  ? bx_archive_prepare_regular_fd(&selected, fd, path, diag)
+              : S_ISDIR(status.st_mode) ? bx_archive_restore_fd(&selected, fd, path, diag)
+                                        : bx_archive_restore_leaf(&selected, state->parent_fd, state->leaf, &status, path, diag);
     if (ok && deferred) {
         ok = bx_archive_pending_metadata_record_fd(&state->dirs, fd, path, state->boundary_prefix, &selected, state->sequence, state->sequence);
         if (!ok)
@@ -1523,18 +1510,16 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                         ok = fd >= 0 && bx_fd_fstat_expected(fd, &expected, &linked) == 0;
                         if (!ok)
                             bx_diag(diag, "%s: %s", link->path, strerror(errno));
-                        if (ok && (link->sequence > sequence || (state->options->metadata.file_flags && S_ISREG(linked.st_mode) && link->sequence >= origin))) {
-                            if (state->options->metadata.file_flags && S_ISREG(linked.st_mode)) {
+                        if (ok && (link->sequence > sequence || (S_ISREG(linked.st_mode) && link->sequence >= origin))) {
+                            if (S_ISREG(linked.st_mode)) {
                                 ok = bx_archive_pending_metadata_record_fd(&state->dirs, fd, link->path, link->boundary_prefix, &link->restore, link->sequence, origin);
                                 if (!ok)
                                     bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));
                             }
-                            else if (S_ISREG(linked.st_mode))
-                                ok = bx_archive_restore_fd(&link->restore, fd, link->path, false, false, diag);
                             else
                                 ok = bx_archive_restore_leaf(&link->restore, parent, leaf, &linked, link->path, diag);
                         }
-                        else if (ok && state->options->metadata.file_flags && S_ISREG(linked.st_mode)) {
+                        else if (ok && S_ISREG(linked.st_mode)) {
                             ok = bx_archive_pending_metadata_record_alias_fd(&state->dirs, fd, link->path, link->boundary_prefix, origin);
                             if (!ok)
                                 bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));

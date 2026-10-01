@@ -534,8 +534,12 @@ static bool bx_archive_restore_result(enum bx_file_restore_result result, const 
     return result == BX_FILE_RESTORE_OK;
 }
 
-bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd, const char* path, bool symlink, bool directory, struct bx_diag_ctx* diag) {
-    return bx_archive_restore_result(bx_file_restore_fd(restore, fd, symlink, directory), path, diag);
+bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd, const char* path, struct bx_diag_ctx* diag) {
+    return bx_archive_restore_result(bx_file_restore_fd(restore, fd), path, diag);
+}
+
+bool bx_archive_prepare_regular_fd(const struct bx_file_restore* restore, int fd, const char* path, struct bx_diag_ctx* diag) {
+    return bx_archive_restore_result(bx_file_restore_prepare_regular(restore, fd), path, diag);
 }
 
 bool bx_archive_restore_leaf(const struct bx_file_restore* restore, int parent_fd, const char* leaf, const struct stat* expected, const char* path, struct bx_diag_ctx* diag) {
@@ -660,7 +664,7 @@ bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs,
                 }
             }
             restore.flags_set = restore.flags_clear = 0u;
-            ok = bx_archive_restore_fd(&restore, fd, location->path, false, directory, diag);
+            ok = bx_archive_restore_fd(&restore, fd, location->path, diag);
         }
         if (ok && bx_archive_temp_pending_signal()) {
             bx_diag(diag, "metadata finalization interrupted");
