@@ -776,7 +776,7 @@ static bool bx_tar_stream_write_fs_raw_entry(
     struct bx_file_metadata_target target;
     bool descriptor = S_ISREG(fs_entry->st->st_mode) || S_ISDIR(fs_entry->st->st_mode);
     if (requested && (!(descriptor ? bx_file_metadata_target_fd(&target, source_fd) : bx_file_metadata_target_leaf(&target, fs_entry->source_parent_fd, fs_entry->source_name, fs_entry->st)) ||
-                      !bx_tar_metadata_collect_target(&metadata, &target, state->options->numeric_owner, options))) {
+                      !bx_tar_metadata_collect_target(&metadata, &target, options))) {
         bx_diag(diag, "%s: cannot read metadata: %s", fs_entry->source_path, strerror(errno));
         bx_file_metadata_free(&metadata);
         return false;
@@ -844,7 +844,7 @@ static bool bx_tar_stream_write_sparse_fs_entry(struct bx_tar_stream_fs_write_st
         compact_size += (size_t)(end - begin);
         offset = end;
     } while (offset < source->st->st_size);
-    if (!bx_tar_metadata_collect(&metadata, fd, state->options->numeric_owner, state->options->metadata))
+    if (!bx_tar_metadata_collect(&metadata, fd, state->options->metadata))
         goto fail;
     if (!bx_tar_stream_start_sparse_v1_entry(&entry, state->sink, source->archive_path, uname, gname, mode, uid, gid, extents, count, (size_t)source->st->st_size, compact_size, mtime, &metadata,
                                              diag))

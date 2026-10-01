@@ -18,8 +18,8 @@ struct bx_tar_metadata_options {
 void bx_tar_metadata_select(struct bx_file_metadata* selected,
                              const struct bx_file_metadata* metadata,
                              const struct bx_tar_metadata_options* options);
-bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool numeric_ids, const struct bx_tar_metadata_options* options);
-bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd, bool numeric_ids, const struct bx_tar_metadata_options* options);
+bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, const struct bx_tar_metadata_options* options);
+bool bx_tar_metadata_collect(struct bx_file_metadata* metadata, int fd, const struct bx_tar_metadata_options* options);
 bool bx_tar_metadata_parse(struct bx_file_metadata* metadata, const char* key,
                             const void* value, size_t len);
 bool bx_tar_metadata_decode_flags(const char* text, unsigned int* set, unsigned int* clear);

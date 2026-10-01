@@ -318,11 +318,11 @@ out: {
 }
 }
 
-static bool bx_metadata_read_acl(char** text, const struct bx_file_metadata_target* target, acl_type_t type, bool numeric_ids) {
+static bool bx_metadata_read_acl(char** text, const struct bx_file_metadata_target* target, acl_type_t type) {
     acl_t acl = bx_metadata_acl_target(target, type);
     if (!acl)
         return false;
-    char* value = acl_to_any_text(acl, NULL, ',', numeric_ids ? TEXT_NUMERIC_IDS : 0);
+    char* value = acl_to_any_text(acl, NULL, ',', TEXT_NUMERIC_IDS);
     acl_free(acl);
     if (!value)
         return false;
@@ -359,13 +359,13 @@ static ssize_t bx_metadata_get_xattr(const struct bx_file_metadata_target* targe
 #endif
 }
 
-bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool acls, bool numeric_ids, bx_file_xattr_filter filter, const void* user) {
+bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool acls, bx_file_xattr_filter filter, const void* user) {
     if (!bx_file_metadata_target_verify(target, true))
         return false;
     bool symlink = S_ISLNK(target->status.st_mode);
     bool directory = S_ISDIR(target->status.st_mode);
     if (acls && !symlink) {
-        if (!bx_metadata_read_acl(&metadata->acl_access, target, ACL_TYPE_ACCESS, numeric_ids) || (directory && !bx_metadata_read_acl(&metadata->acl_default, target, ACL_TYPE_DEFAULT, numeric_ids)))
+        if (!bx_metadata_read_acl(&metadata->acl_access, target, ACL_TYPE_ACCESS) || (directory && !bx_metadata_read_acl(&metadata->acl_default, target, ACL_TYPE_DEFAULT)))
             return false;
     }
     if (!filter)
@@ -401,22 +401,42 @@ bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struc
     return ok && bx_file_metadata_target_verify(target, true);
 }
 
-/* POSIX draft ACL text can carry a fourth, numeric-ID field (star). Linux
- * libacl accepts three fields; retain the named identity and discard extras. */
+/* Star's fourth field is authoritative. Never resolve archive qualifiers
+ * against the destination's user/group names. libacl validates numeric range. */
 static acl_t bx_metadata_acl_from_text(const char* text) {
-    char* copy = xstrdup(text);
+    char* copy = xmalloc(strlen(text) + 1u);
     char* out = copy;
-    unsigned int colons = 0;
-    for (const char* in = text; *in; in++) {
-        if (*in == ',' || *in == '\n') {
-            colons = 0;
-            *out++ = *in;
+    for (const char* in = text; *in;) {
+        const char* end = in + strcspn(in, ",\n");
+        const char* tag = in + strspn(in, " \t");
+        const char* first = memchr(in, ':', (size_t)(end - in));
+        const char* second = first ? memchr(first + 1, ':', (size_t)(end - first - 1)) : NULL;
+        const char* third = second ? memchr(second + 1, ':', (size_t)(end - second - 1)) : NULL;
+        if (second && second > first + 1) {
+            bool named = (first - tag == 1 && (*tag == 'u' || *tag == 'g')) || (first - tag == 4 && memcmp(tag, "user", 4) == 0) || (first - tag == 5 && memcmp(tag, "group", 5) == 0);
+            const char* id = third ? third + 1 : first + 1;
+            size_t length = (size_t)((third ? end : second) - id);
+            if (!named || !length || strspn(id, "0123456789") != length)
+                goto invalid;
+            size_t prefix = (size_t)(first + 1 - in);
+            memcpy(out, in, prefix);
+            out += prefix;
+            memcpy(out, id, length);
+            out += length;
+            size_t permissions = (size_t)((third ? third : end) - second);
+            memcpy(out, second, permissions);
+            out += permissions;
         }
-        else if (*in == ':' && ++colons >= 3u) {
-            continue;
+        else {
+            if (third)
+                goto invalid;
+            size_t length = (size_t)(end - in);
+            memcpy(out, in, length);
+            out += length;
         }
-        else if (colons < 3u)
-            *out++ = *in;
+        in = end;
+        if (*in)
+            *out++ = *in++;
     }
     *out = '\0';
     acl_t acl = acl_from_text(copy);
@@ -428,6 +448,10 @@ static acl_t bx_metadata_acl_from_text(const char* text) {
         return NULL;
     }
     return acl;
+invalid:
+    free(copy);
+    errno = EINVAL;
+    return NULL;
 }
 
 static int bx_metadata_set_xattr(const struct bx_file_metadata_target* target, const char* name, const void* value, size_t size) {
