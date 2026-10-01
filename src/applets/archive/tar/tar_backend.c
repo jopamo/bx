@@ -1128,10 +1128,7 @@ static bool bx_tar_extract_remove_empty_dir_default(struct bx_tar_extract_state*
     return false;
 }
 
-static bool bx_tar_extract_prepare_final_non_dir_target(struct bx_tar_extract_state* state,
-                                                        const struct bx_tar_entry* entry,
-                                                        const char* dest_path,
-                                                        struct bx_diag_ctx* diag) {
+static bool bx_tar_extract_prepare_final_non_dir_target(struct bx_tar_extract_state* state, const struct bx_tar_entry* entry, const char* dest_path, struct bx_diag_ctx* diag) {
     struct stat st;
 
     if (fstatat(state->parent_fd, state->leaf, &st, AT_SYMLINK_NOFOLLOW) != 0) {
@@ -1142,13 +1139,8 @@ static bool bx_tar_extract_prepare_final_non_dir_target(struct bx_tar_extract_st
         return false;
     }
 
-    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
-        if (unlinkat(state->parent_fd, state->leaf, 0) != 0) {
-            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            return false;
-        }
+    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
         return true;
-    }
 
     if (state->options->recursive_unlink) {
         return bx_remove_recursive_at(state->parent_fd, state->leaf, dest_path, &st, diag);
@@ -1317,24 +1309,27 @@ static bool bx_tar_extract_select_metadata(struct bx_tar_extract_state* state,
     return true;
 }
 
-static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state, const struct bx_tar_entry* entry, int fd, const char* path, mode_t mode, struct bx_diag_ctx* diag) {
+static bool bx_tar_extract_metadata(struct bx_tar_extract_state* state,
+                                    const struct bx_tar_entry* entry,
+                                    const struct bx_fd_staged_file* stage,
+                                    const char* path,
+                                    mode_t mode,
+                                    struct bx_diag_ctx* diag) {
     struct bx_file_restore selected = {0};
     if (!bx_tar_extract_select_metadata(state, entry, mode, &selected, path, diag)) {
         bx_file_metadata_free(&selected.metadata);
         return false;
     }
     struct stat status;
-    if (fstat(fd, &status) != 0) {
+    if (fstat(stage->fd, &status) != 0) {
         bx_file_metadata_free(&selected.metadata);
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
     bool deferred = S_ISREG(status.st_mode);
-    bool ok = deferred                  ? bx_archive_prepare_regular_fd(&selected, fd, path, diag)
-              : S_ISDIR(status.st_mode) ? bx_archive_restore_fd(&selected, fd, path, diag)
-                                        : bx_archive_restore_leaf(&selected, state->parent_fd, state->leaf, &status, path, diag);
+    bool ok = deferred ? bx_archive_prepare_regular_fd(&selected, stage->fd, path, diag) : bx_archive_restore_leaf(&selected, stage->parent_fd, stage->name, &status, path, diag);
     if (ok && deferred) {
-        ok = bx_archive_pending_metadata_record_fd(&state->dirs, fd, path, state->boundary_prefix, &selected, state->sequence, state->sequence);
+        ok = bx_archive_pending_metadata_record_fd(&state->dirs, stage->fd, path, state->boundary_prefix, &selected, state->sequence, state->sequence);
         if (!ok)
             bx_diag(diag, "%s: cannot defer metadata: %s", path, strerror(errno));
     }
@@ -1370,9 +1365,8 @@ static bool bx_tar_extract_cancel_links(struct bx_tar_extract_state* state, stru
     return true;
 }
 
-static bool bx_tar_extract_record_inode(struct bx_tar_extract_state* state, int fd, const char* path, struct bx_diag_ctx* diag) {
-    struct stat status;
-    if (fstat(fd, &status) == 0 && bx_inode_ledger_record(&state->restored, &status, state->sequence, state->sequence, 1048576u))
+static bool bx_tar_extract_record_inode(struct bx_tar_extract_state* state, const struct stat* status, const char* path, struct bx_diag_ctx* diag) {
+    if (bx_inode_ledger_record(&state->restored, status, state->sequence, state->sequence, 1048576u))
         return true;
     bx_diag(diag, "%s: cannot record restored inode (limit 1048576): %s", path, strerror(errno));
     return false;
@@ -1499,18 +1493,17 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                         bx_diag(diag, "%s: cannot restore metadata: %s", link->path, strerror(errno));
                         ok = false;
                     }
-                    struct stat destination;
+                    struct stat destination, linked;
                     bool already_linked = ok && fstatat(parent, leaf, &destination, AT_SYMLINK_NOFOLLOW) == 0 && destination.st_dev == expected.st_dev && destination.st_ino == expected.st_ino &&
                                           (destination.st_mode & S_IFMT) == (expected.st_mode & S_IFMT);
-                    if (ok)
-                        ok = already_linked || bx_tar_extract_prepare_final_non_dir_target(state, &entry, link->path, diag);
-                    if (ok && !already_linked && bx_fd_linkat_child(source_parent, source_leaf, parent, leaf, 0) != 0) {
+                    struct bx_fd_staged_file stage = BX_FD_STAGED_FILE_INIT;
+                    if (ok && !already_linked && (bx_fd_staged_link_begin(&stage, parent, leaf, source_parent, source_leaf) != 0 || bx_fd_fstat_expected(stage.fd, &expected, &linked) != 0)) {
                         bx_diag(diag, "%s: %s", link->path, strerror(errno));
                         ok = false;
                     }
                     if (ok) {
-                        int fd = bx_fd_openat_metadata(parent, leaf);
-                        struct stat linked;
+                        const char* candidate = already_linked ? leaf : stage.name;
+                        int fd = bx_fd_openat_metadata(parent, candidate);
                         ok = fd >= 0 && bx_fd_fstat_expected(fd, &expected, &linked) == 0;
                         if (!ok)
                             bx_diag(diag, "%s: %s", link->path, strerror(errno));
@@ -1521,18 +1514,30 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                                     bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));
                             }
                             else
-                                ok = bx_archive_restore_leaf(&link->restore, parent, leaf, &linked, link->path, diag);
+                                ok = bx_archive_restore_leaf(&link->restore, parent, candidate, &linked, link->path, diag);
                         }
                         else if (ok && S_ISREG(linked.st_mode)) {
                             ok = bx_archive_pending_metadata_record_alias_fd(&state->dirs, fd, link->path, link->boundary_prefix, origin);
                             if (!ok)
                                 bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));
                         }
-                        if (ok && link->sequence > sequence)
-                            ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, origin, 1048576u);
                         if (fd >= 0 && !bx_fd_close(&fd, link->path, diag))
                             ok = false;
                     }
+                    if (ok && bx_archive_temp_pending_signal()) {
+                        bx_diag(diag, "%s: %s", link->path, strerror(EINTR));
+                        ok = false;
+                    }
+                    if (ok && !already_linked) {
+                        ok = bx_tar_extract_prepare_final_non_dir_target(state, &entry, link->path, diag);
+                        if (ok && bx_fd_staged_file_publish(&stage, leaf) != 0) {
+                            bx_diag(diag, "%s: %s", link->path, strerror(errno));
+                            ok = false;
+                        }
+                    }
+                    if (ok && link->sequence > sequence)
+                        ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, origin, 1048576u);
+                    bx_fd_staged_file_discard(&stage);
                 }
                 state->parent_fd = saved_parent;
                 state->leaf = saved_leaf;
@@ -1551,9 +1556,7 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
     return true;
 }
 
-static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
-                                     const struct bx_tar_entry* entry,
-                                     struct bx_diag_ctx* diag) {
+static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state, const struct bx_tar_entry* entry, struct bx_diag_ctx* diag) {
     struct bx_tar_mapped_name clean_name = {0};
     char* dest_path = NULL;
     const char* extract_dir = NULL;
@@ -1568,37 +1571,21 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
     }
     state->sequence++;
 
-    if (!bx_tar_starting_file_gate_reached(&state->starting_file_reached,
-                                           state->options->starting_file,
-                                           entry)) {
+    if (!bx_tar_starting_file_gate_reached(&state->starting_file_reached, state->options->starting_file, entry)) {
         bx_tar_extract_clear_current_stream(state);
         return true;
     }
 
-    if (!bx_tar_select_plan_match_occurrence(state->select_plan,
-                                             entry->name,
-                                             state->select_plan->len == 0u,
-                                             state->matched_members,
-                                             state->options->occurrence,
-                                             state->occurrence_counts,
+    if (!bx_tar_select_plan_match_occurrence(state->select_plan, entry->name, state->select_plan->len == 0u, state->matched_members, state->options->occurrence, state->occurrence_counts,
                                              &extract_dir)) {
         bx_tar_extract_clear_current_stream(state);
         return true;
     }
 
-    clean_name = bx_tar_map_member_name(entry->name,
-                                        &state->name_policy,
-                                        &stripped_absolute,
-                                        &stripped_dotdot);
-    bx_tar_warn_name_adjustments(diag,
-                                 stripped_absolute,
-                                 &state->warned_absolute,
-                                 stripped_dotdot,
-                                 &state->warned_dotdot);
-    if (entry->kind == BX_TAR_KIND_DIR && clean_name.text[0] == '\0'
-        && state->name_policy.strip_components == 0u
-        && state->name_policy.one_top_level == NULL
-        && (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "./") == 0)) {
+    clean_name = bx_tar_map_member_name(entry->name, &state->name_policy, &stripped_absolute, &stripped_dotdot);
+    bx_tar_warn_name_adjustments(diag, stripped_absolute, &state->warned_absolute, stripped_dotdot, &state->warned_dotdot);
+    if (entry->kind == BX_TAR_KIND_DIR && clean_name.text[0] == '\0' && state->name_policy.strip_components == 0u && state->name_policy.one_top_level == NULL &&
+        (strcmp(entry->name, ".") == 0 || strcmp(entry->name, "./") == 0)) {
         bx_tar_release_mapped_name(&clean_name);
         clean_name.text = ".";
     }
@@ -1613,17 +1600,9 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
     if (state->options->to_stdout) {
         bool ok = true;
         bx_tar_extract_clear_current_stream(state);
-        if (state->options->verbose_reports
-            && !(state->options->report_block_numbers
-                     ? bx_tar_report_member_line_with_block(state->report_stream,
-                                                            bx_tar_extract_report_block_index(entry),
-                                                            report_name,
-                                                            entry->kind == BX_TAR_KIND_DIR,
-                                                            diag)
-                     : bx_tar_report_member_line(state->report_stream,
-                                                 report_name,
-                                                 entry->kind == BX_TAR_KIND_DIR,
-                                                 diag))) {
+        if (state->options->verbose_reports && !(state->options->report_block_numbers ? bx_tar_report_member_line_with_block(state->report_stream, bx_tar_extract_report_block_index(entry),
+                                                                                                                             report_name, entry->kind == BX_TAR_KIND_DIR, diag)
+                                                                                      : bx_tar_report_member_line(state->report_stream, report_name, entry->kind == BX_TAR_KIND_DIR, diag))) {
             bx_tar_release_mapped_name(&clean_name);
             return false;
         }
@@ -1668,8 +1647,7 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
     }
 
     {
-        enum bx_tar_existing_target_action existing_action =
-            bx_tar_extract_existing_target_action(state, entry, dest_path, diag);
+        enum bx_tar_existing_target_action existing_action = bx_tar_extract_existing_target_action(state, entry, dest_path, diag);
 
         if (existing_action == BX_TAR_EXISTING_TARGET_ERROR) {
             bx_tar_release_mapped_name(&clean_name);
@@ -1689,17 +1667,9 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
         free(dest_path);
         return false;
     }
-    if (state->options->verbose_reports
-        && !(state->options->report_block_numbers
-                 ? bx_tar_report_member_line_with_block(state->report_stream,
-                                                        bx_tar_extract_report_block_index(entry),
-                                                        report_name,
-                                                        entry->kind == BX_TAR_KIND_DIR,
-                                                        diag)
-                 : bx_tar_report_member_line(state->report_stream,
-                                             report_name,
-                                             entry->kind == BX_TAR_KIND_DIR,
-                                             diag))) {
+    if (state->options->verbose_reports &&
+        !(state->options->report_block_numbers ? bx_tar_report_member_line_with_block(state->report_stream, bx_tar_extract_report_block_index(entry), report_name, entry->kind == BX_TAR_KIND_DIR, diag)
+                                               : bx_tar_report_member_line(state->report_stream, report_name, entry->kind == BX_TAR_KIND_DIR, diag))) {
         bx_tar_release_mapped_name(&clean_name);
         free(dest_path);
         return false;
@@ -1726,11 +1696,8 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
                 return false;
             }
         }
-        if (created || mkdir_needed
-            || (state->options->old_file_mode != BX_TAR_OLD_FILES_KEEP
-                && state->options->old_file_mode != BX_TAR_OLD_FILES_SKIP)) {
-            int fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf,
-                                           O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+        if (created || mkdir_needed || (state->options->old_file_mode != BX_TAR_OLD_FILES_KEEP && state->options->old_file_mode != BX_TAR_OLD_FILES_SKIP)) {
+            int fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
             struct bx_file_restore restore = {0};
             bool selected = bx_tar_extract_select_metadata(state, entry, extract_mode, &restore, dest_path, diag);
             bool recorded = selected && fd >= 0 && bx_archive_pending_metadata_record_fd(&state->dirs, fd, dest_path, state->boundary_prefix, &restore, state->sequence, 0u);
@@ -1764,27 +1731,11 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
         state->current_sparse = entry->sparse;
         return true;
     }
-    else if (entry->kind == BX_TAR_KIND_SYMLINK) {
-        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
-            free(dest_path);
-            state->status = 2;
-            return true;
-        }
-        if (symlinkat(entry->linkname, state->parent_fd, state->leaf) != 0) {
-            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            free(dest_path);
-            return false;
-        }
-    }
-    else if (entry->kind == BX_TAR_KIND_HARDLINK) {
+    if (entry->kind == BX_TAR_KIND_HARDLINK) {
         bool target_stripped_absolute = false;
         bool target_stripped_dotdot = false;
-        struct bx_tar_mapped_name mapped_target = bx_tar_map_member_name(entry->linkname,
-                                                                         &state->name_policy,
-                                                                         &target_stripped_absolute,
-                                                                         &target_stripped_dotdot);
-        char* target = extract_dir ? bx_path_join(extract_dir, mapped_target.text)
-                                   : xstrdup(mapped_target.text);
+        struct bx_tar_mapped_name mapped_target = bx_tar_map_member_name(entry->linkname, &state->name_policy, &target_stripped_absolute, &target_stripped_dotdot);
+        char* target = extract_dir ? bx_path_join(extract_dir, mapped_target.text) : xstrdup(mapped_target.text);
         (void)target_stripped_absolute;
         (void)target_stripped_dotdot;
         bx_tar_release_mapped_name(&mapped_target);
@@ -1794,52 +1745,52 @@ static bool bx_tar_extract_one_entry_impl(struct bx_tar_extract_state* state,
         bx_tar_extract_clear_current_stream(state);
         return ok && bx_tar_extract_resolve_links(state, diag);
     }
-    else if (entry->kind == BX_TAR_KIND_FIFO) {
-        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
-            free(dest_path);
-            state->status = 2;
-            return true;
-        }
-        if (mkfifoat(state->parent_fd, state->leaf, extract_mode) != 0) {
-            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            free(dest_path);
-            return false;
-        }
-    }
-    else if (entry->kind == BX_TAR_KIND_CHAR || entry->kind == BX_TAR_KIND_BLOCK) {
-        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
-            free(dest_path);
-            state->status = 2;
-            return true;
-        }
-        mode_t type = entry->kind == BX_TAR_KIND_CHAR ? S_IFCHR : S_IFBLK;
-        if (bx_fd_mknodat(state->parent_fd, state->leaf, type | extract_mode, entry->rdev) != 0) {
-            bx_diag(diag, "%s: cannot create device node: %s", dest_path, strerror(errno));
-            free(dest_path);
-            return false;
-        }
-    }
 
-    int fd = bx_fd_openat_cloexec(state->parent_fd, state->leaf, O_PATH | O_NOFOLLOW, 0);
-    if (fd < 0) {
+    struct bx_fd_staged_file stage = BX_FD_STAGED_FILE_INIT;
+    int created;
+    if (entry->kind == BX_TAR_KIND_SYMLINK)
+        created = bx_fd_staged_symlink_begin(&stage, state->parent_fd, state->leaf, entry->linkname);
+    else
+        created = bx_fd_staged_node_begin(&stage, state->parent_fd, state->leaf, leaf_type | extract_mode, entry->rdev);
+    bool ok = false;
+    if (created != 0) {
+        if (entry->kind == BX_TAR_KIND_CHAR || entry->kind == BX_TAR_KIND_BLOCK)
+            bx_diag(diag, "%s: cannot create device node: %s", dest_path, strerror(errno));
+        else
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        goto special_done;
+    }
+    struct stat candidate;
+    if (fstat(stage.fd, &candidate) != 0) {
         bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-        free(dest_path);
-        return false;
+        goto special_done;
     }
-    if (entry->kind == BX_TAR_KIND_CHAR || entry->kind == BX_TAR_KIND_BLOCK) {
-        struct stat status;
-        mode_t type = entry->kind == BX_TAR_KIND_CHAR ? S_IFCHR : S_IFBLK;
-        int rc = fstat(fd, &status);
-        if (rc != 0 || (status.st_mode & S_IFMT) != type || status.st_rdev != entry->rdev) {
-            bx_diag(diag, "%s: cannot verify device node: %s", dest_path, strerror(rc != 0 ? errno : ESTALE));
-            close(fd);
-            free(dest_path);
-            return false;
-        }
+    if ((candidate.st_mode & S_IFMT) != leaf_type || ((entry->kind == BX_TAR_KIND_CHAR || entry->kind == BX_TAR_KIND_BLOCK) && candidate.st_rdev != entry->rdev)) {
+        bx_diag(diag, "%s: cannot verify leaf: %s", dest_path, strerror(ESTALE));
+        goto special_done;
     }
-    bool ok = bx_tar_extract_metadata(state, entry, fd, dest_path, extract_mode, diag) && bx_tar_extract_record_inode(state, fd, dest_path, diag);
-    if (!bx_fd_close(&fd, dest_path, diag))
-        ok = false;
+    if (!bx_tar_extract_metadata(state, entry, &stage, dest_path, extract_mode, diag))
+        goto special_done;
+    if (state->restored.len >= 1048576u && !bx_inode_ledger_lookup(&state->restored, &candidate, NULL, NULL)) {
+        bx_diag(diag, "%s: cannot record restored inode: %s", dest_path, strerror(E2BIG));
+        goto special_done;
+    }
+    if (bx_archive_temp_pending_signal()) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(EINTR));
+        goto special_done;
+    }
+    if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
+        state->status = 2;
+        ok = true;
+        goto special_done;
+    }
+    if (bx_fd_staged_file_publish(&stage, state->leaf) != 0) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        goto special_done;
+    }
+    ok = bx_tar_extract_record_inode(state, &candidate, dest_path, diag);
+special_done:
+    bx_fd_staged_file_discard(&stage);
     free(dest_path);
     bx_tar_extract_clear_current_stream(state);
     return ok && bx_tar_extract_resolve_links(state, diag);
@@ -1916,7 +1867,7 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
             return false;
         }
     }
-    if (!bx_tar_extract_metadata(state, entry, fd, dest_path, mode, diag)) {
+    if (!bx_tar_extract_metadata(state, entry, &state->current_file, dest_path, mode, diag)) {
         bx_tar_extract_clear_current_stream(state);
         return false;
     }

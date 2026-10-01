@@ -149,6 +149,7 @@ int bx_fd_linkat_child(int olddirfd, const char* oldname, int newdirfd, const ch
 
 struct bx_fd_staged_file {
     int parent_fd;
+    /* Regular writer, or an O_PATH identity reference for a special leaf/link. */
     int fd;
     mode_t mode;
     char name[80];
@@ -158,7 +159,13 @@ struct bx_fd_staged_file {
  * Save its effective creation mode, then restrict access to 0600 before data.
  * The caller owns cleanup on both success and failure. */
 int bx_fd_staged_file_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, mode_t mode);
-/* Close the writer before renaming. Failure leaves the destination unchanged
+/* Special objects retain only an O_PATH identity reference. Metadata must use
+ * parent_fd/name, not empty-path operations on that reference. */
+int bx_fd_staged_symlink_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, const char* target);
+int bx_fd_staged_node_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, mode_t mode, dev_t device);
+int bx_fd_staged_link_begin(struct bx_fd_staged_file* stage, int parent, const char* destination, int source_parent, const char* source_name);
+/* Verify the private leaf against its reference, then close before renaming.
+ * Pre-publication failure leaves the destination unchanged
  * and retains the private name for discard. No durability barrier is implied. */
 int bx_fd_staged_file_publish(struct bx_fd_staged_file* stage, const char* destination);
 void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage);
