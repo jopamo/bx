@@ -22,6 +22,73 @@
 
 #define BX_ARCHIVE_GZIP_IO_CHUNK 8192u
 
+struct bx_archive_gzip_reader {
+    z_stream stream;
+    bool at_end;
+};
+
+bool bx_archive_gzip_reader_open(struct bx_archive_gzip_reader** reader_out, struct bx_diag_ctx* diag) {
+    struct bx_archive_gzip_reader* reader = xmalloc(sizeof(*reader));
+    memset(reader, 0, sizeof(*reader));
+    if (inflateInit2(&reader->stream, MAX_WBITS + 16) != Z_OK) {
+        free(reader);
+        bx_diag(diag, "failed to initialize archive reader");
+        return false;
+    }
+    *reader_out = reader;
+    return true;
+}
+
+enum bx_archive_decode_result bx_archive_gzip_reader_decode(struct bx_archive_gzip_reader* reader, struct bx_archive_decode_chunk* chunk) {
+    chunk->input_used = chunk->output_used = 0u;
+    chunk->error_detail = NULL;
+    if (chunk->input_size > UINT_MAX || chunk->output_size > UINT_MAX) {
+        chunk->error_detail = "invalid codec parameters";
+        return BX_ARCHIVE_DECODE_ERROR;
+    }
+    if (reader->at_end) {
+        if (chunk->input_size < 2u && !chunk->input_eof)
+            return BX_ARCHIVE_DECODE_MORE;
+        /* Preserve gzread's treatment of non-gzip trailing bytes. */
+        if (chunk->input_size < 2u || chunk->input[0] != 0x1f || chunk->input[1] != 0x8b)
+            return BX_ARCHIVE_DECODE_END;
+        if (inflateReset(&reader->stream) != Z_OK) {
+            chunk->error_detail = "failed to reset decoder";
+            return BX_ARCHIVE_DECODE_ERROR;
+        }
+        reader->at_end = false;
+    }
+    reader->stream.next_in = chunk->input;
+    reader->stream.avail_in = (uInt)chunk->input_size;
+    reader->stream.next_out = chunk->output;
+    reader->stream.avail_out = (uInt)chunk->output_size;
+    int rc = inflate(&reader->stream, Z_NO_FLUSH);
+    chunk->input_used = chunk->input_size - reader->stream.avail_in;
+    chunk->output_used = chunk->output_size - reader->stream.avail_out;
+    reader->stream.next_in = reader->stream.next_out = NULL;
+    reader->stream.avail_in = reader->stream.avail_out = 0u;
+    if (rc == Z_STREAM_END) {
+        reader->at_end = true;
+        return BX_ARCHIVE_DECODE_MORE;
+    }
+    if (rc != Z_OK && rc != Z_BUF_ERROR) {
+        chunk->error_detail = reader->stream.msg ? reader->stream.msg : zError(rc);
+        return BX_ARCHIVE_DECODE_ERROR;
+    }
+    if (chunk->input_eof && !chunk->input_used && !chunk->output_used) {
+        chunk->error_detail = "unexpected end of file";
+        return BX_ARCHIVE_DECODE_ERROR;
+    }
+    return BX_ARCHIVE_DECODE_MORE;
+}
+
+void bx_archive_gzip_reader_close(struct bx_archive_gzip_reader* reader) {
+    if (!reader)
+        return;
+    inflateEnd(&reader->stream);
+    free(reader);
+}
+
 enum bx_archive_gzip_packet_status {
     BX_ARCHIVE_GZIP_PACKET_PENDING = 0,
     BX_ARCHIVE_GZIP_PACKET_OK,
