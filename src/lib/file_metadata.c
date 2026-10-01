@@ -710,7 +710,7 @@ static bool bx_metadata_apply_semantic(const struct bx_file_xattr* attr, const s
     return ok;
 }
 
-static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool symlink, bool directory, mode_t mode) {
+static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool symlink, bool directory, mode_t mode, bool defer_final) {
     int rc, error;
     if ((metadata->restore_acls & BX_FILE_ACL_ACCESS) && !symlink) {
         acl_t access = metadata->acl_access ? bx_metadata_acl_from_text(metadata->acl_access) : acl_from_mode(mode & 0777u);
@@ -756,7 +756,7 @@ static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const str
         if (!bx_metadata_apply_xattr(attr, target))
             return false;
     }
-    return (!selinux || bx_metadata_apply_semantic(selinux, target)) && (!capabilities || bx_metadata_apply_semantic(capabilities, target));
+    return defer_final || ((!selinux || bx_metadata_apply_semantic(selinux, target)) && (!capabilities || bx_metadata_apply_semantic(capabilities, target)));
 }
 
 static bool bx_metadata_supported(const struct bx_file_metadata* metadata, mode_t type) {
@@ -840,7 +840,7 @@ bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_
     return true;
 }
 
-static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target, bool symlink, bool directory) {
+static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target, bool symlink, bool directory, bool defer_final) {
     int fd = target->fd;
     if (restore->set_owner || restore->set_group) {
         uid_t uid = restore->set_owner ? restore->uid : (uid_t)-1;
@@ -868,10 +868,12 @@ static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_rest
     }
     if (target->name && !bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
-    if (!bx_metadata_apply(&restore->metadata, target, symlink, directory, restore->mode))
+    if (!bx_metadata_apply(&restore->metadata, target, symlink, directory, restore->mode, defer_final))
         return BX_FILE_RESTORE_METADATA_ERROR;
     if (target->name && !bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
+    if (defer_final)
+        return BX_FILE_RESTORE_OK;
     if (restore->set_mtime) {
         struct timespec times[2] = {restore->mtime, restore->mtime};
         int rc = target->name ? utimensat(fd, target->name, times, AT_SYMLINK_NOFOLLOW) : futimens(fd, times);
@@ -881,17 +883,21 @@ static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_rest
     return bx_file_metadata_apply_flags(fd, restore->flags_set, restore->flags_clear) ? BX_FILE_RESTORE_OK : BX_FILE_RESTORE_METADATA_ERROR;
 }
 
-enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target) {
+static enum bx_file_restore_result bx_metadata_restore_target(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target, bool defer_final) {
     if (!bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
     if (!bx_metadata_supported(&restore->metadata, target->status.st_mode & S_IFMT))
         return BX_FILE_RESTORE_METADATA_ERROR;
     if (target->name && !bx_file_restore_leaf_supported(restore, target->status.st_mode & S_IFMT))
         return BX_FILE_RESTORE_METADATA_ERROR;
-    enum bx_file_restore_result result = bx_metadata_restore(restore, target, S_ISLNK(target->status.st_mode), S_ISDIR(target->status.st_mode));
+    enum bx_file_restore_result result = bx_metadata_restore(restore, target, S_ISLNK(target->status.st_mode), S_ISDIR(target->status.st_mode), defer_final);
     if (result == BX_FILE_RESTORE_OK && !bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
     return result;
+}
+
+enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target) {
+    return bx_metadata_restore_target(restore, target, false);
 }
 
 enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* restore, int fd) {
@@ -899,6 +905,13 @@ enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* res
     if (!bx_file_metadata_target_fd(&target, fd))
         return BX_FILE_RESTORE_STAT_ERROR;
     return bx_file_restore_target(restore, &target);
+}
+
+enum bx_file_restore_result bx_file_restore_fd_base(const struct bx_file_restore* restore, int fd) {
+    struct bx_file_metadata_target target;
+    if (!bx_file_metadata_target_fd(&target, fd))
+        return BX_FILE_RESTORE_STAT_ERROR;
+    return bx_metadata_restore_target(restore, &target, true);
 }
 
 enum bx_file_restore_result bx_file_restore_prepare_regular(const struct bx_file_restore* restore, int fd) {

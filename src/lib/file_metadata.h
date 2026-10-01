@@ -90,6 +90,9 @@ enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore*
  * Reject O_PATH and special-object descriptors without changing metadata. */
 enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* restore,
                                                int fd);
+/* Apply ownership, mode, ACLs and ordinary xattrs only. The caller must retain
+ * final labels/capabilities, timestamps and flags until all inode headers end. */
+enum bx_file_restore_result bx_file_restore_fd_base(const struct bx_file_restore* restore, int fd);
 /* Prepare a private regular inode for fd-free finalization. Check ownership,
  * ordinary xattrs and timestamps now, but retain extractor ownership/mode
  * 0600. Defer ACLs, labels, capabilities and flags to the final restore. */

@@ -646,6 +646,9 @@ bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs,
                 first++;
         }
         unsigned int set = 0u, clear = 0u;
+        const struct bx_file_xattr* label = NULL;
+        const struct bx_file_xattr* capabilities = NULL;
+        struct bx_file_restore final = {0};
         for (size_t i = first; ok && i < group->end; i++) {
             if (bx_archive_temp_pending_signal()) {
                 bx_diag(diag, "metadata finalization interrupted");
@@ -664,11 +667,32 @@ bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs,
                 }
             }
             restore.flags_set = restore.flags_clear = 0u;
-            ok = bx_archive_restore_fd(&restore, fd, location->path, diag);
+            for (size_t attr = 0; attr < restore.metadata.len; attr++) {
+                const struct bx_file_xattr* value = &restore.metadata.xattrs[attr];
+                enum bx_file_xattr_class kind = bx_file_xattr_classify(value->name);
+                if (kind == BX_FILE_XATTR_SELINUX)
+                    label = value;
+                else if (kind == BX_FILE_XATTR_CAPABILITY)
+                    capabilities = value;
+            }
+            if (restore.set_mtime) {
+                final.set_mtime = true;
+                final.mtime = restore.mtime;
+            }
+            ok = bx_archive_restore_result(bx_file_restore_fd_base(&restore, fd), location->path, diag);
         }
         if (ok && bx_archive_temp_pending_signal()) {
             bx_diag(diag, "metadata finalization interrupted");
             ok = false;
+        }
+        if (ok) {
+            struct bx_file_xattr attrs[2];
+            if (label)
+                attrs[final.metadata.len++] = *label;
+            if (capabilities)
+                attrs[final.metadata.len++] = *capabilities;
+            final.metadata.xattrs = attrs;
+            ok = bx_archive_restore_fd(&final, fd, location->path, diag);
         }
         if (ok && !bx_file_metadata_apply_flags(fd, set, clear)) {
             bx_diag(diag, "%s: cannot restore file flags: %s", location->path, strerror(errno));
