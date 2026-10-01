@@ -31,6 +31,20 @@ struct bx_file_xattr {
     size_t size;
 };
 
+enum bx_file_xattr_class {
+    BX_FILE_XATTR_ORDINARY,
+    BX_FILE_XATTR_ACL_ACCESS,
+    BX_FILE_XATTR_ACL_DEFAULT,
+    BX_FILE_XATTR_SELINUX,
+    BX_FILE_XATTR_CAPABILITY,
+};
+enum bx_file_acl_mask {
+    BX_FILE_ACL_ACCESS = 1u,
+    BX_FILE_ACL_DEFAULT = 2u,
+    BX_FILE_ACL_ALL = BX_FILE_ACL_ACCESS | BX_FILE_ACL_DEFAULT,
+};
+enum bx_file_xattr_class bx_file_xattr_classify(const char* name);
+
 /* Zero-initialize before use. Owns all strings and byte arrays; free remains
  * valid after partial failure. Copies own their storage independently. */
 struct bx_file_metadata {
@@ -39,7 +53,7 @@ struct bx_file_metadata {
     char* acl_access;
     char* acl_default;
     char* file_flags;
-    bool restore_acls;
+    unsigned int restore_acls; /* bx_file_acl_mask */
 };
 
 struct bx_file_restore {
@@ -83,6 +97,9 @@ typedef bool (*bx_file_xattr_filter)(const char* name, const void* user);
 void bx_file_metadata_free(struct bx_file_metadata* metadata);
 bool bx_file_metadata_set(struct bx_file_metadata* metadata, const char* name,
                           const void* value, size_t size);
+/* Decode a selected Linux ACL xattr into canonical numeric text. Keep the
+ * previous text on failure; never add the wire value to ordinary xattrs. */
+bool bx_file_metadata_set_acl_xattr(struct bx_file_metadata* metadata, const char* name, const void* value, size_t size);
 void bx_file_metadata_remove(struct bx_file_metadata* metadata, const char* name);
 /* Replace represented fields with owned copies, retaining unrepresented fields.
  * Empty attribute values and empty ACL/flag text are represented fields. */

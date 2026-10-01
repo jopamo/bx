@@ -71,40 +71,57 @@ static bool bx_tar_metadata_matches(const struct bx_archive_name_list* masks,
     return false;
 }
 
-static bool bx_tar_metadata_wanted(const struct bx_tar_metadata_options* options,
-                                    const char* name, bool creating) {
-    /* The text ACL representation is authoritative when explicitly enabled. */
-    if (options->acls && (strcmp(name, "system.posix_acl_access") == 0
-                         || strcmp(name, "system.posix_acl_default") == 0))
-        return false;
-    if (options->selinux && strcmp(name, "security.selinux") == 0)
+static bool bx_tar_metadata_wanted(const struct bx_tar_metadata_options* options, const char* name, bool creating) {
+    enum bx_file_xattr_class kind = bx_file_xattr_classify(name);
+    if (options->acls && (kind == BX_FILE_XATTR_ACL_ACCESS || kind == BX_FILE_XATTR_ACL_DEFAULT))
         return true;
-    return options->xattrs
-        && (options->include.len
-            ? bx_tar_metadata_matches(&options->include, name)
-            : creating || strncmp(name, "user.", 5u) == 0)
-        && !bx_tar_metadata_matches(&options->exclude, name);
+    if (options->selinux && kind == BX_FILE_XATTR_SELINUX)
+        return true;
+    return options->xattrs && (options->include.len ? bx_tar_metadata_matches(&options->include, name) : creating || strncmp(name, "user.", 5u) == 0) &&
+           !bx_tar_metadata_matches(&options->exclude, name);
 }
 
 static bool bx_tar_metadata_collect_filter(const char* name, const void* user) {
     const struct bx_tar_metadata_options* options = user;
+    enum bx_file_xattr_class kind = bx_file_xattr_classify(name);
+    if (options->acls && (kind == BX_FILE_XATTR_ACL_ACCESS || kind == BX_FILE_XATTR_ACL_DEFAULT))
+        return false;
     return bx_tar_metadata_wanted(options, name, true);
 }
 
-void bx_tar_metadata_select(struct bx_file_metadata* selected,
-                             const struct bx_file_metadata* metadata,
-                             const struct bx_tar_metadata_options* options) {
+bool bx_tar_metadata_select(struct bx_file_metadata* selected, const struct bx_file_metadata* metadata, const struct bx_tar_metadata_options* options) {
     bx_file_metadata_free(selected);
+    selected->restore_acls = options->acls ? BX_FILE_ACL_ALL : 0u;
+    if (metadata->acl_access && bx_tar_metadata_wanted(options, "system.posix_acl_access", false)) {
+        selected->acl_access = xstrdup(metadata->acl_access);
+        selected->restore_acls |= BX_FILE_ACL_ACCESS;
+    }
+    if (metadata->acl_default && bx_tar_metadata_wanted(options, "system.posix_acl_default", false)) {
+        selected->acl_default = xstrdup(metadata->acl_default);
+        selected->restore_acls |= BX_FILE_ACL_DEFAULT;
+    }
     for (size_t i = 0; i < metadata->len; i++) {
         const struct bx_file_xattr* attr = &metadata->xattrs[i];
-        if (bx_tar_metadata_wanted(options, attr->name, false))
-            bx_file_metadata_set(selected, attr->name, attr->value, attr->size);
+        if (!bx_tar_metadata_wanted(options, attr->name, false))
+            continue;
+        enum bx_file_xattr_class kind = bx_file_xattr_classify(attr->name);
+        if (kind == BX_FILE_XATTR_ACL_ACCESS || kind == BX_FILE_XATTR_ACL_DEFAULT) {
+            bool access = kind == BX_FILE_XATTR_ACL_ACCESS;
+            /* Established text records take precedence over raw ACL encodings. */
+            if ((access ? selected->acl_access : selected->acl_default) == NULL && !bx_file_metadata_set_acl_xattr(selected, attr->name, attr->value, attr->size))
+                goto fail;
+            selected->restore_acls |= access ? BX_FILE_ACL_ACCESS : BX_FILE_ACL_DEFAULT;
+        }
+        else if (!bx_file_metadata_set(selected, attr->name, attr->value, attr->size))
+            goto fail;
     }
-    selected->restore_acls = options->acls;
-    if (options->acls) {
-        selected->acl_access = metadata->acl_access ? xstrdup(metadata->acl_access) : NULL;
-        selected->acl_default = metadata->acl_default ? xstrdup(metadata->acl_default) : NULL;
-    }
+    return true;
+fail: {
+    int error = errno;
+    bx_file_metadata_free(selected);
+    errno = error;
+    return false;
+}
 }
 
 bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, const struct bx_tar_metadata_options* options) {
