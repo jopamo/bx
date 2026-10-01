@@ -21,7 +21,7 @@
 
 int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownership ownership) {
     struct stat st;
-    if (input->fd >= 0 || (ownership != BX_FD_INPUT_BORROWED && ownership != BX_FD_INPUT_OWNED)) {
+    if (input->fd >= 0 || (ownership != BX_FD_INPUT_BORROWED && ownership != BX_FD_INPUT_DUPLICATE_BORROWED && ownership != BX_FD_INPUT_OWNED)) {
         errno = EINVAL;
         return -1;
     }
@@ -34,7 +34,7 @@ int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownersh
         if (flags < 0)
             return -1;
         if (!(flags & O_NONBLOCK)) {
-            if (ownership == BX_FD_INPUT_BORROWED) {
+            if (ownership != BX_FD_INPUT_OWNED) {
                 errno = EOPNOTSUPP;
                 return -1;
             }
@@ -42,9 +42,14 @@ int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownersh
                 return -1;
         }
     }
+    if (ownership == BX_FD_INPUT_DUPLICATE_BORROWED) {
+        fd = bx_fd_dup_cloexec(fd);
+        if (fd < 0)
+            return -1;
+    }
     input->fd = fd;
     input->type = st.st_mode & S_IFMT;
-    input->owned = ownership == BX_FD_INPUT_OWNED;
+    input->owned = ownership != BX_FD_INPUT_BORROWED;
     return 0;
 }
 

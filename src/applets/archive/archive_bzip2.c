@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "applets/archive/archive_bzip2.h"
 #include "bx/libbx.h"
@@ -15,19 +14,11 @@
 #endif
 
 #define BX_ARCHIVE_BZIP2_IO_CHUNK 8192u
-#define BX_ARCHIVE_BZIP2_READER_IN_CHUNK 8192u
-#define BX_ARCHIVE_BZIP2_READER_OUT_CHUNK 8192u
 
 struct bx_archive_bzip2_reader {
 #if BX_HAVE_LIBBZ2
-    int fd;
     bz_stream stream;
-    unsigned char inbuf[BX_ARCHIVE_BZIP2_READER_IN_CHUNK];
-    unsigned char outbuf[BX_ARCHIVE_BZIP2_READER_OUT_CHUNK];
-    size_t out_pos;
-    size_t out_len;
-    bool input_eof;
-    bool finished;
+    bool at_end;
     bool stream_initialized;
 #else
     int unused;
@@ -90,40 +81,12 @@ static bool bx_archive_bzip2_write_output(const struct bx_archive_bzip2_stream_s
     return true;
 }
 
-static bool bx_archive_bzip2_reader_reinit_stream(struct bx_archive_bzip2_reader* reader,
-                                                  struct bx_diag_ctx* diag) {
-    char* next_in = reader->stream.next_in;
-    unsigned int avail_in = reader->stream.avail_in;
-    int rc;
-
+static int bx_archive_bzip2_reader_reinit_stream(struct bx_archive_bzip2_reader* reader) {
     BZ2_bzDecompressEnd(&reader->stream);
     memset(&reader->stream, 0, sizeof(reader->stream));
-    rc = BZ2_bzDecompressInit(&reader->stream, 0, 0);
-    if (rc != BZ_OK) {
-        reader->stream_initialized = false;
-        bx_archive_bzip2_diag_failed("decompression", rc, diag);
-        return false;
-    }
-    reader->stream.next_in = next_in;
-    reader->stream.avail_in = avail_in;
-    reader->stream_initialized = true;
-    return true;
-}
-
-static bool bx_archive_bzip2_reader_fill_input(struct bx_archive_bzip2_reader* reader,
-                                               struct bx_diag_ctx* diag) {
-    ssize_t nread = read(reader->fd, reader->inbuf, sizeof(reader->inbuf));
-
-    if (nread < 0) {
-        bx_diag(diag, "read error: %s", strerror(errno));
-        return false;
-    }
-    if (nread == 0) {
-        reader->input_eof = true;
-    }
-    reader->stream.next_in = (char*)reader->inbuf;
-    reader->stream.avail_in = nread > 0 ? (unsigned int)nread : 0u;
-    return true;
+    int rc = BZ2_bzDecompressInit(&reader->stream, 0, 0);
+    reader->stream_initialized = rc == BZ_OK;
+    return rc;
 }
 
 static bool bx_archive_bzip2_run_buffer_filter(const unsigned char* input,
@@ -307,71 +270,6 @@ static bool bx_archive_bzip2_filter_stream_input_write(void* user, const void* d
     return bx_archive_bzip2_filter_stream_feed(state, data, len);
 }
 
-static bool bx_archive_bzip2_reader_fill_output(struct bx_archive_bzip2_reader* reader,
-                                                struct bx_diag_ctx* diag) {
-    while (reader->out_pos == reader->out_len && !reader->finished) {
-        int rc;
-        size_t produced;
-
-        if (reader->stream.avail_in == 0u && !reader->input_eof) {
-            if (!bx_archive_bzip2_reader_fill_input(reader, diag)) {
-                return false;
-            }
-        }
-
-        if (reader->stream.avail_in == 0u && reader->input_eof) {
-            bx_archive_bzip2_diag_failed("decompression", BZ_UNEXPECTED_EOF, diag);
-            return false;
-        }
-
-        reader->stream.next_out = (char*)reader->outbuf;
-        reader->stream.avail_out = sizeof(reader->outbuf);
-        rc = BZ2_bzDecompress(&reader->stream);
-        produced = sizeof(reader->outbuf) - (size_t)reader->stream.avail_out;
-
-        if (rc == BZ_STREAM_END) {
-            bool need_restart = reader->stream.avail_in > 0u;
-
-            if (need_restart) {
-                if (!bx_archive_bzip2_reader_reinit_stream(reader, diag)) {
-                    return false;
-                }
-            }
-            else if (reader->input_eof) {
-                reader->finished = true;
-            }
-            else {
-                if (!bx_archive_bzip2_reader_fill_input(reader, diag)) {
-                    return false;
-                }
-                if (reader->stream.avail_in == 0u && reader->input_eof) {
-                    reader->finished = true;
-                }
-                else if (!bx_archive_bzip2_reader_reinit_stream(reader, diag)) {
-                    return false;
-                }
-            }
-            if (produced > 0u) {
-                reader->out_pos = 0u;
-                reader->out_len = produced;
-                return true;
-            }
-            continue;
-        }
-        if (rc != BZ_OK) {
-            bx_archive_bzip2_diag_failed("decompression", rc, diag);
-            return false;
-        }
-        if (produced > 0u) {
-            reader->out_pos = 0u;
-            reader->out_len = produced;
-            return true;
-        }
-    }
-
-    return true;
-}
-
 bool bx_archive_run_bzip2_filter(const struct bx_archive_buffer* input,
                                  struct bx_archive_buffer* output,
                                  bool decompress,
@@ -417,84 +315,72 @@ bool bx_archive_run_bzip2_filter_stream(bx_archive_bzip2_stream_producer_fn prod
     return ok;
 }
 
-bool bx_archive_bzip2_reader_open(struct bx_archive_bzip2_reader** reader_out,
-                                  int fd,
-                                  struct bx_diag_ctx* diag) {
-    struct bx_archive_bzip2_reader* reader;
-    int rc;
-
-    if (reader_out == NULL || fd < 0) {
+bool bx_archive_bzip2_reader_open(struct bx_archive_bzip2_reader** reader_out, struct bx_diag_ctx* diag) {
+    if (!reader_out) {
         bx_diag(diag, "invalid bzip2 reader configuration");
         return false;
     }
-
     *reader_out = NULL;
-    reader = xmalloc(sizeof(*reader));
+    struct bx_archive_bzip2_reader* reader = xmalloc(sizeof(*reader));
     memset(reader, 0, sizeof(*reader));
-    reader->fd = fd;
-
-    rc = BZ2_bzDecompressInit(&reader->stream, 0, 0);
+    int rc = BZ2_bzDecompressInit(&reader->stream, 0, 0);
     if (rc != BZ_OK) {
         free(reader);
         bx_archive_bzip2_diag_failed("decompression", rc, diag);
         return false;
     }
     reader->stream_initialized = true;
-
     *reader_out = reader;
     return true;
 }
 
-bool bx_archive_bzip2_reader_read_some(struct bx_archive_bzip2_reader* reader,
-                                       unsigned char* buffer,
-                                       size_t len,
-                                       size_t* nread_out,
-                                       struct bx_diag_ctx* diag) {
-    size_t available;
-
-    if (reader == NULL || buffer == NULL || nread_out == NULL) {
-        bx_diag(diag, "invalid bzip2 reader configuration");
-        return false;
+enum bx_archive_decode_result bx_archive_bzip2_reader_decode(struct bx_archive_bzip2_reader* reader, struct bx_archive_decode_chunk* chunk) {
+    chunk->input_used = chunk->output_used = 0u;
+    chunk->error_detail = NULL;
+    if (chunk->input_size > UINT_MAX || chunk->output_size > UINT_MAX) {
+        chunk->error_detail = "invalid codec parameters";
+        return BX_ARCHIVE_DECODE_ERROR;
     }
-
-    *nread_out = 0u;
-    if (len == 0u) {
-        return true;
-    }
-
-    if (reader->out_pos == reader->out_len) {
-        reader->out_pos = 0u;
-        reader->out_len = 0u;
-        if (!bx_archive_bzip2_reader_fill_output(reader, diag)) {
-            return false;
+    if (reader->at_end) {
+        if (!chunk->input_size)
+            return chunk->input_eof ? BX_ARCHIVE_DECODE_END : BX_ARCHIVE_DECODE_MORE;
+        int rc = bx_archive_bzip2_reader_reinit_stream(reader);
+        if (rc != BZ_OK) {
+            chunk->error_detail = bx_archive_bzip2_ret_detail(rc);
+            return BX_ARCHIVE_DECODE_ERROR;
         }
+        reader->at_end = false;
     }
-
-    available = reader->out_len - reader->out_pos;
-    if (available == 0u) {
-        return true;
+    reader->stream.next_in = (char*)(uintptr_t)chunk->input;
+    reader->stream.avail_in = (unsigned int)chunk->input_size;
+    reader->stream.next_out = (char*)chunk->output;
+    reader->stream.avail_out = (unsigned int)chunk->output_size;
+    int rc = BZ2_bzDecompress(&reader->stream);
+    chunk->input_used = chunk->input_size - reader->stream.avail_in;
+    chunk->output_used = chunk->output_size - reader->stream.avail_out;
+    reader->stream.next_in = reader->stream.next_out = NULL;
+    reader->stream.avail_in = reader->stream.avail_out = 0u;
+    if (rc == BZ_STREAM_END) {
+        reader->at_end = true;
+        return chunk->input_eof && chunk->input_used == chunk->input_size ? BX_ARCHIVE_DECODE_END : BX_ARCHIVE_DECODE_MORE;
     }
-    if (available > len) {
-        available = len;
+    if (rc == BZ_OK && chunk->input_eof && !chunk->input_used && !chunk->output_used)
+        rc = BZ_UNEXPECTED_EOF;
+    if (rc != BZ_OK) {
+        chunk->error_detail = bx_archive_bzip2_ret_detail(rc);
+        return BX_ARCHIVE_DECODE_ERROR;
     }
-    memcpy(buffer, reader->outbuf + reader->out_pos, available);
-    reader->out_pos += available;
-    *nread_out = available;
-    return true;
+    return BX_ARCHIVE_DECODE_MORE;
 }
 
 void bx_archive_bzip2_reader_close(struct bx_archive_bzip2_reader* reader) {
-    if (reader == NULL) {
+    if (!reader)
         return;
-    }
-    if (reader->stream_initialized) {
+    if (reader->stream_initialized)
         BZ2_bzDecompressEnd(&reader->stream);
-    }
-    if (reader->fd >= 0) {
-        close(reader->fd);
-    }
     free(reader);
 }
+
 #else
 bool bx_archive_run_bzip2_filter(const struct bx_archive_buffer* input,
                                  struct bx_archive_buffer* output,
@@ -518,26 +404,16 @@ bool bx_archive_run_bzip2_filter_stream(bx_archive_bzip2_stream_producer_fn prod
     return false;
 }
 
-bool bx_archive_bzip2_reader_open(struct bx_archive_bzip2_reader** reader_out,
-                                  int fd,
-                                  struct bx_diag_ctx* diag) {
+bool bx_archive_bzip2_reader_open(struct bx_archive_bzip2_reader** reader_out, struct bx_diag_ctx* diag) {
     (void)reader_out;
-    (void)fd;
     bx_diag(diag, "bzip2 support is unavailable in this build");
     return false;
 }
 
-bool bx_archive_bzip2_reader_read_some(struct bx_archive_bzip2_reader* reader,
-                                       unsigned char* buffer,
-                                       size_t len,
-                                       size_t* nread_out,
-                                       struct bx_diag_ctx* diag) {
+enum bx_archive_decode_result bx_archive_bzip2_reader_decode(struct bx_archive_bzip2_reader* reader, struct bx_archive_decode_chunk* chunk) {
     (void)reader;
-    (void)buffer;
-    (void)len;
-    (void)nread_out;
-    bx_diag(diag, "bzip2 support is unavailable in this build");
-    return false;
+    chunk->error_detail = "support is unavailable in this build";
+    return BX_ARCHIVE_DECODE_ERROR;
 }
 
 void bx_archive_bzip2_reader_close(struct bx_archive_bzip2_reader* reader) {

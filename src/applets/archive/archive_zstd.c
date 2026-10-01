@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "applets/archive/archive_zstd.h"
 #include "bx/libbx.h"
@@ -15,18 +14,9 @@
 
 struct bx_archive_zstd_reader {
 #if BX_HAVE_LIBZSTD
-    int fd;
     ZSTD_DStream* stream;
-    void* inbuf;
-    size_t inbuf_size;
-    size_t inbuf_pos;
-    size_t inbuf_len;
-    void* outbuf;
-    size_t outbuf_size;
-    size_t out_pos;
-    size_t out_len;
-    bool input_eof;
-    bool finished;
+    bool at_end;
+
 #else
     int unused;
 #endif
@@ -273,84 +263,7 @@ static bool bx_archive_zstd_filter_stream_input_write(void* user, const void* da
     return bx_archive_zstd_filter_stream_feed(state, data, len);
 }
 
-static bool bx_archive_zstd_reader_fill_output(struct bx_archive_zstd_reader* reader,
-                                               struct bx_diag_ctx* diag) {
-    while (reader->out_pos == reader->out_len && !reader->finished) {
-        ZSTD_inBuffer in;
-        ZSTD_outBuffer out;
-        size_t rc;
 
-        if (reader->inbuf_pos == reader->inbuf_len && !reader->input_eof && reader->stream != NULL) {
-            ssize_t nread = read(reader->fd, reader->inbuf, reader->inbuf_size);
-
-            if (nread < 0) {
-                bx_diag(diag, "read error: %s", strerror(errno));
-                return false;
-            }
-            if (nread == 0) {
-                reader->input_eof = true;
-            }
-            reader->inbuf_pos = 0u;
-            reader->inbuf_len = nread > 0 ? (size_t)nread : 0u;
-        }
-        in.src = reader->inbuf;
-        in.size = reader->inbuf_len;
-        in.pos = reader->inbuf_pos;
-
-        out.dst = reader->outbuf;
-        out.size = reader->outbuf_size;
-        out.pos = 0u;
-
-        rc = ZSTD_decompressStream(reader->stream, &out, &in);
-        if (ZSTD_isError(rc)) {
-            bx_archive_zstd_diag_failed("decompression", rc, NULL, diag);
-            return false;
-        }
-        reader->inbuf_pos = in.pos;
-        reader->out_pos = 0u;
-        reader->out_len = out.pos;
-
-        if (rc == 0u) {
-            if (reader->inbuf_pos == reader->inbuf_len && reader->input_eof) {
-                reader->finished = true;
-                return true;
-            }
-            if (reader->inbuf_pos == reader->inbuf_len && !reader->input_eof) {
-                ssize_t nread = read(reader->fd, reader->inbuf, reader->inbuf_size);
-
-                if (nread < 0) {
-                    bx_diag(diag, "read error: %s", strerror(errno));
-                    return false;
-                }
-                if (nread == 0) {
-                    reader->input_eof = true;
-                    reader->finished = true;
-                    return true;
-                }
-                reader->inbuf_pos = 0u;
-                reader->inbuf_len = (size_t)nread;
-            }
-            rc = ZSTD_initDStream(reader->stream);
-            if (ZSTD_isError(rc)) {
-                bx_archive_zstd_diag_failed("decompression", rc, NULL, diag);
-                return false;
-            }
-            if (reader->out_len > 0u) {
-                return true;
-            }
-            continue;
-        }
-        if (out.pos > 0u) {
-            return true;
-        }
-        if (reader->input_eof && reader->inbuf_pos == reader->inbuf_len) {
-            bx_archive_zstd_diag_failed("decompression", (size_t)-1, "compressed data is truncated", diag);
-            return false;
-        }
-    }
-
-    return true;
-}
 #endif
 
 bool bx_archive_run_zstd_filter(const struct bx_archive_buffer* input,
@@ -420,23 +333,17 @@ out:
 #endif
 }
 
-bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out,
-                                 int fd,
-                                 struct bx_diag_ctx* diag) {
+bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out, struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBZSTD
-    struct bx_archive_zstd_reader* reader;
-
-    if (reader_out == NULL) {
+    if (!reader_out) {
         bx_diag(diag, "invalid zstd reader configuration");
         return false;
     }
     *reader_out = NULL;
-
-    reader = xmalloc(sizeof(*reader));
+    struct bx_archive_zstd_reader* reader = xmalloc(sizeof(*reader));
     memset(reader, 0, sizeof(*reader));
-    reader->fd = fd;
     reader->stream = ZSTD_createDStream();
-    if (reader->stream == NULL) {
+    if (!reader->stream) {
         free(reader);
         bx_archive_zstd_diag_failed("decompression", (size_t)-1, "stream allocation failed", diag);
         return false;
@@ -446,73 +353,59 @@ bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out,
         bx_archive_zstd_diag_failed("decompression", (size_t)-1, "decoder initialization failed", diag);
         return false;
     }
-    reader->inbuf_size = ZSTD_DStreamInSize();
-    reader->outbuf_size = ZSTD_DStreamOutSize();
-    reader->inbuf = xmalloc(reader->inbuf_size);
-    reader->outbuf = xmalloc(reader->outbuf_size);
     *reader_out = reader;
     return true;
 #else
     (void)reader_out;
-    (void)fd;
     bx_diag(diag, "zstd support is unavailable in this build");
     return false;
 #endif
 }
 
-bool bx_archive_zstd_reader_read_some(struct bx_archive_zstd_reader* reader,
-                                      unsigned char* buffer,
-                                      size_t len,
-                                      size_t* nread_out,
-                                      struct bx_diag_ctx* diag) {
+enum bx_archive_decode_result bx_archive_zstd_reader_decode(struct bx_archive_zstd_reader* reader, struct bx_archive_decode_chunk* chunk) {
 #if BX_HAVE_LIBZSTD
-    size_t total = 0u;
-
-    while (total < len) {
-        size_t chunk;
-
-        if (reader->out_pos == reader->out_len && !reader->finished) {
-            if (!bx_archive_zstd_reader_fill_output(reader, diag)) {
-                return false;
-            }
+    chunk->input_used = chunk->output_used = 0u;
+    chunk->error_detail = NULL;
+    if (reader->at_end) {
+        if (!chunk->input_size)
+            return chunk->input_eof ? BX_ARCHIVE_DECODE_END : BX_ARCHIVE_DECODE_MORE;
+        size_t rc = ZSTD_initDStream(reader->stream);
+        if (ZSTD_isError(rc)) {
+            chunk->error_detail = ZSTD_getErrorName(rc);
+            return BX_ARCHIVE_DECODE_ERROR;
         }
-        if (reader->out_pos == reader->out_len) {
-            break;
-        }
-        chunk = len - total;
-        if (chunk > reader->out_len - reader->out_pos) {
-            chunk = reader->out_len - reader->out_pos;
-        }
-        memcpy(buffer + total, (unsigned char*)reader->outbuf + reader->out_pos, chunk);
-        reader->out_pos += chunk;
-        total += chunk;
+        reader->at_end = false;
     }
-
-    *nread_out = total;
-    return true;
+    ZSTD_inBuffer in = {.src = chunk->input, .size = chunk->input_size};
+    ZSTD_outBuffer out = {.dst = chunk->output, .size = chunk->output_size};
+    size_t rc = ZSTD_decompressStream(reader->stream, &out, &in);
+    chunk->input_used = in.pos;
+    chunk->output_used = out.pos;
+    if (ZSTD_isError(rc)) {
+        chunk->error_detail = ZSTD_getErrorName(rc);
+        return BX_ARCHIVE_DECODE_ERROR;
+    }
+    if (!rc) {
+        reader->at_end = true;
+        return chunk->input_eof && in.pos == in.size ? BX_ARCHIVE_DECODE_END : BX_ARCHIVE_DECODE_MORE;
+    }
+    if (chunk->input_eof && !in.pos && !out.pos) {
+        chunk->error_detail = "compressed data is truncated";
+        return BX_ARCHIVE_DECODE_ERROR;
+    }
+    return BX_ARCHIVE_DECODE_MORE;
 #else
     (void)reader;
-    (void)buffer;
-    (void)len;
-    (void)nread_out;
-    bx_diag(diag, "zstd support is unavailable in this build");
-    return false;
+    chunk->error_detail = "support is unavailable in this build";
+    return BX_ARCHIVE_DECODE_ERROR;
 #endif
 }
 
 void bx_archive_zstd_reader_close(struct bx_archive_zstd_reader* reader) {
 #if BX_HAVE_LIBZSTD
-    if (reader == NULL) {
+    if (!reader)
         return;
-    }
-    free(reader->inbuf);
-    free(reader->outbuf);
     ZSTD_freeDStream(reader->stream);
-    if (reader->fd >= 0) {
-        close(reader->fd);
-    }
-    free(reader);
-#else
-    free(reader);
 #endif
+    free(reader);
 }

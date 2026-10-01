@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "applets/archive/archive_xz.h"
 #include "bx/libbx.h"
@@ -14,19 +13,10 @@
 #endif
 
 #define BX_ARCHIVE_XZ_IO_CHUNK 8192u
-#define BX_ARCHIVE_XZ_READER_IN_CHUNK 8192u
-#define BX_ARCHIVE_XZ_READER_OUT_CHUNK 8192u
 
 struct bx_archive_xz_reader {
 #if BX_HAVE_LIBLZMA
-    int fd;
     lzma_stream stream;
-    unsigned char inbuf[BX_ARCHIVE_XZ_READER_IN_CHUNK];
-    unsigned char outbuf[BX_ARCHIVE_XZ_READER_OUT_CHUNK];
-    size_t out_pos;
-    size_t out_len;
-    bool input_eof;
-    bool finished;
     bool stream_initialized;
 #else
     int unused;
@@ -211,56 +201,7 @@ static bool bx_archive_xz_filter_stream_input_write(void* user, const void* data
     return bx_archive_xz_filter_stream_feed(state, data, len);
 }
 
-static bool bx_archive_xz_reader_fill_output(struct bx_archive_xz_reader* reader,
-                                             struct bx_diag_ctx* diag) {
-    while (reader->out_pos == reader->out_len && !reader->finished) {
-        lzma_action action = LZMA_RUN;
-        size_t produced;
-        lzma_ret rc;
 
-        if (reader->stream.avail_in == 0u && !reader->input_eof) {
-            ssize_t nread = read(reader->fd, reader->inbuf, sizeof(reader->inbuf));
-
-            if (nread < 0) {
-                bx_diag(diag, "read error: %s", strerror(errno));
-                return false;
-            }
-            if (nread == 0) {
-                reader->input_eof = true;
-            }
-            reader->stream.next_in = reader->inbuf;
-            reader->stream.avail_in = nread > 0 ? (size_t)nread : 0u;
-        }
-        if (reader->input_eof) {
-            action = LZMA_FINISH;
-        }
-
-        reader->stream.next_out = reader->outbuf;
-        reader->stream.avail_out = sizeof(reader->outbuf);
-        rc = lzma_code(&reader->stream, action);
-        produced = sizeof(reader->outbuf) - reader->stream.avail_out;
-        reader->out_pos = 0u;
-        reader->out_len = produced;
-
-        if (rc == LZMA_STREAM_END) {
-            reader->finished = true;
-            return true;
-        }
-        if (rc != LZMA_OK) {
-            bx_archive_xz_diag_failed("decompression", rc, diag);
-            return false;
-        }
-        if (produced > 0u) {
-            return true;
-        }
-        if (reader->input_eof && reader->stream.avail_in == 0u) {
-            bx_archive_xz_diag_failed("decompression", LZMA_BUF_ERROR, diag);
-            return false;
-        }
-    }
-
-    return true;
-}
 #endif
 
 bool bx_archive_run_xz_filter(const struct bx_archive_buffer* input,
@@ -327,25 +268,17 @@ out:
 #endif
 }
 
-bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
-                               int fd,
-                               struct bx_diag_ctx* diag) {
+bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out, struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBLZMA
-    struct bx_archive_xz_reader* reader;
-    lzma_ret rc;
-
-    if (reader_out == NULL) {
+    if (!reader_out) {
         bx_diag(diag, "invalid xz reader configuration");
         return false;
     }
     *reader_out = NULL;
-
-    reader = xmalloc(sizeof(*reader));
+    struct bx_archive_xz_reader* reader = xmalloc(sizeof(*reader));
     memset(reader, 0, sizeof(*reader));
-    reader->fd = fd;
     reader->stream = (lzma_stream)LZMA_STREAM_INIT;
-
-    rc = lzma_stream_decoder(&reader->stream, UINT64_MAX, LZMA_CONCATENATED);
+    lzma_ret rc = lzma_stream_decoder(&reader->stream, UINT64_MAX, LZMA_CONCATENATED);
     if (rc != LZMA_OK) {
         free(reader);
         bx_archive_xz_diag_failed("decompression", rc, diag);
@@ -356,66 +289,45 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
     return true;
 #else
     (void)reader_out;
-    (void)fd;
     bx_diag(diag, "xz support is unavailable in this build");
     return false;
 #endif
 }
 
-bool bx_archive_xz_reader_read_some(struct bx_archive_xz_reader* reader,
-                                    unsigned char* buffer,
-                                    size_t len,
-                                    size_t* nread_out,
-                                    struct bx_diag_ctx* diag) {
+enum bx_archive_decode_result bx_archive_xz_reader_decode(struct bx_archive_xz_reader* reader, struct bx_archive_decode_chunk* chunk) {
 #if BX_HAVE_LIBLZMA
-    size_t total = 0u;
-
-    while (total < len) {
-        size_t chunk;
-
-        if (reader->out_pos == reader->out_len && !reader->finished) {
-            if (!bx_archive_xz_reader_fill_output(reader, diag)) {
-                return false;
-            }
-        }
-        if (reader->out_pos == reader->out_len) {
-            break;
-        }
-
-        chunk = len - total;
-        if (chunk > reader->out_len - reader->out_pos) {
-            chunk = reader->out_len - reader->out_pos;
-        }
-        memcpy(buffer + total, reader->outbuf + reader->out_pos, chunk);
-        reader->out_pos += chunk;
-        total += chunk;
+    chunk->error_detail = NULL;
+    reader->stream.next_in = chunk->input;
+    reader->stream.avail_in = chunk->input_size;
+    reader->stream.next_out = chunk->output;
+    reader->stream.avail_out = chunk->output_size;
+    lzma_ret rc = lzma_code(&reader->stream, chunk->input_eof ? LZMA_FINISH : LZMA_RUN);
+    chunk->input_used = chunk->input_size - reader->stream.avail_in;
+    chunk->output_used = chunk->output_size - reader->stream.avail_out;
+    reader->stream.next_in = reader->stream.next_out = NULL;
+    reader->stream.avail_in = reader->stream.avail_out = 0u;
+    if (rc == LZMA_STREAM_END)
+        return BX_ARCHIVE_DECODE_END;
+    if (rc == LZMA_OK && chunk->input_eof && !chunk->input_used && !chunk->output_used)
+        rc = LZMA_BUF_ERROR;
+    if (rc != LZMA_OK) {
+        chunk->error_detail = bx_archive_xz_ret_detail(rc);
+        return BX_ARCHIVE_DECODE_ERROR;
     }
-
-    *nread_out = total;
-    return true;
+    return BX_ARCHIVE_DECODE_MORE;
 #else
     (void)reader;
-    (void)buffer;
-    (void)len;
-    (void)nread_out;
-    bx_diag(diag, "xz support is unavailable in this build");
-    return false;
+    chunk->error_detail = "support is unavailable in this build";
+    return BX_ARCHIVE_DECODE_ERROR;
 #endif
 }
 
 void bx_archive_xz_reader_close(struct bx_archive_xz_reader* reader) {
 #if BX_HAVE_LIBLZMA
-    if (reader == NULL) {
+    if (!reader)
         return;
-    }
-    if (reader->stream_initialized) {
+    if (reader->stream_initialized)
         lzma_end(&reader->stream);
-    }
-    if (reader->fd >= 0) {
-        close(reader->fd);
-    }
-    free(reader);
-#else
-    free(reader);
 #endif
+    free(reader);
 }
