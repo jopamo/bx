@@ -85,6 +85,8 @@ struct bx_archive_pending_metadata {
     ptrdiff_t root_depth;
 };
 
+#define BX_ARCHIVE_PENDING_METADATA_LIMIT 1048576u
+
 void bx_archive_fs_list_free(struct bx_archive_fs_list* list);
 /* Borrows the operand parent/name; source_path is only the display path.
  * The frontend owns explicit-operand parent-resolution policy. */
@@ -137,6 +139,9 @@ bool bx_archive_pending_metadata_record_alias_fd(struct bx_archive_pending_metad
                                                  int fd, const char* path,
                                                  size_t boundary_prefix,
                                                  uint64_t origin);
+/* Reopen a saved live location transiently. Return -2 for a stale/missing
+ * locator, -1 for an operation error. Writable targets must be regular. */
+int bx_archive_pending_metadata_open_fd(int root_fd, unsigned policy, const struct bx_archive_pending_metadata_entry* expected, bool writable);
 bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs, int root_fd, struct bx_diag_ctx* diag);
 bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
                             const char* path,

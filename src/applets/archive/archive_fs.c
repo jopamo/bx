@@ -438,7 +438,7 @@ static bool bx_archive_pending_metadata_record(struct bx_archive_pending_metadat
         if (!oversized)
             bytes += slots + values;
     }
-    if (dirs->len >= 1048576u || oversized || bytes > 256u * 1024u * 1024u - dirs->bytes) {
+    if (dirs->len >= BX_ARCHIVE_PENDING_METADATA_LIMIT || oversized || bytes > 256u * 1024u * 1024u - dirs->bytes) {
         errno = E2BIG;
         return false;
     }
@@ -482,9 +482,13 @@ bool bx_archive_pending_metadata_record_alias_fd(struct bx_archive_pending_metad
 }
 
 /* -2 means the saved object no longer occupies this approved location. */
-static int bx_archive_pending_metadata_entry_open(int root_fd, const char* path, unsigned policy, const struct bx_archive_pending_metadata_entry* expected) {
+int bx_archive_pending_metadata_open_fd(int root_fd, unsigned policy, const struct bx_archive_pending_metadata_entry* expected, bool writable) {
+    if ((expected->type != S_IFREG && expected->type != S_IFDIR) || (writable && expected->type != S_IFREG)) {
+        errno = EINVAL;
+        return -1;
+    }
     char* leaf = NULL;
-    int parent = bx_dir_path_open_destination_parent_from(root_fd, path, expected->boundary_prefix, policy, false, 0, &leaf);
+    int parent = bx_dir_path_open_destination_parent_from(root_fd, expected->path, expected->boundary_prefix, policy, false, 0, &leaf);
     if (parent < 0)
         return (errno == ENOENT || errno == ENOTDIR || errno == ELOOP) ? -2 : -1;
     int fd = -1;
@@ -504,7 +508,7 @@ static int bx_archive_pending_metadata_entry_open(int root_fd, const char* path,
         if (!found)
             goto done;
     }
-    int flags = O_RDONLY | O_NOFOLLOW | O_NONBLOCK;
+    int flags = (writable ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_NONBLOCK;
     if (expected->type == S_IFDIR)
         flags |= O_DIRECTORY;
     fd = bx_fd_openat_cloexec(parent, leaf, flags, 0);
@@ -597,7 +601,7 @@ bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs,
                     goto done;
                 }
                 struct bx_archive_pending_metadata_entry* entry = &dirs->entries[i];
-                int fd = bx_archive_pending_metadata_entry_open(root_fd, entry->path, dirs->path_policy, entry);
+                int fd = bx_archive_pending_metadata_open_fd(root_fd, dirs->path_policy, entry, false);
                 if (fd == -2)
                     continue;
                 if (fd < 0) {
@@ -627,7 +631,7 @@ bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs,
         }
         struct bx_archive_pending_metadata_group* group = &groups[--count];
         struct bx_archive_pending_metadata_entry* location = &dirs->entries[group->location];
-        int fd = bx_archive_pending_metadata_entry_open(root_fd, location->path, dirs->path_policy, location);
+        int fd = bx_archive_pending_metadata_open_fd(root_fd, dirs->path_policy, location, false);
         if (fd == -2)
             continue;
         if (fd < 0) {
