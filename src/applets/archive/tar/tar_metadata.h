@@ -13,9 +13,10 @@ struct bx_tar_metadata_options {
     struct bx_archive_name_list exclude;
 };
 
-/* Replace selected with an owned policy-filtered copy. The two models must
- * be distinct; neither the source nor options are retained. */
-void bx_tar_metadata_select(struct bx_file_metadata* selected,
+/* Replace selected with an owned policy-filtered copy. Decode selected raw
+ * ACLs into numeric text; established text wins. Failure leaves selected empty.
+ * The models must be distinct; source and options are never retained. */
+bool bx_tar_metadata_select(struct bx_file_metadata* selected,
                              const struct bx_file_metadata* metadata,
                              const struct bx_tar_metadata_options* options);
 bool bx_tar_metadata_collect_target(struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, const struct bx_tar_metadata_options* options);

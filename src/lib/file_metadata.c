@@ -18,6 +18,18 @@
 
 #include "bx/libbx.h"
 
+enum bx_file_xattr_class bx_file_xattr_classify(const char* name) {
+    if (strcmp(name, "system.posix_acl_access") == 0)
+        return BX_FILE_XATTR_ACL_ACCESS;
+    if (strcmp(name, "system.posix_acl_default") == 0)
+        return BX_FILE_XATTR_ACL_DEFAULT;
+    if (strcmp(name, "security.selinux") == 0)
+        return BX_FILE_XATTR_SELINUX;
+    if (strcmp(name, "security.capability") == 0)
+        return BX_FILE_XATTR_CAPABILITY;
+    return BX_FILE_XATTR_ORDINARY;
+}
+
 bool bx_file_metadata_stat_unchanged(const struct stat* a, const struct stat* b) {
     return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_mode == b->st_mode && a->st_uid == b->st_uid && a->st_gid == b->st_gid && a->st_nlink == b->st_nlink && a->st_rdev == b->st_rdev &&
            a->st_size == b->st_size && a->st_mtim.tv_sec == b->st_mtim.tv_sec && a->st_mtim.tv_nsec == b->st_mtim.tv_nsec && a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
@@ -240,32 +252,18 @@ bool bx_file_metadata_apply_flags(int fd, unsigned int set, unsigned int clear) 
 
 static ssize_t bx_metadata_get_xattr(const struct bx_file_metadata_target* target, const char* name, void* value, size_t size);
 
-/* Decode Linux's version-2 ACL xattrs through the pinned-object interface.
- * ENODATA denotes a mode-derived access ACL or an empty default ACL, not an
- * unsupported interface. */
-static acl_t bx_metadata_acl_target(const struct bx_file_metadata_target* target, acl_type_t type) {
-    unsigned char* data = xmalloc(65536u);
-    ssize_t size = bx_metadata_get_xattr(target, type == ACL_TYPE_DEFAULT ? "system.posix_acl_default" : "system.posix_acl_access", data, 65536u);
+static acl_t bx_metadata_acl_decode(const unsigned char* data, size_t size, acl_type_t type) {
     acl_t acl = NULL;
-    if (size < 0) {
-        if (errno == ENODATA) {
-            if (type == ACL_TYPE_DEFAULT)
-                acl = acl_init(0);
-            else
-                acl = acl_from_mode(target->status.st_mode);
-        }
-        goto out;
-    }
     uint32_t version;
-    if (size < 4 || (size - 4) % 8 != 0 || (type == ACL_TYPE_ACCESS && size == 4))
+    if (size < 4 || size > 65536u || (size - 4) % 8 != 0 || (type == ACL_TYPE_ACCESS && size == 4))
         goto invalid;
     memcpy(&version, data, sizeof(version));
     if (le32toh(version) != 2)
         goto invalid;
     acl = acl_init((int)((size - 4) / 8));
     if (!acl)
-        goto out;
-    for (ssize_t pos = 4; pos < size; pos += 8) {
+        return NULL;
+    for (size_t pos = 4; pos < size; pos += 8) {
         uint16_t tag, perms;
         uint32_t id;
         memcpy(&tag, data + pos, sizeof(tag));
@@ -278,11 +276,8 @@ static acl_t bx_metadata_acl_target(const struct bx_file_metadata_target* target
             goto invalid;
         acl_entry_t entry;
         acl_permset_t set;
-        if (acl_create_entry(&acl, &entry) != 0 || acl_set_tag_type(entry, tag) != 0
-            || acl_get_permset(entry, &set) != 0 || acl_clear_perms(set) != 0
-            || ((perms & ACL_READ) && acl_add_perm(set, ACL_READ) != 0)
-            || ((perms & ACL_WRITE) && acl_add_perm(set, ACL_WRITE) != 0)
-            || ((perms & ACL_EXECUTE) && acl_add_perm(set, ACL_EXECUTE) != 0))
+        if (acl_create_entry(&acl, &entry) != 0 || acl_set_tag_type(entry, tag) != 0 || acl_get_permset(entry, &set) != 0 || acl_clear_perms(set) != 0 ||
+            ((perms & ACL_READ) && acl_add_perm(set, ACL_READ) != 0) || ((perms & ACL_WRITE) && acl_add_perm(set, ACL_WRITE) != 0) || ((perms & ACL_EXECUTE) && acl_add_perm(set, ACL_EXECUTE) != 0))
             goto fail;
         if (tag == ACL_USER) {
             uid_t uid = (uid_t)id;
@@ -290,7 +285,8 @@ static acl_t bx_metadata_acl_target(const struct bx_file_metadata_target* target
                 goto invalid;
             if (acl_set_qualifier(entry, &uid) != 0)
                 goto fail;
-        } else if (tag == ACL_GROUP) {
+        }
+        else if (tag == ACL_GROUP) {
             gid_t gid = (gid_t)id;
             if (id == UINT32_MAX || (uint32_t)gid != id)
                 goto invalid;
@@ -300,32 +296,79 @@ static acl_t bx_metadata_acl_target(const struct bx_file_metadata_target* target
     }
     if (size > 4 && acl_valid(acl) != 0)
         goto fail;
-    goto out;
+    return acl;
 invalid:
     errno = EINVAL;
 fail: {
     int error = errno;
     if (acl)
         acl_free(acl);
-    acl = NULL;
     errno = error;
+    return NULL;
 }
-out: {
+}
+
+static char* bx_metadata_acl_text(acl_t acl) {
+    char* text = acl_to_any_text(acl, NULL, ',', TEXT_NUMERIC_IDS);
+    if (text && strlen(text) > 65536u) {
+        acl_free(text);
+        errno = E2BIG;
+        return NULL;
+    }
+    return text;
+}
+
+/* ENODATA denotes mode-derived access permissions or an empty default ACL. */
+static acl_t bx_metadata_acl_target(const struct bx_file_metadata_target* target, acl_type_t type) {
+    unsigned char* data = xmalloc(65536u);
+    ssize_t size = bx_metadata_get_xattr(target, type == ACL_TYPE_DEFAULT ? "system.posix_acl_default" : "system.posix_acl_access", data, 65536u);
+    acl_t acl = size >= 0 ? bx_metadata_acl_decode(data, (size_t)size, type) : NULL;
+    if (size < 0 && errno == ENODATA)
+        acl = type == ACL_TYPE_DEFAULT ? acl_init(0) : acl_from_mode(target->status.st_mode);
     int error = errno;
     free(data);
     errno = error;
     return acl;
 }
+
+bool bx_file_metadata_set_acl_xattr(struct bx_file_metadata* metadata, const char* name, const void* value, size_t size) {
+    if (!name || !value) {
+        errno = EINVAL;
+        return false;
+    }
+    enum bx_file_xattr_class kind = bx_file_xattr_classify(name);
+    if (kind != BX_FILE_XATTR_ACL_ACCESS && kind != BX_FILE_XATTR_ACL_DEFAULT) {
+        errno = EINVAL;
+        return false;
+    }
+    acl_t acl = bx_metadata_acl_decode(value, size, kind == BX_FILE_XATTR_ACL_ACCESS ? ACL_TYPE_ACCESS : ACL_TYPE_DEFAULT);
+    if (!acl)
+        return false;
+    char* text = bx_metadata_acl_text(acl);
+    int error = errno;
+    acl_free(acl);
+    if (!text) {
+        errno = error;
+        return false;
+    }
+    char** slot = kind == BX_FILE_XATTR_ACL_ACCESS ? &metadata->acl_access : &metadata->acl_default;
+    free(*slot);
+    *slot = xstrdup(text);
+    acl_free(text);
+    return true;
 }
 
 static bool bx_metadata_read_acl(char** text, const struct bx_file_metadata_target* target, acl_type_t type) {
     acl_t acl = bx_metadata_acl_target(target, type);
     if (!acl)
         return false;
-    char* value = acl_to_any_text(acl, NULL, ',', TEXT_NUMERIC_IDS);
+    char* value = bx_metadata_acl_text(acl);
+    int error = errno;
     acl_free(acl);
-    if (!value)
+    if (!value) {
+        errno = error;
         return false;
+    }
     *text = xstrdup(value);
     acl_free(value);
     return true;
@@ -392,7 +435,9 @@ bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struc
             ok = false;
             break;
         }
-        ok = bx_file_metadata_set(metadata, name, value, (size_t)len);
+        enum bx_file_xattr_class kind = bx_file_xattr_classify(name);
+        ok = kind == BX_FILE_XATTR_ACL_ACCESS || kind == BX_FILE_XATTR_ACL_DEFAULT ? bx_file_metadata_set_acl_xattr(metadata, name, value, (size_t)len)
+                                                                                   : bx_file_metadata_set(metadata, name, value, (size_t)len);
     }
     int error = errno;
     free(value);
@@ -552,43 +597,45 @@ static bool bx_metadata_apply_xattr(const struct bx_file_xattr* attr, const stru
 }
 
 static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool symlink, bool directory, mode_t mode) {
-    if (metadata->restore_acls && !symlink) {
+    int rc, error;
+    if ((metadata->restore_acls & BX_FILE_ACL_ACCESS) && !symlink) {
         acl_t access = metadata->acl_access ? bx_metadata_acl_from_text(metadata->acl_access) : acl_from_mode(mode & 0777u);
         if (!access)
             return false;
-        int rc = bx_metadata_set_acl(target, access, false);
-        int error = errno;
+        rc = bx_metadata_set_acl(target, access, false);
+        error = errno;
         acl_free(access);
         if (rc != 0) {
             errno = error;
             return false;
         }
-        if (directory) {
-            if (metadata->acl_default && *metadata->acl_default) {
-                acl_t defaults = bx_metadata_acl_from_text(metadata->acl_default);
-                if (!defaults)
-                    return false;
-                rc = bx_metadata_set_acl(target, defaults, true);
-                error = errno;
-                acl_free(defaults);
-                if (rc != 0) {
-                    errno = error;
-                    return false;
-                }
-            }
-            else if (!bx_metadata_delete_default_acl(target))
+    }
+    if ((metadata->restore_acls & BX_FILE_ACL_DEFAULT) && directory) {
+        if (metadata->acl_default && *metadata->acl_default) {
+            acl_t defaults = bx_metadata_acl_from_text(metadata->acl_default);
+            if (!defaults)
                 return false;
+            rc = bx_metadata_set_acl(target, defaults, true);
+            error = errno;
+            acl_free(defaults);
+            if (rc != 0) {
+                errno = error;
+                return false;
+            }
         }
+        else if (!bx_metadata_delete_default_acl(target))
+            return false;
     }
     const struct bx_file_xattr* capabilities = NULL;
     const struct bx_file_xattr* selinux = NULL;
     for (size_t i = 0; i < metadata->len; i++) {
         const struct bx_file_xattr* attr = &metadata->xattrs[i];
-        if (strcmp(attr->name, "security.capability") == 0) {
+        enum bx_file_xattr_class kind = bx_file_xattr_classify(attr->name);
+        if (kind == BX_FILE_XATTR_CAPABILITY) {
             capabilities = attr;
             continue;
         }
-        if (strcmp(attr->name, "security.selinux") == 0) {
+        if (kind == BX_FILE_XATTR_SELINUX) {
             selinux = attr;
             continue;
         }
@@ -598,11 +645,32 @@ static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const str
     return (!selinux || bx_metadata_apply_xattr(selinux, target)) && (!capabilities || bx_metadata_apply_xattr(capabilities, target));
 }
 
+static bool bx_metadata_acl_supported(const struct bx_file_metadata* metadata, mode_t type) {
+    if (metadata->restore_acls & ~(unsigned int)BX_FILE_ACL_ALL) {
+        errno = EINVAL;
+        return false;
+    }
+    if (((metadata->restore_acls & BX_FILE_ACL_ACCESS) && metadata->acl_access && type == S_IFLNK) || ((metadata->restore_acls & BX_FILE_ACL_DEFAULT) && metadata->acl_default && type != S_IFDIR)) {
+        errno = EOPNOTSUPP;
+        return false;
+    }
+    for (size_t i = 0; i < metadata->len; i++) {
+        enum bx_file_xattr_class kind = bx_file_xattr_classify(metadata->xattrs[i].name);
+        if (kind == BX_FILE_XATTR_ACL_ACCESS || kind == BX_FILE_XATTR_ACL_DEFAULT) {
+            errno = EINVAL;
+            return false;
+        }
+    }
+    return true;
+}
+
 bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_t type) {
     if (type != S_IFLNK && type != S_IFIFO && type != S_IFCHR && type != S_IFBLK) {
         errno = EINVAL;
         return false;
     }
+    if (!bx_metadata_acl_supported(&restore->metadata, type))
+        return false;
     if (restore->flags_set || restore->flags_clear) {
         errno = EOPNOTSUPP;
         return false;
@@ -679,6 +747,8 @@ static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_rest
 enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target) {
     if (!bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
+    if (!bx_metadata_acl_supported(&restore->metadata, target->status.st_mode & S_IFMT))
+        return BX_FILE_RESTORE_METADATA_ERROR;
     if (target->name && !bx_file_restore_leaf_supported(restore, target->status.st_mode & S_IFMT))
         return BX_FILE_RESTORE_METADATA_ERROR;
     enum bx_file_restore_result result = bx_metadata_restore(restore, target, S_ISLNK(target->status.st_mode), S_ISDIR(target->status.st_mode));
@@ -702,6 +772,8 @@ enum bx_file_restore_result bx_file_restore_prepare_regular(const struct bx_file
         errno = EINVAL;
         return BX_FILE_RESTORE_STAT_ERROR;
     }
+    if (!bx_metadata_acl_supported(&restore->metadata, S_IFREG))
+        return BX_FILE_RESTORE_METADATA_ERROR;
     struct bx_file_restore immediate = *restore;
     immediate.flags_set = immediate.flags_clear = 0u;
     immediate.mode = 0600u;
@@ -710,8 +782,7 @@ enum bx_file_restore_result bx_file_restore_prepare_regular(const struct bx_file
     enum bx_file_restore_result result = BX_FILE_RESTORE_METADATA_ERROR;
     for (size_t i = 0; i < restore->metadata.len; i++) {
         const struct bx_file_xattr* attr = &restore->metadata.xattrs[i];
-        if (strcmp(attr->name, "system.posix_acl_access") != 0 && strcmp(attr->name, "system.posix_acl_default") != 0 && strcmp(attr->name, "security.selinux") != 0 &&
-            strcmp(attr->name, "security.capability") != 0 && !bx_file_metadata_set(&immediate.metadata, attr->name, attr->value, attr->size))
+        if (bx_file_xattr_classify(attr->name) == BX_FILE_XATTR_ORDINARY && !bx_file_metadata_set(&immediate.metadata, attr->name, attr->value, attr->size))
             goto out;
     }
     result = bx_file_restore_target(&immediate, &target);

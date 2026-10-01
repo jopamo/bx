@@ -1304,7 +1304,10 @@ static bool bx_tar_extract_select_metadata(struct bx_tar_extract_state* state,
     restore->set_mtime = !state->options->touch_mtime && !entry->omit_mtime && entry->kind != BX_TAR_KIND_HARDLINK;
     bx_tar_extract_entry_ids(state, entry, &restore->uid, &restore->gid,
                               &restore->set_owner, &restore->set_group);
-    bx_tar_metadata_select(&restore->metadata, &entry->metadata, &state->options->metadata);
+    if (!bx_tar_metadata_select(&restore->metadata, &entry->metadata, &state->options->metadata)) {
+        bx_diag(diag, "%s: invalid or unsupported metadata: %s", path, strerror(errno));
+        return false;
+    }
     restore->flags_present = state->options->metadata.file_flags && entry->metadata.file_flags != NULL;
     if (restore->flags_present && !bx_tar_metadata_decode_flags(entry->metadata.file_flags, &restore->flags_set, &restore->flags_clear)) {
         bx_diag(diag, "%s: invalid or unsupported file flags: %s", path, strerror(errno));
