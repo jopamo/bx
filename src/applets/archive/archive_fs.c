@@ -410,17 +410,19 @@ void bx_archive_pending_metadata_free(struct bx_archive_pending_metadata* dirs) 
     dirs->bytes = 0u;
 }
 
-bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs,
-                                           int fd,
-                                           const char* path,
-                                           size_t boundary_prefix,
-                                           const struct bx_file_restore* restore,
-                                           uint64_t order,
-                                           uint64_t origin) {
+static bool bx_archive_pending_metadata_record(struct bx_archive_pending_metadata* dirs,
+                                               int fd,
+                                               const char* path,
+                                               size_t boundary_prefix,
+                                               const struct bx_file_restore* restore,
+                                               uint64_t order,
+                                               uint64_t origin,
+                                               bool alias) {
     struct bx_archive_pending_metadata_entry* entry;
     struct stat status;
     int stat_rc = fstat(fd, &status);
-    if (stat_rc != 0 || (!S_ISDIR(status.st_mode) && !S_ISREG(status.st_mode)) || origin > order || !path || boundary_prefix > strlen(path) || (boundary_prefix && path[boundary_prefix - 1] != '/')) {
+    if (stat_rc != 0 || (!S_ISDIR(status.st_mode) && !S_ISREG(status.st_mode)) || (alias && !S_ISREG(status.st_mode)) || origin > order || !path || boundary_prefix > strlen(path) ||
+        (boundary_prefix && path[boundary_prefix - 1] != '/')) {
         int error = stat_rc != 0 ? errno : EINVAL;
         errno = error;
         return false;
@@ -449,6 +451,7 @@ bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* d
     memset(entry, 0, sizeof(*entry));
     entry->order = order;
     entry->origin = origin;
+    entry->alias = alias;
     dirs->len++;
     entry->path = xstrdup(path);
     entry->boundary_prefix = boundary_prefix;
@@ -461,6 +464,21 @@ bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* d
     bx_file_metadata_copy(&entry->restore.metadata, metadata);
     dirs->bytes += bytes;
     return true;
+}
+
+bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* dirs,
+                                           int fd,
+                                           const char* path,
+                                           size_t boundary_prefix,
+                                           const struct bx_file_restore* restore,
+                                           uint64_t order,
+                                           uint64_t origin) {
+    return bx_archive_pending_metadata_record(dirs, fd, path, boundary_prefix, restore, order, origin, false);
+}
+
+bool bx_archive_pending_metadata_record_alias_fd(struct bx_archive_pending_metadata* dirs, int fd, const char* path, size_t boundary_prefix, uint64_t origin) {
+    const struct bx_file_restore restore = {0};
+    return bx_archive_pending_metadata_record(dirs, fd, path, boundary_prefix, &restore, origin, origin, true);
 }
 
 /* -2 means the saved object no longer occupies this approved location. */
@@ -630,6 +648,8 @@ bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs,
                 ok = false;
                 break;
             }
+            if (dirs->entries[i].alias)
+                continue;
             struct bx_file_restore restore = dirs->entries[i].restore;
             if (restore.flags_present) {
                 if (!(restore.flags_set | restore.flags_clear))
