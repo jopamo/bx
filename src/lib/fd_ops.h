@@ -35,7 +35,7 @@ int bx_fd_fstat_expected(int fd, const struct stat* expected, struct stat* opene
 /* Open a single child for metadata without following symlinks. Prefer a real
  * fd for regular files/directories, verified against a transient O_PATH
  * reference. Special objects return an O_PATH locator; metadata uses the
- * verified parent/leaf. Read-denied files/directories also return a locator. */
+ * verified parent/leaf. Read-denied files/directories fail explicitly. */
 int bx_fd_openat_metadata(int parent_fd, const char* name);
 
 /* bx_fd_open_write: wrapper for open(O_WRONLY | flags).

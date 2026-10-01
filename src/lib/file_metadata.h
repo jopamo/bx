@@ -68,12 +68,15 @@ enum bx_file_restore_result {
 bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_t type);
 enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target);
 
-/* Borrow an inode fd. Ownership precedes mode, ACLs/xattrs, timestamps and flags.
- * O_PATH uses empty-path operations (chmod requires fchmodat2). Symlinks
- * require O_PATH and are never followed. */
+/* Borrow a real regular-file/directory fd; derive type from the pinned inode.
+ * Ownership precedes mode, ACLs/xattrs, timestamps and flags.
+ * Reject O_PATH and special-object descriptors without changing metadata. */
 enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* restore,
-                                               int fd,
-                                               bool symlink, bool directory);
+                                               int fd);
+/* Prepare a private regular inode for fd-free finalization. Check ownership,
+ * ordinary xattrs and timestamps now, but retain extractor ownership/mode
+ * 0600. Defer ACLs, labels, capabilities and flags to the final restore. */
+enum bx_file_restore_result bx_file_restore_prepare_regular(const struct bx_file_restore* restore, int fd);
 
 typedef bool (*bx_file_xattr_filter)(const char* name, const void* user);
 
@@ -98,12 +101,4 @@ bool bx_file_metadata_read_target(struct bx_file_metadata* metadata, const struc
  * regular files and directories; other object types report applicable=false. */
 bool bx_file_metadata_read_flags(int fd, unsigned int* flags, bool* applicable);
 bool bx_file_metadata_apply_flags(int fd, unsigned int set, unsigned int clear);
-/* Borrow a verified inode fd. No pathname reconstruction or fallback.
- * O_PATH operations require empty-path kernel support; failure is fatal.
- * Apply after chown/chmod and data writes, which can clear inode metadata.
- * ACLs precede ordinary xattrs, SELinux labels and capabilities, in that order. */
-bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd,
-                            bool symlink, bool directory,
-                            mode_t mode);
-
 #endif

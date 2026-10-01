@@ -463,22 +463,22 @@ static int bx_metadata_set_xattr(const struct bx_file_metadata_target* target, c
         rc = -1;
     }
 #ifdef __NR_setxattrat
-    if (target->name || (rc < 0 && errno == EBADF)) {
+    if (target->name) {
         struct {
             _Alignas(8) uint64_t value;
             uint32_t size;
             uint32_t flags;
         } args = {.value = (uintptr_t)value, .size = (uint32_t)size};
-        rc = (int)syscall(__NR_setxattrat, target->fd, target->name ? target->name : "", AT_SYMLINK_NOFOLLOW | (target->name ? 0 : AT_EMPTY_PATH), name, &args, sizeof(args));
+        rc = (int)syscall(__NR_setxattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, name, &args, sizeof(args));
     }
 #endif
     return rc;
 }
 
-/* libacl has no default-ACL fd setter. Encode the same Linux xattr format
- * used by the fd reader; empty-path writes also support O_PATH references. */
-static int bx_metadata_set_acl(const struct bx_file_metadata_target* target, acl_t acl, bool defaults, bool path_fd) {
-    if (!defaults && !path_fd && !target->name)
+/* libacl has no default-ACL fd setter. Encode the Linux xattr format used
+ * by the reader and apply it through the same verified target. */
+static int bx_metadata_set_acl(const struct bx_file_metadata_target* target, acl_t acl, bool defaults) {
+    if (!defaults && !target->name)
         return acl_set_fd(target->fd, acl);
     int count = acl_entries(acl);
     if (count < 0)
@@ -540,8 +540,8 @@ static bool bx_metadata_delete_default_acl(const struct bx_file_metadata_target*
         rc = -1;
     }
 #ifdef __NR_removexattrat
-    if (target->name || (rc < 0 && errno == EBADF))
-        rc = (int)syscall(__NR_removexattrat, target->fd, target->name ? target->name : "", AT_SYMLINK_NOFOLLOW | (target->name ? 0 : AT_EMPTY_PATH), "system.posix_acl_default");
+    if (target->name)
+        rc = (int)syscall(__NR_removexattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, "system.posix_acl_default");
 #endif
     return rc == 0 || errno == ENODATA;
 }
@@ -551,12 +551,12 @@ static bool bx_metadata_apply_xattr(const struct bx_file_xattr* attr, const stru
     return rc == 0;
 }
 
-static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool symlink, bool directory, mode_t mode, bool path_fd) {
+static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const struct bx_file_metadata_target* target, bool symlink, bool directory, mode_t mode) {
     if (metadata->restore_acls && !symlink) {
         acl_t access = metadata->acl_access ? bx_metadata_acl_from_text(metadata->acl_access) : acl_from_mode(mode & 0777u);
         if (!access)
             return false;
-        int rc = bx_metadata_set_acl(target, access, false, path_fd);
+        int rc = bx_metadata_set_acl(target, access, false);
         int error = errno;
         acl_free(access);
         if (rc != 0) {
@@ -568,7 +568,7 @@ static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const str
                 acl_t defaults = bx_metadata_acl_from_text(metadata->acl_default);
                 if (!defaults)
                     return false;
-                rc = bx_metadata_set_acl(target, defaults, true, path_fd);
+                rc = bx_metadata_set_acl(target, defaults, true);
                 error = errno;
                 acl_free(defaults);
                 if (rc != 0) {
@@ -596,14 +596,6 @@ static bool bx_metadata_apply(const struct bx_file_metadata* metadata, const str
             return false;
     }
     return (!selinux || bx_metadata_apply_xattr(selinux, target)) && (!capabilities || bx_metadata_apply_xattr(capabilities, target));
-}
-
-bool bx_file_metadata_apply(const struct bx_file_metadata* metadata, int fd, bool symlink, bool directory, mode_t mode) {
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0)
-        return false;
-    const struct bx_file_metadata_target target = {.fd = fd};
-    return bx_metadata_apply(metadata, &target, symlink, directory, mode, (flags & O_PATH) != 0);
 }
 
 bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_t type) {
@@ -643,12 +635,12 @@ bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_
     return true;
 }
 
-static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target, bool symlink, bool directory, bool path_fd) {
+static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_restore* restore, const struct bx_file_metadata_target* target, bool symlink, bool directory) {
     int fd = target->fd;
     if (restore->set_owner || restore->set_group) {
         uid_t uid = restore->set_owner ? restore->uid : (uid_t)-1;
         gid_t gid = restore->set_group ? restore->gid : (gid_t)-1;
-        int rc = target->name ? fchownat(fd, target->name, uid, gid, AT_SYMLINK_NOFOLLOW) : path_fd ? fchownat(fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) : fchown(fd, uid, gid);
+        int rc = target->name ? fchownat(fd, target->name, uid, gid, AT_SYMLINK_NOFOLLOW) : fchown(fd, uid, gid);
         if (rc != 0)
             return BX_FILE_RESTORE_STAT_ERROR;
     }
@@ -656,9 +648,9 @@ static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_rest
         if (target->name && !bx_file_metadata_target_verify(target, false))
             return BX_FILE_RESTORE_STAT_ERROR;
         int rc;
-        if (path_fd || target->name) {
+        if (target->name) {
 #ifdef SYS_fchmodat2
-            rc = (int)syscall(SYS_fchmodat2, fd, target->name ? target->name : "", restore->mode & 07777u, target->name ? AT_SYMLINK_NOFOLLOW : AT_EMPTY_PATH);
+            rc = (int)syscall(SYS_fchmodat2, fd, target->name, restore->mode & 07777u, AT_SYMLINK_NOFOLLOW);
 #else
             errno = ENOTSUP;
             rc = -1;
@@ -671,13 +663,13 @@ static enum bx_file_restore_result bx_metadata_restore(const struct bx_file_rest
     }
     if (target->name && !bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
-    if (!bx_metadata_apply(&restore->metadata, target, symlink, directory, restore->mode, path_fd))
+    if (!bx_metadata_apply(&restore->metadata, target, symlink, directory, restore->mode))
         return BX_FILE_RESTORE_METADATA_ERROR;
     if (target->name && !bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
     if (restore->set_mtime) {
         struct timespec times[2] = {restore->mtime, restore->mtime};
-        int rc = target->name ? utimensat(fd, target->name, times, AT_SYMLINK_NOFOLLOW) : path_fd ? utimensat(fd, "", times, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW) : futimens(fd, times);
+        int rc = target->name ? utimensat(fd, target->name, times, AT_SYMLINK_NOFOLLOW) : futimens(fd, times);
         if (rc != 0)
             return BX_FILE_RESTORE_STAT_ERROR;
     }
@@ -689,22 +681,49 @@ enum bx_file_restore_result bx_file_restore_target(const struct bx_file_restore*
         return BX_FILE_RESTORE_STAT_ERROR;
     if (target->name && !bx_file_restore_leaf_supported(restore, target->status.st_mode & S_IFMT))
         return BX_FILE_RESTORE_METADATA_ERROR;
-    enum bx_file_restore_result result = bx_metadata_restore(restore, target, S_ISLNK(target->status.st_mode), S_ISDIR(target->status.st_mode), false);
+    enum bx_file_restore_result result = bx_metadata_restore(restore, target, S_ISLNK(target->status.st_mode), S_ISDIR(target->status.st_mode));
     if (result == BX_FILE_RESTORE_OK && !bx_file_metadata_target_verify(target, false))
         return BX_FILE_RESTORE_STAT_ERROR;
     return result;
 }
 
-enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* restore, int fd, bool symlink, bool directory) {
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0)
+enum bx_file_restore_result bx_file_restore_fd(const struct bx_file_restore* restore, int fd) {
+    struct bx_file_metadata_target target;
+    if (!bx_file_metadata_target_fd(&target, fd))
         return BX_FILE_RESTORE_STAT_ERROR;
-    if (!(flags & O_PATH)) {
-        struct bx_file_metadata_target verified;
-        if (!bx_file_metadata_target_fd(&verified, fd))
-            return BX_FILE_RESTORE_STAT_ERROR;
-        return bx_file_restore_target(restore, &verified);
+    return bx_file_restore_target(restore, &target);
+}
+
+enum bx_file_restore_result bx_file_restore_prepare_regular(const struct bx_file_restore* restore, int fd) {
+    struct bx_file_metadata_target target;
+    if (!bx_file_metadata_target_fd(&target, fd))
+        return BX_FILE_RESTORE_STAT_ERROR;
+    if (!S_ISREG(target.status.st_mode)) {
+        errno = EINVAL;
+        return BX_FILE_RESTORE_STAT_ERROR;
     }
-    const struct bx_file_metadata_target target = {.fd = fd};
-    return bx_metadata_restore(restore, &target, symlink, directory, (flags & O_PATH) != 0);
+    struct bx_file_restore immediate = *restore;
+    immediate.flags_set = immediate.flags_clear = 0u;
+    immediate.mode = 0600u;
+    immediate.set_mode = true;
+    immediate.metadata = (struct bx_file_metadata){0};
+    enum bx_file_restore_result result = BX_FILE_RESTORE_METADATA_ERROR;
+    for (size_t i = 0; i < restore->metadata.len; i++) {
+        const struct bx_file_xattr* attr = &restore->metadata.xattrs[i];
+        if (strcmp(attr->name, "system.posix_acl_access") != 0 && strcmp(attr->name, "system.posix_acl_default") != 0 && strcmp(attr->name, "security.selinux") != 0 &&
+            strcmp(attr->name, "security.capability") != 0 && !bx_file_metadata_set(&immediate.metadata, attr->name, attr->value, attr->size))
+            goto out;
+    }
+    result = bx_file_restore_target(&immediate, &target);
+    /* Check requested ownership while the inode is private, then return it
+     * to the extractor so finalization can reopen a live alias. */
+    if (result == BX_FILE_RESTORE_OK && ((restore->set_owner && restore->uid != target.status.st_uid) || (restore->set_group && restore->gid != target.status.st_gid)) &&
+        fchown(fd, target.status.st_uid, target.status.st_gid) != 0)
+        result = BX_FILE_RESTORE_STAT_ERROR;
+out: {
+    int error = errno;
+    bx_file_metadata_free(&immediate.metadata);
+    errno = error;
+    return result;
+}
 }

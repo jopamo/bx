@@ -960,7 +960,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                     goto fail;
                 if (!bx_archive_write_regular_payload(state->materialized_fd, entry->data, entry->data_len, options->sparse, diag))
                     goto done;
-                if (!bx_archive_restore_fd(&restore, state->materialized_fd, entry->name, false, false, diag))
+                if (!bx_archive_restore_fd(&restore, state->materialized_fd, entry->name, diag))
                     goto done;
             }
             if (bx_archive_temp_pending_signal()) {
@@ -980,7 +980,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 restore.set_mode = true;
                 if (!bx_archive_write_regular_payload(stage.fd, entry->data, entry->data_len, options->sparse, diag))
                     goto done;
-                if (!bx_archive_restore_fd(&restore, stage.fd, entry->name, false, false, diag))
+                if (!bx_archive_restore_fd(&restore, stage.fd, entry->name, diag))
                     goto done;
                 if (state != NULL) {
                     fd = bx_fd_dup_cloexec(stage.fd);
