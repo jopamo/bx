@@ -10,8 +10,8 @@ static BX_COLD void bx_oom_fatal(const char* message) {
 }
 
 void* xmalloc(size_t size) {
-    void* p = malloc(size);
-    if (BX_UNLIKELY(p == NULL && size > 0u)) {
+    void* p = malloc(size ? size : 1u);
+    if (BX_UNLIKELY(p == NULL)) {
         bx_oom_fatal("malloc failure");
     }
     return p;
