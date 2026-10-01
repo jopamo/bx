@@ -31,6 +31,7 @@
 #include "lib/id_parse.h"
 #include "lib/inode_ledger.h"
 #include "lib/mode_parse.h"
+#include "lib/mount_identity.h"
 #include "lib/path_ops.h"
 #include "lib/remove_ops.h"
 #include "lib/size_parse.h"
@@ -3184,6 +3185,25 @@ int bx_tar_run(int argc, char** argv) {
     }
 
     if (options.mode == BX_TAR_MODE_CREATE) {
+        if (options.create_options.one_file_system) {
+            struct bx_mount_identity identity;
+            int fd = bx_fd_open_cloexec(".", O_PATH | O_DIRECTORY, 0);
+            bool ok = fd >= 0 && bx_mount_identity_read(fd, &identity);
+            int error = errno;
+            if (ok && !identity.has_mount) {
+                ok = false;
+                error = EOPNOTSUPP;
+            }
+            if (fd >= 0 && close(fd) != 0 && ok) {
+                ok = false;
+                error = errno;
+            }
+            if (!ok) {
+                bx_diag(&diag, "--one-file-system requires mount identity: %s", strerror(error));
+                bx_tar_options_cleanup(&options);
+                return 2;
+            }
+        }
         if (bx_tar_can_stream_create(&options)) {
             struct bx_tar_create_stream_producer_ctx stream_ctx = {
                 .create_options = &options.create_options,

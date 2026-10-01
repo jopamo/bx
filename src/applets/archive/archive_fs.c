@@ -173,11 +173,46 @@ static bool bx_archive_fs_visit_error(struct bx_archive_fs_visit_state* state,
                                        state->diag) == BX_ARCHIVE_FS_ERROR_SKIP;
 }
 
+static bool bx_archive_fs_mount_error(struct bx_archive_fs_visit_state* state, int error) {
+    bx_diag(state->diag, "%s: --one-file-system mount identity: %s", state->source.data, strerror(error));
+    return false;
+}
+
+static bool bx_archive_fs_check_boundary(struct bx_archive_fs_visit_state* state, int parent, const char* name, bool* same) {
+    struct bx_mount_identity identity;
+    bool ok;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        int fd = bx_fd_openat_cloexec(parent, name, O_PATH | O_DIRECTORY | O_NOFOLLOW, 0);
+        if (fd < 0)
+            return bx_archive_fs_mount_error(state, errno);
+        ok = bx_mount_identity_read(fd, &identity);
+        int error = errno;
+        if (close(fd) != 0 && ok) {
+            ok = false;
+            error = errno;
+        }
+        errno = error;
+    }
+    else
+        ok = bx_mount_identity_read_at(parent, name, &identity);
+    if (!ok)
+        return bx_archive_fs_mount_error(state, errno);
+    if (!identity.has_mount)
+        return bx_archive_fs_mount_error(state, EOPNOTSUPP);
+    if (!state->boundary.initialized) {
+        state->boundary.root = identity;
+        state->boundary.initialized = true;
+        *same = true;
+        return true;
+    }
+    if (!bx_mount_identity_compare(&state->boundary.root, &identity, same))
+        return bx_archive_fs_mount_error(state, errno);
+    return true;
+}
+
 /* A NULL result means the caller must not descend (boundary or skipped error).
  * Keep the checked directory open through child lookup, including sorted walks. */
-static bool bx_archive_fs_open_dir(struct bx_archive_fs_visit_state* state,
-                                   int parent_fd, const char* name,
-                                   const struct stat* expected, DIR** result) {
+static bool bx_archive_fs_open_dir(struct bx_archive_fs_visit_state* state, int parent_fd, const char* name, const struct stat* expected, DIR** result) {
     *result = NULL;
     int fd = bx_fd_openat_cloexec(parent_fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
     if (fd < 0)
@@ -192,20 +227,20 @@ static bool bx_archive_fs_open_dir(struct bx_archive_fs_visit_state* state,
         struct bx_mount_identity identity;
         bool same = true;
         bool ok = bx_mount_identity_read(fd, &identity);
-        if (ok && state->boundary.initialized)
+        if (ok && !identity.has_mount) {
+            errno = EOPNOTSUPP;
+            ok = false;
+        }
+        if (ok)
             ok = bx_mount_identity_compare(&state->boundary.root, &identity, &same);
         if (!ok || !same) {
             int error = errno;
             int rc = close(fd);
             if (!ok)
-                return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, error);
+                return bx_archive_fs_mount_error(state, error);
             if (rc != 0)
                 return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno);
             return true;
-        }
-        if (!state->boundary.initialized) {
-            state->boundary.root = identity;
-            state->boundary.initialized = true;
         }
     }
     *result = fdopendir(fd);
@@ -278,11 +313,20 @@ static bool bx_archive_fs_visit_children(struct bx_archive_fs_visit_state* state
     return ok;
 }
 
-static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state,
-                                       int parent_fd, const char* name, bool recurse) {
+static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state, int parent_fd, const char* name, bool recurse) {
     struct stat status;
     if (fstatat(parent_fd, name, &status, AT_SYMLINK_NOFOLLOW) != 0)
         return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, errno);
+    if (state->boundary.enabled) {
+        bool same;
+        if (!bx_archive_fs_check_boundary(state, parent_fd, name, &same))
+            return false;
+        if (!same) {
+            if (!S_ISDIR(status.st_mode))
+                return true;
+            recurse = false;
+        }
+    }
     struct bx_archive_fs_visit_entry visit = {
         .source_parent_fd = parent_fd,
         .source_fd = -1,
