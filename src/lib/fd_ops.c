@@ -118,6 +118,21 @@ ssize_t bx_fd_input_read(struct bx_fd_input* input, void* data, size_t len, int 
     }
 }
 
+ssize_t bx_fd_input_pread(struct bx_fd_input* input, void* data, size_t len, off_t offset, int cancel_fd) {
+    if (!S_ISREG(input->type) && !S_ISBLK(input->type)) {
+        errno = ESPIPE;
+        return -1;
+    }
+    if (len == 0)
+        return 0;
+    if (len > (size_t)SSIZE_MAX)
+        len = (size_t)SSIZE_MAX;
+    if (bx_fd_input_cancelled(cancel_fd) != 0)
+        return -1;
+    ssize_t count = pread(input->fd, data, len, offset);
+    return bx_fd_input_cancelled(cancel_fd) == 0 ? count : -1;
+}
+
 void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage) {
     int error = errno;
     bx_fd_cleanup(&stage->fd);

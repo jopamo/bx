@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -11,11 +10,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifndef ZLIB_CONST
-#define ZLIB_CONST 1
-#endif
-#include <zlib.h>
-
 #include "applets/archive/archive_bzip2.h"
 #include "applets/archive/archive_codec.h"
 #include "applets/archive/archive_common.h"
@@ -26,8 +20,6 @@
 #include "bx/libbx.h"
 #include "lib/fd_ops.h"
 
-#define BX_ARCHIVE_GZIP_STREAM_BUFFER_SIZE (1024u * 1024u)
-
 struct bx_archive_codec {
     const char* name;
     bool supports_mt_encode;
@@ -36,23 +28,22 @@ struct bx_archive_codec {
 
 struct bx_archive_codec_input {
     enum {
-        BX_ARCHIVE_CODEC_INPUT_GZIP = 0,
+        BX_ARCHIVE_CODEC_INPUT_PLAIN = 0,
+        BX_ARCHIVE_CODEC_INPUT_GZIP,
         BX_ARCHIVE_CODEC_INPUT_BZIP2,
         BX_ARCHIVE_CODEC_INPUT_XZ,
         BX_ARCHIVE_CODEC_INPUT_ZSTD,
     } kind;
-    gzFile stream;
     struct bx_fd_input source;
     unsigned char decode_buffer[8192];
     size_t decode_pos;
     size_t decode_len;
     bool source_eof;
     bool decoder_end;
-    int feeder;
     void* codec_reader;
     const struct bx_archive_codec* required_codec;
     bool checked_mode;
-    bool direct_mode;
+    bool detect_all;
     bool plain_seekable;
     bool force_seek;
     uint64_t plain_size;
@@ -402,89 +393,6 @@ bool bx_archive_codec_run_encode_mt_stream(const struct bx_archive_codec* codec,
     return false;
 }
 
-static bool bx_archive_codec_input_requires_gzip(const struct bx_archive_codec_input* input) {
-    return input->required_codec == bx_archive_codec_gzip();
-}
-
-static bool bx_archive_codec_input_requires_bzip2(const struct bx_archive_codec_input* input) {
-    return input->required_codec == bx_archive_codec_bzip2();
-}
-
-static bool bx_archive_codec_input_requires_xz(const struct bx_archive_codec_input* input) {
-    return input->required_codec == bx_archive_codec_xz();
-}
-
-static bool bx_archive_codec_input_requires_zstd(const struct bx_archive_codec_input* input) {
-    return input->required_codec == bx_archive_codec_zstd();
-}
-
-static bool bx_archive_codec_input_feed(struct bx_archive_codec_input* input, struct bx_diag_ctx* diag) {
-    unsigned char data[PIPE_BUF];
-    ssize_t count = bx_fd_input_read(&input->source, data, sizeof(data), bx_archive_temp_signal_fd());
-    if (count < 0) {
-        bx_diag(diag, "read error: %s", strerror(errno));
-        return false;
-    }
-    if (count == 0) {
-        if (close(input->feeder) != 0) {
-            input->feeder = -1;
-            bx_diag(diag, "read error: %s", strerror(errno));
-            return false;
-        }
-        input->feeder = -1;
-        return true;
-    }
-    /* gzread reached EAGAIN, so this owned pipe is empty. PIPE_BUF fits
-     * atomically without waiting, even when the pipe capacity is minimal. */
-    ssize_t written = write(input->feeder, data, (size_t)count);
-    if (written != count) {
-        if (written >= 0)
-            errno = EIO;
-        bx_diag(diag, "read error: %s", strerror(errno));
-        return false;
-    }
-    return true;
-}
-
-static bool bx_archive_codec_input_check_mode(struct bx_archive_codec_input* input,
-                                              struct bx_diag_ctx* diag) {
-    int direct;
-
-    if (input->kind != BX_ARCHIVE_CODEC_INPUT_GZIP) {
-        return true;
-    }
-    if (input->checked_mode) {
-        return true;
-    }
-
-    while (true) {
-        direct = gzdirect(input->stream);
-        if (bx_archive_temp_pending_signal()) {
-            errno = EINTR;
-            bx_diag(diag, "read error: %s", strerror(errno));
-            return false;
-        }
-        int error;
-        (void)gzerror(input->stream, &error);
-        if (input->source.fd < 0 || error != Z_ERRNO || (errno != EAGAIN && errno != EWOULDBLOCK))
-            break;
-        gzclearerr(input->stream);
-        if (!bx_archive_codec_input_feed(input, diag))
-            return false;
-    }
-    if (direct < 0) {
-        bx_diag(diag, "gzip decompression failed");
-        return false;
-    }
-    if (bx_archive_codec_input_requires_gzip(input) && direct == 1) {
-        bx_diag(diag, "gzip decompression failed");
-        return false;
-    }
-    input->direct_mode = direct == 1;
-    input->checked_mode = true;
-    return true;
-}
-
 static bool bx_archive_codec_bytes_have_magic(const unsigned char* data,
                                               size_t data_len,
                                               const unsigned char* magic,
@@ -514,14 +422,63 @@ static const struct bx_archive_codec* bx_archive_codec_detect_magic(const unsign
     return NULL;
 }
 
-const struct bx_archive_codec* bx_archive_codec_detect_fd(int fd) {
+bool bx_archive_codec_detect_fd(int fd, const struct bx_archive_codec** codec_out) {
+    struct bx_fd_input source = BX_FD_INPUT_INIT;
     unsigned char magic[6];
-    ssize_t nread = pread(fd, magic, sizeof(magic), 0);
+    *codec_out = NULL;
+    if (bx_fd_input_init(&source, fd, BX_FD_INPUT_BORROWED) != 0)
+        return false;
+    ssize_t count = bx_fd_input_pread(&source, magic, sizeof(magic), 0, bx_archive_temp_signal_fd());
+    bx_fd_input_close(&source);
+    if (count < 0)
+        return false;
+    *codec_out = bx_archive_codec_detect_magic(magic, (size_t)count);
+    return true;
+}
 
-    if (nread <= 0) {
-        return NULL;
+static bool bx_archive_codec_input_start_decoder(struct bx_archive_codec_input* input, const struct bx_archive_codec* codec, struct bx_diag_ctx* diag) {
+    input->required_codec = codec;
+    input->checked_mode = true;
+    if (codec == bx_archive_codec_bzip2()) {
+        input->kind = BX_ARCHIVE_CODEC_INPUT_BZIP2;
+        return bx_archive_bzip2_reader_open((struct bx_archive_bzip2_reader**)&input->codec_reader, diag);
     }
-    return bx_archive_codec_detect_magic(magic, (size_t)nread);
+    if (codec == bx_archive_codec_xz()) {
+        input->kind = BX_ARCHIVE_CODEC_INPUT_XZ;
+        return bx_archive_xz_reader_open((struct bx_archive_xz_reader**)&input->codec_reader, diag);
+    }
+    if (codec == bx_archive_codec_zstd()) {
+        input->kind = BX_ARCHIVE_CODEC_INPUT_ZSTD;
+        return bx_archive_zstd_reader_open((struct bx_archive_zstd_reader**)&input->codec_reader, diag);
+    }
+    input->kind = BX_ARCHIVE_CODEC_INPUT_GZIP;
+    return bx_archive_gzip_reader_open((struct bx_archive_gzip_reader**)&input->codec_reader, diag);
+}
+
+static bool bx_archive_codec_input_check_mode(struct bx_archive_codec_input* input, struct bx_diag_ctx* diag) {
+    if (input->checked_mode)
+        return true;
+    size_t needed = input->detect_all ? 6u : 2u;
+    while (input->decode_len < needed && !input->source_eof) {
+        ssize_t count = bx_fd_input_read(&input->source, input->decode_buffer + input->decode_len, sizeof(input->decode_buffer) - input->decode_len, bx_archive_temp_signal_fd());
+        if (count < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
+        input->source_eof = count == 0;
+        input->decode_len += (size_t)count;
+    }
+    const struct bx_archive_codec* codec = bx_archive_codec_detect_magic(input->decode_buffer, input->decode_len);
+    if (!input->detect_all && codec != bx_archive_codec_gzip())
+        codec = NULL;
+    if (input->required_codec == bx_archive_codec_gzip() && codec != bx_archive_codec_gzip()) {
+        bx_diag(diag, "archive is not in gzip format");
+        return false;
+    }
+    if (codec)
+        return bx_archive_codec_input_start_decoder(input, codec, diag);
+    input->checked_mode = true;
+    return true;
 }
 
 static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** input_out,
@@ -540,7 +497,6 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
     *input_out = NULL;
     input = xmalloc(sizeof(*input));
     memset(input, 0, sizeof(*input));
-    input->feeder = -1;
     input->source = (struct bx_fd_input)BX_FD_INPUT_INIT;
     input->force_seek = seek_mode == BX_ARCHIVE_CODEC_SEEK_FORCE;
     if (bx_fd_input_init(&input->source, fd, ownership) != 0) {
@@ -553,83 +509,21 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
     }
     fd = input->source.fd;
 
-    {
-        struct stat st;
-
-        if (fstat(fd, &st) == 0
-            && S_ISREG(st.st_mode)
-            && st.st_size >= 0) {
-            input->plain_seekable = true;
-            input->plain_size = (uint64_t)st.st_size;
+    struct stat st;
+    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size >= 0) {
+        off_t offset = lseek(fd, 0, SEEK_CUR);
+        input->detect_all = required_codec == NULL;
+        if (offset >= 0 && offset <= st.st_size) {
+            input->plain_seekable = seek_mode != BX_ARCHIVE_CODEC_SEEK_DISABLE;
+            input->plain_size = (uint64_t)(st.st_size - offset);
         }
-    }
-    if (required_codec == NULL && input->plain_seekable) {
-        required_codec = bx_archive_codec_detect_fd(fd);
-    }
-    if (seek_mode == BX_ARCHIVE_CODEC_SEEK_DISABLE) {
-        input->plain_seekable = false;
     }
     input->required_codec = required_codec;
-
-    if (bx_archive_codec_input_requires_bzip2(input)) {
-        input->kind = BX_ARCHIVE_CODEC_INPUT_BZIP2;
-        input->plain_seekable = false;
-        input->plain_size = 0u;
-        if (!bx_archive_bzip2_reader_open((struct bx_archive_bzip2_reader**)&input->codec_reader, diag)) {
+    if (required_codec == bx_archive_codec_bzip2() || required_codec == bx_archive_codec_xz() || required_codec == bx_archive_codec_zstd()) {
+        if (!bx_archive_codec_input_start_decoder(input, required_codec, diag)) {
             bx_archive_codec_input_close(input);
             return false;
         }
-        *input_out = input;
-        return true;
-    }
-    if (bx_archive_codec_input_requires_xz(input)) {
-        input->kind = BX_ARCHIVE_CODEC_INPUT_XZ;
-        input->plain_seekable = false;
-        input->plain_size = 0u;
-        if (!bx_archive_xz_reader_open((struct bx_archive_xz_reader**)&input->codec_reader, diag)) {
-            bx_archive_codec_input_close(input);
-            return false;
-        }
-        *input_out = input;
-        return true;
-    }
-    if (bx_archive_codec_input_requires_zstd(input)) {
-        input->kind = BX_ARCHIVE_CODEC_INPUT_ZSTD;
-        input->plain_seekable = false;
-        input->plain_size = 0u;
-        if (!bx_archive_zstd_reader_open((struct bx_archive_zstd_reader**)&input->codec_reader, diag)) {
-            bx_archive_codec_input_close(input);
-            return false;
-        }
-        *input_out = input;
-        return true;
-    }
-
-    input->kind = BX_ARCHIVE_CODEC_INPUT_GZIP;
-    if (!S_ISREG(input->source.type)) {
-        int pipefd[2];
-        if (pipe2(pipefd, O_CLOEXEC | O_NONBLOCK) != 0) {
-            bx_diag(diag, "read error: %s", strerror(errno));
-            bx_archive_codec_input_close(input);
-            return false;
-        }
-        fd = pipefd[0];
-        input->feeder = pipefd[1];
-    }
-    input->stream = gzdopen(fd, "rb");
-    if (input->stream == NULL) {
-        if (input->feeder >= 0)
-            close(fd);
-        bx_archive_codec_input_close(input);
-        bx_diag(diag, "failed to initialize archive reader");
-        return false;
-    }
-    if (input->feeder < 0)
-        input->source.fd = -1;
-    if (bx_archive_codec_input_requires_gzip(input) && gzbuffer(input->stream, BX_ARCHIVE_GZIP_STREAM_BUFFER_SIZE) != 0) {
-        bx_archive_codec_input_close(input);
-        bx_diag(diag, "failed to initialize archive reader");
-        return false;
     }
 
     *input_out = input;
@@ -687,7 +581,9 @@ static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* i
             .input_eof = input->source_eof,
         };
         enum bx_archive_decode_result result;
-        if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2)
+        if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP)
+            result = bx_archive_gzip_reader_decode(input->codec_reader, &chunk);
+        else if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2)
             result = bx_archive_bzip2_reader_decode(input->codec_reader, &chunk);
         else if (input->kind == BX_ARCHIVE_CODEC_INPUT_XZ)
             result = bx_archive_xz_reader_decode(input->codec_reader, &chunk);
@@ -732,11 +628,7 @@ static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* i
     return true;
 }
 
-bool bx_archive_codec_input_read_some(struct bx_archive_codec_input* input,
-                                      unsigned char* buffer,
-                                      size_t len,
-                                      size_t* nread_out,
-                                      struct bx_diag_ctx* diag) {
+bool bx_archive_codec_input_read_some(struct bx_archive_codec_input* input, unsigned char* buffer, size_t len, size_t* nread_out, struct bx_diag_ctx* diag) {
     if (len == 0) {
         *nread_out = 0;
         return true;
@@ -746,138 +638,86 @@ bool bx_archive_codec_input_read_some(struct bx_archive_codec_input* input,
         bx_diag(diag, "read error: %s", strerror(errno));
         return false;
     }
-    if (input->kind != BX_ARCHIVE_CODEC_INPUT_GZIP)
+    if (!bx_archive_codec_input_check_mode(input, diag))
+        return false;
+    if (input->kind != BX_ARCHIVE_CODEC_INPUT_PLAIN)
         return bx_archive_codec_input_read_decoded(input, buffer, len, nread_out, diag);
 
-    unsigned int request = len > INT_MAX ? INT_MAX : (unsigned int)len;
-    int nread;
+    if (len > sizeof(input->decode_buffer))
+        len = sizeof(input->decode_buffer);
+    size_t remaining = input->decode_len - input->decode_pos;
+    if (remaining) {
+        *nread_out = remaining > len ? len : remaining;
+        memcpy(buffer, input->decode_buffer + input->decode_pos, *nread_out);
+        input->decode_pos += *nread_out;
+    }
+    else {
+        ssize_t count = input->source_eof ? 0 : bx_fd_input_read(&input->source, buffer, len, bx_archive_temp_signal_fd());
+        if (count < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
+        input->source_eof = count == 0;
+        *nread_out = (size_t)count;
+    }
+    input->logical_offset += *nread_out;
+    return true;
+}
 
-    while (true) {
-        nread = gzread(input->stream, buffer, request);
+static bool bx_archive_codec_input_skip_direct_seek(struct bx_archive_codec_input* input, size_t* len, struct bx_diag_ctx* diag) {
+    if (input->plain_seekable && (input->logical_offset > input->plain_size || *len > input->plain_size - input->logical_offset)) {
+        bx_diag(diag, "truncated archive");
+        return false;
+    }
+    size_t buffered = input->decode_len - input->decode_pos;
+    if (buffered > *len)
+        buffered = *len;
+    input->decode_pos += buffered;
+    input->logical_offset += buffered;
+    *len -= buffered;
+    while (*len) {
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
             bx_diag(diag, "read error: %s", strerror(errno));
             return false;
         }
-        int error;
-        (void)gzerror(input->stream, &error);
-        if (input->source.fd < 0 || error != Z_ERRNO || (errno != EAGAIN && errno != EWOULDBLOCK))
-            break;
-        gzclearerr(input->stream);
-        if (nread > 0)
-            break;
-        if (!bx_archive_codec_input_feed(input, diag))
-            return false;
-    }
-    if (nread < 0) {
-        int errnum = 0;
-        const char* msg = gzerror(input->stream, &errnum);
-
-        if (errnum == Z_ERRNO) {
-            bx_diag(diag, "read error: %s", strerror(errno));
-        }
-        else {
-            bx_diag(diag,
-                    "gzip decompression failed%s%s",
-                    msg != NULL ? ": " : "",
-                    msg != NULL ? msg : "");
-        }
-        return false;
-    }
-
-    if (!bx_archive_codec_input_check_mode(input, diag)) {
-        return false;
-    }
-
-    *nread_out = (size_t)nread;
-    input->logical_offset += (uint64_t)(size_t)nread;
-    return true;
-}
-
-static bool bx_archive_codec_input_skip_direct_seek(struct bx_archive_codec_input* input,
-                                                    size_t len,
-                                                    struct bx_diag_ctx* diag) {
-    while (len > 0u) {
-        size_t chunk = len > (size_t)LONG_MAX ? (size_t)LONG_MAX : len;
-
-        if (input->logical_offset > input->plain_size
-            || chunk > input->plain_size - input->logical_offset) {
-            bx_diag(diag, "truncated archive");
-            return false;
-        }
-        if (gzseek(input->stream, (z_off_t)chunk, SEEK_CUR) < 0) {
-            bx_diag(diag, "read error: %s", strerror(errno));
-            return false;
-        }
-        input->logical_offset += chunk;
-        len -= chunk;
-    }
-
-    return true;
-}
-
-static bool bx_archive_codec_input_try_seek_direct(struct bx_archive_codec_input* input,
-                                                    size_t len,
-                                                    size_t* remaining_out) {
-    if (remaining_out == NULL) {
-        return false;
-    }
-
-    *remaining_out = len;
-    while (len > 0u) {
-        size_t chunk = len > (size_t)LONG_MAX ? (size_t)LONG_MAX : len;
-
-        if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP) {
-            if (gzseek(input->stream, (z_off_t)chunk, SEEK_CUR) < 0) {
-                return false;
+        size_t chunk = *len > (size_t)LONG_MAX ? (size_t)LONG_MAX : *len;
+        if (lseek(input->source.fd, (off_t)chunk, SEEK_CUR) < 0) {
+            if (!input->plain_seekable) {
+                input->force_seek = false;
+                return true;
             }
-        }
-        else {
+            bx_diag(diag, "read error: %s", strerror(errno));
             return false;
         }
         input->logical_offset += chunk;
-        len -= chunk;
-        *remaining_out = len;
+        *len -= chunk;
     }
-
     return true;
 }
 
-bool bx_archive_codec_input_skip(struct bx_archive_codec_input* input,
-                                 size_t len,
-                                 struct bx_diag_ctx* diag) {
+bool bx_archive_codec_input_skip(struct bx_archive_codec_input* input, size_t len, struct bx_diag_ctx* diag) {
     unsigned char buffer[8192];
 
     if (len == 0u) {
         return true;
     }
-    if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP
-        && !bx_archive_codec_input_check_mode(input, diag)) {
+    if (bx_archive_temp_pending_signal()) {
+        errno = EINTR;
+        bx_diag(diag, "read error: %s", strerror(errno));
         return false;
     }
-    if (input->force_seek && !input->plain_seekable && input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP && input->direct_mode) {
-        size_t remaining = len;
-
-        if (bx_archive_codec_input_try_seek_direct(input, len, &remaining)) {
-            return true;
-        }
-        input->force_seek = false;
-        len = remaining;
-    }
-    if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP
-        && input->direct_mode
-        && input->plain_seekable) {
-        return bx_archive_codec_input_skip_direct_seek(input, len, diag);
+    if (!bx_archive_codec_input_check_mode(input, diag))
+        return false;
+    if (input->kind == BX_ARCHIVE_CODEC_INPUT_PLAIN && (input->plain_seekable || input->force_seek)) {
+        if (!bx_archive_codec_input_skip_direct_seek(input, &len, diag))
+            return false;
     }
 
     while (len > 0u) {
         size_t nread = 0u;
 
-        if (!bx_archive_codec_input_read_some(input,
-                                             buffer,
-                                             len > sizeof(buffer) ? sizeof(buffer) : len,
-                                             &nread,
-                                             diag)) {
+        if (!bx_archive_codec_input_read_some(input, buffer, len > sizeof(buffer) ? sizeof(buffer) : len, &nread, diag)) {
             return false;
         }
         if (nread == 0u) {
@@ -906,18 +746,30 @@ static bool bx_archive_codec_input_drain_to_eof(struct bx_archive_codec_input* i
     }
 }
 
-bool bx_archive_codec_input_finish_success(struct bx_archive_codec_input* input,
-                                           struct bx_diag_ctx* diag) {
-    if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP
-        && !bx_archive_codec_input_check_mode(input, diag)) {
+bool bx_archive_codec_input_finish_success(struct bx_archive_codec_input* input, struct bx_diag_ctx* diag) {
+    if (bx_archive_temp_pending_signal()) {
+        errno = EINTR;
+        bx_diag(diag, "read error: %s", strerror(errno));
         return false;
     }
-    if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP
-        && input->direct_mode
-        && input->plain_seekable) {
+    if (!bx_archive_codec_input_check_mode(input, diag))
+        return false;
+    if (input->kind == BX_ARCHIVE_CODEC_INPUT_PLAIN && input->plain_seekable)
         return true;
+    if (!bx_archive_codec_input_drain_to_eof(input, diag))
+        return false;
+    /* Gzip permits trailing non-member bytes, but finish still observes source
+     * EOF and cancellation through the common input owner. */
+    unsigned char discard[8192];
+    while (!input->source_eof) {
+        ssize_t count = bx_fd_input_read(&input->source, discard, sizeof(discard), bx_archive_temp_signal_fd());
+        if (count < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
+        input->source_eof = count == 0;
     }
-    return bx_archive_codec_input_drain_to_eof(input, diag);
+    return true;
 }
 
 uint64_t bx_archive_codec_input_total_bytes_read(const struct bx_archive_codec_input* input) {
@@ -937,10 +789,9 @@ void bx_archive_codec_input_close(struct bx_archive_codec_input* input) {
     else if (input->kind == BX_ARCHIVE_CODEC_INPUT_ZSTD) {
         bx_archive_zstd_reader_close((struct bx_archive_zstd_reader*)input->codec_reader);
     }
-    else if (input->stream != NULL) {
-        gzclose(input->stream);
+    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP) {
+        bx_archive_gzip_reader_close(input->codec_reader);
     }
     bx_fd_input_close(&input->source);
-    bx_fd_cleanup(&input->feeder);
     free(input);
 }

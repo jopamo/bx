@@ -5,6 +5,12 @@
 #include <stddef.h>
 
 #include "applets/archive/archive_common.h"
+#include "applets/archive/archive_decode.h"
+
+struct bx_archive_gzip_reader;
+bool bx_archive_gzip_reader_open(struct bx_archive_gzip_reader** reader_out, struct bx_diag_ctx* diag);
+enum bx_archive_decode_result bx_archive_gzip_reader_decode(struct bx_archive_gzip_reader* reader, struct bx_archive_decode_chunk* chunk);
+void bx_archive_gzip_reader_close(struct bx_archive_gzip_reader* reader);
 
 struct bx_archive_gzip_stream_sink {
     void* user;

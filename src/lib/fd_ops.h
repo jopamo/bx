@@ -92,6 +92,8 @@ int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownersh
  * Readiness is never followed by a potentially blocking shared-stream read.
  * Regular-file reads do not promise bounded storage latency. */
 ssize_t bx_fd_input_read(struct bx_fd_input* input, void* data, size_t len, int cancel_fd);
+/* Storage-only, without changing the shared file offset. */
+ssize_t bx_fd_input_pread(struct bx_fd_input* input, void* data, size_t len, off_t offset, int cancel_fd);
 void bx_fd_input_close(struct bx_fd_input* input);
 
 /* Non-follow constructors/checks. These force the non-follow bit at the

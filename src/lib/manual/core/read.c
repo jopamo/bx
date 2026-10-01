@@ -572,8 +572,11 @@ read_whole_file(struct mparse *curp, int fd, const char *filename,
 	}
 
 	codec = filename_compression_codec(filename);
-	if (codec == NULL && S_ISREG(st.st_mode))
-		codec = bx_archive_codec_detect_fd(fd);
+	if (codec == NULL && S_ISREG(st.st_mode) &&
+	    !bx_archive_codec_detect_fd(fd, &codec)) {
+		mandoc_msg(MANDOCERR_READ, 0, 0, "%s", strerror(errno));
+		return -1;
+	}
 	if (codec != NULL) {
 		*with_mmap = 0;
 		return read_compressed_file(fd, codec, fb);
