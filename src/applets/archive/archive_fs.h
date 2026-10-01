@@ -72,6 +72,7 @@ struct bx_archive_pending_metadata_entry {
     ptrdiff_t depth;
     uint64_t order;
     uint64_t origin;
+    bool alias;
 };
 
 struct bx_archive_pending_metadata {
@@ -130,6 +131,12 @@ bool bx_archive_pending_metadata_record_fd(struct bx_archive_pending_metadata* d
                                            const struct bx_file_restore* restore,
                                            uint64_t order,
                                            uint64_t origin);
+/* Register another locator for a deferred regular inode, without replaying
+ * the alias header's metadata. Shares the snapshot count/byte bounds. */
+bool bx_archive_pending_metadata_record_alias_fd(struct bx_archive_pending_metadata* dirs,
+                                                 int fd, const char* path,
+                                                 size_t boundary_prefix,
+                                                 uint64_t origin);
 bool bx_archive_pending_metadata_apply(struct bx_archive_pending_metadata* dirs, int root_fd, struct bx_diag_ctx* diag);
 bool bx_archive_restore_fd(const struct bx_file_restore* restore, int fd,
                             const char* path, bool symlink, bool directory,

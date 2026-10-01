@@ -1534,6 +1534,11 @@ static bool bx_tar_extract_resolve_links(struct bx_tar_extract_state* state, str
                             else
                                 ok = bx_archive_restore_leaf(&link->restore, parent, leaf, &linked, link->path, diag);
                         }
+                        else if (ok && state->options->metadata.file_flags && S_ISREG(linked.st_mode)) {
+                            ok = bx_archive_pending_metadata_record_alias_fd(&state->dirs, fd, link->path, link->boundary_prefix, origin);
+                            if (!ok)
+                                bx_diag(diag, "%s: cannot defer metadata: %s", link->path, strerror(errno));
+                        }
                         if (ok && link->sequence > sequence)
                             ok = bx_inode_ledger_record(&state->restored, &linked, link->sequence, origin, 1048576u);
                         if (fd >= 0 && !bx_fd_close(&fd, link->path, diag))
