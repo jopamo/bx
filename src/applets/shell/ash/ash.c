@@ -1472,6 +1472,33 @@ static enum ash_command_build_result ash_ast_simple_to_command(
     ash_command_init(command);
     for (size_t i = 0u; i < node->value.simple.count; i++) {
         const struct ash_simple_item* item = &node->value.simple.items[i];
+        if (item->kind != ASH_SIMPLE_WORD) {
+            continue;
+        }
+        struct ash_expanded_fields fields;
+        if (!ash_expand_argument(
+                shell,
+                &item->value.word.syntax,
+                &fields
+            )) {
+            ash_command_destroy(command);
+            return ASH_COMMAND_BUILD_SHELL_ERROR;
+        }
+        for (size_t j = 0u; j < fields.count; j++) {
+            if (!ash_command_push_word(
+                    shell,
+                    command,
+                    fields.values[j]
+                )) {
+                ash_expanded_fields_destroy(&fields);
+                ash_command_destroy(command);
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
+            }
+        }
+        ash_expanded_fields_destroy(&fields);
+    }
+    for (size_t i = 0u; i < node->value.simple.count; i++) {
+        const struct ash_simple_item* item = &node->value.simple.items[i];
         if (item->kind == ASH_SIMPLE_REDIRECTION) {
             enum ash_command_build_result result =
                 ash_ast_add_redirection(
@@ -1506,29 +1533,6 @@ static enum ash_command_build_result ash_ast_simple_to_command(
                 ash_command_destroy(command);
                 return ASH_COMMAND_BUILD_SHELL_ERROR;
             }
-        }
-        else {
-            struct ash_expanded_fields fields;
-            if (!ash_expand_argument(
-                    shell,
-                    &item->value.word.syntax,
-                    &fields
-                )) {
-                ash_command_destroy(command);
-                return ASH_COMMAND_BUILD_SHELL_ERROR;
-            }
-            for (size_t j = 0u; j < fields.count; j++) {
-                if (!ash_command_push_word(
-                        shell,
-                        command,
-                        fields.values[j]
-                    )) {
-                    ash_expanded_fields_destroy(&fields);
-                    ash_command_destroy(command);
-                    return ASH_COMMAND_BUILD_SHELL_ERROR;
-                }
-            }
-            ash_expanded_fields_destroy(&fields);
         }
     }
     return ASH_COMMAND_BUILD_OK;
