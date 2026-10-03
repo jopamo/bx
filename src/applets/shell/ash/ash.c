@@ -565,20 +565,76 @@ static int ash_builtin_umask(struct ash_shell* shell, const struct ash_command* 
 }
 
 static int ash_builtin_pwd(struct ash_shell* shell, const struct ash_command* command) {
-    if (command->word_count > 1u) {
-        ash_diag(shell, "pwd: extra operand '%s'", command->words[1]);
-        return 1;
+    bool physical = false;
+    bool publish_pwd = false;
+    for (size_t i = 1u; i < command->word_count; i++) {
+        const char* argument = command->words[i];
+        if (strcmp(argument, "--") == 0) {
+            break;
+        }
+        if (argument[0] != '-' || argument[1] == '\0') {
+            break;
+        }
+        for (size_t j = 1u; argument[j] != '\0'; j++) {
+            if (argument[j] == 'P') {
+                physical = true;
+                publish_pwd = true;
+            }
+            else if (argument[j] == 'L') {
+                physical = false;
+            }
+            else {
+                ash_diag(shell, "pwd: -%c: invalid option", argument[j]);
+                fprintf(stderr, "pwd: usage: pwd [-LP]\n");
+                return 2;
+            }
+        }
     }
 
-    char* cwd = ash_getcwd_dup();
-    if (cwd == NULL) {
-        ash_exec_error(shell, "pwd", errno);
-        return 1;
+    bool posix = ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX);
+    bool stale = shell->cwd.logical == NULL;
+    if (!stale && posix) {
+        struct stat current;
+        struct stat logical;
+        stale = stat(".", &current) != 0 || stat(shell->cwd.logical, &logical) != 0 || current.st_dev != logical.st_dev || current.st_ino != logical.st_ino;
     }
 
-    printf("%s\n", cwd);
+    char* cwd = NULL;
+    const char* directory = shell->cwd.logical;
+    if (physical || stale) {
+        cwd = ash_getcwd_dup();
+        if (cwd == NULL) {
+            fprintf(stderr, "pwd: error retrieving current directory: getcwd: cannot access parent directories: %s\n", strerror(errno));
+            return 1;
+        }
+        directory = cwd;
+        if (stale) {
+            char* new_physical = ash_strdup_text(shell, cwd);
+            char* new_logical = ash_strdup_text(shell, cwd);
+            if (new_physical == NULL || new_logical == NULL) {
+                free(new_physical);
+                free(new_logical);
+                free(cwd);
+                return 1;
+            }
+            free(shell->cwd.physical);
+            free(shell->cwd.logical);
+            shell->cwd.physical = new_physical;
+            shell->cwd.logical = new_logical;
+        }
+    }
+
+    int status = 0;
+    if (posix && publish_pwd && !ash_var_set_caller(shell, "PWD", directory, false)) {
+        status = 1;
+    }
+    if (printf("%s\n", directory) < 0 || fflush(stdout) != 0) {
+        ash_diag(shell, "pwd: write error: %s", strerror(errno));
+        clearerr(stdout);
+        status = 1;
+    }
     free(cwd);
-    return 0;
+    return status;
 }
 
 static int ash_builtin_exec(struct ash_shell* shell, const struct ash_command* command) {
