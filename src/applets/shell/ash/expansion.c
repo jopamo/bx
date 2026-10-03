@@ -557,6 +557,26 @@ static bool ash_append_pattern_component(
     );
 }
 
+static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern) {
+    for (size_t i = 0u; i < word->count; i++) {
+        const struct ash_word_part* part = &word->parts[i];
+        struct bx_text_buffer component;
+        bx_text_buffer_init(&component);
+        if (!ash_expand_part(shell, part, &component)) {
+            bx_text_buffer_destroy(&component);
+            return false;
+        }
+
+        bool appended = (value == NULL || ash_expansion_append_span(shell, value, component.data, component.length)) &&
+                        (pattern == NULL || ash_append_pattern_component(shell, pattern, &component, ash_word_part_is_quoted(part)));
+        bx_text_buffer_destroy(&component);
+        if (!appended) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ash_expand(
     struct ash_shell* shell,
     const struct ash_word* word,
@@ -566,37 +586,13 @@ bool ash_expand(
     *output_word = NULL;
     struct bx_text_buffer output;
     bx_text_buffer_init(&output);
-
-    for (size_t i = 0u; i < word->count; i++) {
-        const struct ash_word_part* part = &word->parts[i];
-        struct bx_text_buffer component;
-        bx_text_buffer_init(&component);
-        if (!ash_expand_part(shell, part, &component)) {
-            bx_text_buffer_destroy(&component);
-            bx_text_buffer_destroy(&output);
-            return false;
-        }
-
-        bool appended = context == ASH_EXPANSION_PATTERN ?
-            ash_append_pattern_component(
-                shell,
-                &output,
-                &component,
-                ash_word_part_is_quoted(part)
-            ) :
-            ash_expansion_append_span(
-                shell,
-                &output,
-                component.data,
-                component.length
-            );
-        bx_text_buffer_destroy(&component);
-        if (!appended) {
-            bx_text_buffer_destroy(&output);
-            return false;
-        }
+    bool pattern = context == ASH_EXPANSION_PATTERN;
+    if (!ash_expand_buffers(
+            shell, word, pattern ? NULL : &output, pattern ? &output : NULL
+        )) {
+        bx_text_buffer_destroy(&output);
+        return false;
     }
-
     *output_word = bx_text_buffer_take(&output);
     if (*output_word == NULL) {
         bx_text_buffer_destroy(&output);
@@ -918,27 +914,34 @@ enum ash_redirection_expansion_result ash_expand_redirection(
     char** output
 ) {
     *output = NULL;
-    char* value = NULL;
-    if (!ash_expand_word(shell, word, &value)) {
-        return ASH_REDIRECTION_EXPANSION_ERROR;
-    }
-    if (!ash_pathname_expansion_enabled(shell) ||
-        !ash_word_may_expand_pathname(word)) {
-        *output = value;
-        return ASH_REDIRECTION_EXPANSION_OK;
-    }
-
-    char* pattern = NULL;
-    if (!ash_expand(
+    bool needs_pattern = ash_pathname_expansion_enabled(shell) &&
+        ash_word_may_expand_pathname(word);
+    struct bx_text_buffer value_buffer;
+    struct bx_text_buffer pattern_buffer;
+    bx_text_buffer_init(&value_buffer);
+    bx_text_buffer_init(&pattern_buffer);
+    if (!ash_expand_buffers(
             shell,
             word,
-            ASH_EXPANSION_PATTERN,
-            &pattern
+            &value_buffer,
+            needs_pattern ? &pattern_buffer : NULL
         )) {
-        free(value);
+        bx_text_buffer_destroy(&value_buffer);
+        bx_text_buffer_destroy(&pattern_buffer);
         return ASH_REDIRECTION_EXPANSION_ERROR;
     }
-    if (!ash_pathname_pattern_may_expand(pattern)) {
+    char* value = bx_text_buffer_take(&value_buffer);
+    char* pattern = value != NULL && needs_pattern ?
+        bx_text_buffer_take(&pattern_buffer) : NULL;
+    if (value == NULL || (needs_pattern && pattern == NULL)) {
+        free(value);
+        free(pattern);
+        bx_text_buffer_destroy(&value_buffer);
+        bx_text_buffer_destroy(&pattern_buffer);
+        (void)ash_expansion_oom(shell);
+        return ASH_REDIRECTION_EXPANSION_ERROR;
+    }
+    if (!needs_pattern || !ash_pathname_pattern_may_expand(pattern)) {
         free(pattern);
         *output = value;
         return ASH_REDIRECTION_EXPANSION_OK;
