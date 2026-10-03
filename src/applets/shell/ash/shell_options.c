@@ -134,6 +134,14 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
+        "pipefail",
+        ASH_SHELL_OPTION_PIPEFAIL,
+        ASH_SHELL_OPTION_USE_INVOCATION_NAME | ASH_SHELL_OPTION_USE_SET_NAME,
+        '\0',
+        ASH_OPTION_STATE_STORED,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
+    {
         "verbose",
         ASH_SHELL_OPTION_VERBOSE,
         ASH_OPTION_INVOCATION_AND_SET,
@@ -248,7 +256,8 @@ enum ash_shell_option_result ash_shell_option_apply_letter(
          i < sizeof(ash_shell_options) /
              sizeof(ash_shell_options[0]);
          i++) {
-        if (ash_shell_options[i].letter == letter) {
+        if (ash_shell_options[i].letter != '\0' &&
+            ash_shell_options[i].letter == letter) {
             return ash_shell_option_apply(
                 options,
                 &ash_shell_options[i],
@@ -318,7 +327,8 @@ void ash_shell_options_format_letters(
                 enabled = privileged;
                 break;
         }
-        if (enabled && length + 1u < output_size) {
+        if (enabled && ash_shell_options[i].letter != '\0' &&
+            length + 1u < output_size) {
             output[length++] = ash_shell_options[i].letter;
         }
     }

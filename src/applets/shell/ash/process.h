@@ -79,6 +79,8 @@ struct ash_job {
     enum ash_job_state state;
     enum ash_job_visibility visibility;
     bool foreground;
+    /* Pipeline result policy captured before launching any member. */
+    bool pipefail;
     pid_t process_group;
     struct ash_process* processes;
     size_t process_count;

@@ -157,6 +157,7 @@ bool ash_jobs_invariants(const struct ash_shell* shell) {
         if (job->owner != shell ||
             !ash_job_kind_valid(job->kind) ||
             !ash_job_foreground_valid(job->kind, job->foreground) ||
+            (job->pipefail && job->kind != ASH_JOB_PIPELINE) ||
             job->state < ASH_JOB_PREPARING ||
             job->state > ASH_JOB_COMPLETED ||
             (job->visibility != ASH_JOB_PRIVATE &&
@@ -287,6 +288,8 @@ struct ash_job* ash_job_create(
         .state = ASH_JOB_PREPARING,
         .visibility = ASH_JOB_PRIVATE,
         .foreground = foreground,
+        .pipefail = kind == ASH_JOB_PIPELINE &&
+            (shell->options & ASH_SHELL_OPTION_PIPEFAIL) != 0u,
     };
     shell->jobs = job;
     assert(ash_jobs_invariants(shell));
@@ -557,6 +560,17 @@ int ash_job_wait(struct ash_job* job, int* exit_status) {
     *exit_status = ash_child_exit_status(
         &job->processes[job->status_process].child
     );
+    if (job->pipefail) {
+        for (size_t i = job->process_count; i != 0u; i--) {
+            int status = ash_child_exit_status(
+                &job->processes[i - 1u].child
+            );
+            if (status != 0) {
+                *exit_status = status;
+                break;
+            }
+        }
+    }
     return 0;
 }
 
