@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
 
@@ -35,6 +36,8 @@ bool bx_archive_buffer_append(struct bx_archive_buffer* buffer, const void* data
 bool bx_archive_buffer_append_byte(struct bx_archive_buffer* buffer, unsigned char value);
 bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len);
 bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
+/* Append up to limit bytes without probing beyond it; copied excludes existing storage. */
+bool bx_archive_buffer_read_at_most(int fd, struct bx_archive_buffer* buffer, uintmax_t limit, uintmax_t* copied, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_has_gzip_magic(const struct bx_archive_buffer* buffer);
 

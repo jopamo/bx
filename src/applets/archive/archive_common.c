@@ -89,22 +89,25 @@ bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len
     return true;
 }
 
-bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
+bool bx_archive_buffer_read_at_most(int fd, struct bx_archive_buffer* buffer, uintmax_t limit, uintmax_t* copied, struct bx_diag_ctx* diag) {
     unsigned char chunk[8192];
     struct bx_fd_input input = BX_FD_INPUT_INIT;
     bool ok = false;
+    *copied = 0;
     if (bx_fd_input_init(&input, fd, BX_FD_INPUT_BORROWED) != 0) {
         bx_diag(diag, "read error: %s", strerror(errno));
         return false;
     }
 
-    while (true) {
+    while (*copied < limit) {
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
             bx_diag(diag, "read error: %s", strerror(errno));
             break;
         }
-        ssize_t nread = bx_fd_input_read(&input, chunk, sizeof(chunk), bx_archive_temp_signal_fd());
+        uintmax_t remaining = limit - *copied;
+        size_t length = remaining < sizeof(chunk) ? (size_t)remaining : sizeof(chunk);
+        ssize_t nread = bx_fd_input_read(&input, chunk, length, bx_archive_temp_signal_fd());
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
             nread = -1;
@@ -117,13 +120,25 @@ bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct
             bx_diag(diag, "buffer growth failed: %s", strerror(errno));
             break;
         }
+        *copied += (uintmax_t)nread;
         if (nread == 0) {
             ok = true;
             break;
         }
     }
+    if (*copied == limit) {
+        if (bx_archive_temp_pending_signal())
+            bx_diag(diag, "read error: %s", strerror(EINTR));
+        else
+            ok = true;
+    }
     bx_fd_input_close(&input);
     return ok;
+}
+
+bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
+    uintmax_t copied;
+    return bx_archive_buffer_read_at_most(fd, buffer, UINTMAX_MAX, &copied, diag);
 }
 
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
