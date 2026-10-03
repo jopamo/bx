@@ -128,3 +128,7 @@ const char* ash_shell_policy_bash_version(
     }
     return ash_bash_baseline_version;
 }
+
+bool ash_shell_policy_fatal_special_builtin_errors(const struct ash_shell_policy* policy) {
+    return ash_shell_policy_valid(policy) && ash_shell_policy_has(policy, ASH_SHELL_POLICY_POSIX) && !ash_shell_policy_has(policy, ASH_SHELL_POLICY_INTERACTIVE);
+}
