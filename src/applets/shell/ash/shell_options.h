@@ -37,6 +37,7 @@ enum ash_shell_option_result {
 };
 
 bool ash_shell_options_valid(uint32_t options);
+bool ash_shell_options_noexec(uint32_t options, bool interactive);
 bool ash_shell_options_valid_for_personality(
     uint32_t options,
     enum ash_shell_personality personality

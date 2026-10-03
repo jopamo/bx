@@ -118,13 +118,7 @@ static struct ash_input_unit_result ash_input_execute_buffer(
     }
 
     ash_shell_context_end_parse(shell);
-    bool noexec =
-        (shell->options & ASH_SHELL_OPTION_NOEXEC) != 0u &&
-        !ash_shell_policy_has(
-            &shell->policy,
-            ASH_SHELL_POLICY_INTERACTIVE
-        );
-    int status = noexec ? 0 : ash_execute_ast(shell, program);
+    int status = ash_execute_ast(shell, program);
     shell->last_status = status;
     ash_ast_destroy(program);
     return (struct ash_input_unit_result){

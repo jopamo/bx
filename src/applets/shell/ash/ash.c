@@ -1803,12 +1803,24 @@ static int ash_execute_ast_pipeline(
     return node->value.pipeline.negated ? (status == 0 ? 1 : 0) : status;
 }
 
+static bool ash_execution_suppressed(const struct ash_shell* shell) {
+    return ash_shell_options_noexec(
+        shell->options,
+        ash_shell_policy_has(
+            &shell->policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        )
+    );
+}
+
 static int ash_execute_ast_and_or(
     struct ash_shell* shell,
     const struct ash_ast* node
 ) {
     int status = shell->last_status;
-    for (size_t i = 0u; i < node->value.and_or.count; i++) {
+    for (size_t i = 0u;
+         i < node->value.and_or.count && !ash_execution_suppressed(shell);
+         i++) {
         if (i != 0u) {
             enum ash_and_or_operator operator =
                 node->value.and_or.operators[i - 1u];
@@ -1893,7 +1905,9 @@ static int ash_execute_ast_list(
     const struct ash_ast* node
 ) {
     int status = shell->last_status;
-    for (size_t i = 0u; i < node->value.list.count; i++) {
+    for (size_t i = 0u;
+         i < node->value.list.count && !ash_execution_suppressed(shell);
+         i++) {
         const struct ash_list_entry* entry = &node->value.list.entries[i];
         status = entry->asynchronous ?
             ash_execute_ast_async(shell, entry->command) :
@@ -1929,9 +1943,9 @@ static int ash_execute_ast_loop(
 ) {
     int status = 0;
     ash_control_enter_loop(shell);
-    while (!shell->should_exit) {
+    while (!shell->should_exit && !ash_execution_suppressed(shell)) {
         int condition = ash_execute_ast(shell, node->value.loop.condition);
-        if (shell->should_exit) {
+        if (shell->should_exit || ash_execution_suppressed(shell)) {
             break;
         }
         if (ash_control_pending(shell)) {
@@ -1967,7 +1981,8 @@ static int ash_execute_ast_for(
     ash_control_enter_loop(shell);
     if (node->value.for_loop.explicit_words) {
         for (size_t i = 0u;
-             i < node->value.for_loop.word_count && !shell->should_exit;
+             i < node->value.for_loop.word_count && !shell->should_exit &&
+                 !ash_execution_suppressed(shell);
              i++) {
             struct ash_expanded_fields fields;
             if (!ash_expand_argument(
@@ -1980,7 +1995,8 @@ static int ash_execute_ast_for(
             }
             bool stop = false;
             for (size_t j = 0u;
-                 j < fields.count && !shell->should_exit;
+                 j < fields.count && !shell->should_exit &&
+                     !ash_execution_suppressed(shell);
                  j++) {
                 if (!ash_var_set(
                         shell,
@@ -2017,7 +2033,8 @@ static int ash_execute_ast_for(
         size_t positional_count = positionals != NULL ?
             positionals->count : 0u;
         for (size_t i = 0u;
-             i < positional_count && !shell->should_exit;
+             i < positional_count && !shell->should_exit &&
+                 !ash_execution_suppressed(shell);
              i++) {
             if (!ash_var_set(
                     shell,
@@ -2148,6 +2165,9 @@ static int ash_execute_ast_function(
 
 int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     ash_shell_context_assert_invariants(shell);
+    if (ash_execution_suppressed(shell)) {
+        return 0;
+    }
     struct ash_execution_location_guard location_guard = {0};
     ash_execution_location_enter(
         shell,

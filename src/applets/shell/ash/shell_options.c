@@ -96,8 +96,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
     {
         "noexec",
         ASH_SHELL_OPTION_NOEXEC,
-        ASH_SHELL_OPTION_USE_INVOCATION_SHORT |
-            ASH_SHELL_OPTION_USE_INVOCATION_NAME,
+        ASH_OPTION_INVOCATION_AND_SET,
         'n',
         ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
@@ -180,6 +179,10 @@ static uint32_t ash_shell_option_personality_mask(
 
 bool ash_shell_options_valid(uint32_t options) {
     return (options & ~ASH_SHELL_OPTION_ALL) == 0u;
+}
+
+bool ash_shell_options_noexec(uint32_t options, bool interactive) {
+    return (options & ASH_SHELL_OPTION_NOEXEC) != 0u && !interactive;
 }
 
 bool ash_shell_options_valid_for_personality(
