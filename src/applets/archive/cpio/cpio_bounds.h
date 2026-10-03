@@ -13,6 +13,28 @@ struct bx_cpio_member_bounds {
     size_t next_offset;
 };
 
+static inline bool bx_cpio_parse_number(const unsigned char* field, size_t width, unsigned int bits, uintmax_t* out) {
+    uintmax_t value = 0;
+    if (!field || !width || !out || (bits != 3 && bits != 4))
+        return false;
+    for (size_t i = 0; i < width; i++) {
+        unsigned char ch = field[i];
+        unsigned int digit;
+        if (ch >= '0' && ch <= '9')
+            digit = ch - '0';
+        else if (ch >= 'a' && ch <= 'f')
+            digit = 10u + ch - 'a';
+        else if (ch >= 'A' && ch <= 'F')
+            digit = 10u + ch - 'A';
+        else
+            return false;
+        if (digit >= (1u << bits) || !bx_checked_uintmax_mul(value, 1u << bits, &value) || !bx_checked_uintmax_add(value, digit, &value))
+            return false;
+    }
+    *out = value;
+    return true;
+}
+
 static inline bool bx_cpio_metadata_budget(size_t count, size_t bytes, size_t extra, size_t count_limit, size_t byte_limit, size_t* next_bytes) {
     return count < count_limit && bytes <= byte_limit && extra <= byte_limit - bytes && bx_checked_size_add(bytes, extra, next_bytes);
 }
