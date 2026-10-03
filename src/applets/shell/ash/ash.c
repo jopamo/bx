@@ -278,6 +278,24 @@ static char* ash_getcwd_dup(void) {
     }
 }
 
+static char* ash_physical_directory_dup(const char* path) {
+    char* physical = bx_path_realpath_dup(path);
+    if (physical == NULL || physical[0] != '/' || physical[1] == '/' || path[0] != '/' || path[1] != '/' || path[2] == '/') {
+        return physical;
+    }
+    struct bx_text_buffer doubled;
+    bx_text_buffer_init(&doubled);
+    if (!bx_text_buffer_append_char(&doubled, '/') || !bx_text_buffer_append_text(&doubled, physical)) {
+        int error = errno;
+        bx_text_buffer_destroy(&doubled);
+        free(physical);
+        errno = error;
+        return NULL;
+    }
+    free(physical);
+    return bx_text_buffer_take(&doubled);
+}
+
 static int ash_apply_command_assignments_shell(struct ash_shell* shell, const struct ash_command* command, bool force_export) {
     for (size_t i = 0; i < command->assignment_count; i++) {
         size_t name_len = 0;
@@ -344,15 +362,44 @@ static int ash_apply_command_assignments_env(struct ash_shell* shell, const stru
 }
 
 static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* command) {
-    if (command->word_count > 2u) {
+    bool physical_mode = false;
+    bool fail_getcwd = false;
+    size_t operand = 1u;
+    for (; operand < command->word_count; operand++) {
+        const char* argument = command->words[operand];
+        if (strcmp(argument, "--") == 0) {
+            operand++;
+            break;
+        }
+        if (argument[0] != '-' || argument[1] == '\0') {
+            break;
+        }
+        for (size_t j = 1u; argument[j] != '\0'; j++) {
+            if (argument[j] == 'P') {
+                physical_mode = true;
+            }
+            else if (argument[j] == 'L') {
+                physical_mode = false;
+            }
+            else if (argument[j] == 'e') {
+                fail_getcwd = true;
+            }
+            else {
+                ash_diag(shell, "cd: -%c: invalid option", argument[j]);
+                fprintf(stderr, "cd: usage: cd [-L|[-P [-e]]] [-@] [dir]\n");
+                return 2;
+            }
+        }
+    }
+    if (command->word_count - operand > 1u) {
         ash_diag(shell, "cd: too many arguments");
-        return 1;
+        return 2;
     }
 
     const char* target = NULL;
     bool print_new_dir = false;
 
-    if (command->word_count == 1u) {
+    if (operand == command->word_count) {
         target = ash_var_get(shell, "HOME");
         if (target == NULL) {
             ash_diag(shell, "cd: HOME not set");
@@ -360,7 +407,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         }
     }
     else {
-        target = command->words[1];
+        target = command->words[operand];
         if (strcmp(target, "-") == 0) {
             target = ash_var_get(shell, "OLDPWD");
             if (target == NULL) {
@@ -395,22 +442,22 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
             ash_diag_oom(shell);
             goto done;
         }
-        logical = bx_path_normalize_directory_dup(absolute.data);
+        logical = physical_mode ? ash_physical_directory_dup(absolute.data) : bx_path_normalize_directory_dup(absolute.data);
         if (logical == NULL) {
             if (errno == ENOMEM) {
                 ash_diag_oom(shell);
                 goto done;
             }
-            if (ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX)) {
+            if (!physical_mode && ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX)) {
                 ash_exec_error(shell, target, errno);
                 goto done;
             }
         }
     }
 
-    if (chdir(logical != NULL ? logical : target) != 0) {
+    if (chdir(!physical_mode && logical != NULL ? logical : target) != 0) {
         int error = errno;
-        if (logical == NULL || ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX) || chdir(target) != 0) {
+        if (physical_mode || logical == NULL || ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX) || chdir(target) != 0) {
             ash_exec_error(shell, target, error);
             goto done;
         }
@@ -431,6 +478,15 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         else if (errno == ENOMEM) {
             ash_diag_oom(shell);
             status = 1;
+        }
+        else {
+            fprintf(stderr, "cd: error retrieving current directory: getcwd: cannot access parent directories: %s\n", strerror(errno));
+            if (absolute.data != NULL) {
+                logical = bx_text_buffer_take(&absolute);
+            }
+            if (physical_mode && fail_getcwd) {
+                status = 1;
+            }
         }
     }
     free(shell->cwd.physical);
@@ -625,24 +681,12 @@ static int ash_builtin_pwd(struct ash_shell* shell, const struct ash_command* co
     char* cwd = NULL;
     const char* directory = shell->cwd.logical;
     if (physical && !stale) {
-        cwd = bx_path_realpath_dup(shell->cwd.logical);
+        cwd = ash_physical_directory_dup(shell->cwd.logical);
         if (cwd == NULL && errno == ENOMEM) {
             ash_diag_oom(shell);
             return 1;
         }
         stale = cwd == NULL;
-        if (cwd != NULL && cwd[0] == '/' && cwd[1] != '/' && shell->cwd.logical[0] == '/' && shell->cwd.logical[1] == '/' && shell->cwd.logical[2] != '/') {
-            struct bx_text_buffer doubled;
-            bx_text_buffer_init(&doubled);
-            if (!bx_text_buffer_append_char(&doubled, '/') || !bx_text_buffer_append_text(&doubled, cwd)) {
-                bx_text_buffer_destroy(&doubled);
-                free(cwd);
-                ash_diag_oom(shell);
-                return 1;
-            }
-            free(cwd);
-            cwd = bx_text_buffer_take(&doubled);
-        }
     }
     if (physical || stale) {
         if (stale) {
