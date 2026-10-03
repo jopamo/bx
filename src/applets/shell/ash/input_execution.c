@@ -204,7 +204,7 @@ static int ash_input_execute_current(
     bx_text_buffer_init(&physical_line);
     struct ash_source_location pending_origin = {0};
 
-    while (!shell->should_exit) {
+    while (!shell->should_exit && !ash_control_pending(shell)) {
         bool awaiting_more_input = logical_input.length != 0u;
         if (prompt && !awaiting_more_input) {
             const char* prompt_command = ash_var_get(
@@ -324,6 +324,9 @@ static int ash_input_execute_current(
 
     bx_text_buffer_destroy(&physical_line);
     bx_text_buffer_destroy(&logical_input);
+    if (ash_input_source_kind(shell) == ASH_INPUT_SOURCED_FILE) {
+        (void)ash_control_consume_return(shell, &status);
+    }
     return status;
 }
 

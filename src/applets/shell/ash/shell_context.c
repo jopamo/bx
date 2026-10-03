@@ -120,7 +120,8 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
          lexer->source_identity == shell->input_stack->identity);
 }
 
-static bool ash_control_invariants(const struct ash_control_state* control) {
+static bool ash_control_invariants(const struct ash_shell* shell) {
+    const struct ash_control_state* control = &shell->control;
     if (control->pending < ASH_CONTROL_NONE ||
         control->pending > ASH_CONTROL_DISCARD_UNIT) {
         return false;
@@ -134,7 +135,7 @@ static bool ash_control_invariants(const struct ash_control_state* control) {
                 control->remaining_levels <= control->loop_depth;
         case ASH_CONTROL_RETURN:
             return control->remaining_levels == 0u &&
-                control->function_depth != 0u;
+                ash_control_return_allowed(shell);
         case ASH_CONTROL_DISCARD_UNIT:
             return control->remaining_levels == 0u &&
                 control->status > 0 && control->status <= 255;
@@ -207,7 +208,7 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
         ash_parser_state_invariants(shell) &&
         bx_fd_transaction_stack_invariants(&shell->redirections) &&
         ash_jobs_invariants(shell) &&
-        ash_control_invariants(&shell->control) &&
+        ash_control_invariants(shell) &&
         ash_function_scope_count(shell) ==
             shell->control.function_depth &&
         ash_execution_function_count(shell) ==

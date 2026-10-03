@@ -57,8 +57,20 @@ void ash_control_leave_function(struct ash_shell* shell) {
     }
 }
 
+bool ash_control_return_allowed(const struct ash_shell* shell) {
+    if (shell->control.function_depth != 0u) {
+        return true;
+    }
+    for (const struct ash_execution_frame* frame = shell->execution_frames; frame != NULL; frame = frame->previous) {
+        if (frame->kind == ASH_EXECUTION_SOURCE_FRAME && frame->source_kind == ASH_INPUT_SOURCED_FILE) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool ash_control_request_return(struct ash_shell* shell, int status) {
-    if (shell->control.function_depth == 0u) {
+    if (!ash_control_return_allowed(shell)) {
         return false;
     }
     shell->control.pending = ASH_CONTROL_RETURN;
