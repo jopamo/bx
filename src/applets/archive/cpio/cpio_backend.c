@@ -98,7 +98,7 @@ struct bx_cpio_entry_list {
 struct bx_cpio_inode_map {
     dev_t dev;
     ino_t ino;
-    uint32_t synthetic_ino;
+    uintmax_t synthetic_ino;
     size_t total_count;
     size_t seen_count;
 };
@@ -191,7 +191,7 @@ static struct bx_cpio_inode_map* bx_cpio_get_inode_map(struct bx_cpio_inode_map_
     }
     maps->items[maps->len].dev = dev;
     maps->items[maps->len].ino = ino;
-    maps->items[maps->len].synthetic_ino = (uint32_t)maps->len;
+    maps->items[maps->len].synthetic_ino = maps->len;
     maps->items[maps->len].total_count = 0u;
     maps->items[maps->len].seen_count = 0u;
     return &maps->items[maps->len++];
@@ -227,15 +227,6 @@ static bool bx_cpio_parse_hex_field(const unsigned char* field, size_t len, size
     return true;
 }
 
-static void bx_cpio_format_hex_field(unsigned char* field, size_t len, size_t value) {
-    static const char digits[] = "0123456789ABCDEF";
-    size_t i;
-    for (i = 0u; i < len; i++) {
-        field[len - 1u - i] = (unsigned char)digits[value & 0x0fu];
-        value >>= 4u;
-    }
-}
-
 static bool bx_cpio_parse_octal_field(const unsigned char* field, size_t len, size_t* value_out) {
     size_t value = 0u;
     size_t i;
@@ -250,14 +241,6 @@ static bool bx_cpio_parse_octal_field(const unsigned char* field, size_t len, si
     }
     *value_out = value;
     return true;
-}
-
-static void bx_cpio_format_octal_field(unsigned char* field, size_t len, size_t value) {
-    size_t i;
-    for (i = 0u; i < len; i++) {
-        field[len - 1u - i] = (unsigned char)('0' + (value & 0x07u));
-        value >>= 3u;
-    }
 }
 
 static bool bx_cpio_parse_owner_spec(const char* text,
@@ -310,33 +293,29 @@ static bool bx_cpio_read_file(const char* path, struct bx_archive_buffer* buffer
 
 static bool bx_cpio_emit_newc_entry(struct bx_archive_buffer* archive,
                                     const char* name,
-                                    uint32_t ino,
+                                    uintmax_t ino,
                                     mode_t mode,
                                     uid_t uid,
                                     gid_t gid,
                                     nlink_t nlink,
                                     struct timespec mtime,
+                                    dev_t device,
                                     dev_t rdev,
                                     size_t size,
                                     const unsigned char* data) {
     unsigned char header[BX_CPIO_NEWC_HEADER_LEN + 1u];
-    size_t namesize = strlen(name) + 1u;
+    size_t namesize;
     size_t padded;
 
-    memcpy(header, "070701", 6u);
-    bx_cpio_format_hex_field(header + 6, 8u, ino);
-    bx_cpio_format_hex_field(header + 14, 8u, mode);
-    bx_cpio_format_hex_field(header + 22, 8u, uid);
-    bx_cpio_format_hex_field(header + 30, 8u, gid);
-    bx_cpio_format_hex_field(header + 38, 8u, nlink);
-    bx_cpio_format_hex_field(header + 46, 8u, (size_t)mtime.tv_sec);
-    bx_cpio_format_hex_field(header + 54, 8u, size);
-    bx_cpio_format_hex_field(header + 62, 8u, 0u);
-    bx_cpio_format_hex_field(header + 70, 8u, 0u);
-    bx_cpio_format_hex_field(header + 78, 8u, major(rdev));
-    bx_cpio_format_hex_field(header + 86, 8u, minor(rdev));
-    bx_cpio_format_hex_field(header + 94, 8u, namesize);
-    bx_cpio_format_hex_field(header + 102, 8u, 0u);
+    if (mtime.tv_sec < 0 || !bx_checked_size_add(strlen(name), 1u, &namesize)) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    const uintmax_t fields[] = {ino, mode, uid, gid, nlink, (uintmax_t)mtime.tv_sec, size, major(device), minor(device), major(rdev), minor(rdev), namesize, 0};
+    if (!bx_cpio_encode_newc_header(header, fields)) {
+        errno = EOVERFLOW;
+        return false;
+    }
     if (!bx_archive_buffer_append(archive, header, BX_CPIO_NEWC_HEADER_LEN)
         || !bx_archive_buffer_append(archive, name, namesize)) {
         return false;
@@ -355,33 +334,28 @@ static bool bx_cpio_emit_newc_entry(struct bx_archive_buffer* archive,
 
 static bool bx_cpio_emit_odc_entry(struct bx_archive_buffer* archive,
                                    const char* name,
-                                   uint32_t ino,
+                                   uintmax_t ino,
                                    mode_t mode,
                                    uid_t uid,
                                    gid_t gid,
                                    nlink_t nlink,
                                    struct timespec mtime,
+                                   dev_t device,
                                    dev_t rdev,
                                    size_t size,
                                    const unsigned char* data) {
     unsigned char header[BX_CPIO_ODC_HEADER_LEN + 1u];
-    size_t namesize = strlen(name) + 1u;
+    size_t namesize;
 
-    if ((uintmax_t)rdev > 0777777u) {
+    if (mtime.tv_sec < 0 || !bx_checked_size_add(strlen(name), 1u, &namesize)) {
         errno = EOVERFLOW;
         return false;
     }
-    memcpy(header, "070707", 6u);
-    bx_cpio_format_octal_field(header + 6, 6u, 0u);
-    bx_cpio_format_octal_field(header + 12, 6u, ino & 0777777u);
-    bx_cpio_format_octal_field(header + 18, 6u, mode & 0777777u);
-    bx_cpio_format_octal_field(header + 24, 6u, uid & 0777777u);
-    bx_cpio_format_octal_field(header + 30, 6u, gid & 0777777u);
-    bx_cpio_format_octal_field(header + 36, 6u, nlink & 0777777u);
-    bx_cpio_format_octal_field(header + 42, 6u, rdev);
-    bx_cpio_format_octal_field(header + 48, 11u, (size_t)mtime.tv_sec);
-    bx_cpio_format_octal_field(header + 59, 6u, namesize);
-    bx_cpio_format_octal_field(header + 65, 11u, size);
+    const uintmax_t fields[] = {device, ino, mode, uid, gid, nlink, rdev, (uintmax_t)mtime.tv_sec, namesize, size};
+    if (!bx_cpio_encode_odc_header(header, fields)) {
+        errno = EOVERFLOW;
+        return false;
+    }
     if (!bx_archive_buffer_append(archive, header, BX_CPIO_ODC_HEADER_LEN)
         || !bx_archive_buffer_append(archive, name, namesize)) {
         return false;
@@ -445,20 +419,27 @@ static void bx_cpio_count_inodes(const struct bx_archive_fs_list* list,
 
 static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
                                       const struct bx_archive_fs_entry* entry,
-                                      uint32_t ino,
+                                      uintmax_t ino,
                                       const struct bx_cpio_options* options,
                                       bool suppress_data,
                                       struct bx_diag_ctx* diag) {
     mode_t mode = entry->st.st_mode;
     uid_t uid = options->owner_override ? options->owner : entry->st.st_uid;
     gid_t gid = options->owner_override ? options->group : entry->st.st_gid;
-    nlink_t nlink = S_ISDIR(mode) ? 2u : entry->st.st_nlink;
+    nlink_t nlink = options->reproducible && S_ISDIR(mode) ? 2u : entry->st.st_nlink;
     struct timespec mtime = entry->st.st_mtim;
+    uintmax_t archive_ino = options->reproducible ? ino : entry->st.st_ino;
+    dev_t device = options->reproducible ? 0 : entry->st.st_dev;
     dev_t rdev = S_ISCHR(mode) || S_ISBLK(mode) ? entry->st.st_rdev : 0;
     struct bx_archive_buffer data = {0};
     const unsigned char* payload = NULL;
     size_t size = 0u;
+    uintmax_t wide_limit = options->format == BX_CPIO_FORMAT_NEWC ? UINT32_MAX : UINT64_C(077777777777);
 
+    if (mtime.tv_sec < 0 || (uintmax_t)mtime.tv_sec > wide_limit || (S_ISREG(mode) && (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size > wide_limit))) {
+        bx_diag(diag, "%s: %s", entry->archive_path, strerror(EOVERFLOW));
+        return false;
+    }
     if (options->reproducible) {
         uid = options->owner_override ? options->owner : 0u;
         gid = options->owner_override ? options->group : 0u;
@@ -480,14 +461,14 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
     }
 
     if (options->format == BX_CPIO_FORMAT_NEWC) {
-        if (!bx_cpio_emit_newc_entry(archive, entry->archive_path, ino, mode, uid, gid, nlink, mtime, rdev, size, payload)) {
+        if (!bx_cpio_emit_newc_entry(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size, payload)) {
             bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
             bx_archive_buffer_free(&data);
             return false;
         }
     }
     else {
-        if (!bx_cpio_emit_odc_entry(archive, entry->archive_path, ino, mode, uid, gid, nlink, mtime, rdev, size, payload)) {
+        if (!bx_cpio_emit_odc_entry(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size, payload)) {
             bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
             bx_archive_buffer_free(&data);
             return false;
@@ -563,14 +544,14 @@ static bool bx_cpio_build_archive(struct bx_archive_buffer* archive,
 
     if (options->format == BX_CPIO_FORMAT_NEWC) {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_newc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, NULL);
+        bx_cpio_emit_newc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u, NULL);
         while (archive->len % 512u != 0u) {
             bx_archive_buffer_append_byte(archive, 0u);
         }
     }
     else {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_odc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, NULL);
+        bx_cpio_emit_odc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u, NULL);
         if (archive->len % 2u != 0u) {
             bx_archive_buffer_append_byte(archive, 0u);
         }

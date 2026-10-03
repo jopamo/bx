@@ -21,7 +21,7 @@ static void bx_cpio_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -F, --file=ARCHIVE    use ARCHIVE instead of standard input/output (-o or -i)\n");
     fprintf(stream, "  -H, --format=FORMAT   create newc (default) or odc archives (-o only)\n");
     fprintf(stream, "  -R UID:GID            override numeric ownership (-o, extraction, or -p)\n");
-    fprintf(stream, "      --reproducible     normalize inode/device IDs and default ownership (-o)\n");
+    fprintf(stream, "      --reproducible    normalize identities, directory links and ownership (-o)\n");
     fprintf(stream, "      --quiet           suppress the copied-blocks summary\n");
     fprintf(stream, "      --to-stdout       write selected file data to standard output (-i, no -t)\n");
     fprintf(stream, "      --sparse          recreate holes during filesystem copy\n");
