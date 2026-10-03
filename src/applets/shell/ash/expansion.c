@@ -926,7 +926,8 @@ enum ash_redirection_expansion_result ash_expand_redirection(
     int* substitution_status
 ) {
     *output = NULL;
-    bool needs_pattern = ash_pathname_expansion_enabled(shell) &&
+    bool needs_pattern = ash_shell_policy_globs_redirections(&shell->policy) &&
+        ash_pathname_expansion_enabled(shell) &&
         ash_word_may_expand_pathname(word);
     struct bx_text_buffer value_buffer;
     struct bx_text_buffer pattern_buffer;

@@ -59,8 +59,9 @@ bool ash_expand_word(
     int* substitution_status
 );
 /*
- * Redirection words do not field-split. Zero pathname matches preserve the
- * literal operand, one selects that path, and multiple matches are ambiguous.
+ * Redirection words do not field-split. Noninteractive POSIX policy suppresses
+ * pathname expansion. Otherwise zero matches preserve the literal operand,
+ * one selects that path, and multiple matches are ambiguous.
  */
 enum ash_redirection_expansion_result ash_expand_redirection(
     struct ash_shell* shell,
