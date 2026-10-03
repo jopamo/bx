@@ -378,7 +378,6 @@ bool ash_invocation_parse(
                 continue;
             }
             if (*option == 'o' &&
-                strcmp(candidate.progname, "bash") == 0 &&
                 index + 1 < argc) {
                 const char* option_name = argv[++index];
                 if (ash_shell_option_apply_name(
