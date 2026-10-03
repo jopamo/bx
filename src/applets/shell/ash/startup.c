@@ -206,14 +206,14 @@ static enum ash_startup_outcome ash_startup_execute_bashrc(
     return ash_startup_file_outcome(result);
 }
 
-static enum ash_startup_outcome ash_startup_execute_bash_env(struct ash_shell* shell) {
-    const char* requested = ash_var_get(shell, "BASH_ENV");
+static enum ash_startup_outcome ash_startup_execute_env_file(struct ash_shell* shell, const char* name) {
+    const char* requested = ash_var_get(shell, name);
     if (requested == NULL || requested[0] == '\0') {
         return ASH_STARTUP_CONTINUE;
     }
 
     struct ash_lexer lexer;
-    ash_lexer_init(&lexer, "BASH_ENV", requested, strlen(requested));
+    ash_lexer_init(&lexer, name, requested, strlen(requested));
     struct ash_word word;
     errno = 0;
     enum ash_lexer_result lexed = ash_lexer_scan_expansion_string(&lexer, &word);
@@ -228,7 +228,7 @@ static enum ash_startup_outcome ash_startup_execute_bash_env(struct ash_shell* s
                 ash_diag_oom(shell);
             }
             else {
-                ash_exec_error(shell, "BASH_ENV expansion", error);
+                ash_diag(shell, "%s expansion: %s", name, strerror(error));
             }
             return ASH_STARTUP_FATAL;
         }
@@ -239,7 +239,7 @@ static enum ash_startup_outcome ash_startup_execute_bash_env(struct ash_shell* s
         int status = 1;
         (void)ash_control_consume_unit_discard(shell, &status);
         shell->last_status = 1;
-        shell->should_exit = (shell->options & ASH_SHELL_OPTION_NOEXEC) != 0u;
+        shell->should_exit = (shell->options & ASH_SHELL_OPTION_NOEXEC) != 0u && !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE);
         shell->requested_exit_status = shell->should_exit ? 1 : 0;
         return shell->should_exit ? ASH_STARTUP_EXIT : ASH_STARTUP_CONTINUE;
     }
@@ -274,7 +274,11 @@ enum ash_startup_outcome ash_startup_execute(
     }
     if (outcome == ASH_STARTUP_CONTINUE &&
         ash_shell_policy_reads_bash_env(&shell->policy)) {
-        outcome = ash_startup_execute_bash_env(shell);
+        outcome = ash_startup_execute_env_file(shell, "BASH_ENV");
+    }
+    else if (outcome == ASH_STARTUP_CONTINUE &&
+             ash_shell_policy_reads_env(&shell->policy)) {
+        outcome = ash_startup_execute_env_file(shell, "ENV");
     }
     return outcome;
 }
