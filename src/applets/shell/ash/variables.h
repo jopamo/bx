@@ -90,7 +90,8 @@ bool ash_var_set(
 bool ash_var_set_caller(
     struct ash_shell* shell,
     const char* name,
-    const char* value
+    const char* value,
+    bool force_export
 );
 bool ash_var_set_local(
     struct ash_shell* shell,
@@ -105,7 +106,12 @@ bool ash_var_set_temporary(
     const char* value,
     bool force_export
 );
-bool ash_var_export(struct ash_shell* shell, const char* name);
+/* Explicit export promotes a current command-prefix binding to its caller. */
+bool ash_var_export(
+    struct ash_shell* shell,
+    const char* name,
+    size_t name_length
+);
 void ash_vars_visit_visible(
     const struct ash_shell* shell,
     ash_var_visitor_fn visitor,

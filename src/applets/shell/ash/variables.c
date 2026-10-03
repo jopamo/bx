@@ -364,7 +364,7 @@ bool ash_var_set_local(
     );
 }
 
-bool ash_var_set_caller(struct ash_shell* shell, const char* name, const char* value) {
+bool ash_var_set_caller(struct ash_shell* shell, const char* name, const char* value, bool force_export) {
     struct ash_scope* current = ash_scope_current(shell);
     bool temporary = current != NULL && current->kind == ASH_SCOPE_TEMPORARY_ASSIGNMENT;
     size_t name_length = strlen(name);
@@ -373,10 +373,10 @@ bool ash_var_set_caller(struct ash_shell* shell, const char* name, const char* v
     if (owner == NULL) {
         owner = ash_scope_global(shell);
     }
-    if (!ash_var_set_in_scope(shell, owner, name, name_length, value, 0u, false)) {
+    if (!ash_var_set_in_scope(shell, owner, name, name_length, value, 0u, force_export)) {
         return false;
     }
-    return !temporary || ash_var_find_in_scope(current, name, name_length) == NULL || ash_var_set_in_scope(shell, current, name, name_length, value, 0u, false);
+    return !temporary || ash_var_find_in_scope(current, name, name_length) == NULL || ash_var_set_in_scope(shell, current, name, name_length, value, 0u, force_export);
 }
 
 bool ash_var_set_temporary(
@@ -402,18 +402,16 @@ bool ash_var_set_temporary(
     );
 }
 
-bool ash_var_export(struct ash_shell* shell, const char* name) {
-    size_t length = strlen(name);
-    struct ash_var* var = ash_var_find_len(shell, name, length, NULL);
+bool ash_var_export(struct ash_shell* shell, const char* name, size_t length) {
+    struct ash_scope* owner = NULL;
+    struct ash_var* var = ash_var_find_len(shell, name, length, &owner);
     if (var == NULL) {
         return ash_var_set_with_export(shell, name, length, "", true);
     }
-    return ash_var_update_attributes(
-        shell,
-        name,
-        ASH_VAR_ATTR_EXPORT,
-        0u
-    );
+    if (owner == ash_scope_current(shell) && owner->kind == ASH_SCOPE_TEMPORARY_ASSIGNMENT) {
+        return ash_var_set_caller(shell, var->name, ash_value_get_scalar(&var->value), true);
+    }
+    return ash_var_update_attributes(shell, var->name, ASH_VAR_ATTR_EXPORT, 0u);
 }
 
 bool ash_var_update_attributes(

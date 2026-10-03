@@ -400,7 +400,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         shell->cwd.physical = new_physical;
         shell->cwd.logical = new_logical;
         shell->cwd.old_logical = new_old_logical;
-        if (!ash_var_set_caller(shell, "PWD", newcwd)) {
+        if (!ash_var_set_caller(shell, "PWD", newcwd, false)) {
             free(oldcwd);
             free(newcwd);
             return 1;
@@ -408,7 +408,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
     }
 
     if (oldcwd != NULL) {
-        if (!ash_var_set_caller(shell, "OLDPWD", oldcwd)) {
+        if (!ash_var_set_caller(shell, "OLDPWD", oldcwd, false)) {
             free(oldcwd);
             free(newcwd);
             return 1;
@@ -465,7 +465,8 @@ static int ash_builtin_export(struct ash_shell* shell, const struct ash_command*
         const char* value = NULL;
 
         if (ash_parse_assignment(arg, &name_len, &value)) {
-            if (!ash_var_set_with_export(shell, arg, name_len, value, true)) {
+            if (!ash_var_set_with_export(shell, arg, name_len, value, true) ||
+                !ash_var_export(shell, arg, name_len)) {
                 status = 1;
             }
             continue;
@@ -478,7 +479,7 @@ static int ash_builtin_export(struct ash_shell* shell, const struct ash_command*
             continue;
         }
 
-        if (!ash_var_export(shell, arg)) {
+        if (!ash_var_export(shell, arg, len)) {
             status = 1;
         }
     }
@@ -1022,7 +1023,7 @@ static int ash_execute_in_child(
 }
 
 static int ash_execute_single_command_parent(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution) {
-    bool temporary_scope = resolution->kind == ASH_COMMAND_REGULAR_BUILTIN && command->assignment_count != 0u;
+    bool temporary_scope = command->assignment_count != 0u && (resolution->kind == ASH_COMMAND_REGULAR_BUILTIN || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX));
     if (temporary_scope ? !ash_apply_command_assignments_temporary(shell, command) : ash_apply_command_assignments_shell(shell, command) != 0) {
         return 1;
     }
