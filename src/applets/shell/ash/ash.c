@@ -2221,7 +2221,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCfipsv] "
+            "Usage: %s [--standalone-applets] [-aCfinpsv] "
             "[-c command] [script [arg ...]]\n",
             progname
         );
@@ -2246,7 +2246,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCfilpstv or -c command or -o/+o option-name\n"
+            "\t-aCfilnpstv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2261,6 +2261,7 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -C           prevent output redirection from replacing files\n");
     fprintf(stream, "  -f           disable pathname expansion\n");
     fprintf(stream, "  -i           force interactive mode\n");
+    fprintf(stream, "  -n           parse without execution (ignored when interactive)\n");
     fprintf(stream, "  -p           enable privileged mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
     if (strcmp(progname, "bash") == 0) {
@@ -2276,9 +2277,9 @@ static void ash_print_help(FILE* stream, const char* progname) {
         fprintf(stream, "               read file instead of ~/.bashrc\n");
         fprintf(stream, "  --norc       do not read ~/.bashrc\n");
         fprintf(stream, "  -o option-name\n");
-        fprintf(stream, "               set allexport, noclobber, noglob, onecmd, or verbose\n");
+        fprintf(stream, "               set allexport, noclobber, noexec, noglob, onecmd, or verbose\n");
         fprintf(stream, "  +o option-name\n");
-        fprintf(stream, "               clear allexport, noclobber, noglob, onecmd, or verbose\n");
+        fprintf(stream, "               clear allexport, noclobber, noexec, noglob, onecmd, or verbose\n");
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
     fprintf(stream, "  --standalone-applets\n");

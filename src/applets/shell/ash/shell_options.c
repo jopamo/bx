@@ -96,7 +96,8 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
     {
         "noexec",
         ASH_SHELL_OPTION_NOEXEC,
-        0u,
+        ASH_SHELL_OPTION_USE_INVOCATION_SHORT |
+            ASH_SHELL_OPTION_USE_INVOCATION_NAME,
         'n',
         ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
