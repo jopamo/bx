@@ -40,6 +40,7 @@
 #include "applets/shell/ash/variables.h"
 #include "bx/self_exec.h"
 #include "lib/fd_ops.h"
+#include "lib/path_ops.h"
 #include "lib/text_buffer.h"
 
 static void ash_print_exported_variable(
@@ -353,7 +354,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
 
     if (command->word_count == 1u) {
         target = ash_var_get(shell, "HOME");
-        if (target == NULL || target[0] == '\0') {
+        if (target == NULL) {
             ash_diag(shell, "cd: HOME not set");
             return 1;
         }
@@ -362,11 +363,15 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         target = command->words[1];
         if (strcmp(target, "-") == 0) {
             target = ash_var_get(shell, "OLDPWD");
-            if (target == NULL || target[0] == '\0') {
+            if (target == NULL) {
                 ash_diag(shell, "cd: OLDPWD not set");
                 return 1;
             }
             print_new_dir = true;
+        }
+        else if (target[0] == '\0') {
+            ash_diag(shell, "cd: null directory");
+            return 1;
         }
     }
 
@@ -375,66 +380,84 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
     if (visible_pwd != NULL && oldpwd == NULL) {
         return 1;
     }
-    char* oldcwd = ash_getcwd_dup();
-
-    if (chdir(target) != 0) {
-        ash_exec_error(shell, target, errno);
-        free(oldpwd);
-        free(oldcwd);
-        return 1;
+    char* oldcwd = shell->cwd.logical == NULL ? ash_getcwd_dup() : NULL;
+    const char* base = shell->cwd.logical != NULL ? shell->cwd.logical : oldcwd;
+    char* old_logical = base != NULL ? ash_strdup_text(shell, base) : NULL;
+    char* logical = NULL;
+    struct bx_text_buffer absolute;
+    bx_text_buffer_init(&absolute);
+    int status = 1;
+    if (base != NULL && old_logical == NULL) {
+        goto done;
     }
-
-    char* newcwd = ash_getcwd_dup();
-    if (newcwd != NULL) {
-        char* new_physical = ash_strdup_text(shell, newcwd);
-        char* new_logical = ash_strdup_text(shell, newcwd);
-        char* new_old_logical = shell->cwd.logical != NULL
-            ? ash_strdup_text(shell, shell->cwd.logical)
-            : (oldcwd != NULL ? ash_strdup_text(shell, oldcwd) : NULL);
-        if (new_physical == NULL || new_logical == NULL ||
-            ((shell->cwd.logical != NULL || oldcwd != NULL) && new_old_logical == NULL)) {
-            free(new_physical);
-            free(new_logical);
-            free(new_old_logical);
-            free(oldpwd);
-            free(oldcwd);
-            free(newcwd);
-            return 1;
+    if (target[0] == '/' || base != NULL) {
+        if ((target[0] != '/' && (!bx_text_buffer_append_text(&absolute, base) || !bx_text_buffer_append_char(&absolute, '/'))) || !bx_text_buffer_append_text(&absolute, target)) {
+            ash_diag_oom(shell);
+            goto done;
         }
-        free(shell->cwd.physical);
-        free(shell->cwd.logical);
-        free(shell->cwd.old_logical);
-        shell->cwd.physical = new_physical;
-        shell->cwd.logical = new_logical;
-        shell->cwd.old_logical = new_old_logical;
-        if (!ash_var_set_caller(shell, "PWD", newcwd, false)) {
-            free(oldpwd);
-            free(oldcwd);
-            free(newcwd);
-            return 1;
+        logical = bx_path_normalize_directory_dup(absolute.data);
+        if (logical == NULL) {
+            if (errno == ENOMEM) {
+                ash_diag_oom(shell);
+                goto done;
+            }
+            if (ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX)) {
+                ash_exec_error(shell, target, errno);
+                goto done;
+            }
         }
     }
 
-    if (!ash_var_set_caller(shell, "OLDPWD", oldpwd, false)) {
-        free(oldpwd);
-        free(oldcwd);
-        free(newcwd);
-        return 1;
+    if (chdir(logical != NULL ? logical : target) != 0) {
+        int error = errno;
+        if (logical == NULL || ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX) || chdir(target) != 0) {
+            ash_exec_error(shell, target, error);
+            goto done;
+        }
+        free(logical);
+        logical = NULL;
     }
 
-    if (print_new_dir) {
-        if (newcwd != NULL) {
-            printf("%s\n", newcwd);
+    status = 0;
+    char* physical = NULL;
+    if (logical == NULL) {
+        physical = ash_getcwd_dup();
+        if (physical != NULL) {
+            logical = ash_strdup_text(shell, physical);
+            if (logical == NULL) {
+                status = 1;
+            }
         }
-        else {
-            printf("%s\n", target);
+        else if (errno == ENOMEM) {
+            ash_diag_oom(shell);
+            status = 1;
         }
     }
+    free(shell->cwd.physical);
+    free(shell->cwd.logical);
+    free(shell->cwd.old_logical);
+    shell->cwd.physical = physical;
+    shell->cwd.logical = logical;
+    shell->cwd.old_logical = old_logical;
+    logical = NULL;
+    old_logical = NULL;
 
+    if (print_new_dir && (printf("%s\n", target) < 0 || fflush(stdout) != 0)) {
+        ash_diag(shell, "cd: write error: %s", strerror(errno));
+        clearerr(stdout);
+        status = 1;
+    }
+    if ((shell->cwd.logical != NULL && !ash_var_set_caller(shell, "PWD", shell->cwd.logical, false)) || !ash_var_set_caller(shell, "OLDPWD", oldpwd, false)) {
+        status = 1;
+    }
+
+done:
+    bx_text_buffer_destroy(&absolute);
+    free(logical);
+    free(old_logical);
     free(oldpwd);
     free(oldcwd);
-    free(newcwd);
-    return 0;
+    return status;
 }
 
 static int ash_builtin_exit(struct ash_shell* shell, const struct ash_command* command, bool in_child) {
@@ -601,8 +624,34 @@ static int ash_builtin_pwd(struct ash_shell* shell, const struct ash_command* co
 
     char* cwd = NULL;
     const char* directory = shell->cwd.logical;
+    if (physical && !stale) {
+        cwd = bx_path_realpath_dup(shell->cwd.logical);
+        if (cwd == NULL && errno == ENOMEM) {
+            ash_diag_oom(shell);
+            return 1;
+        }
+        stale = cwd == NULL;
+        if (cwd != NULL && cwd[0] == '/' && cwd[1] != '/' && shell->cwd.logical[0] == '/' && shell->cwd.logical[1] == '/' && shell->cwd.logical[2] != '/') {
+            struct bx_text_buffer doubled;
+            bx_text_buffer_init(&doubled);
+            if (!bx_text_buffer_append_char(&doubled, '/') || !bx_text_buffer_append_text(&doubled, cwd)) {
+                bx_text_buffer_destroy(&doubled);
+                free(cwd);
+                ash_diag_oom(shell);
+                return 1;
+            }
+            free(cwd);
+            cwd = bx_text_buffer_take(&doubled);
+        }
+    }
     if (physical || stale) {
-        cwd = ash_getcwd_dup();
+        if (stale) {
+            free(shell->cwd.physical);
+            free(shell->cwd.logical);
+            shell->cwd.physical = NULL;
+            shell->cwd.logical = NULL;
+            cwd = ash_getcwd_dup();
+        }
         if (cwd == NULL) {
             fprintf(stderr, "pwd: error retrieving current directory: getcwd: cannot access parent directories: %s\n", strerror(errno));
             return 1;
@@ -617,8 +666,6 @@ static int ash_builtin_pwd(struct ash_shell* shell, const struct ash_command* co
                 free(cwd);
                 return 1;
             }
-            free(shell->cwd.physical);
-            free(shell->cwd.logical);
             shell->cwd.physical = new_physical;
             shell->cwd.logical = new_logical;
         }
