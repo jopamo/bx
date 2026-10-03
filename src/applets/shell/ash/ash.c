@@ -1327,7 +1327,9 @@ static bool ash_command_substitute(
         return false;
     }
     (void)ash_job_release(job);
-    shell->last_status = status;
+    if (!ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX)) {
+        shell->last_status = status;
+    }
     if (!read_ok) {
         bx_text_buffer_destroy(&captured);
         return false;
