@@ -394,6 +394,25 @@ static bool native_markdown_has_h1(NativeMarkdown* context, lxa_dom_ref_t node,
     return true;
 }
 
+static bool native_markdown_document_section(NativeMarkdown* context,
+                                             lxa_dom_ref_t root,
+                                             lxa_dom_ref_t candidate,
+                                             lxa_dom_ref_t* section) {
+    *section = (lxa_dom_ref_t){0};
+    if (!candidate.handle)
+        return true;
+    lxa_dom_ref_t parent, owner;
+    if (!native_markdown_status(lxa_dom_nodes_parent(context->nodes, candidate, &parent)))
+        return false;
+    if (!parent.handle)
+        return true;
+    if (!native_markdown_status(lxa_dom_nodes_parent(context->nodes, parent, &owner)))
+        return false;
+    if (owner.handle == root.handle)
+        *section = candidate;
+    return true;
+}
+
 static bool native_markdown_find_head_element(NativeMarkdown* context,
                                                lxa_dom_ref_t head,
                                                const char* tag, const char* attribute,
@@ -1065,11 +1084,21 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data,
         .lore = bx_fetch_lore_markdown_url_matches(base_url),
     };
     char* document_base = NULL;
-    bool ready = true;
-    if (absolute_links && base_url) {
+    lxa_dom_ref_t root = lxa_html_document_root(document);
+    lxa_dom_ref_t head = {0}, body = {0};
+    bool ready = native_markdown_document_section(&context, root,
+        lxa_html_document_body(document), &body);
+    if (ready && !body.handle) {
+        errno = EINVAL;
+        ready = false;
+    }
+    if (ready)
+        ready = native_markdown_document_section(&context, root,
+            lxa_html_document_head(document), &head);
+    if (ready && absolute_links && base_url) {
         lxa_dom_ref_t base;
         ready = native_markdown_find_head_element(&context,
-            lxa_html_document_head(document), "base", "href", &base);
+            head, "base", "href", &base);
         if (ready && base.handle) {
             lxa_span_t href;
             ready = native_markdown_attribute(&context, base, "href", &href);
@@ -1092,14 +1121,13 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data,
             }
         }
     }
-    lxa_dom_ref_t body = lxa_html_document_body(document);
     bool has_h1 = false;
     bool rendered = ready && body.handle
         && native_markdown_has_h1(&context, body, 0, &has_h1);
     if (rendered && !has_h1 && !context.lore) {
         lxa_dom_ref_t title;
         rendered = native_markdown_find_head_element(&context,
-            lxa_html_document_head(document), "title", NULL, &title)
+            head, "title", NULL, &title)
             && (!title.handle || native_markdown_heading(&context, title, 0, 1u));
     }
     rendered = rendered && native_markdown_children(&context, body, 0);
