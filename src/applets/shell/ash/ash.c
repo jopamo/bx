@@ -370,10 +370,16 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         }
     }
 
+    const char* visible_pwd = ash_var_get(shell, "PWD");
+    char* oldpwd = visible_pwd != NULL ? ash_strdup_text(shell, visible_pwd) : NULL;
+    if (visible_pwd != NULL && oldpwd == NULL) {
+        return 1;
+    }
     char* oldcwd = ash_getcwd_dup();
 
     if (chdir(target) != 0) {
         ash_exec_error(shell, target, errno);
+        free(oldpwd);
         free(oldcwd);
         return 1;
     }
@@ -390,6 +396,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
             free(new_physical);
             free(new_logical);
             free(new_old_logical);
+            free(oldpwd);
             free(oldcwd);
             free(newcwd);
             return 1;
@@ -401,18 +408,18 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         shell->cwd.logical = new_logical;
         shell->cwd.old_logical = new_old_logical;
         if (!ash_var_set_caller(shell, "PWD", newcwd, false)) {
+            free(oldpwd);
             free(oldcwd);
             free(newcwd);
             return 1;
         }
     }
 
-    if (oldcwd != NULL) {
-        if (!ash_var_set_caller(shell, "OLDPWD", oldcwd, false)) {
-            free(oldcwd);
-            free(newcwd);
-            return 1;
-        }
+    if (!ash_var_set_caller(shell, "OLDPWD", oldpwd, false)) {
+        free(oldpwd);
+        free(oldcwd);
+        free(newcwd);
+        return 1;
     }
 
     if (print_new_dir) {
@@ -424,6 +431,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         }
     }
 
+    free(oldpwd);
     free(oldcwd);
     free(newcwd);
     return 0;
