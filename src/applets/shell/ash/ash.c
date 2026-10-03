@@ -362,7 +362,7 @@ static int ash_apply_command_assignments_env(struct ash_shell* shell, const stru
 }
 
 static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* command) {
-    bool physical_mode = false;
+    bool physical_mode = (shell->options & ASH_SHELL_OPTION_PHYSICAL) != 0u;
     bool fail_getcwd = false;
     size_t operand = 1u;
     for (; operand < command->word_count; operand++) {
@@ -644,7 +644,7 @@ static int ash_builtin_umask(struct ash_shell* shell, const struct ash_command* 
 }
 
 static int ash_builtin_pwd(struct ash_shell* shell, const struct ash_command* command) {
-    bool physical = false;
+    bool physical = (shell->options & ASH_SHELL_OPTION_PHYSICAL) != 0u;
     bool publish_pwd = false;
     for (size_t i = 1u; i < command->word_count; i++) {
         const char* argument = command->words[i];
@@ -2455,7 +2455,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCefinpsuv] "
+            "Usage: %s [--standalone-applets] [-aCefinpPsuv] "
             "[-o option-name] [-c command] [script [arg ...]]\n",
             progname
         );
@@ -2480,7 +2480,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCefilnpstuv or -c command or -o/+o option-name\n"
+            "\t-aCefilnpPstuv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2497,6 +2497,7 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -i           force interactive mode\n");
     fprintf(stream, "  -n           parse without execution (ignored when interactive)\n");
     fprintf(stream, "  -p           enable privileged mode\n");
+    fprintf(stream, "  -P           use physical directory paths by default\n");
     fprintf(stream, "  -s           read commands from stdin\n");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  -l           make the shell a login shell\n");
@@ -2515,9 +2516,9 @@ static void ash_print_help(FILE* stream, const char* progname) {
     }
     const char* onecmd = strcmp(progname, "bash") == 0 ? "onecmd, " : "";
     fprintf(stream, "  -o option-name\n");
-    fprintf(stream, "               set allexport, errexit, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
+    fprintf(stream, "               set allexport, errexit, noclobber, noexec, noglob, nounset, %sphysical, pipefail, or verbose\n", onecmd);
     fprintf(stream, "  +o option-name\n");
-    fprintf(stream, "               clear allexport, errexit, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
+    fprintf(stream, "               clear allexport, errexit, noclobber, noexec, noglob, nounset, %sphysical, pipefail, or verbose\n", onecmd);
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
