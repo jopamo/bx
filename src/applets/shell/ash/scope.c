@@ -230,7 +230,7 @@ struct ash_var* ash_scope_lookup_variable_mut(
     }
     if (shell == NULL || name == NULL ||
         mode < ASH_SCOPE_LOOKUP_VISIBLE ||
-        mode > ASH_SCOPE_LOOKUP_GLOBAL) {
+        mode > ASH_SCOPE_LOOKUP_OUTER) {
         return NULL;
     }
 
@@ -241,13 +241,17 @@ struct ash_var* ash_scope_lookup_variable_mut(
     else if (mode == ASH_SCOPE_LOOKUP_GLOBAL) {
         first = ash_scope_global(shell);
     }
+    else if (mode == ASH_SCOPE_LOOKUP_OUTER) {
+        first = shell->scopes != NULL ? shell->scopes->parent : NULL;
+    }
     else {
         first = shell->scopes;
     }
 
     for (struct ash_scope* scope = first;
          scope != NULL;
-         scope = mode == ASH_SCOPE_LOOKUP_VISIBLE ? scope->parent : NULL) {
+         scope = mode == ASH_SCOPE_LOOKUP_VISIBLE ||
+             mode == ASH_SCOPE_LOOKUP_OUTER ? scope->parent : NULL) {
         for (struct ash_var* var = scope->variables;
              var != NULL;
              var = var->next) {
@@ -343,13 +347,17 @@ static const struct ash_var* ash_scope_lookup_raw(
     else if (mode == ASH_SCOPE_LOOKUP_GLOBAL) {
         first = ash_scope_global_const(shell);
     }
+    else if (mode == ASH_SCOPE_LOOKUP_OUTER) {
+        first = shell->scopes != NULL ? shell->scopes->parent : NULL;
+    }
     else {
         first = shell->scopes;
     }
 
     for (const struct ash_scope* scope = first;
          scope != NULL;
-         scope = mode == ASH_SCOPE_LOOKUP_VISIBLE ? scope->parent : NULL) {
+         scope = mode == ASH_SCOPE_LOOKUP_VISIBLE ||
+             mode == ASH_SCOPE_LOOKUP_OUTER ? scope->parent : NULL) {
         const struct ash_var* var = ash_scope_find_in_frame(
             scope,
             name,
@@ -395,7 +403,7 @@ enum ash_scope_lookup_status ash_scope_lookup(
     };
     if (shell == NULL || name == NULL ||
         mode < ASH_SCOPE_LOOKUP_VISIBLE ||
-        mode > ASH_SCOPE_LOOKUP_GLOBAL) {
+        mode > ASH_SCOPE_LOOKUP_OUTER) {
         return ASH_SCOPE_LOOKUP_UNSET;
     }
 

@@ -83,6 +83,15 @@ bool ash_var_set(
     const char* value,
     bool force_export
 );
+/*
+ * Builtin side-effect writes update the caller beneath a command-prefix
+ * frame, plus the visible temporary binding when one exists.
+ */
+bool ash_var_set_caller(
+    struct ash_shell* shell,
+    const char* name,
+    const char* value
+);
 bool ash_var_set_local(
     struct ash_shell* shell,
     const char* name,

@@ -294,6 +294,24 @@ static int ash_apply_command_assignments_shell(struct ash_shell* shell, const st
     return 0;
 }
 
+static bool ash_apply_command_assignments_temporary(struct ash_shell* shell, const struct ash_command* command) {
+    if (command->assignment_count == 0u) {
+        return true;
+    }
+    if (!ash_scope_push_temporary(shell)) {
+        return ash_diag_oom(shell);
+    }
+    for (size_t i = 0u; i < command->assignment_count; i++) {
+        size_t name_length = 0u;
+        const char* value = NULL;
+        if (!ash_parse_assignment(command->assignments[i], &name_length, &value) || !ash_var_set_temporary(shell, command->assignments[i], name_length, value, true)) {
+            (void)ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT);
+            return false;
+        }
+    }
+    return true;
+}
+
 static int ash_apply_command_assignments_env(struct ash_shell* shell, const struct ash_command* command) {
     (void)shell;
     for (size_t i = 0; i < command->assignment_count; i++) {
@@ -382,7 +400,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         shell->cwd.physical = new_physical;
         shell->cwd.logical = new_logical;
         shell->cwd.old_logical = new_old_logical;
-        if (!ash_var_set(shell, "PWD", newcwd, false)) {
+        if (!ash_var_set_caller(shell, "PWD", newcwd)) {
             free(oldcwd);
             free(newcwd);
             return 1;
@@ -390,7 +408,7 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
     }
 
     if (oldcwd != NULL) {
-        if (!ash_var_set(shell, "OLDPWD", oldcwd, false)) {
+        if (!ash_var_set_caller(shell, "OLDPWD", oldcwd)) {
             free(oldcwd);
             free(newcwd);
             return 1;
@@ -845,33 +863,9 @@ static int ash_execute_function(
     }
 
     bool temporary_scope = command->assignment_count != 0u;
-    if (temporary_scope && !ash_scope_push_temporary(shell)) {
-        ash_diag_oom(shell);
+    if (!ash_apply_command_assignments_temporary(shell, command)) {
         ash_ast_destroy(invocation_body);
         return 2;
-    }
-    for (size_t i = 0u; i < command->assignment_count; i++) {
-        size_t name_length = 0u;
-        const char* value = NULL;
-        if (!ash_parse_assignment(
-                command->assignments[i],
-                &name_length,
-                &value
-            ) ||
-            !ash_var_set_temporary(
-                shell,
-                command->assignments[i],
-                name_length,
-                value,
-                true
-            )) {
-            (void)ash_scope_pop(
-                shell,
-                ASH_SCOPE_TEMPORARY_ASSIGNMENT
-            );
-            ash_ast_destroy(invocation_body);
-            return 2;
-        }
     }
 
     struct ash_redirection_transaction saved_fds;
@@ -1027,8 +1021,9 @@ static int ash_execute_in_child(
     );
 }
 
-static int ash_execute_single_command_parent(struct ash_shell* shell, const struct ash_command* command, enum ash_builtin_kind builtin) {
-    if (ash_apply_command_assignments_shell(shell, command) != 0) {
+static int ash_execute_single_command_parent(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution) {
+    bool temporary_scope = resolution->kind == ASH_COMMAND_REGULAR_BUILTIN && command->assignment_count != 0u;
+    if (temporary_scope ? !ash_apply_command_assignments_temporary(shell, command) : ash_apply_command_assignments_shell(shell, command) != 0) {
         return 1;
     }
 
@@ -1036,18 +1031,24 @@ static int ash_execute_single_command_parent(struct ash_shell* shell, const stru
     ash_redirection_transaction_init(&saved);
 
     if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
+        if (temporary_scope) {
+            (void)ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT);
+        }
         return 1;
     }
 
-    int status = ash_run_builtin(shell, builtin, command, false);
+    int status = ash_run_builtin(shell, resolution->target.builtin, command, false);
 
     if (!shell->should_exit) {
         if (ash_redirection_transaction_rollback(shell, &saved) != 0) {
-            return 1;
+            status = 1;
         }
     }
     else if (ash_redirection_transaction_commit(shell, &saved) != 0) {
-        return 1;
+        status = 1;
+    }
+    if (temporary_scope && ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT) != ASH_SCOPE_POP_OK) {
+        status = 2;
     }
 
     return status;
@@ -1181,7 +1182,7 @@ static int ash_execute_command(
             return ash_execute_single_command_parent(
                 shell,
                 command,
-                resolution.target.builtin
+                &resolution
             );
         case ASH_COMMAND_FUNCTION:
             return ash_execute_function(

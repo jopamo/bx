@@ -364,6 +364,21 @@ bool ash_var_set_local(
     );
 }
 
+bool ash_var_set_caller(struct ash_shell* shell, const char* name, const char* value) {
+    struct ash_scope* current = ash_scope_current(shell);
+    bool temporary = current != NULL && current->kind == ASH_SCOPE_TEMPORARY_ASSIGNMENT;
+    size_t name_length = strlen(name);
+    struct ash_scope* owner = NULL;
+    (void)ash_scope_lookup_variable_mut(shell, name, name_length, temporary ? ASH_SCOPE_LOOKUP_OUTER : ASH_SCOPE_LOOKUP_VISIBLE, &owner);
+    if (owner == NULL) {
+        owner = ash_scope_global(shell);
+    }
+    if (!ash_var_set_in_scope(shell, owner, name, name_length, value, 0u, false)) {
+        return false;
+    }
+    return !temporary || ash_var_find_in_scope(current, name, name_length) == NULL || ash_var_set_in_scope(shell, current, name, name_length, value, 0u, false);
+}
+
 bool ash_var_set_temporary(
     struct ash_shell* shell,
     const char* name,
