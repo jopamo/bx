@@ -39,6 +39,7 @@ bool ash_control_pending(const struct ash_shell* shell);
 enum ash_loop_control ash_control_consume_loop(struct ash_shell* shell);
 void ash_control_enter_function(struct ash_shell* shell);
 void ash_control_leave_function(struct ash_shell* shell);
+bool ash_control_return_allowed(const struct ash_shell* shell);
 bool ash_control_request_return(struct ash_shell* shell, int status);
 bool ash_control_consume_return(struct ash_shell* shell, int* status);
 void ash_control_discard_unit(struct ash_shell* shell, int status);
