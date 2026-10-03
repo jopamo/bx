@@ -208,45 +208,6 @@ static void bx_cpio_inode_maps_free(struct bx_cpio_inode_map_list* maps) {
     maps->cap = 0u;
 }
 
-static bool bx_cpio_parse_hex_field(const unsigned char* field, size_t len, size_t* value_out) {
-    size_t value = 0u;
-    size_t i;
-    for (i = 0u; i < len; i++) {
-        unsigned char ch = field[i];
-        value <<= 4u;
-        if (ch >= '0' && ch <= '9') {
-            value |= (size_t)(ch - '0');
-        }
-        else if (ch >= 'a' && ch <= 'f') {
-            value |= (size_t)(10 + ch - 'a');
-        }
-        else if (ch >= 'A' && ch <= 'F') {
-            value |= (size_t)(10 + ch - 'A');
-        }
-        else {
-            return false;
-        }
-    }
-    *value_out = value;
-    return true;
-}
-
-static bool bx_cpio_parse_octal_field(const unsigned char* field, size_t len, size_t* value_out) {
-    size_t value = 0u;
-    size_t i;
-    for (i = 0u; i < len; i++) {
-        unsigned char ch = field[i];
-        if (ch < '0' || ch > '7') {
-            return false;
-        }
-        if (!bx_checked_size_mul(value, 8, &value) ||
-            !bx_checked_size_add(value, (size_t)(ch - '0'), &value))
-            return false;
-    }
-    *value_out = value;
-    return true;
-}
-
 static bool bx_cpio_parse_owner_spec(const char* text,
                                      struct bx_cpio_options* options,
                                      struct bx_diag_ctx* diag) {
@@ -686,7 +647,21 @@ static bool bx_cpio_finish_stream(const struct bx_archive_buffer* archive, size_
     return true;
 }
 
-static bool bx_cpio_member_metadata_budget(const struct bx_cpio_entry_list* entries, size_t mode, size_t namesize, size_t size, size_t* next_bytes, struct bx_diag_ctx* diag) {
+static bool bx_cpio_decode_metadata(struct bx_cpio_entry* entry, uintmax_t mode, uintmax_t uid, uintmax_t gid, uintmax_t nlink, uintmax_t mtime, struct bx_diag_ctx* diag) {
+    if ((mode & ~(uintmax_t)(S_IFMT | 07777)) != 0 || (uintmax_t)(mode_t)mode != mode || (uintmax_t)(uid_t)uid != uid || (uintmax_t)(gid_t)gid != gid || (uintmax_t)(nlink_t)nlink != nlink ||
+        !bx_checked_uintmax_to_time_t(mtime, &entry->mtime.tv_sec)) {
+        bx_diag(diag, "unrepresentable cpio metadata");
+        return false;
+    }
+    entry->mode = (mode_t)mode;
+    entry->uid = (uid_t)uid;
+    entry->gid = (gid_t)gid;
+    entry->nlink = (nlink_t)nlink;
+    entry->mtime.tv_nsec = 0;
+    return true;
+}
+
+static bool bx_cpio_member_metadata_budget(const struct bx_cpio_entry_list* entries, mode_t mode, size_t namesize, size_t size, size_t* next_bytes, struct bx_diag_ctx* diag) {
     size_t extra;
     bool fits = bx_checked_size_add(sizeof(struct bx_cpio_entry), namesize, &extra);
     if (fits && S_ISLNK(mode))
@@ -704,18 +679,18 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
     size_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_NEWC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
-        size_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor, rdevmajor, rdevminor, check;
+        uintmax_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor, rdevmajor, rdevminor, check;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
         if (memcmp(header, "070701", 6u) != 0) {
             bx_diag(diag, "invalid newc header");
             return false;
         }
-        if (!bx_cpio_parse_hex_field(header + 6, 8u, &ino) || !bx_cpio_parse_hex_field(header + 14, 8u, &mode) || !bx_cpio_parse_hex_field(header + 22, 8u, &uid) ||
-            !bx_cpio_parse_hex_field(header + 30, 8u, &gid) || !bx_cpio_parse_hex_field(header + 38, 8u, &nlink) || !bx_cpio_parse_hex_field(header + 46, 8u, &mtime) ||
-            !bx_cpio_parse_hex_field(header + 54, 8u, &size) || !bx_cpio_parse_hex_field(header + 62, 8u, &devmajor) || !bx_cpio_parse_hex_field(header + 70, 8u, &devminor) ||
-            !bx_cpio_parse_hex_field(header + 78, 8u, &rdevmajor) || !bx_cpio_parse_hex_field(header + 86, 8u, &rdevminor) || !bx_cpio_parse_hex_field(header + 94, 8u, &namesize) ||
-            !bx_cpio_parse_hex_field(header + 102, 8u, &check) || check != 0) {
+        if (!bx_cpio_parse_number(header + 6, 8u, 4, &ino) || !bx_cpio_parse_number(header + 14, 8u, 4, &mode) || !bx_cpio_parse_number(header + 22, 8u, 4, &uid) ||
+            !bx_cpio_parse_number(header + 30, 8u, 4, &gid) || !bx_cpio_parse_number(header + 38, 8u, 4, &nlink) || !bx_cpio_parse_number(header + 46, 8u, 4, &mtime) ||
+            !bx_cpio_parse_number(header + 54, 8u, 4, &size) || !bx_cpio_parse_number(header + 62, 8u, 4, &devmajor) || !bx_cpio_parse_number(header + 70, 8u, 4, &devminor) ||
+            !bx_cpio_parse_number(header + 78, 8u, 4, &rdevmajor) || !bx_cpio_parse_number(header + 86, 8u, 4, &rdevminor) || !bx_cpio_parse_number(header + 94, 8u, 4, &namesize) ||
+            !bx_cpio_parse_number(header + 102, 8u, 4, &check) || check != 0 || namesize > SIZE_MAX || size > SIZE_MAX) {
             bx_diag(diag, "invalid newc header");
             return false;
         }
@@ -737,20 +712,16 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             bx_diag(diag, "invalid newc trailer");
             return false;
         }
+        if (!bx_cpio_decode_metadata(&entry, mode, uid, gid, nlink, mtime, diag))
+            return false;
         size_t next_bytes;
-        if (!bx_cpio_member_metadata_budget(entries, mode, namesize, size, &next_bytes, diag))
+        if (!bx_cpio_member_metadata_budget(entries, entry.mode, namesize, size, &next_bytes, diag))
             return false;
         entry.name = xmalloc(namesize);
         memcpy(entry.name, archive->data + pos, namesize);
         pos = bounds.data_offset;
         entry.ino = (uint32_t)ino;
         entry.device = ((uint64_t)devmajor << 32) | devminor;
-        entry.mode = (mode_t)mode;
-        entry.uid = (uid_t)uid;
-        entry.gid = (gid_t)gid;
-        entry.nlink = (nlink_t)nlink;
-        entry.mtime.tv_sec = (time_t)mtime;
-        entry.mtime.tv_nsec = 0;
         entry.size = size;
         if ((S_ISCHR(entry.mode) || S_ISBLK(entry.mode)) && !bx_fd_device_from_numbers(rdevmajor, rdevminor, &entry.rdev)) {
             bx_diag(diag, "%s: invalid device metadata", entry.name);
@@ -774,17 +745,17 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
     size_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_ODC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
-        size_t ino, mode, uid, gid, nlink, mtime, namesize, size, device, rdev;
+        uintmax_t ino, mode, uid, gid, nlink, mtime, namesize, size, device, rdev;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
         if (memcmp(header, "070707", 6u) != 0) {
             bx_diag(diag, "invalid odc header");
             return false;
         }
-        if (!bx_cpio_parse_octal_field(header + 6, 6u, &device) || !bx_cpio_parse_octal_field(header + 12, 6u, &ino) || !bx_cpio_parse_octal_field(header + 18, 6u, &mode) ||
-            !bx_cpio_parse_octal_field(header + 24, 6u, &uid) || !bx_cpio_parse_octal_field(header + 30, 6u, &gid) || !bx_cpio_parse_octal_field(header + 36, 6u, &nlink) ||
-            !bx_cpio_parse_octal_field(header + 42, 6u, &rdev) || !bx_cpio_parse_octal_field(header + 48, 11u, &mtime) || !bx_cpio_parse_octal_field(header + 59, 6u, &namesize) ||
-            !bx_cpio_parse_octal_field(header + 65, 11u, &size)) {
+        if (!bx_cpio_parse_number(header + 6, 6u, 3, &device) || !bx_cpio_parse_number(header + 12, 6u, 3, &ino) || !bx_cpio_parse_number(header + 18, 6u, 3, &mode) ||
+            !bx_cpio_parse_number(header + 24, 6u, 3, &uid) || !bx_cpio_parse_number(header + 30, 6u, 3, &gid) || !bx_cpio_parse_number(header + 36, 6u, 3, &nlink) ||
+            !bx_cpio_parse_number(header + 42, 6u, 3, &rdev) || !bx_cpio_parse_number(header + 48, 11u, 3, &mtime) || !bx_cpio_parse_number(header + 59, 6u, 3, &namesize) ||
+            !bx_cpio_parse_number(header + 65, 11u, 3, &size) || namesize > SIZE_MAX || size > SIZE_MAX) {
             bx_diag(diag, "invalid odc header");
             return false;
         }
@@ -801,20 +772,16 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             bx_diag(diag, "invalid odc trailer");
             return false;
         }
+        if (!bx_cpio_decode_metadata(&entry, mode, uid, gid, nlink, mtime, diag))
+            return false;
         size_t next_bytes;
-        if (!bx_cpio_member_metadata_budget(entries, mode, namesize, size, &next_bytes, diag))
+        if (!bx_cpio_member_metadata_budget(entries, entry.mode, namesize, size, &next_bytes, diag))
             return false;
         entry.name = xmalloc(namesize);
         memcpy(entry.name, archive->data + pos, namesize);
         pos = bounds.data_offset;
         entry.ino = (uint32_t)ino;
         entry.device = device;
-        entry.mode = (mode_t)mode;
-        entry.uid = (uid_t)uid;
-        entry.gid = (gid_t)gid;
-        entry.nlink = (nlink_t)nlink;
-        entry.mtime.tv_sec = (time_t)mtime;
-        entry.mtime.tv_nsec = 0;
         entry.size = size;
         if ((S_ISCHR(entry.mode) || S_ISBLK(entry.mode)) && !bx_fd_device_from_numbers(major((dev_t)rdev), minor((dev_t)rdev), &entry.rdev)) {
             bx_diag(diag, "%s: invalid device metadata", entry.name);
