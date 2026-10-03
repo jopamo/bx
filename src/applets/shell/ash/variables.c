@@ -406,7 +406,7 @@ bool ash_var_export(struct ash_shell* shell, const char* name, size_t length) {
     struct ash_scope* owner = NULL;
     struct ash_var* var = ash_var_find_len(shell, name, length, &owner);
     if (var == NULL) {
-        return ash_var_set_with_export(shell, name, length, "", true);
+        return ash_var_set_with_export(shell, name, length, NULL, true);
     }
     if (owner == ash_scope_current(shell) && owner->kind == ASH_SCOPE_TEMPORARY_ASSIGNMENT) {
         return ash_var_set_caller(shell, var->name, ash_value_get_scalar(&var->value), true);

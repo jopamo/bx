@@ -39,6 +39,7 @@ struct ash_associative_array {
 struct ash_value {
     enum ash_value_kind kind;
     union {
+        /* NULL is an unset scalar; an allocated empty string is set-empty. */
         char* scalar;
         struct ash_indexed_array indexed;
         struct ash_associative_array associative;
