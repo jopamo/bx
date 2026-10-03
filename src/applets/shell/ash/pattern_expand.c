@@ -19,7 +19,8 @@ enum ash_pattern_compile_result ash_pattern_compile_word(
             shell,
             word,
             ASH_EXPANSION_PATTERN,
-            &expanded
+            &expanded,
+            NULL
         )) {
         return ASH_PATTERN_COMPILE_EXPANSION_ERROR;
     }

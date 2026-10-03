@@ -118,6 +118,7 @@ static char* ash_strdup_text(const struct ash_shell* shell, const char* text) {
 }
 
 static void ash_command_init(struct ash_command* command) {
+    command->substitution_status = 0;
     command->words = NULL;
     command->word_count = 0;
     command->word_cap = 0;
@@ -1156,7 +1157,7 @@ static int ash_execute_command(
             return 1;
         }
         if (command->redir_count == 0u) {
-            return 0;
+            return command->substitution_status;
         }
 
         struct ash_redirection_transaction saved;
@@ -1164,7 +1165,8 @@ static int ash_execute_command(
         if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
             return 1;
         }
-        return ash_redirection_transaction_rollback(shell, &saved);
+        int status = ash_redirection_transaction_rollback(shell, &saved);
+        return status != 0 ? status : command->substitution_status;
     }
 
     struct ash_command_resolution resolution =
@@ -1238,7 +1240,8 @@ static bool ash_command_substitute(
     struct ash_shell* shell,
     const char* command,
     size_t length,
-    char** output
+    char** output,
+    int* substitution_status
 ) {
     *output = NULL;
     int pipe_fds[2];
@@ -1344,6 +1347,7 @@ static bool ash_command_substitute(
         bx_text_buffer_destroy(&captured);
         return ash_diag_oom(shell);
     }
+    *substitution_status = status;
     return true;
 }
 
@@ -1430,7 +1434,8 @@ static enum ash_command_build_result ash_ast_add_redirection(
         ash_expand_redirection(
             shell,
             &redirection->target.syntax,
-            &target
+            &target,
+            &command->substitution_status
         );
     if (expansion == ASH_REDIRECTION_EXPANSION_AMBIGUOUS) {
         return ASH_COMMAND_BUILD_COMMAND_ERROR;
@@ -1479,7 +1484,8 @@ static enum ash_command_build_result ash_ast_simple_to_command(
         if (!ash_expand_argument(
                 shell,
                 &item->value.word.syntax,
-                &fields
+                &fields,
+                &command->substitution_status
             )) {
             ash_command_destroy(command);
             return ASH_COMMAND_BUILD_SHELL_ERROR;
@@ -1518,7 +1524,8 @@ static enum ash_command_build_result ash_ast_simple_to_command(
             if (!ash_expand_word(
                     shell,
                     &item->value.word.syntax,
-                    &text
+                    &text,
+                    &command->substitution_status
                 )) {
                 ash_command_destroy(command);
                 return ASH_COMMAND_BUILD_SHELL_ERROR;
@@ -1994,7 +2001,8 @@ static int ash_execute_ast_for(
             if (!ash_expand_argument(
                     shell,
                     &node->value.for_loop.words[i].syntax,
-                    &fields
+                    &fields,
+                    NULL
                 )) {
                 status = 2;
                 break;
@@ -2073,7 +2081,8 @@ static int ash_execute_ast_case_body(
     if (!ash_expand_word(
             shell,
             &node->value.case_command.subject.syntax,
-            &subject
+            &subject,
+            NULL
         )) {
         return 2;
     }

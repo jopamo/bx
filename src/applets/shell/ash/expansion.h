@@ -34,24 +34,29 @@ void ash_expanded_fields_destroy(struct ash_expanded_fields* fields);
 bool ash_expand_argument(
     struct ash_shell* shell,
     const struct ash_word* word,
-    struct ash_expanded_fields* fields
+    struct ash_expanded_fields* fields,
+    int* substitution_status
 );
 
 /*
  * Expands one structured word without field splitting or pathname expansion.
  * The caller owns the returned string. Context-specific field production is
  * added here rather than in the lexer or executor.
+ * Every expansion entry accepts an optional substitution_status accumulator.
+ * Successful substitutions replace it; words without substitutions retain it.
  */
 bool ash_expand(
     struct ash_shell* shell,
     const struct ash_word* word,
     enum ash_expansion_context context,
-    char** output
+    char** output,
+    int* substitution_status
 );
 bool ash_expand_word(
     struct ash_shell* shell,
     const struct ash_word* word,
-    char** output
+    char** output,
+    int* substitution_status
 );
 /*
  * Redirection words do not field-split. Zero pathname matches preserve the
@@ -60,7 +65,8 @@ bool ash_expand_word(
 enum ash_redirection_expansion_result ash_expand_redirection(
     struct ash_shell* shell,
     const struct ash_word* word,
-    char** output
+    char** output,
+    int* substitution_status
 );
 
 #endif /* BX_APPLETS_SHELL_ASH_EXPANSION_H */
