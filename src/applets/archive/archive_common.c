@@ -16,6 +16,7 @@
 
 #define BX_ARCHIVE_FILE_STREAM_BUFFER_SIZE (1024u * 1024u)
 #include "lib/fd_ops.h"
+#include "lib/checked_math.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
@@ -89,25 +90,22 @@ bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len
     return true;
 }
 
-bool bx_archive_buffer_read_at_most(int fd, struct bx_archive_buffer* buffer, uintmax_t limit, uintmax_t* copied, struct bx_diag_ctx* diag) {
+bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
     unsigned char chunk[8192];
     struct bx_fd_input input = BX_FD_INPUT_INIT;
     bool ok = false;
-    *copied = 0;
     if (bx_fd_input_init(&input, fd, BX_FD_INPUT_BORROWED) != 0) {
         bx_diag(diag, "read error: %s", strerror(errno));
         return false;
     }
 
-    while (*copied < limit) {
+    while (true) {
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
             bx_diag(diag, "read error: %s", strerror(errno));
             break;
         }
-        uintmax_t remaining = limit - *copied;
-        size_t length = remaining < sizeof(chunk) ? (size_t)remaining : sizeof(chunk);
-        ssize_t nread = bx_fd_input_read(&input, chunk, length, bx_archive_temp_signal_fd());
+        ssize_t nread = bx_fd_input_read(&input, chunk, sizeof(chunk), bx_archive_temp_signal_fd());
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
             nread = -1;
@@ -120,25 +118,13 @@ bool bx_archive_buffer_read_at_most(int fd, struct bx_archive_buffer* buffer, ui
             bx_diag(diag, "buffer growth failed: %s", strerror(errno));
             break;
         }
-        *copied += (uintmax_t)nread;
         if (nread == 0) {
             ok = true;
             break;
         }
     }
-    if (*copied == limit) {
-        if (bx_archive_temp_pending_signal())
-            bx_diag(diag, "read error: %s", strerror(EINTR));
-        else
-            ok = true;
-    }
     bx_fd_input_close(&input);
     return ok;
-}
-
-bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
-    uintmax_t copied;
-    return bx_archive_buffer_read_at_most(fd, buffer, UINTMAX_MAX, &copied, diag);
 }
 
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
@@ -416,6 +402,100 @@ bool bx_archive_copy_regular_payload(int source_fd, int fd, off_t limit, bool sp
 done:
     bx_fd_input_close(&input);
     return ok;
+}
+
+static bool bx_archive_spool_end(const struct bx_archive_spool* spool, uintmax_t extra, off_t* end) {
+    uintmax_t next;
+    if (!bx_checked_uintmax_add(spool->len, extra, &next) || (off_t)next < 0 || (uintmax_t)(off_t)next != next) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    *end = (off_t)next;
+    return true;
+}
+
+bool bx_archive_spool_open(struct bx_archive_spool* spool, struct bx_diag_ctx* diag) {
+    if (spool->fd >= 0) {
+        errno = EALREADY;
+        bx_diag(diag, "temporary archive: %s", strerror(errno));
+        return false;
+    }
+    const char* directory = getenv("TMPDIR");
+    if (!directory || !*directory)
+        directory = "/tmp";
+    *spool = (struct bx_archive_spool)BX_ARCHIVE_SPOOL_INIT;
+    int parent = bx_fd_open_cloexec(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+    if (parent >= 0)
+        spool->fd = bx_fd_open_anonymous_file_at(parent);
+    int error = errno;
+    if (parent >= 0 && close(parent) != 0 && spool->fd >= 0) {
+        error = errno;
+        bx_fd_cleanup(&spool->fd);
+    }
+    if (spool->fd < 0) {
+        bx_diag(diag, "temporary archive: %s", strerror(error));
+        return false;
+    }
+    return true;
+}
+
+bool bx_archive_spool_close(struct bx_archive_spool* spool, struct bx_diag_ctx* diag) {
+    spool->len = 0;
+    return bx_fd_close(&spool->fd, "temporary archive", diag);
+}
+
+bool bx_archive_spool_append(struct bx_archive_spool* spool, const void* data, size_t len) {
+    off_t end;
+    if (!bx_archive_spool_end(spool, len, &end) || !bx_archive_write_payload_bytes(spool->fd, data, len))
+        return false;
+    spool->len = (uintmax_t)end;
+    return true;
+}
+
+bool bx_archive_spool_append_zeros(struct bx_archive_spool* spool, size_t len) {
+    static const unsigned char zeros[4096];
+    off_t end;
+    if (!bx_archive_spool_end(spool, len, &end))
+        return false;
+    while (len) {
+        size_t count = len < sizeof(zeros) ? len : sizeof(zeros);
+        if (!bx_archive_spool_append(spool, zeros, count))
+            return false;
+        len -= count;
+    }
+    return true;
+}
+
+bool bx_archive_spool_copy(struct bx_archive_spool* spool, int source_fd, off_t length, off_t* copied, struct bx_diag_ctx* diag) {
+    off_t end;
+    *copied = 0;
+    if (length < 0 || !bx_archive_spool_end(spool, (uintmax_t)length, &end)) {
+        bx_diag(diag, "temporary archive: %s", strerror(EOVERFLOW));
+        return false;
+    }
+    if (!bx_archive_copy_regular_payload(source_fd, spool->fd, length, false, copied, diag))
+        return false;
+    spool->len += (uintmax_t)*copied;
+    return true;
+}
+
+bool bx_archive_spool_write_all(FILE* stream, const struct bx_archive_spool* spool, struct bx_diag_ctx* diag) {
+    if (fflush(stream) != 0 || fileno(stream) < 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+    if (bx_fd_lseek(spool->fd, 0, SEEK_SET) < 0) {
+        bx_diag(diag, "read error: %s", strerror(errno));
+        return false;
+    }
+    off_t copied;
+    if (!bx_archive_copy_regular_payload(spool->fd, fileno(stream), (off_t)spool->len, false, &copied, diag))
+        return false;
+    if ((uintmax_t)copied != spool->len) {
+        bx_diag(diag, "read error: unexpected end of temporary archive");
+        return false;
+    }
+    return true;
 }
 
 static bool bx_archive_output_file_open_direct(struct bx_archive_output_file* out,

@@ -21,6 +21,20 @@ struct bx_archive_name_list {
     size_t cap;
 };
 
+struct bx_archive_spool {
+    int fd;
+    uintmax_t len;
+};
+#define BX_ARCHIVE_SPOOL_INIT {.fd = -1}
+
+/* Open only a closed handle. Failed writes require discarding the private spool. */
+bool bx_archive_spool_open(struct bx_archive_spool* spool, struct bx_diag_ctx* diag);
+bool bx_archive_spool_close(struct bx_archive_spool* spool, struct bx_diag_ctx* diag);
+bool bx_archive_spool_append(struct bx_archive_spool* spool, const void* data, size_t len);
+bool bx_archive_spool_append_zeros(struct bx_archive_spool* spool, size_t len);
+bool bx_archive_spool_copy(struct bx_archive_spool* spool, int source_fd, off_t length, off_t* copied, struct bx_diag_ctx* diag);
+bool bx_archive_spool_write_all(FILE* stream, const struct bx_archive_spool* spool, struct bx_diag_ctx* diag);
+
 struct bx_archive_output_file {
     FILE* stream;
     char* publish_path;
@@ -36,8 +50,6 @@ bool bx_archive_buffer_append(struct bx_archive_buffer* buffer, const void* data
 bool bx_archive_buffer_append_byte(struct bx_archive_buffer* buffer, unsigned char value);
 bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len);
 bool bx_archive_buffer_read_all(int fd, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
-/* Append up to limit bytes without probing beyond it; copied excludes existing storage. */
-bool bx_archive_buffer_read_at_most(int fd, struct bx_archive_buffer* buffer, uintmax_t limit, uintmax_t* copied, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_has_gzip_magic(const struct bx_archive_buffer* buffer);
 
@@ -55,8 +67,8 @@ bool bx_archive_write_regular_payload(int fd,
                                       size_t len,
                                       bool sparse,
                                       struct bx_diag_ctx* diag);
-/* Copy at most limit bytes to a fresh/truncated destination at offset zero.
- * Borrow both descriptors. The caller verifies copied length and source state. */
+/* Copy at most limit bytes at current offsets; sparse output starts at zero in
+ * a fresh/truncated destination. Borrow descriptors; the caller verifies source state. */
 bool bx_archive_copy_regular_payload(int source_fd, int fd, off_t limit, bool sparse, off_t* copied, struct bx_diag_ctx* diag);
 
 bool bx_archive_output_file_open(struct bx_archive_output_file* out,

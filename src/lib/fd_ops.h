@@ -50,6 +50,8 @@ void bx_fd_cleanup(int* p_fd);
  * creating process-local descriptors that must not leak across exec. */
 int bx_fd_open_cloexec(const char* path, int flags, mode_t mode);
 int bx_fd_openat_cloexec(int dirfd, const char* path, int flags, mode_t mode);
+/* Create an unlinked private read/write file in a trusted directory. No named fallback. */
+int bx_fd_open_anonymous_file_at(int dirfd);
 int bx_fd_socket_cloexec(int domain, int type, int protocol);
 int bx_fd_socketpair_cloexec(int domain, int type, int protocol, int socketfd[2]);
 int bx_fd_pipe_cloexec(int pipefd[2]);
