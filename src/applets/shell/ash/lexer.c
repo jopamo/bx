@@ -538,7 +538,15 @@ enum ash_matched_frame_kind {
     ASH_MATCH_DOUBLE_QUOTE,
     ASH_MATCH_ANSI_C_QUOTE,
     ASH_MATCH_LOCALE_QUOTE,
+    ASH_MATCH_CASE,
     ASH_MATCH_COUNT,
+};
+
+enum ash_matched_case_phase {
+    ASH_MATCH_CASE_SUBJECT = 0,
+    ASH_MATCH_CASE_IN,
+    ASH_MATCH_CASE_PATTERN,
+    ASH_MATCH_CASE_BODY,
 };
 
 #define ASH_MATCH_INLINE_FRAMES 8u
@@ -547,6 +555,12 @@ struct ash_matched_frame {
     bool comments_enabled;
     bool comment_eligible;
     enum ash_quote_kind backquote_quote;
+    bool commands_enabled;
+    bool word_start;
+    bool command_start;
+    bool case_subject_seen;
+    bool case_pattern_start;
+    enum ash_matched_case_phase case_phase;
 };
 
 struct ash_matched_stack {
@@ -581,12 +595,20 @@ static int ash_matched_stack_push(
         kind == ASH_MATCH_COMMAND ||
         kind == ASH_MATCH_PROCESS ||
         kind == ASH_MATCH_BACKQUOTE;
+    bool commands_enabled = kind == ASH_MATCH_COMMAND ||
+        kind == ASH_MATCH_PROCESS || kind == ASH_MATCH_CASE;
+    if (kind == ASH_MATCH_CASE) {
+        comments_enabled = true;
+    }
     if (stack->count != 0u) {
         struct ash_matched_frame* parent =
             &stack->frames[stack->count - 1u];
         if (kind == ASH_MATCH_PAREN) {
             comments_enabled = parent->comments_enabled;
             parent->comment_eligible = parent->comments_enabled;
+            commands_enabled = parent->commands_enabled &&
+                !(parent->kind == ASH_MATCH_CASE &&
+                  parent->case_phase == ASH_MATCH_CASE_PATTERN);
         }
         else if (parent->comments_enabled) {
             parent->comment_eligible = false;
@@ -628,6 +650,9 @@ static int ash_matched_stack_push(
         .kind = kind,
         .comments_enabled = comments_enabled,
         .comment_eligible = comments_enabled,
+        .commands_enabled = commands_enabled,
+        .word_start = true,
+        .command_start = true,
     };
     return 0;
 }
@@ -650,6 +675,7 @@ static size_t ash_matched_opener_length(
         case ASH_MATCH_DOUBLE_QUOTE:
             return 1u;
         case ASH_MATCH_COUNT:
+        case ASH_MATCH_CASE:
             break;
     }
     return 0u;
@@ -747,6 +773,7 @@ static const char* ash_matched_error(
         case ASH_MATCH_ANSI_C_QUOTE:
         case ASH_MATCH_LOCALE_QUOTE:
         case ASH_MATCH_COUNT:
+        case ASH_MATCH_CASE:
             break;
     }
     return "unterminated shell construct";
@@ -809,6 +836,7 @@ static int ash_word_append_matched_span(
         case ASH_MATCH_ANSI_C_QUOTE:
         case ASH_MATCH_LOCALE_QUOTE:
         case ASH_MATCH_COUNT:
+        case ASH_MATCH_CASE:
             errno = EINVAL;
             return -1;
     }
@@ -840,6 +868,20 @@ static int ash_word_append_matched_span(
 static bool ash_matched_comment_separator(char ch) {
     return ash_is_blank(ch) || ch == '\n' ||
         strchr("&|;<>", ch) != NULL;
+}
+
+static enum ash_reserved_word ash_lexer_matched_reserved_word(const struct ash_lexer* lexer) {
+    char spelling[sizeof("until")];
+    size_t length = 0u;
+    while (length < sizeof(spelling) - 1u) {
+        char ch = ash_lexer_peek_logical(lexer, length);
+        if (ch == '\0' || ash_matched_comment_separator(ch) || ch == '(' || ch == ')') {
+            return ash_reserved_word_from_span(spelling, length);
+        }
+        spelling[length++] = ch;
+    }
+    char next = ash_lexer_peek_logical(lexer, length);
+    return next == '\0' || ash_matched_comment_separator(next) || next == '(' || next == ')' ? ash_reserved_word_from_span(spelling, length) : ASH_RESERVED_NONE;
 }
 
 /*
@@ -1052,6 +1094,14 @@ static enum ash_lexer_result ash_lexer_scan_matched(
         }
 
         if (ch == '\\') {
+            if (active->commands_enabled) {
+                active->word_start = false;
+                active->command_start = false;
+                if (frame == ASH_MATCH_CASE &&
+                    active->case_phase == ASH_MATCH_CASE_SUBJECT) {
+                    active->case_subject_seen = true;
+                }
+            }
             (void)ash_lexer_advance(lexer);
             if (!ash_lexer_at_end(lexer)) {
                 (void)ash_lexer_advance(lexer);
@@ -1066,6 +1116,116 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             active->comment_eligible) {
             ash_lexer_skip_comment(lexer);
             continue;
+        }
+
+        /* A case pattern's ')' closes its clause, not the substitution. */
+        if (active->commands_enabled) {
+            bool blank = ash_is_blank(ch) || ch == '\n';
+            enum ash_reserved_word keyword = active->word_start && !blank ?
+                ash_lexer_matched_reserved_word(lexer) : ASH_RESERVED_NONE;
+            if (frame == ASH_MATCH_CASE) {
+                if (active->case_phase == ASH_MATCH_CASE_SUBJECT) {
+                    if (blank && active->case_subject_seen) {
+                        active->case_phase = ASH_MATCH_CASE_IN;
+                    }
+                    else if (!blank) {
+                        active->case_subject_seen = true;
+                    }
+                }
+                else if (active->case_phase == ASH_MATCH_CASE_IN &&
+                         keyword == ASH_RESERVED_IN) {
+                    (void)ash_lexer_advance_logical(lexer);
+                    (void)ash_lexer_advance_logical(lexer);
+                    active->case_phase = ASH_MATCH_CASE_PATTERN;
+                    active->case_pattern_start = true;
+                    active->word_start = true;
+                    continue;
+                }
+                else if (active->case_phase == ASH_MATCH_CASE_PATTERN) {
+                    if (keyword == ASH_RESERVED_ESAC &&
+                        active->case_pattern_start) {
+                        for (size_t i = 0u; i < 4u; i++) {
+                            (void)ash_lexer_advance_logical(lexer);
+                        }
+                        stack.count--;
+                        continue;
+                    }
+                    if (ch == ')') {
+                        (void)ash_lexer_advance(lexer);
+                        active->case_phase = ASH_MATCH_CASE_BODY;
+                        active->command_start = true;
+                        active->word_start = true;
+                        active->comment_eligible = true;
+                        continue;
+                    }
+                    if (ch == '(' && active->case_pattern_start) {
+                        (void)ash_lexer_advance(lexer);
+                        active->case_pattern_start = false;
+                        continue;
+                    }
+                    if (!blank && ch != '#') {
+                        active->case_pattern_start = false;
+                    }
+                }
+                else if (active->case_phase == ASH_MATCH_CASE_BODY) {
+                    if (keyword == ASH_RESERVED_ESAC &&
+                        active->command_start) {
+                        for (size_t i = 0u; i < 4u; i++) {
+                            (void)ash_lexer_advance_logical(lexer);
+                        }
+                        stack.count--;
+                        continue;
+                    }
+                    if (ch == ';' &&
+                        (ash_lexer_starts_with(lexer, ";;") ||
+                         ash_lexer_starts_with(lexer, ";&"))) {
+                        const struct ash_operator* operator = ash_lexer_operator(lexer);
+                        for (size_t i = 0u; i < operator->length; i++) {
+                            (void)ash_lexer_advance_logical(lexer);
+                        }
+                        active->case_phase = ASH_MATCH_CASE_PATTERN;
+                        active->case_pattern_start = true;
+                        active->word_start = true;
+                        active->comment_eligible = true;
+                        continue;
+                    }
+                }
+            }
+            bool command_context = frame != ASH_MATCH_CASE ||
+                active->case_phase == ASH_MATCH_CASE_BODY;
+            if (command_context && active->command_start &&
+                keyword == ASH_RESERVED_CASE) {
+                for (size_t i = 0u; i < 4u; i++) {
+                    (void)ash_lexer_advance_logical(lexer);
+                }
+                active->word_start = false;
+                active->command_start = false;
+                if (ash_matched_stack_push(&stack, ASH_MATCH_CASE) != 0) {
+                    goto out_of_memory;
+                }
+                continue;
+            }
+            if (blank || strchr(";|&", ch) != NULL) {
+                active->word_start = true;
+                if (ch == '\n' || strchr(";|&", ch) != NULL) {
+                    active->command_start = true;
+                }
+            }
+            else if (active->word_start) {
+                active->word_start = false;
+                if (!(command_context && active->command_start &&
+                      (keyword == ASH_RESERVED_THEN ||
+                       keyword == ASH_RESERVED_DO ||
+                       keyword == ASH_RESERVED_ELSE ||
+                       keyword == ASH_RESERVED_ELIF ||
+                       keyword == ASH_RESERVED_IF ||
+                       keyword == ASH_RESERVED_WHILE ||
+                       keyword == ASH_RESERVED_UNTIL ||
+                       keyword == ASH_RESERVED_BANG ||
+                       keyword == ASH_RESERVED_LBRACE))) {
+                    active->command_start = false;
+                }
+            }
         }
 
         enum ash_matched_frame_kind nested;
@@ -1149,6 +1309,12 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             }
             (void)ash_lexer_advance(lexer);
             stack.count--;
+            if (frame == ASH_MATCH_PAREN && stack.count != 0u &&
+                active->commands_enabled) {
+                struct ash_matched_frame* parent = &stack.frames[stack.count - 1u];
+                parent->word_start = true;
+                parent->command_start = true;
+            }
             continue;
         }
         if ((frame == ASH_MATCH_COMMAND ||

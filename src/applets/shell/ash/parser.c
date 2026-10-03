@@ -9,54 +9,6 @@
 #include "applets/shell/ash/parser_internal.h"
 #include "applets/shell/ash/variables.h"
 
-enum ash_reserved_word {
-    ASH_RESERVED_NONE = 0,
-    ASH_RESERVED_BANG,
-    ASH_RESERVED_LBRACE,
-    ASH_RESERVED_RBRACE,
-    ASH_RESERVED_CASE,
-    ASH_RESERVED_DO,
-    ASH_RESERVED_DONE,
-    ASH_RESERVED_ELIF,
-    ASH_RESERVED_ELSE,
-    ASH_RESERVED_ESAC,
-    ASH_RESERVED_FI,
-    ASH_RESERVED_FOR,
-    ASH_RESERVED_IF,
-    ASH_RESERVED_IN,
-    ASH_RESERVED_THEN,
-    ASH_RESERVED_UNTIL,
-    ASH_RESERVED_WHILE,
-};
-
-struct ash_reserved_word_entry {
-    enum ash_reserved_word word;
-    const char* spelling;
-    size_t length;
-};
-
-#define ASH_RESERVED_ENTRY(word, spelling) \
-    {word, spelling, sizeof(spelling) - 1u}
-static const struct ash_reserved_word_entry ash_reserved_words[] = {
-    ASH_RESERVED_ENTRY(ASH_RESERVED_BANG, "!"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_LBRACE, "{"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_RBRACE, "}"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_CASE, "case"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_DO, "do"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_DONE, "done"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_ELIF, "elif"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_ELSE, "else"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_ESAC, "esac"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_FI, "fi"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_FOR, "for"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_IF, "if"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_IN, "in"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_THEN, "then"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_UNTIL, "until"),
-    ASH_RESERVED_ENTRY(ASH_RESERVED_WHILE, "while"),
-};
-#undef ASH_RESERVED_ENTRY
-
 struct ash_parse_stop {
     enum ash_token_kind token;
     enum ash_reserved_word words[4];
@@ -88,19 +40,7 @@ static enum ash_reserved_word ash_parser_reserved_word(
         memcpy(spelling + length, part->text, part->length);
         length += part->length;
     }
-
-    for (size_t i = 0u;
-         i < sizeof(ash_reserved_words) /
-             sizeof(ash_reserved_words[0]);
-         i++) {
-        const struct ash_reserved_word_entry* entry =
-            &ash_reserved_words[i];
-        if (entry->length == length &&
-            memcmp(entry->spelling, spelling, length) == 0) {
-            return entry->word;
-        }
-    }
-    return ASH_RESERVED_NONE;
+    return ash_reserved_word_from_span(spelling, length);
 }
 
 enum ash_parser_result ash_parser_fail(
@@ -159,15 +99,15 @@ static bool ash_parser_at_end(struct ash_parser* parser) {
 /*
  * A token required before an unescaped newline is normally a fatal omission.
  * A terminal backslash-newline has already been removed by the lexer, so its
- * apparent EOF is only a physical-line boundary and may still supply the
- * required token.
+ * apparent EOF or partial word is only a physical-line boundary and may still
+ * supply the required token.
  */
 static enum ash_parser_result ash_parser_required_token_result(
     const struct ash_parser* parser,
     const struct ash_token* token
 ) {
     return token != NULL &&
-        token->kind == ASH_TOKEN_EOF &&
+        (token->kind == ASH_TOKEN_EOF || token->kind == ASH_TOKEN_WORD) &&
         ash_lexer_ended_with_line_continuation(&parser->lexer) ?
             ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR;
 }
@@ -205,7 +145,8 @@ static bool ash_parser_consume_reserved(
     if (ash_parser_reserved_word(token) != expected) {
         ash_parser_fail(
             parser,
-            ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+            ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE :
+                ash_parser_required_token_result(parser, token),
             token->location,
             error
         );
@@ -1586,7 +1527,7 @@ static struct ash_ast* ash_parse_list(
                 token = ash_parser_peek(parser);
                 ash_parser_fail(
                     parser,
-                    ASH_PARSER_ERROR,
+                    ash_parser_required_token_result(parser, token),
                     (token != NULL) ? token->location : node->location,
                     "separator expected before closing token"
                 );
