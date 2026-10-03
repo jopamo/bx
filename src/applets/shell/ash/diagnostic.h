@@ -2,6 +2,7 @@
 #define BX_APPLETS_SHELL_ASH_DIAGNOSTIC_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "applets/shell/ash/syntax.h"
 
@@ -15,6 +16,7 @@ void ash_diag(const struct ash_shell* shell, const char* format, ...)
     __attribute__((format(printf, 2, 3)));
 void ash_diag_expansion(const struct ash_shell* shell, const char* format, ...)
     __attribute__((format(printf, 2, 3)));
+void ash_diag_unbound_parameter(const struct ash_shell* shell, const char* name, size_t length);
 void ash_diag_parse(
     const struct ash_shell* shell,
     struct ash_source_location location,

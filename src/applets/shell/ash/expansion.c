@@ -18,9 +18,8 @@ static bool ash_expansion_oom(const struct ash_shell* shell) {
     return ash_diag_oom(shell);
 }
 
-static bool ash_expansion_bad_substitution(struct ash_shell* shell, const char* input) {
-    ash_diag_expansion(shell, "%s: bad substitution", input);
-    if (shell->forked_execution || ash_shell_policy_noninteractive_posix(&shell->policy)) {
+static bool ash_expansion_fail(struct ash_shell* shell, bool terminate_context) {
+    if (shell->forked_execution || terminate_context) {
         shell->should_exit = true;
         shell->requested_exit_status = shell->forked_execution ? 1 : 127;
     }
@@ -28,6 +27,11 @@ static bool ash_expansion_bad_substitution(struct ash_shell* shell, const char* 
         ash_control_discard_unit(shell, 1);
     }
     return false;
+}
+
+static bool ash_expansion_bad_substitution(struct ash_shell* shell, const char* input) {
+    ash_diag_expansion(shell, "%s: bad substitution", input);
+    return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
 }
 
 static bool ash_pathname_expansion_enabled(
@@ -81,6 +85,14 @@ static bool ash_expansion_append_char(
         ash_expansion_oom(shell);
 }
 
+static bool ash_append_parameter_value(struct ash_shell* shell, struct bx_text_buffer* output, const char* value, const char* name, size_t name_length) {
+    if (value == NULL && (shell->options & ASH_SHELL_OPTION_NOUNSET) != 0u) {
+        ash_diag_unbound_parameter(shell, name, name_length);
+        return ash_expansion_fail(shell, !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE));
+    }
+    return ash_expansion_append_text(shell, output, value != NULL ? value : "");
+}
+
 static const char* ash_positional(
     const struct ash_shell* shell,
     uintmax_t index
@@ -88,29 +100,38 @@ static const char* ash_positional(
     const struct ash_positional_frame* positionals =
         ash_scope_positionals(shell);
     if (positionals == NULL) {
-        return "";
+        return NULL;
     }
     if (index == 0) {
         return positionals->argv0;
     }
     if (index > positionals->count) {
-        return "";
+        return NULL;
     }
     return positionals->values[index - 1];
 }
 
-static bool ash_append_numbered_parameter(struct ash_shell* shell, struct bx_text_buffer* output, const char* digits, size_t length) {
+static bool ash_append_numbered_parameter(struct ash_shell* shell, struct bx_text_buffer* output, const char* digits, size_t length, bool braced) {
+    const char* name = braced ? digits : digits - 1;
+    size_t name_length = length + (braced ? 0u : 1u);
     uintmax_t index = 0u;
     for (size_t i = 0u; i < length; i++) {
         unsigned int digit = (unsigned int)(digits[i] - '0');
         if (index > ((uintmax_t)INTMAX_MAX - digit) / 10u) {
             /* Bash retries an overflowing braced index as a dollar digit. */
-            return ash_expansion_append_text(shell, output,
-                                             ash_shell_policy_valid(&shell->policy) && ash_shell_policy_is_bash(&shell->policy) ? ash_positional(shell, (unsigned int)(digits[0] - '0')) : "");
+            const char* value = NULL;
+            if (ash_shell_policy_valid(&shell->policy) && ash_shell_policy_is_bash(&shell->policy)) {
+                value = ash_positional(shell, (unsigned int)(digits[0] - '0'));
+                if (value == NULL && (shell->options & ASH_SHELL_OPTION_NOUNSET) != 0u) {
+                    char fallback[] = {'$', digits[0]};
+                    ash_diag_unbound_parameter(shell, fallback, sizeof(fallback));
+                }
+            }
+            return ash_append_parameter_value(shell, output, value, name, name_length);
         }
         index = index * 10u + digit;
     }
-    return ash_expansion_append_text(shell, output, ash_positional(shell, index));
+    return ash_append_parameter_value(shell, output, ash_positional(shell, index), name, name_length);
 }
 
 static const char* ash_ifs_joiner(const struct ash_shell* shell) {
@@ -156,7 +177,8 @@ static bool ash_append_positionals_joined(
 static bool ash_append_special(
     struct ash_shell* shell,
     char parameter,
-    struct bx_text_buffer* output
+    struct bx_text_buffer* output,
+    bool braced
 ) {
     char number[32];
     switch (parameter) {
@@ -184,7 +206,7 @@ static bool ash_append_special(
         }
         case '!':
             if (shell->last_async_pid <= 0) {
-                return true;
+                return ash_append_parameter_value(shell, output, NULL, braced ? "!" : "$!", braced ? 1u : 2u);
             }
             snprintf(
                 number,
@@ -193,12 +215,6 @@ static bool ash_append_special(
                 (long)shell->last_async_pid
             );
             return ash_expansion_append_text(shell, output, number);
-        case '0':
-            return ash_expansion_append_text(
-                shell,
-                output,
-                ash_positional(shell, 0)
-            );
         case '@':
         case '*':
             return ash_append_positionals_joined(shell, output);
@@ -220,7 +236,7 @@ static bool ash_expand_parameter(
 
     if (strchr("?$#-!@*", character) != NULL) {
         return input[position + 1u] == '\0' &&
-            ash_append_special(shell, character, output);
+            ash_append_special(shell, character, output, false);
     }
 
     if (character == '{') {
@@ -233,14 +249,14 @@ static bool ash_expand_parameter(
             if (input[position] != '}' || input[position + 1u] != '\0') {
                 return ash_expansion_bad_substitution(shell, input);
             }
-            return ash_append_numbered_parameter(shell, output, input + start, position - start);
+            return ash_append_numbered_parameter(shell, output, input + start, position - start, true);
         }
         if (strchr("?$#-!@*", input[position]) != NULL) {
             char special = input[position++];
             if (input[position] != '}' || input[position + 1u] != '\0') {
                 return ash_expansion_bad_substitution(shell, input);
             }
-            return ash_append_special(shell, special, output);
+            return ash_append_special(shell, special, output, true);
         }
 
         size_t start = position;
@@ -256,18 +272,14 @@ static bool ash_expand_parameter(
             input + start,
             position - start
         );
-        return ash_expansion_append_text(
-            shell,
-            output,
-            value != NULL ? value : ""
-        );
+        return ash_append_parameter_value(shell, output, value, input + start, position - start);
     }
 
     if (isdigit((unsigned char)character)) {
         if (input[position + 1u] != '\0') {
             return ash_expansion_bad_substitution(shell, input);
         }
-        return ash_append_numbered_parameter(shell, output, input + position, 1u);
+        return ash_append_numbered_parameter(shell, output, input + position, 1u, false);
     }
 
     if (!ash_is_name_start((unsigned char)character)) {
@@ -285,11 +297,7 @@ static bool ash_expand_parameter(
         input + start,
         position - start
     );
-    return ash_expansion_append_text(
-        shell,
-        output,
-        value != NULL ? value : ""
-    );
+    return ash_append_parameter_value(shell, output, value, input + start, position - start);
 }
 
 static int ash_hex_value(unsigned char character) {

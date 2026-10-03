@@ -2267,7 +2267,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCfinpsv] "
+            "Usage: %s [--standalone-applets] [-aCfinpsuv] "
             "[-o option-name] [-c command] [script [arg ...]]\n",
             progname
         );
@@ -2292,7 +2292,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCfilnpstv or -c command or -o/+o option-name\n"
+            "\t-aCfilnpstuv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2314,6 +2314,7 @@ static void ash_print_help(FILE* stream, const char* progname) {
         fprintf(stream, "  -l           make the shell a login shell\n");
         fprintf(stream, "  -t           exit after one top-level input unit\n");
     }
+    fprintf(stream, "  -u           report unset parameters during expansion\n");
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  --init-file file\n");
@@ -2325,9 +2326,9 @@ static void ash_print_help(FILE* stream, const char* progname) {
     }
     const char* onecmd = strcmp(progname, "bash") == 0 ? "onecmd, " : "";
     fprintf(stream, "  -o option-name\n");
-    fprintf(stream, "               set allexport, noclobber, noexec, noglob, %spipefail, or verbose\n", onecmd);
+    fprintf(stream, "               set allexport, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
     fprintf(stream, "  +o option-name\n");
-    fprintf(stream, "               clear allexport, noclobber, noexec, noglob, %spipefail, or verbose\n", onecmd);
+    fprintf(stream, "               clear allexport, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
