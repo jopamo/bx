@@ -272,16 +272,45 @@ static bool bx_cpio_parse_owner_spec(const char* text,
     return true;
 }
 
-static bool bx_cpio_read_file(const char* path, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
-    int fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
+static bool bx_cpio_read_file(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
+    const char* path = entry->source_path;
+    char* leaf = NULL;
+    int parent = bx_dir_path_open_source_parent_at(source_root_fd, path, &leaf);
+    struct stat expected_parent = {.st_dev = entry->source_parent_dev, .st_ino = entry->source_parent_ino, .st_mode = S_IFDIR};
+    struct stat opened;
+    int fd = -1;
+    if (parent >= 0 && bx_fd_fstat_expected(parent, &expected_parent, &opened) == 0)
+        fd = bx_fd_openat_regular_verified(parent, leaf, &entry->st, &opened);
+    int error = errno;
+    if (parent >= 0 && close(parent) != 0 && fd >= 0) {
+        error = errno;
+        close(fd);
+        fd = -1;
+    }
+    free(leaf);
     if (fd < 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
+        bx_diag(diag, "%s: %s", path, strerror(error));
         return false;
     }
     bx_archive_buffer_init(buffer);
     if (!bx_archive_buffer_read_all(fd, buffer, diag)) {
         close(fd);
         bx_archive_buffer_free(buffer);
+        return false;
+    }
+    struct stat finished;
+    if (fstat(fd, &finished) != 0) {
+        error = errno;
+        close(fd);
+        bx_archive_buffer_free(buffer);
+        bx_diag(diag, "%s: %s", path, strerror(error));
+        return false;
+    }
+    if (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size != buffer->len || finished.st_size != entry->st.st_size || finished.st_mtim.tv_sec != entry->st.st_mtim.tv_sec ||
+        finished.st_mtim.tv_nsec != entry->st.st_mtim.tv_nsec || finished.st_ctim.tv_sec != entry->st.st_ctim.tv_sec || finished.st_ctim.tv_nsec != entry->st.st_ctim.tv_nsec) {
+        close(fd);
+        bx_archive_buffer_free(buffer);
+        bx_diag(diag, "%s: source changed while reading", path);
         return false;
     }
     if (close(fd) != 0) {
@@ -396,13 +425,10 @@ static bool bx_cpio_include_source(const struct bx_archive_fs_visit_entry* entry
     return !S_ISSOCK(entry->st->st_mode);
 }
 
-static bool bx_cpio_build_fs_list(struct bx_archive_fs_list* list,
-                                  char** names,
-                                  size_t count,
-                                  struct bx_diag_ctx* diag) {
+static bool bx_cpio_build_fs_list(struct bx_archive_fs_list* list, int source_root_fd, char** names, size_t count, struct bx_diag_ctx* diag) {
     size_t i;
     for (i = 0u; i < count; i++) {
-        if (!bx_archive_fs_add_path_filtered(list, names[i], names[i], false, false, bx_cpio_include_source, NULL, NULL, NULL, diag)) {
+        if (!bx_archive_fs_add_path_filtered(list, source_root_fd, names[i], names[i], false, false, bx_cpio_include_source, NULL, NULL, NULL, diag)) {
             return false;
         }
     }
@@ -420,6 +446,7 @@ static void bx_cpio_count_inodes(const struct bx_archive_fs_list* list,
 }
 
 static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
+                                      int source_root_fd,
                                       const struct bx_archive_fs_entry* entry,
                                       uintmax_t ino,
                                       const struct bx_cpio_options* options,
@@ -456,7 +483,7 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
         size = strlen(entry->link_target);
     }
     else if (S_ISREG(mode) && !suppress_data) {
-        if (!bx_cpio_read_file(entry->source_path, &data, diag)) {
+        if (!bx_cpio_read_file(source_root_fd, entry, &data, diag)) {
             return false;
         }
         payload = data.data;
@@ -485,18 +512,14 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
     return true;
 }
 
-static bool bx_cpio_build_archive(struct bx_archive_buffer* archive,
-                                  const struct bx_cpio_options* options,
-                                  char** names,
-                                  size_t name_count,
-                                  struct bx_diag_ctx* diag) {
+static bool bx_cpio_build_archive(struct bx_archive_buffer* archive, int source_root_fd, const struct bx_cpio_options* options, char** names, size_t name_count, struct bx_diag_ctx* diag) {
     struct bx_archive_fs_list files = {0};
     struct bx_cpio_inode_map_list maps = {0};
     bool* emitted = NULL;
     size_t i;
 
     bx_archive_buffer_init(archive);
-    if (!bx_cpio_build_fs_list(&files, names, name_count, diag)) {
+    if (!bx_cpio_build_fs_list(&files, source_root_fd, names, name_count, diag)) {
         bx_archive_fs_list_free(&files);
         return false;
     }
@@ -523,12 +546,7 @@ static bool bx_cpio_build_archive(struct bx_archive_buffer* archive,
                     if (emitted[j] || group_map != map) {
                         continue;
                     }
-                    if (!bx_cpio_emit_one_fs_entry(archive,
-                                                   group_entry,
-                                                   map->synthetic_ino,
-                                                   options,
-                                                   j != i,
-                                                   diag)) {
+                    if (!bx_cpio_emit_one_fs_entry(archive, source_root_fd, group_entry, map->synthetic_ino, options, j != i, diag)) {
                         free(emitted);
                         bx_cpio_inode_maps_free(&maps);
                         bx_archive_fs_list_free(&files);
@@ -539,7 +557,7 @@ static bool bx_cpio_build_archive(struct bx_archive_buffer* archive,
             }
             continue;
         }
-        if (!bx_cpio_emit_one_fs_entry(archive, entry, map->synthetic_ino, options, false, diag)) {
+        if (!bx_cpio_emit_one_fs_entry(archive, source_root_fd, entry, map->synthetic_ino, options, false, diag)) {
             free(emitted);
             bx_cpio_inode_maps_free(&maps);
             bx_archive_fs_list_free(&files);
@@ -1159,9 +1177,15 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
     struct bx_archive_pending_metadata dirs = {.path_policy = BX_DIR_PATH_NO_MOUNT_CROSSING};
     int status = 2;
     int root_fd = -1;
+    int source_root_fd = -1;
     if (!bx_cpio_read_name_list(options, &names, &name_count, diag))
         return 2;
-    if (!bx_cpio_build_fs_list(&files, names, name_count, diag))
+    source_root_fd = bx_fd_open_cloexec(".", O_RDONLY | O_DIRECTORY, 0);
+    if (source_root_fd < 0) {
+        bx_diag(diag, ".: %s", strerror(errno));
+        goto done;
+    }
+    if (!bx_cpio_build_fs_list(&files, source_root_fd, names, name_count, diag))
         goto done;
     root_fd = bx_fd_open_cloexec(options->pass_dir, O_RDONLY | O_DIRECTORY, 0);
     if (root_fd < 0) {
@@ -1206,7 +1230,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
                 bx_diag(diag, "%s: %s", entry.name, strerror(errno));
                 break;
             }
-            if ((state == NULL || !state->origin) && !bx_cpio_read_file(file->source_path, &data, diag)) {
+            if ((state == NULL || !state->origin) && !bx_cpio_read_file(source_root_fd, file, &data, diag)) {
                 bx_archive_buffer_free(&data);
                 status = 2;
                 break;
@@ -1241,6 +1265,8 @@ done:
     bx_archive_fs_list_free(&files);
     bx_cpio_free_name_list(names, name_count);
     bx_fd_cleanup(&root_fd);
+    if (!bx_fd_close(&source_root_fd, ".", status == 0 ? diag : NULL))
+        status = 2;
     return status;
 }
 
@@ -1452,7 +1478,15 @@ static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv
         if (!bx_cpio_read_name_list(&options, &names, &name_count, &diag)) {
             return 2;
         }
-        if (!bx_cpio_build_archive(&archive, &options, names, name_count, &diag)) {
+        int source_root_fd = bx_fd_open_cloexec(".", O_RDONLY | O_DIRECTORY, 0);
+        if (source_root_fd < 0) {
+            bx_diag(&diag, ".: %s", strerror(errno));
+            bx_cpio_free_name_list(names, name_count);
+            return 2;
+        }
+        bool built = bx_cpio_build_archive(&archive, source_root_fd, &options, names, name_count, &diag);
+        bool closed = bx_fd_close(&source_root_fd, ".", built ? &diag : NULL);
+        if (!built || !closed) {
             bx_archive_buffer_free(&archive);
             bx_cpio_free_name_list(names, name_count);
             return 2;
