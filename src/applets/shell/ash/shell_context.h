@@ -135,6 +135,7 @@ struct ash_shell {
 
     bool owns_self_executable_fd;
     int self_executable_fd;
+    /* Invocation PID used by `$$`, retained across fork detachment. */
     pid_t shell_pid;
     /* Cached from the latest committed published async job for `$!`. */
     pid_t last_async_pid;

@@ -770,7 +770,5 @@ void ash_jobs_detach_after_fork(struct ash_shell* shell) {
     assert(ash_jobs_invariants(shell));
     shell->jobs = NULL;
     shell->next_job_id = 1u;
-    shell->last_async_pid = -1;
-    shell->shell_pid = getpid();
     assert(ash_jobs_invariants(shell));
 }
