@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <linux/fs.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -68,6 +69,7 @@ struct bx_cpio_options {
     bool to_stdout;
     bool sparse;
     bool reproducible;
+    bool preserve_all;
     bool owner_override;
     uid_t owner;
     gid_t group;
@@ -98,6 +100,8 @@ struct bx_cpio_entry {
     size_t data_len;
     /* Pass-through borrows the handle; payload writing consumes its fd. */
     struct bx_cpio_source* source;
+    /* Borrowed pass-through snapshot; deferred records own copies. */
+    const struct bx_file_restore* restore;
 };
 
 struct bx_cpio_entry_list {
@@ -1058,6 +1062,8 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
         .uid = options->owner,
         .gid = options->group,
     };
+    if (entry->restore)
+        restore = *entry->restore;
     if (bx_archive_temp_pending_signal()) {
         errno = EINTR;
         goto fail;
@@ -1095,7 +1101,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 if (!bx_cpio_write_payload(fd, entry, options->sparse, diag))
                     goto done;
             }
-            restore.mode = entry->mode & ~bx_mode_current_umask();
+            restore.mode = options->preserve_all ? entry->mode : entry->mode & ~bx_mode_current_umask();
             restore.set_mode = true;
             if (bx_archive_temp_pending_signal()) {
                 errno = EINTR;
@@ -1111,7 +1117,8 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
             if (entry->kind == BX_CPIO_KIND_REG) {
                 if (bx_fd_staged_file_begin(&stage, parent, leaf, entry->mode & 07777u) != 0)
                     goto fail;
-                restore.mode = stage.mode;
+                if (!options->preserve_all)
+                    restore.mode = stage.mode;
                 restore.set_mode = true;
                 if (!bx_cpio_write_payload(stage.fd, entry, options->sparse, diag))
                     goto done;
@@ -1143,7 +1150,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 errno = ESTALE;
                 goto fail;
             }
-            if (entry->kind != BX_CPIO_KIND_SYMLINK && (restore.set_owner || restore.set_group)) {
+            if (!options->preserve_all && entry->kind != BX_CPIO_KIND_SYMLINK && (restore.set_owner || restore.set_group)) {
                 restore.mode = stage.mode;
                 restore.set_mode = true;
             }
@@ -1240,6 +1247,77 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
     return status;
 }
 
+static bool bx_cpio_preserve_xattr(const char* name, const void* user) {
+    (void)name;
+    (void)user;
+    return true;
+}
+
+static bool bx_cpio_capture_restore(int root_fd, const struct bx_archive_fs_entry* file, int source_fd, struct bx_file_restore* restore, struct bx_diag_ctx* diag) {
+    int parent = -1, fd = -1;
+    char* leaf = NULL;
+    struct bx_file_metadata_target target;
+    bool ok = false;
+    *restore = (struct bx_file_restore){
+        .uid = file->st.st_uid, .gid = file->st.st_gid,
+        .mode = file->st.st_mode, .mtime = file->st.st_mtim,
+        .set_owner = true, .set_group = true, .set_mode = true, .set_mtime = true,
+    };
+    if (restore->uid == (uid_t)-1 || restore->gid == (gid_t)-1) {
+        errno = EOVERFLOW;
+        goto done;
+    }
+    if (source_fd >= 0) {
+        if (!bx_file_metadata_target_fd(&target, source_fd))
+            goto done;
+    }
+    else {
+        parent = bx_dir_path_open_source_parent_at(root_fd, file->source_path, &leaf);
+        struct stat expected = {.st_dev = file->source_parent_dev, .st_ino = file->source_parent_ino, .st_mode = S_IFDIR};
+        struct stat status;
+        if (parent < 0 || bx_fd_fstat_expected(parent, &expected, &status) != 0)
+            goto done;
+        if (S_ISREG(file->st.st_mode) || S_ISDIR(file->st.st_mode)) {
+            fd = S_ISREG(file->st.st_mode) ?
+                bx_fd_openat_regular_verified(parent, leaf, &file->st, &status) :
+                bx_fd_openat_cloexec(parent, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+            if (fd < 0 || !bx_file_metadata_target_fd(&target, fd))
+                goto done;
+        }
+        else if (!bx_file_metadata_target_leaf(&target, parent, leaf, &file->st))
+            goto done;
+    }
+    if (!bx_file_metadata_stat_unchanged(&file->st, &target.status)) {
+        errno = ESTALE;
+        goto done;
+    }
+    if (!bx_file_metadata_read_target(&restore->metadata, &target, true, bx_cpio_preserve_xattr, NULL))
+        goto done;
+    restore->metadata.restore_acls = S_ISLNK(file->st.st_mode) ? 0u : BX_FILE_ACL_ALL;
+    if (!target.name) {
+        unsigned int flags;
+        bool applicable;
+        const unsigned int mask = FS_APPEND_FL | FS_IMMUTABLE_FL | FS_NODUMP_FL | FS_NOATIME_FL | FS_SYNC_FL | FS_DIRSYNC_FL;
+        if (!bx_file_metadata_read_flags(target.fd, &flags, &applicable))
+            goto done;
+        restore->flags_present = applicable;
+        restore->flags_set = flags & mask;
+        restore->flags_clear = ~flags & mask;
+    }
+    else if (!bx_file_restore_leaf_supported(restore, file->st.st_mode & S_IFMT))
+        goto done;
+    ok = bx_file_metadata_target_verify(&target, true);
+done:
+    if (!ok)
+        bx_diag(diag, "%s: cannot read metadata: %s", file->source_path, strerror(errno));
+    if (!bx_fd_close(&fd, file->source_path, ok ? diag : NULL))
+        ok = false;
+    if (!bx_fd_close(&parent, file->source_path, ok ? diag : NULL))
+        ok = false;
+    free(leaf);
+    return ok;
+}
+
 static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx_diag_ctx* diag, uintmax_t* copied_bytes) {
     char** names = NULL;
     size_t name_count = 0;
@@ -1325,7 +1403,15 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
             status = 2;
             break;
         }
-        bool ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, state, diag);
+        struct bx_file_restore restore = {0};
+        bool ok = true;
+        if (options->preserve_all) {
+            ok = bx_cpio_capture_restore(source_root_fd, file, source.fd, &restore, diag);
+            entry.restore = &restore;
+        }
+        if (ok)
+            ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, state, diag);
+        bx_file_metadata_free(&restore.metadata);
         if (ok)
             *copied_bytes += bytes;
         bx_fd_cleanup(&source.fd);
@@ -1396,6 +1482,9 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
             }
             else if (strcmp(arg, "--reproducible") == 0) {
                 options->reproducible = true;
+            }
+            else if (strcmp(arg, "--preserve-all") == 0) {
+                options->preserve_all = true;
             }
             else if (strncmp(arg, "--file", name_len) == 0 && name_len == 6u) {
                 if (value == NULL && ++i >= argc) {
@@ -1505,6 +1594,10 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
     bool filesystem_copy = options->mode == BX_CPIO_MODE_PASS || (options->mode == BX_CPIO_MODE_COPY_IN && !options->list && !options->to_stdout);
     if (options->list && options->mode != BX_CPIO_MODE_COPY_IN)
         invalid = "-t requires -i";
+    else if (options->preserve_all && options->mode != BX_CPIO_MODE_PASS)
+        invalid = "--preserve-all requires -p";
+    else if (options->preserve_all && options->owner_override)
+        invalid = "--preserve-all cannot be combined with -R";
     else if (options->to_stdout && (options->mode != BX_CPIO_MODE_COPY_IN || options->list))
         invalid = "--to-stdout requires extraction without -t";
     else if (options->format_explicit && options->mode != BX_CPIO_MODE_COPY_OUT)

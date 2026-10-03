@@ -25,11 +25,12 @@ static void bx_cpio_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --quiet           suppress the copied-blocks summary\n");
     fprintf(stream, "      --to-stdout       write selected file data to standard output (-i, no -t)\n");
     fprintf(stream, "      --sparse          recreate holes during filesystem copy\n");
+    fprintf(stream, "      --preserve-all    strictly preserve source metadata during pass-through (-p)\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
     fprintf(stream, "\nInput format is detected automatically. Archive modes preserve only cpio fields,\n");
     fprintf(stream, "not ACLs, xattrs, labels, capabilities, flags, or fractional timestamps.\n");
-    fprintf(stream, "--preserve-all and other formats are unsupported.\n");
+    fprintf(stream, "Pass-through --preserve-all copies semantic metadata directly, without an archive.\n");
 }
 
 int bx_cpio_main(int argc, char** argv) {
