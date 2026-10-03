@@ -34,6 +34,10 @@ bool bx_archive_spool_append(struct bx_archive_spool* spool, const void* data, s
 bool bx_archive_spool_append_zeros(struct bx_archive_spool* spool, size_t len);
 bool bx_archive_spool_copy(struct bx_archive_spool* spool, int source_fd, off_t length, off_t* copied, struct bx_diag_ctx* diag);
 bool bx_archive_spool_write_all(FILE* stream, const struct bx_archive_spool* spool, struct bx_diag_ctx* diag);
+bool bx_archive_spool_read_all(struct bx_archive_spool* spool, int source_fd, struct bx_diag_ctx* diag);
+bool bx_archive_spool_read_at(const struct bx_archive_spool* spool, uintmax_t offset, void* data, size_t len, struct bx_diag_ctx* diag);
+/* Consume a validated span without retaining a descriptor per member. */
+bool bx_archive_spool_copy_at(const struct bx_archive_spool* spool, uintmax_t offset, uintmax_t len, int fd, bool sparse, struct bx_diag_ctx* diag);
 
 struct bx_archive_output_file {
     FILE* stream;
