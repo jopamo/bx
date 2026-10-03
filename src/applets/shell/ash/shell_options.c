@@ -110,6 +110,14 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
+        "physical",
+        ASH_SHELL_OPTION_PHYSICAL,
+        ASH_OPTION_INVOCATION_AND_SET,
+        'P',
+        ASH_OPTION_STATE_STORED,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
+    {
         NULL,
         ASH_SHELL_OPTION_STDIN,
         ASH_SHELL_OPTION_USE_INVOCATION_SHORT,

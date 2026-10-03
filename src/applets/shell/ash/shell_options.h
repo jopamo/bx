@@ -21,7 +21,8 @@ enum ash_shell_option {
     ASH_SHELL_OPTION_STDIN = 1u << 10,
     ASH_SHELL_OPTION_ONECMD = 1u << 11,
     ASH_SHELL_OPTION_PIPEFAIL = 1u << 12,
-    ASH_SHELL_OPTION_ALL = (1u << 13) - 1u,
+    ASH_SHELL_OPTION_PHYSICAL = 1u << 13,
+    ASH_SHELL_OPTION_ALL = (1u << 14) - 1u,
 };
 
 enum ash_shell_option_use {
