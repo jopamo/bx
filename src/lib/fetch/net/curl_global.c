@@ -2,6 +2,11 @@
 #include <curl/curl.h>
 #include <errno.h>
 
+const char* bx_fetch_net_curl_version(void) {
+    const curl_version_info_data* version = curl_version_info(CURLVERSION_NOW);
+    return version ? version->version : NULL;
+}
+
 static int global_failure(BxFetchNetSetupError* setup_error, const char* capability, CURLcode curl_code, int error_number) {
     if (setup_error) {
         setup_error->present = true;

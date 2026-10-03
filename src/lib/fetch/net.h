@@ -96,6 +96,9 @@ typedef struct {
 int bx_fetch_global_init(const struct bx_fetch_config* cfg, BxFetchNetSetupError* setup_error);
 void bx_fetch_global_cleanup(void);
 
+/* Borrowed runtime libcurl version; query during single-threaded startup. */
+const char* bx_fetch_net_curl_version(void);
+
 /*
  * Called at most once for commit-eligible HTTP 200/206 headers, a metadata-only
  * HTTP 304 response, or successful FTP/FTPS completion. FTP has no HTTP header
