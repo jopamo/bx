@@ -64,7 +64,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
     {
         "errexit",
         ASH_SHELL_OPTION_ERREXIT,
-        0u,
+        ASH_OPTION_INVOCATION_AND_SET,
         'e',
         ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,

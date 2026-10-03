@@ -142,6 +142,10 @@ struct ash_shell {
     int last_status;
     /* Set at child detachment; input-unit errors cannot resume a fork child. */
     bool forked_execution;
+    /* Dynamically scoped execution suppression, independent of the -e bit. */
+    bool errexit_suppressed;
+    /* Ignored eval/source calls also mask diagnostic-triggered termination. */
+    bool errexit_diagnostics_suppressed;
     bool should_exit;
     int requested_exit_status;
     struct ash_control_state control;

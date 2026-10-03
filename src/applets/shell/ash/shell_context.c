@@ -254,6 +254,8 @@ static bool ash_shell_context_empty(const struct ash_shell* shell) {
         !shell->owns_self_executable_fd &&
         shell->shell_pid == 0 &&
         !shell->forked_execution &&
+        !shell->errexit_suppressed &&
+        !shell->errexit_diagnostics_suppressed &&
         shell->command_substitution == NULL;
 }
 #endif
