@@ -284,17 +284,15 @@ static bool bx_cpio_finish_source(struct bx_cpio_source* source, uintmax_t copie
     return ok;
 }
 
-static bool bx_cpio_read_file(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
+static bool bx_cpio_append_source(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_archive_buffer* archive, struct bx_diag_ctx* diag) {
     struct bx_cpio_source source = {.fd = bx_cpio_open_source(source_root_fd, entry, diag), .file = entry};
     if (source.fd < 0)
         return false;
-    bx_archive_buffer_init(buffer);
-    bool ok = bx_archive_buffer_read_all(source.fd, buffer, diag);
+    uintmax_t copied;
+    bool ok = bx_archive_buffer_read_at_most(source.fd, archive, (uintmax_t)entry->st.st_size, &copied, diag);
     if (ok)
-        ok = bx_cpio_finish_source(&source, buffer->len, diag);
+        ok = bx_cpio_finish_source(&source, copied, diag);
     bx_fd_cleanup(&source.fd);
-    if (!ok)
-        bx_archive_buffer_free(buffer);
     return ok;
 }
 
@@ -307,21 +305,19 @@ static bool bx_cpio_write_payload(int fd, const struct bx_cpio_entry* entry, boo
     return bx_cpio_finish_source(entry->source, (uintmax_t)copied, diag);
 }
 
-static bool bx_cpio_emit_newc_entry(struct bx_archive_buffer* archive,
-                                    const char* name,
-                                    uintmax_t ino,
-                                    mode_t mode,
-                                    uid_t uid,
-                                    gid_t gid,
-                                    nlink_t nlink,
-                                    struct timespec mtime,
-                                    dev_t device,
-                                    dev_t rdev,
-                                    size_t size,
-                                    const unsigned char* data) {
+static bool bx_cpio_emit_newc_header(struct bx_archive_buffer* archive,
+                                     const char* name,
+                                     uintmax_t ino,
+                                     mode_t mode,
+                                     uid_t uid,
+                                     gid_t gid,
+                                     nlink_t nlink,
+                                     struct timespec mtime,
+                                     dev_t device,
+                                     dev_t rdev,
+                                     size_t size) {
     unsigned char header[BX_CPIO_NEWC_HEADER_LEN + 1u];
     size_t namesize;
-    size_t padded;
 
     if (mtime.tv_sec < 0 || !bx_checked_size_add(strlen(name), 1u, &namesize)) {
         errno = EOVERFLOW;
@@ -341,25 +337,20 @@ static bool bx_cpio_emit_newc_entry(struct bx_archive_buffer* archive,
             return false;
         }
     }
-    if (size != 0u && !bx_archive_buffer_append(archive, data, size)) {
-        return false;
-    }
-    padded = (4u - (archive->len % 4u)) % 4u;
-    return bx_archive_buffer_append_zeros(archive, padded);
+    return true;
 }
 
-static bool bx_cpio_emit_odc_entry(struct bx_archive_buffer* archive,
-                                   const char* name,
-                                   uintmax_t ino,
-                                   mode_t mode,
-                                   uid_t uid,
-                                   gid_t gid,
-                                   nlink_t nlink,
-                                   struct timespec mtime,
-                                   dev_t device,
-                                   dev_t rdev,
-                                   size_t size,
-                                   const unsigned char* data) {
+static bool bx_cpio_emit_odc_header(struct bx_archive_buffer* archive,
+                                    const char* name,
+                                    uintmax_t ino,
+                                    mode_t mode,
+                                    uid_t uid,
+                                    gid_t gid,
+                                    nlink_t nlink,
+                                    struct timespec mtime,
+                                    dev_t device,
+                                    dev_t rdev,
+                                    size_t size) {
     unsigned char header[BX_CPIO_ODC_HEADER_LEN + 1u];
     size_t namesize;
 
@@ -374,9 +365,6 @@ static bool bx_cpio_emit_odc_entry(struct bx_archive_buffer* archive,
     }
     if (!bx_archive_buffer_append(archive, header, BX_CPIO_ODC_HEADER_LEN)
         || !bx_archive_buffer_append(archive, name, namesize)) {
-        return false;
-    }
-    if (size != 0u && !bx_archive_buffer_append(archive, data, size)) {
         return false;
     }
     return true;
@@ -446,7 +434,6 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
     uintmax_t archive_ino = options->reproducible ? ino : entry->st.st_ino;
     dev_t device = options->reproducible ? 0 : entry->st.st_dev;
     dev_t rdev = S_ISCHR(mode) || S_ISBLK(mode) ? entry->st.st_rdev : 0;
-    struct bx_archive_buffer data = {0};
     const unsigned char* payload = NULL;
     size_t size = 0u;
     uintmax_t wide_limit = options->format == BX_CPIO_FORMAT_NEWC ? UINT32_MAX : UINT64_C(077777777777);
@@ -455,7 +442,8 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
         bx_diag(diag, "%s: reserved cpio trailer name", entry->archive_path);
         return false;
     }
-    if (mtime.tv_sec < 0 || (uintmax_t)mtime.tv_sec > wide_limit || (S_ISREG(mode) && (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size > wide_limit))) {
+    if (mtime.tv_sec < 0 || (uintmax_t)mtime.tv_sec > wide_limit ||
+        (S_ISREG(mode) && (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size > wide_limit || (uintmax_t)entry->st.st_size > SIZE_MAX))) {
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(EOVERFLOW));
         return false;
     }
@@ -469,32 +457,37 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
         size = strlen(entry->link_target);
     }
     else if (S_ISREG(mode) && !suppress_data) {
-        if (!bx_cpio_read_file(source_root_fd, entry, &data, diag)) {
-            return false;
-        }
-        payload = data.data;
-        size = data.len;
+        size = (size_t)entry->st.st_size;
     }
     else if (S_ISREG(mode)) {
         size = 0u;
     }
 
     if (options->format == BX_CPIO_FORMAT_NEWC) {
-        if (!bx_cpio_emit_newc_entry(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size, payload)) {
+        if (!bx_cpio_emit_newc_header(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size)) {
             bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
-            bx_archive_buffer_free(&data);
             return false;
         }
     }
     else {
-        if (!bx_cpio_emit_odc_entry(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size, payload)) {
+        if (!bx_cpio_emit_odc_header(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size)) {
             bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
-            bx_archive_buffer_free(&data);
             return false;
         }
     }
 
-    bx_archive_buffer_free(&data);
+    if (S_ISREG(mode) && !suppress_data) {
+        if (!bx_cpio_append_source(source_root_fd, entry, archive, diag))
+            return false;
+    }
+    else if (size != 0 && !bx_archive_buffer_append(archive, payload, size)) {
+        bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
+        return false;
+    }
+    if (options->format == BX_CPIO_FORMAT_NEWC && !bx_archive_buffer_append_zeros(archive, (4u - archive->len % 4u) % 4u)) {
+        bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
+        return false;
+    }
     return true;
 }
 
@@ -554,14 +547,14 @@ static bool bx_cpio_build_archive(struct bx_archive_buffer* archive, int source_
 
     if (options->format == BX_CPIO_FORMAT_NEWC) {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_newc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u, NULL);
+        bx_cpio_emit_newc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u);
         while (archive->len % 512u != 0u) {
             bx_archive_buffer_append_byte(archive, 0u);
         }
     }
     else {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_odc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u, NULL);
+        bx_cpio_emit_odc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u);
         if (archive->len % 2u != 0u) {
             bx_archive_buffer_append_byte(archive, 0u);
         }
