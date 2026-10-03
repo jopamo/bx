@@ -92,8 +92,9 @@ struct bx_cpio_entry {
     dev_t rdev;
     size_t size;
     char* link_target;
-    /* Borrowed until the caller finishes consuming the entry. */
-    const unsigned char* data;
+    /* Borrowed storage remains live until every entry is consumed. */
+    const struct bx_archive_spool* archive;
+    uintmax_t data_offset;
     size_t data_len;
     /* Pass-through borrows the handle; payload writing consumes its fd. */
     struct bx_cpio_source* source;
@@ -150,7 +151,7 @@ static void bx_cpio_entry_free(struct bx_cpio_entry* entry) {
     free(entry->link_target);
     entry->name = NULL;
     entry->link_target = NULL;
-    entry->data = NULL;
+    entry->archive = NULL;
 }
 
 static void bx_cpio_entry_list_free(struct bx_cpio_entry_list* list) {
@@ -298,7 +299,7 @@ static bool bx_cpio_append_source(int source_root_fd, const struct bx_archive_fs
 
 static bool bx_cpio_write_payload(int fd, const struct bx_cpio_entry* entry, bool sparse, struct bx_diag_ctx* diag) {
     if (!entry->source)
-        return bx_archive_write_regular_payload(fd, entry->data, entry->data_len, sparse, diag);
+        return bx_archive_spool_copy_at(entry->archive, entry->data_offset, entry->data_len, fd, sparse, diag);
     off_t copied;
     if (!bx_archive_copy_regular_payload(entry->source->fd, fd, entry->source->file->st.st_size, sparse, &copied, diag))
         return false;
@@ -589,11 +590,8 @@ static bool bx_cpio_write_archive_output(const struct bx_cpio_options* options, 
     return true;
 }
 
-static bool bx_cpio_read_archive_input(const struct bx_cpio_options* options,
-                                       struct bx_archive_buffer* archive,
-                                       struct bx_diag_ctx* diag) {
+static bool bx_cpio_read_archive_input(const struct bx_cpio_options* options, struct bx_archive_spool* archive, struct bx_diag_ctx* diag) {
     int fd;
-    bx_archive_buffer_init(archive);
     if (options->archive_path == NULL) {
         fd = STDIN_FILENO;
     }
@@ -604,7 +602,7 @@ static bool bx_cpio_read_archive_input(const struct bx_cpio_options* options,
             return false;
         }
     }
-    if (!bx_archive_buffer_read_all(fd, archive, diag)) {
+    if (!bx_archive_spool_open(archive, diag) || !bx_archive_spool_read_all(archive, fd, diag)) {
         if (options->archive_path != NULL) {
             close(fd);
         }
@@ -617,21 +615,23 @@ static bool bx_cpio_read_archive_input(const struct bx_cpio_options* options,
     return true;
 }
 
-static bool bx_cpio_parse_payload(struct bx_cpio_entry* entry, const unsigned char* data, struct bx_diag_ctx* diag) {
+static bool bx_cpio_parse_payload(struct bx_cpio_entry* entry, const struct bx_archive_spool* archive, uintmax_t offset, struct bx_diag_ctx* diag) {
     if (S_ISREG(entry->mode)) {
         entry->kind = BX_CPIO_KIND_REG;
         entry->data_len = entry->size;
-        entry->data = data;
+        entry->archive = archive;
+        entry->data_offset = offset;
         return true;
     }
     if (S_ISLNK(entry->mode)) {
-        if (!bx_cpio_symlink_target_valid(data, entry->size)) {
+        entry->link_target = xmalloc(entry->size + 1u);
+        if (!bx_archive_spool_read_at(archive, offset, entry->link_target, entry->size, diag))
+            return false;
+        if (!bx_cpio_symlink_target_valid((const unsigned char*)entry->link_target, entry->size)) {
             bx_diag(diag, "invalid symlink target");
             return false;
         }
         entry->kind = BX_CPIO_KIND_SYMLINK;
-        entry->link_target = xmalloc(entry->size + 1u);
-        memcpy(entry->link_target, data, entry->size);
         entry->link_target[entry->size] = '\0';
         return true;
     }
@@ -654,10 +654,56 @@ static bool bx_cpio_parse_payload(struct bx_cpio_entry* entry, const unsigned ch
     return true;
 }
 
-static bool bx_cpio_finish_stream(const struct bx_archive_buffer* archive, size_t offset, struct bx_diag_ctx* diag) {
-    if (!bx_cpio_zero_padding(archive->data + offset, archive->len - offset)) {
+static bool bx_cpio_zero_range(const struct bx_archive_spool* archive, uintmax_t offset, uintmax_t len, bool* zero, struct bx_diag_ctx* diag) {
+    unsigned char chunk[8192];
+    *zero = true;
+    while (len) {
+        size_t count = len < sizeof(chunk) ? (size_t)len : sizeof(chunk);
+        if (!bx_archive_spool_read_at(archive, offset, chunk, count, diag))
+            return false;
+        if (!bx_cpio_zero_padding(chunk, count)) {
+            *zero = false;
+            break;
+        }
+        offset += count;
+        len -= count;
+    }
+    return true;
+}
+
+static bool bx_cpio_finish_stream(const struct bx_archive_spool* archive, uintmax_t offset, struct bx_diag_ctx* diag) {
+    bool zero;
+    if (!bx_cpio_zero_range(archive, offset, archive->len - offset, &zero, diag))
+        return false;
+    if (!zero) {
         bx_diag(diag, "trailing data after cpio trailer");
         return false;
+    }
+    return true;
+}
+
+static bool bx_cpio_validate_name(const struct bx_archive_spool* archive, uintmax_t offset, size_t len, bool* valid, bool* trailer, struct bx_diag_ctx* diag) {
+    unsigned char chunk[8192];
+    *valid = true;
+    *trailer = false;
+    size_t done = 0;
+    while (done < len) {
+        size_t count = len - done < sizeof(chunk) ? len - done : sizeof(chunk);
+        if (!bx_archive_spool_read_at(archive, offset + done, chunk, count, diag))
+            return false;
+        size_t text = count;
+        if (done + count == len) {
+            if (chunk[count - 1] != '\0')
+                *valid = false;
+            text--;
+        }
+        if (memchr(chunk, '\0', text))
+            *valid = false;
+        if (!*valid)
+            break;
+        if (len == sizeof("TRAILER!!!"))
+            *trailer = memcmp(chunk, "TRAILER!!!", len) == 0;
+        done += count;
     }
     return true;
 }
@@ -688,12 +734,12 @@ static bool bx_cpio_member_metadata_budget(const struct bx_cpio_entry_list* entr
     return true;
 }
 
-static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
-                                       struct bx_cpio_entry_list* entries,
-                                       struct bx_diag_ctx* diag) {
-    size_t pos = 0u;
+static bool bx_cpio_parse_newc_archive(const struct bx_archive_spool* archive, struct bx_cpio_entry_list* entries, struct bx_diag_ctx* diag) {
+    uintmax_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_NEWC_HEADER_LEN <= archive->len - pos) {
-        const unsigned char* header = archive->data + pos;
+        unsigned char header[BX_CPIO_NEWC_HEADER_LEN];
+        if (!bx_archive_spool_read_at(archive, pos, header, sizeof(header), diag))
+            return false;
         uintmax_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor, rdevmajor, rdevminor, check;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
@@ -711,17 +757,25 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
         }
         pos += BX_CPIO_NEWC_HEADER_LEN;
         struct bx_cpio_member_bounds bounds;
-        if (!bx_cpio_member_bounds(archive->data, archive->len, pos, namesize,
-                                   size, 4, 4, &bounds)) {
+        if (!bx_cpio_member_bounds(archive->len, pos, namesize, size, 4, 4, &bounds)) {
             bx_diag(diag, "invalid or truncated newc member");
             return false;
         }
-        if (!bx_cpio_zero_padding(archive->data + pos + namesize, bounds.data_offset - (pos + namesize)) ||
-            !bx_cpio_zero_padding(archive->data + bounds.data_offset + size, bounds.next_offset - (bounds.data_offset + size))) {
+        bool valid, trailer, name_padding, data_padding;
+        if (!bx_cpio_validate_name(archive, pos, namesize, &valid, &trailer, diag))
+            return false;
+        if (!valid) {
+            bx_diag(diag, "invalid or truncated newc member");
+            return false;
+        }
+        if (!bx_cpio_zero_range(archive, pos + namesize, bounds.data_offset - (pos + namesize), &name_padding, diag) ||
+            !bx_cpio_zero_range(archive, bounds.data_offset + size, bounds.next_offset - (bounds.data_offset + size), &data_padding, diag))
+            return false;
+        if (!name_padding || !data_padding) {
             bx_diag(diag, "invalid newc padding");
             return false;
         }
-        if (namesize == sizeof("TRAILER!!!") && memcmp(archive->data + pos, "TRAILER!!!", namesize) == 0) {
+        if (trailer) {
             if (size == 0)
                 return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
             bx_diag(diag, "invalid newc trailer");
@@ -733,7 +787,10 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
         if (!bx_cpio_member_metadata_budget(entries, entry.mode, namesize, size, &next_bytes, diag))
             return false;
         entry.name = xmalloc(namesize);
-        memcpy(entry.name, archive->data + pos, namesize);
+        if (!bx_archive_spool_read_at(archive, pos, entry.name, namesize, diag)) {
+            bx_cpio_entry_free(&entry);
+            return false;
+        }
         pos = bounds.data_offset;
         entry.ino = (uint32_t)ino;
         entry.device = ((uint64_t)devmajor << 32) | devminor;
@@ -743,7 +800,7 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             bx_cpio_entry_free(&entry);
             return false;
         }
-        if (!bx_cpio_parse_payload(&entry, archive->data + pos, diag)) {
+        if (!bx_cpio_parse_payload(&entry, archive, pos, diag)) {
             bx_cpio_entry_free(&entry);
             return false;
         }
@@ -754,12 +811,12 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
     return false;
 }
 
-static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
-                                      struct bx_cpio_entry_list* entries,
-                                      struct bx_diag_ctx* diag) {
-    size_t pos = 0u;
+static bool bx_cpio_parse_odc_archive(const struct bx_archive_spool* archive, struct bx_cpio_entry_list* entries, struct bx_diag_ctx* diag) {
+    uintmax_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_ODC_HEADER_LEN <= archive->len - pos) {
-        const unsigned char* header = archive->data + pos;
+        unsigned char header[BX_CPIO_ODC_HEADER_LEN];
+        if (!bx_archive_spool_read_at(archive, pos, header, sizeof(header), diag))
+            return false;
         uintmax_t ino, mode, uid, gid, nlink, mtime, namesize, size, device, rdev;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
@@ -776,12 +833,18 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
         }
         pos += BX_CPIO_ODC_HEADER_LEN;
         struct bx_cpio_member_bounds bounds;
-        if (!bx_cpio_member_bounds(archive->data, archive->len, pos, namesize,
-                                   size, 1, 1, &bounds)) {
+        if (!bx_cpio_member_bounds(archive->len, pos, namesize, size, 1, 1, &bounds)) {
             bx_diag(diag, "invalid or truncated odc member");
             return false;
         }
-        if (namesize == sizeof("TRAILER!!!") && memcmp(archive->data + pos, "TRAILER!!!", namesize) == 0) {
+        bool valid, trailer;
+        if (!bx_cpio_validate_name(archive, pos, namesize, &valid, &trailer, diag))
+            return false;
+        if (!valid) {
+            bx_diag(diag, "invalid or truncated odc member");
+            return false;
+        }
+        if (trailer) {
             if (size == 0)
                 return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
             bx_diag(diag, "invalid odc trailer");
@@ -793,7 +856,10 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
         if (!bx_cpio_member_metadata_budget(entries, entry.mode, namesize, size, &next_bytes, diag))
             return false;
         entry.name = xmalloc(namesize);
-        memcpy(entry.name, archive->data + pos, namesize);
+        if (!bx_archive_spool_read_at(archive, pos, entry.name, namesize, diag)) {
+            bx_cpio_entry_free(&entry);
+            return false;
+        }
         pos = bounds.data_offset;
         entry.ino = (uint32_t)ino;
         entry.device = device;
@@ -803,7 +869,7 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             bx_cpio_entry_free(&entry);
             return false;
         }
-        if (!bx_cpio_parse_payload(&entry, archive->data + pos, diag)) {
+        if (!bx_cpio_parse_payload(&entry, archive, pos, diag)) {
             bx_cpio_entry_free(&entry);
             return false;
         }
@@ -814,18 +880,19 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
     return false;
 }
 
-static bool bx_cpio_detect_archive_format(const struct bx_archive_buffer* archive,
-                                          enum bx_cpio_format* format_out,
-                                          struct bx_diag_ctx* diag) {
+static bool bx_cpio_detect_archive_format(const struct bx_archive_spool* archive, enum bx_cpio_format* format_out, struct bx_diag_ctx* diag) {
     if (archive->len < 6u) {
         bx_diag(diag, "empty or truncated archive");
         return false;
     }
-    if (memcmp(archive->data, "070701", 6u) == 0) {
+    unsigned char magic[6];
+    if (!bx_archive_spool_read_at(archive, 0, magic, sizeof(magic), diag))
+        return false;
+    if (memcmp(magic, "070701", 6u) == 0) {
         *format_out = BX_CPIO_FORMAT_NEWC;
         return true;
     }
-    if (memcmp(archive->data, "070707", 6u) == 0) {
+    if (memcmp(magic, "070707", 6u) == 0) {
         *format_out = BX_CPIO_FORMAT_ODC;
         return true;
     }
@@ -1133,8 +1200,12 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
         else if (options->to_stdout) {
             if (entry->kind == BX_CPIO_KIND_SYMLINK)
                 ok = bx_xwrite_all(STDOUT_FILENO, entry->link_target, strlen(entry->link_target));
-            else if (entry->kind == BX_CPIO_KIND_REG)
-                ok = bx_xwrite_all(STDOUT_FILENO, entry->data, entry->data_len);
+            else if (entry->kind == BX_CPIO_KIND_REG) {
+                if (!bx_cpio_write_payload(STDOUT_FILENO, entry, false, diag)) {
+                    status = 2;
+                    break;
+                }
+            }
         }
         else {
             struct bx_cpio_hardlink_state* state = NULL;
@@ -1508,36 +1579,37 @@ static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv
         return bx_cpio_pass_through(&options, &diag, copied_bytes);
     }
     else {
-        struct bx_archive_buffer archive = {0};
+        struct bx_archive_spool archive = BX_ARCHIVE_SPOOL_INIT;
         struct bx_cpio_entry_list entries = {0};
         enum bx_cpio_format input_format;
         int rc;
         if (!bx_cpio_read_archive_input(&options, &archive, &diag)) {
-            bx_archive_buffer_free(&archive);
+            bx_archive_spool_close(&archive, NULL);
             return 2;
         }
         *copied_bytes = archive.len;
         if (!bx_cpio_detect_archive_format(&archive, &input_format, &diag)) {
-            bx_archive_buffer_free(&archive);
+            bx_archive_spool_close(&archive, NULL);
             return 2;
         }
         if (input_format == BX_CPIO_FORMAT_NEWC) {
             if (!bx_cpio_parse_newc_archive(&archive, &entries, &diag)) {
                 bx_cpio_entry_list_free(&entries);
-                bx_archive_buffer_free(&archive);
+                bx_archive_spool_close(&archive, NULL);
                 return 2;
             }
         }
         else {
             if (!bx_cpio_parse_odc_archive(&archive, &entries, &diag)) {
                 bx_cpio_entry_list_free(&entries);
-                bx_archive_buffer_free(&archive);
+                bx_archive_spool_close(&archive, NULL);
                 return 2;
             }
         }
         rc = bx_cpio_extract_entries(&entries, &options, argc, argv, &diag);
         bx_cpio_entry_list_free(&entries);
-        bx_archive_buffer_free(&archive);
+        if (!bx_archive_spool_close(&archive, rc == 0 ? &diag : NULL))
+            rc = 2;
         return rc;
     }
 }

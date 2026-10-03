@@ -484,14 +484,107 @@ bool bx_archive_spool_write_all(FILE* stream, const struct bx_archive_spool* spo
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
-    if (bx_fd_lseek(spool->fd, 0, SEEK_SET) < 0) {
+    return bx_archive_spool_copy_at(spool, 0, spool->len, fileno(stream), false, diag);
+}
+
+bool bx_archive_spool_read_all(struct bx_archive_spool* spool, int source_fd, struct bx_diag_ctx* diag) {
+    struct bx_fd_input input = BX_FD_INPUT_INIT;
+    unsigned char chunk[65536];
+    bool ok = false;
+    if (bx_fd_input_init(&input, source_fd, BX_FD_INPUT_BORROWED) != 0) {
+        bx_diag(diag, "read error: %s", strerror(errno));
+        return false;
+    }
+    while (true) {
+        ssize_t count;
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            count = -1;
+        }
+        else {
+            count = bx_fd_input_read(&input, chunk, sizeof(chunk), bx_archive_temp_signal_fd());
+            if (bx_archive_temp_pending_signal()) {
+                errno = EINTR;
+                count = -1;
+            }
+        }
+        if (count < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            break;
+        }
+        if (count == 0) {
+            ok = true;
+            break;
+        }
+        if (!bx_archive_spool_append(spool, chunk, (size_t)count)) {
+            bx_diag(diag, "temporary archive: %s", strerror(errno));
+            break;
+        }
+    }
+    bx_fd_input_close(&input);
+    return ok;
+}
+
+static bool bx_archive_spool_range(const struct bx_archive_spool* spool, uintmax_t offset, uintmax_t len, struct bx_diag_ctx* diag) {
+    if (offset > spool->len || len > spool->len - offset) {
+        errno = EOVERFLOW;
+        bx_diag(diag, "read error: %s", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+bool bx_archive_spool_read_at(const struct bx_archive_spool* spool, uintmax_t offset, void* data, size_t len, struct bx_diag_ctx* diag) {
+    struct bx_fd_input input = BX_FD_INPUT_INIT;
+    bool ok = false;
+    if (!bx_archive_spool_range(spool, offset, len, diag))
+        return false;
+    if (bx_fd_input_init(&input, spool->fd, BX_FD_INPUT_BORROWED) != 0) {
+        bx_diag(diag, "read error: %s", strerror(errno));
+        return false;
+    }
+    size_t done = 0;
+    while (done < len) {
+        size_t count = len - done < 65536 ? len - done : 65536;
+        ssize_t nread;
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            nread = -1;
+        }
+        else {
+            nread = bx_fd_input_pread(&input, (unsigned char*)data + done, count, (off_t)(offset + done), bx_archive_temp_signal_fd());
+            if (bx_archive_temp_pending_signal()) {
+                errno = EINTR;
+                nread = -1;
+            }
+        }
+        if (nread < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            goto done;
+        }
+        if (nread == 0) {
+            bx_diag(diag, "read error: unexpected end of temporary archive");
+            goto done;
+        }
+        done += (size_t)nread;
+    }
+    ok = true;
+done:
+    bx_fd_input_close(&input);
+    return ok;
+}
+
+bool bx_archive_spool_copy_at(const struct bx_archive_spool* spool, uintmax_t offset, uintmax_t len, int fd, bool sparse, struct bx_diag_ctx* diag) {
+    if (!bx_archive_spool_range(spool, offset, len, diag))
+        return false;
+    if (bx_fd_lseek(spool->fd, (off_t)offset, SEEK_SET) < 0) {
         bx_diag(diag, "read error: %s", strerror(errno));
         return false;
     }
     off_t copied;
-    if (!bx_archive_copy_regular_payload(spool->fd, fileno(stream), (off_t)spool->len, false, &copied, diag))
+    if (!bx_archive_copy_regular_payload(spool->fd, fd, (off_t)len, sparse, &copied, diag))
         return false;
-    if ((uintmax_t)copied != spool->len) {
+    if ((uintmax_t)copied != len) {
         bx_diag(diag, "read error: unexpected end of temporary archive");
         return false;
     }
