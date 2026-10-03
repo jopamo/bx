@@ -87,7 +87,8 @@ struct bx_cpio_entry {
     dev_t rdev;
     size_t size;
     char* link_target;
-    unsigned char* data;
+    /* Borrowed until the caller finishes consuming the entry. */
+    const unsigned char* data;
     size_t data_len;
 };
 
@@ -140,7 +141,6 @@ static const char* bx_cpio_progname(char** argv, int argc) {
 static void bx_cpio_entry_free(struct bx_cpio_entry* entry) {
     free(entry->name);
     free(entry->link_target);
-    free(entry->data);
     entry->name = NULL;
     entry->link_target = NULL;
     entry->data = NULL;
@@ -645,8 +645,7 @@ static bool bx_cpio_parse_payload(struct bx_cpio_entry* entry, const unsigned ch
     if (S_ISREG(entry->mode)) {
         entry->kind = BX_CPIO_KIND_REG;
         entry->data_len = entry->size;
-        entry->data = xmalloc(entry->size ? entry->size : 1u);
-        memcpy(entry->data, data, entry->size);
+        entry->data = data;
         return true;
     }
     if (S_ISLNK(entry->mode)) {
@@ -1547,9 +1546,9 @@ static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv
                 return 2;
             }
         }
-        bx_archive_buffer_free(&archive);
         rc = bx_cpio_extract_entries(&entries, &options, argc, argv, &diag);
         bx_cpio_entry_list_free(&entries);
+        bx_archive_buffer_free(&archive);
         return rc;
     }
 }
