@@ -74,6 +74,11 @@ struct bx_cpio_options {
     int operand_index;
 };
 
+struct bx_cpio_source {
+    int fd;
+    const struct bx_archive_fs_entry* file;
+};
+
 struct bx_cpio_entry {
     char* name;
     enum bx_cpio_kind kind;
@@ -90,6 +95,8 @@ struct bx_cpio_entry {
     /* Borrowed until the caller finishes consuming the entry. */
     const unsigned char* data;
     size_t data_len;
+    /* Pass-through borrows the handle; payload writing consumes its fd. */
+    struct bx_cpio_source* source;
 };
 
 struct bx_cpio_entry_list {
@@ -236,7 +243,7 @@ static bool bx_cpio_parse_owner_spec(const char* text,
     return true;
 }
 
-static bool bx_cpio_read_file(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
+static int bx_cpio_open_source(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_diag_ctx* diag) {
     const char* path = entry->source_path;
     char* leaf = NULL;
     int parent = bx_dir_path_open_source_parent_at(source_root_fd, path, &leaf);
@@ -254,35 +261,50 @@ static bool bx_cpio_read_file(int source_root_fd, const struct bx_archive_fs_ent
     free(leaf);
     if (fd < 0) {
         bx_diag(diag, "%s: %s", path, strerror(error));
-        return false;
     }
-    bx_archive_buffer_init(buffer);
-    if (!bx_archive_buffer_read_all(fd, buffer, diag)) {
-        close(fd);
-        bx_archive_buffer_free(buffer);
-        return false;
-    }
+    return fd;
+}
+
+static bool bx_cpio_finish_source(struct bx_cpio_source* source, uintmax_t copied, struct bx_diag_ctx* diag) {
+    const struct bx_archive_fs_entry* entry = source->file;
+    const char* path = entry->source_path;
     struct stat finished;
-    if (fstat(fd, &finished) != 0) {
-        error = errno;
-        close(fd);
-        bx_archive_buffer_free(buffer);
-        bx_diag(diag, "%s: %s", path, strerror(error));
-        return false;
-    }
-    if (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size != buffer->len || finished.st_size != entry->st.st_size || finished.st_mtim.tv_sec != entry->st.st_mtim.tv_sec ||
-        finished.st_mtim.tv_nsec != entry->st.st_mtim.tv_nsec || finished.st_ctim.tv_sec != entry->st.st_ctim.tv_sec || finished.st_ctim.tv_nsec != entry->st.st_ctim.tv_nsec) {
-        close(fd);
-        bx_archive_buffer_free(buffer);
-        bx_diag(diag, "%s: source changed while reading", path);
-        return false;
-    }
-    if (close(fd) != 0) {
+    bool ok = true;
+    if (fstat(source->fd, &finished) != 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
-        bx_archive_buffer_free(buffer);
-        return false;
+        ok = false;
     }
-    return true;
+    else if (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size != copied || finished.st_size != entry->st.st_size || finished.st_mtim.tv_sec != entry->st.st_mtim.tv_sec ||
+             finished.st_mtim.tv_nsec != entry->st.st_mtim.tv_nsec || finished.st_ctim.tv_sec != entry->st.st_ctim.tv_sec || finished.st_ctim.tv_nsec != entry->st.st_ctim.tv_nsec) {
+        bx_diag(diag, "%s: source changed while reading", path);
+        ok = false;
+    }
+    if (!bx_fd_close(&source->fd, path, ok ? diag : NULL))
+        ok = false;
+    return ok;
+}
+
+static bool bx_cpio_read_file(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
+    struct bx_cpio_source source = {.fd = bx_cpio_open_source(source_root_fd, entry, diag), .file = entry};
+    if (source.fd < 0)
+        return false;
+    bx_archive_buffer_init(buffer);
+    bool ok = bx_archive_buffer_read_all(source.fd, buffer, diag);
+    if (ok)
+        ok = bx_cpio_finish_source(&source, buffer->len, diag);
+    bx_fd_cleanup(&source.fd);
+    if (!ok)
+        bx_archive_buffer_free(buffer);
+    return ok;
+}
+
+static bool bx_cpio_write_payload(int fd, const struct bx_cpio_entry* entry, bool sparse, struct bx_diag_ctx* diag) {
+    if (!entry->source)
+        return bx_archive_write_regular_payload(fd, entry->data, entry->data_len, sparse, diag);
+    off_t copied;
+    if (!bx_archive_copy_regular_payload(entry->source->fd, fd, entry->source->file->st.st_size, sparse, &copied, diag))
+        return false;
+    return bx_cpio_finish_source(entry->source, (uintmax_t)copied, diag);
 }
 
 static bool bx_cpio_emit_newc_entry(struct bx_archive_buffer* archive,
@@ -1010,7 +1032,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
             if (entry->data_len > 0) {
                 if (bx_fd_ftruncate(fd, 0) != 0 || bx_fd_lseek(fd, 0, SEEK_SET) < 0)
                     goto fail;
-                if (!bx_archive_write_regular_payload(fd, entry->data, entry->data_len, options->sparse, diag))
+                if (!bx_cpio_write_payload(fd, entry, options->sparse, diag))
                     goto done;
             }
             restore.mode = entry->mode & ~bx_mode_current_umask();
@@ -1031,7 +1053,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                     goto fail;
                 restore.mode = stage.mode;
                 restore.set_mode = true;
-                if (!bx_archive_write_regular_payload(stage.fd, entry->data, entry->data_len, options->sparse, diag))
+                if (!bx_cpio_write_payload(stage.fd, entry, options->sparse, diag))
                     goto done;
                 if (!bx_archive_prepare_regular_fd(&restore, stage.fd, entry->name, diag))
                     goto done;
@@ -1190,7 +1212,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
             .rdev = file->st.st_rdev,
             .link_target = file->link_target,
         };
-        struct bx_archive_buffer data = {0};
+        struct bx_cpio_source source = {.fd = -1, .file = file};
         struct bx_cpio_hardlink_state* state = NULL;
         if (S_ISDIR(file->st.st_mode)) {
             entry.kind = BX_CPIO_KIND_DIR;
@@ -1215,28 +1237,34 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
                 bx_diag(diag, "%s: %s", entry.name, strerror(errno));
                 break;
             }
-            if ((state == NULL || !state->origin) && !bx_cpio_read_file(source_root_fd, file, &data, diag)) {
-                bx_archive_buffer_free(&data);
-                status = 2;
-                break;
+            if (state == NULL || !state->origin) {
+                if (file->st.st_size < 0) {
+                    bx_diag(diag, "%s: %s", entry.name, strerror(EOVERFLOW));
+                    status = 2;
+                    break;
+                }
+                source.fd = bx_cpio_open_source(source_root_fd, file, diag);
+                if (source.fd < 0) {
+                    status = 2;
+                    break;
+                }
+                entry.source = &source;
             }
-            entry.data = data.data;
-            entry.data_len = data.len;
         }
         else {
             continue;
         }
-        size_t bytes = entry.kind == BX_CPIO_KIND_SYMLINK ? strlen(entry.link_target) : entry.data_len;
+        uintmax_t bytes = entry.source ? (uintmax_t)file->st.st_size : entry.kind == BX_CPIO_KIND_SYMLINK ? strlen(entry.link_target) : 0;
         if (UINTMAX_MAX - *copied_bytes < bytes) {
             bx_diag(diag, "copied byte count: %s", strerror(EOVERFLOW));
-            bx_archive_buffer_free(&data);
+            bx_fd_cleanup(&source.fd);
             status = 2;
             break;
         }
         bool ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, state, diag);
         if (ok)
             *copied_bytes += bytes;
-        bx_archive_buffer_free(&data);
+        bx_fd_cleanup(&source.fd);
         if (!ok) {
             status = 2;
             break;

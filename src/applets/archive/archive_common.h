@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <sys/types.h>
 
 #include "bx/diag.h"
 
@@ -51,6 +52,9 @@ bool bx_archive_write_regular_payload(int fd,
                                       size_t len,
                                       bool sparse,
                                       struct bx_diag_ctx* diag);
+/* Copy at most limit bytes to a fresh/truncated destination at offset zero.
+ * Borrow both descriptors. The caller verifies copied length and source state. */
+bool bx_archive_copy_regular_payload(int source_fd, int fd, off_t limit, bool sparse, off_t* copied, struct bx_diag_ctx* diag);
 
 bool bx_archive_output_file_open(struct bx_archive_output_file* out,
                                  const char* archive_path,
