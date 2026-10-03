@@ -442,6 +442,14 @@ int bx_fd_open_cloexec(const char* path, int flags, mode_t mode) {
     return bx_fd_openat_cloexec(AT_FDCWD, path, flags, mode);
 }
 
+int bx_fd_open_anonymous_file_at(int dirfd) {
+    if (dirfd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    return bx_fd_openat_cloexec(dirfd, ".", O_TMPFILE | O_RDWR, 0600);
+}
+
 int bx_fd_openat_cloexec(int dirfd, const char* path, int flags, mode_t mode) {
     int fd;
 

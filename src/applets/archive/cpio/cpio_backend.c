@@ -284,12 +284,12 @@ static bool bx_cpio_finish_source(struct bx_cpio_source* source, uintmax_t copie
     return ok;
 }
 
-static bool bx_cpio_append_source(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_archive_buffer* archive, struct bx_diag_ctx* diag) {
+static bool bx_cpio_append_source(int source_root_fd, const struct bx_archive_fs_entry* entry, struct bx_archive_spool* archive, struct bx_diag_ctx* diag) {
     struct bx_cpio_source source = {.fd = bx_cpio_open_source(source_root_fd, entry, diag), .file = entry};
     if (source.fd < 0)
         return false;
-    uintmax_t copied;
-    bool ok = bx_archive_buffer_read_at_most(source.fd, archive, (uintmax_t)entry->st.st_size, &copied, diag);
+    off_t copied;
+    bool ok = bx_archive_spool_copy(archive, source.fd, entry->st.st_size, &copied, diag);
     if (ok)
         ok = bx_cpio_finish_source(&source, copied, diag);
     bx_fd_cleanup(&source.fd);
@@ -305,7 +305,7 @@ static bool bx_cpio_write_payload(int fd, const struct bx_cpio_entry* entry, boo
     return bx_cpio_finish_source(entry->source, (uintmax_t)copied, diag);
 }
 
-static bool bx_cpio_emit_newc_header(struct bx_archive_buffer* archive,
+static bool bx_cpio_emit_newc_header(struct bx_archive_spool* archive,
                                      const char* name,
                                      uintmax_t ino,
                                      mode_t mode,
@@ -315,7 +315,7 @@ static bool bx_cpio_emit_newc_header(struct bx_archive_buffer* archive,
                                      struct timespec mtime,
                                      dev_t device,
                                      dev_t rdev,
-                                     size_t size) {
+                                     uintmax_t size) {
     unsigned char header[BX_CPIO_NEWC_HEADER_LEN + 1u];
     size_t namesize;
 
@@ -328,19 +328,18 @@ static bool bx_cpio_emit_newc_header(struct bx_archive_buffer* archive,
         errno = EOVERFLOW;
         return false;
     }
-    if (!bx_archive_buffer_append(archive, header, BX_CPIO_NEWC_HEADER_LEN)
-        || !bx_archive_buffer_append(archive, name, namesize)) {
+    if (!bx_archive_spool_append(archive, header, BX_CPIO_NEWC_HEADER_LEN) || !bx_archive_spool_append(archive, name, namesize)) {
         return false;
     }
     while (archive->len % 4u != 0u) {
-        if (!bx_archive_buffer_append_byte(archive, 0u)) {
+        if (!bx_archive_spool_append_zeros(archive, 1u)) {
             return false;
         }
     }
     return true;
 }
 
-static bool bx_cpio_emit_odc_header(struct bx_archive_buffer* archive,
+static bool bx_cpio_emit_odc_header(struct bx_archive_spool* archive,
                                     const char* name,
                                     uintmax_t ino,
                                     mode_t mode,
@@ -350,7 +349,7 @@ static bool bx_cpio_emit_odc_header(struct bx_archive_buffer* archive,
                                     struct timespec mtime,
                                     dev_t device,
                                     dev_t rdev,
-                                    size_t size) {
+                                    uintmax_t size) {
     unsigned char header[BX_CPIO_ODC_HEADER_LEN + 1u];
     size_t namesize;
 
@@ -363,8 +362,7 @@ static bool bx_cpio_emit_odc_header(struct bx_archive_buffer* archive,
         errno = EOVERFLOW;
         return false;
     }
-    if (!bx_archive_buffer_append(archive, header, BX_CPIO_ODC_HEADER_LEN)
-        || !bx_archive_buffer_append(archive, name, namesize)) {
+    if (!bx_archive_spool_append(archive, header, BX_CPIO_ODC_HEADER_LEN) || !bx_archive_spool_append(archive, name, namesize)) {
         return false;
     }
     return true;
@@ -419,7 +417,7 @@ static void bx_cpio_count_inodes(const struct bx_archive_fs_list* list,
     }
 }
 
-static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
+static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
                                       int source_root_fd,
                                       const struct bx_archive_fs_entry* entry,
                                       uintmax_t ino,
@@ -435,15 +433,14 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
     dev_t device = options->reproducible ? 0 : entry->st.st_dev;
     dev_t rdev = S_ISCHR(mode) || S_ISBLK(mode) ? entry->st.st_rdev : 0;
     const unsigned char* payload = NULL;
-    size_t size = 0u;
+    uintmax_t size = 0u;
     uintmax_t wide_limit = options->format == BX_CPIO_FORMAT_NEWC ? UINT32_MAX : UINT64_C(077777777777);
 
     if (strcmp(entry->archive_path, "TRAILER!!!") == 0) {
         bx_diag(diag, "%s: reserved cpio trailer name", entry->archive_path);
         return false;
     }
-    if (mtime.tv_sec < 0 || (uintmax_t)mtime.tv_sec > wide_limit ||
-        (S_ISREG(mode) && (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size > wide_limit || (uintmax_t)entry->st.st_size > SIZE_MAX))) {
+    if (mtime.tv_sec < 0 || (uintmax_t)mtime.tv_sec > wide_limit || (S_ISREG(mode) && (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size > wide_limit))) {
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(EOVERFLOW));
         return false;
     }
@@ -457,7 +454,7 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
         size = strlen(entry->link_target);
     }
     else if (S_ISREG(mode) && !suppress_data) {
-        size = (size_t)entry->st.st_size;
+        size = (uintmax_t)entry->st.st_size;
     }
     else if (S_ISREG(mode)) {
         size = 0u;
@@ -480,25 +477,28 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
         if (!bx_cpio_append_source(source_root_fd, entry, archive, diag))
             return false;
     }
-    else if (size != 0 && !bx_archive_buffer_append(archive, payload, size)) {
+    else if (size != 0 && !bx_archive_spool_append(archive, payload, size)) {
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
         return false;
     }
-    if (options->format == BX_CPIO_FORMAT_NEWC && !bx_archive_buffer_append_zeros(archive, (4u - archive->len % 4u) % 4u)) {
+    if (options->format == BX_CPIO_FORMAT_NEWC && !bx_archive_spool_append_zeros(archive, (4u - archive->len % 4u) % 4u)) {
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
         return false;
     }
     return true;
 }
 
-static bool bx_cpio_build_archive(struct bx_archive_buffer* archive, int source_root_fd, const struct bx_cpio_options* options, char** names, size_t name_count, struct bx_diag_ctx* diag) {
+static bool bx_cpio_build_archive(struct bx_archive_spool* archive, int source_root_fd, const struct bx_cpio_options* options, char** names, size_t name_count, struct bx_diag_ctx* diag) {
     struct bx_archive_fs_list files = {0};
     struct bx_cpio_inode_map_list maps = {0};
     bool* emitted = NULL;
     size_t i;
 
-    bx_archive_buffer_init(archive);
     if (!bx_cpio_build_fs_list(&files, source_root_fd, names, name_count, diag)) {
+        bx_archive_fs_list_free(&files);
+        return false;
+    }
+    if (!bx_archive_spool_open(archive, diag)) {
         bx_archive_fs_list_free(&files);
         return false;
     }
@@ -545,40 +545,40 @@ static bool bx_cpio_build_archive(struct bx_archive_buffer* archive, int source_
         emitted[i] = true;
     }
 
+    bool finished;
     if (options->format == BX_CPIO_FORMAT_NEWC) {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_newc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u);
-        while (archive->len % 512u != 0u) {
-            bx_archive_buffer_append_byte(archive, 0u);
-        }
+        finished = bx_cpio_emit_newc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u) && bx_archive_spool_append_zeros(archive, (512u - archive->len % 512u) % 512u);
     }
     else {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_odc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u);
-        if (archive->len % 2u != 0u) {
-            bx_archive_buffer_append_byte(archive, 0u);
-        }
+        finished = bx_cpio_emit_odc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u) && bx_archive_spool_append_zeros(archive, archive->len % 2u);
     }
+    if (!finished)
+        bx_diag(diag, "archive trailer: %s", strerror(errno));
 
     free(emitted);
     bx_cpio_inode_maps_free(&maps);
     bx_archive_fs_list_free(&files);
-    return true;
+    return finished;
 }
 
-static bool bx_cpio_write_archive_output(const struct bx_cpio_options* options,
-                                         const struct bx_archive_buffer* archive,
-                                         struct bx_diag_ctx* diag) {
+static bool bx_cpio_write_archive_output(const struct bx_cpio_options* options, const struct bx_archive_spool* archive, struct bx_diag_ctx* diag) {
     FILE* stream;
+    if (bx_archive_temp_pending_signal()) {
+        errno = EINTR;
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
     if (options->archive_path == NULL) {
-        return bx_archive_buffer_write_all(stdout, archive, diag);
+        return bx_archive_spool_write_all(stdout, archive, diag);
     }
     stream = fopen(options->archive_path, "wb");
     if (stream == NULL) {
         bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
         return false;
     }
-    if (!bx_archive_buffer_write_all(stream, archive, diag)) {
+    if (!bx_archive_spool_write_all(stream, archive, diag)) {
         fclose(stream);
         return false;
     }
@@ -1479,7 +1479,7 @@ static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv
     if (options.mode == BX_CPIO_MODE_COPY_OUT) {
         char** names = NULL;
         size_t name_count = 0u;
-        struct bx_archive_buffer archive = {0};
+        struct bx_archive_spool archive = BX_ARCHIVE_SPOOL_INIT;
         int rc;
         if (!bx_cpio_read_name_list(&options, &names, &name_count, &diag)) {
             return 2;
@@ -1493,13 +1493,14 @@ static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv
         bool built = bx_cpio_build_archive(&archive, source_root_fd, &options, names, name_count, &diag);
         bool closed = bx_fd_close(&source_root_fd, ".", built ? &diag : NULL);
         if (!built || !closed) {
-            bx_archive_buffer_free(&archive);
+            bx_archive_spool_close(&archive, NULL);
             bx_cpio_free_name_list(names, name_count);
             return 2;
         }
         rc = bx_cpio_write_archive_output(&options, &archive, &diag) ? 0 : 2;
         *copied_bytes = archive.len;
-        bx_archive_buffer_free(&archive);
+        if (!bx_archive_spool_close(&archive, rc == 0 ? &diag : NULL))
+            rc = 2;
         bx_cpio_free_name_list(names, name_count);
         return rc;
     }
