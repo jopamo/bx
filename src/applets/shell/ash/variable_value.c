@@ -29,11 +29,14 @@ bool ash_value_init_scalar(struct ash_value* value, const char* scalar) {
         return false;
     }
     *value = (struct ash_value){.kind = ASH_VALUE_SCALAR};
-    value->data.scalar = ash_value_duplicate(scalar);
-    if (value->data.scalar != NULL) {
-        assert(ash_value_invariants(value));
+    if (scalar != NULL) {
+        value->data.scalar = ash_value_duplicate(scalar);
+        if (value->data.scalar == NULL) {
+            return false;
+        }
     }
-    return value->data.scalar != NULL;
+    assert(ash_value_invariants(value));
+    return true;
 }
 
 void ash_value_init_indexed(struct ash_value* value) {
@@ -231,7 +234,7 @@ bool ash_value_invariants(const struct ash_value* value) {
     }
     switch (value->kind) {
         case ASH_VALUE_SCALAR:
-            return value->data.scalar != NULL;
+            return true;
         case ASH_VALUE_INDEXED_ARRAY: {
             const struct ash_indexed_array* array = &value->data.indexed;
             if (array->count > array->capacity ||
