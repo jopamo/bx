@@ -13,6 +13,10 @@ struct bx_cpio_member_bounds {
     size_t next_offset;
 };
 
+static inline bool bx_cpio_metadata_budget(size_t count, size_t bytes, size_t extra, size_t count_limit, size_t byte_limit, size_t* next_bytes) {
+    return count < count_limit && bytes <= byte_limit && extra <= byte_limit - bytes && bx_checked_size_add(bytes, extra, next_bytes);
+}
+
 static inline bool bx_cpio_zero_padding(const unsigned char* data, size_t length) {
     for (size_t i = 0; i < length; i++) {
         if (data[i] != 0)

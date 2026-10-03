@@ -31,6 +31,7 @@
 #define BX_CPIO_NEWC_HEADER_LEN 110u
 #define BX_CPIO_ODC_HEADER_LEN 76u
 #define BX_CPIO_NAME_INPUT_BYTE_LIMIT (256u * 1024u * 1024u)
+#define BX_CPIO_MEMBER_METADATA_BYTE_LIMIT (256u * 1024u * 1024u)
 
 enum bx_cpio_mode {
     BX_CPIO_MODE_NONE = 0,
@@ -94,6 +95,7 @@ struct bx_cpio_entry_list {
     struct bx_cpio_entry* items;
     size_t len;
     size_t cap;
+    size_t bytes;
 };
 
 struct bx_cpio_inode_map {
@@ -153,9 +155,10 @@ static void bx_cpio_entry_list_free(struct bx_cpio_entry_list* list) {
     list->items = NULL;
     list->len = 0u;
     list->cap = 0u;
+    list->bytes = 0u;
 }
 
-static bool bx_cpio_entry_list_push(struct bx_cpio_entry_list* list, const struct bx_cpio_entry* entry) {
+static void bx_cpio_entry_list_push(struct bx_cpio_entry_list* list, const struct bx_cpio_entry* entry, size_t next_bytes) {
     struct bx_cpio_entry* slot;
     if (list->len == list->cap) {
         size_t next_cap = list->cap ? list->cap * 2u : 16u;
@@ -165,7 +168,7 @@ static bool bx_cpio_entry_list_push(struct bx_cpio_entry_list* list, const struc
     slot = &list->items[list->len++];
     memset(slot, 0, sizeof(*slot));
     *slot = *entry;
-    return true;
+    list->bytes = next_bytes;
 }
 
 static ssize_t bx_cpio_find_inode_map(const struct bx_cpio_inode_map_list* maps, dev_t dev, ino_t ino) {
@@ -684,6 +687,18 @@ static bool bx_cpio_finish_stream(const struct bx_archive_buffer* archive, size_
     return true;
 }
 
+static bool bx_cpio_member_metadata_budget(const struct bx_cpio_entry_list* entries, size_t mode, size_t namesize, size_t size, size_t* next_bytes, struct bx_diag_ctx* diag) {
+    size_t extra;
+    bool fits = bx_checked_size_add(sizeof(struct bx_cpio_entry), namesize, &extra);
+    if (fits && S_ISLNK(mode))
+        fits = bx_checked_size_add(extra, size, &extra) && bx_checked_size_add(extra, 1u, &extra);
+    if (!fits || !bx_cpio_metadata_budget(entries->len, entries->bytes, extra, BX_ARCHIVE_PENDING_METADATA_LIMIT, BX_CPIO_MEMBER_METADATA_BYTE_LIMIT, next_bytes)) {
+        bx_diag(diag, "cpio member metadata limit exceeded");
+        return false;
+    }
+    return true;
+}
+
 static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
                                        struct bx_cpio_entry_list* entries,
                                        struct bx_diag_ctx* diag) {
@@ -717,16 +732,18 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             bx_diag(diag, "invalid newc padding");
             return false;
         }
-        entry.name = xmalloc(namesize);
-        memcpy(entry.name, archive->data + pos, namesize);
-        pos = bounds.data_offset;
-        if (strcmp(entry.name, "TRAILER!!!") == 0) {
-            bx_cpio_entry_free(&entry);
+        if (namesize == sizeof("TRAILER!!!") && memcmp(archive->data + pos, "TRAILER!!!", namesize) == 0) {
             if (size == 0)
                 return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
             bx_diag(diag, "invalid newc trailer");
             return false;
         }
+        size_t next_bytes;
+        if (!bx_cpio_member_metadata_budget(entries, mode, namesize, size, &next_bytes, diag))
+            return false;
+        entry.name = xmalloc(namesize);
+        memcpy(entry.name, archive->data + pos, namesize);
+        pos = bounds.data_offset;
         entry.ino = (uint32_t)ino;
         entry.device = ((uint64_t)devmajor << 32) | devminor;
         entry.mode = (mode_t)mode;
@@ -746,7 +763,7 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             return false;
         }
         pos = bounds.next_offset;
-        bx_cpio_entry_list_push(entries, &entry);
+        bx_cpio_entry_list_push(entries, &entry, next_bytes);
     }
     bx_diag(diag, "truncated newc archive");
     return false;
@@ -779,16 +796,18 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             bx_diag(diag, "invalid or truncated odc member");
             return false;
         }
-        entry.name = xmalloc(namesize);
-        memcpy(entry.name, archive->data + pos, namesize);
-        pos = bounds.data_offset;
-        if (strcmp(entry.name, "TRAILER!!!") == 0) {
-            bx_cpio_entry_free(&entry);
+        if (namesize == sizeof("TRAILER!!!") && memcmp(archive->data + pos, "TRAILER!!!", namesize) == 0) {
             if (size == 0)
                 return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
             bx_diag(diag, "invalid odc trailer");
             return false;
         }
+        size_t next_bytes;
+        if (!bx_cpio_member_metadata_budget(entries, mode, namesize, size, &next_bytes, diag))
+            return false;
+        entry.name = xmalloc(namesize);
+        memcpy(entry.name, archive->data + pos, namesize);
+        pos = bounds.data_offset;
         entry.ino = (uint32_t)ino;
         entry.device = device;
         entry.mode = (mode_t)mode;
@@ -808,7 +827,7 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             return false;
         }
         pos = bounds.next_offset;
-        bx_cpio_entry_list_push(entries, &entry);
+        bx_cpio_entry_list_push(entries, &entry, next_bytes);
     }
     bx_diag(diag, "truncated odc archive");
     return false;
