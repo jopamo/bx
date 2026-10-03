@@ -2319,9 +2319,9 @@ static void ash_print_help(FILE* stream, const char* progname) {
         fprintf(stream, "               read file instead of ~/.bashrc\n");
         fprintf(stream, "  --norc       do not read ~/.bashrc\n");
         fprintf(stream, "  -o option-name\n");
-        fprintf(stream, "               set allexport, noclobber, noexec, noglob, onecmd, or verbose\n");
+        fprintf(stream, "               set allexport, noclobber, noexec, noglob, onecmd, pipefail, or verbose\n");
         fprintf(stream, "  +o option-name\n");
-        fprintf(stream, "               clear allexport, noclobber, noexec, noglob, onecmd, or verbose\n");
+        fprintf(stream, "               clear allexport, noclobber, noexec, noglob, onecmd, pipefail, or verbose\n");
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
     fprintf(stream, "  --standalone-applets\n");
