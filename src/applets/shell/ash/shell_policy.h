@@ -66,6 +66,9 @@ bool ash_shell_policy_allows_startup(
 bool ash_shell_policy_fatal_special_builtin_errors(
     const struct ash_shell_policy* policy
 );
+bool ash_shell_policy_globs_redirections(
+    const struct ash_shell_policy* policy
+);
 const char* ash_shell_policy_bash_version(
     const struct ash_shell_policy* policy
 );
