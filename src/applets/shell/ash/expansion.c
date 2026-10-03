@@ -467,7 +467,8 @@ static bool ash_append_dollar_single(
 static bool ash_expand_part(
     struct ash_shell* shell,
     const struct ash_word_part* part,
-    struct bx_text_buffer* output
+    struct bx_text_buffer* output,
+    int* substitution_status
 ) {
     if (part->kind == ASH_WORD_PARAMETER) {
         return ash_expand_parameter(shell, part->text, output);
@@ -484,13 +485,18 @@ static bool ash_expand_part(
         }
 
         char* substitution = NULL;
+        int status;
         bool expanded = shell->command_substitution(
             shell,
             part->text + prefix,
             part->length - prefix - suffix,
-            &substitution
+            &substitution,
+            &status
         );
         if (expanded) {
+            if (substitution_status != NULL) {
+                *substitution_status = status;
+            }
             expanded = ash_expansion_append_text(
                 shell,
                 output,
@@ -557,12 +563,12 @@ static bool ash_append_pattern_component(
     );
 }
 
-static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern) {
+static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, int* substitution_status) {
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
         struct bx_text_buffer component;
         bx_text_buffer_init(&component);
-        if (!ash_expand_part(shell, part, &component)) {
+        if (!ash_expand_part(shell, part, &component, substitution_status)) {
             bx_text_buffer_destroy(&component);
             return false;
         }
@@ -581,14 +587,16 @@ bool ash_expand(
     struct ash_shell* shell,
     const struct ash_word* word,
     enum ash_expansion_context context,
-    char** output_word
+    char** output_word,
+    int* substitution_status
 ) {
     *output_word = NULL;
     struct bx_text_buffer output;
     bx_text_buffer_init(&output);
     bool pattern = context == ASH_EXPANSION_PATTERN;
     if (!ash_expand_buffers(
-            shell, word, pattern ? NULL : &output, pattern ? &output : NULL
+            shell, word, pattern ? NULL : &output, pattern ? &output : NULL,
+            substitution_status
         )) {
         bx_text_buffer_destroy(&output);
         return false;
@@ -604,9 +612,12 @@ bool ash_expand(
 bool ash_expand_word(
     struct ash_shell* shell,
     const struct ash_word* word,
-    char** output_word
+    char** output_word,
+    int* substitution_status
 ) {
-    return ash_expand(shell, word, ASH_EXPANSION_WORD, output_word);
+    return ash_expand(
+        shell, word, ASH_EXPANSION_WORD, output_word, substitution_status
+    );
 }
 
 void ash_expanded_fields_init(struct ash_expanded_fields* fields) {
@@ -911,7 +922,8 @@ static bool ash_expand_pathnames(
 enum ash_redirection_expansion_result ash_expand_redirection(
     struct ash_shell* shell,
     const struct ash_word* word,
-    char** output
+    char** output,
+    int* substitution_status
 ) {
     *output = NULL;
     bool needs_pattern = ash_pathname_expansion_enabled(shell) &&
@@ -924,7 +936,8 @@ enum ash_redirection_expansion_result ash_expand_redirection(
             shell,
             word,
             &value_buffer,
-            needs_pattern ? &pattern_buffer : NULL
+            needs_pattern ? &pattern_buffer : NULL,
+            substitution_status
         )) {
         bx_text_buffer_destroy(&value_buffer);
         bx_text_buffer_destroy(&pattern_buffer);
@@ -996,7 +1009,8 @@ static bool ash_part_requires_splitting(const struct ash_word_part* part) {
 bool ash_expand_argument(
     struct ash_shell* shell,
     const struct ash_word* word,
-    struct ash_expanded_fields* fields
+    struct ash_expanded_fields* fields,
+    int* substitution_status
 ) {
     ash_expanded_fields_init(fields);
     bool pathname_expansion =
@@ -1061,7 +1075,7 @@ bool ash_expand_argument(
 
         struct bx_text_buffer component;
         bx_text_buffer_init(&component);
-        if (!ash_expand_part(shell, part, &component)) {
+        if (!ash_expand_part(shell, part, &component, substitution_status)) {
             bx_text_buffer_destroy(&component);
             goto fail;
         }

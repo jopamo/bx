@@ -31,11 +31,13 @@ typedef bool (*ash_command_substitution_fn)(
     struct ash_shell* shell,
     const char* command,
     size_t length,
-    char** output
+    char** output,
+    int* status
 );
 /*
  * The command span is borrowed. On success output receives one caller-owned
- * allocation; on failure output remains NULL.
+ * allocation and status receives the child result; on failure output remains
+ * NULL.
  */
 
 struct ash_cwd_state {

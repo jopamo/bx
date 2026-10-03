@@ -30,6 +30,8 @@ struct ash_command {
     struct ash_redir* redirs;
     size_t redir_count;
     size_t redir_cap;
+    /* Last substitution result, or zero when expansion ran none. */
+    int substitution_status;
 };
 
 #endif /* BX_APPLETS_SHELL_ASH_COMMAND_H */
