@@ -36,6 +36,8 @@ enum ash_scope_lookup_mode {
     ASH_SCOPE_LOOKUP_VISIBLE,
     ASH_SCOPE_LOOKUP_CURRENT,
     ASH_SCOPE_LOOKUP_GLOBAL,
+    /* Search below the current frame, retaining dynamic outer scope lookup. */
+    ASH_SCOPE_LOOKUP_OUTER,
 };
 
 enum ash_scope_lookup_status {
