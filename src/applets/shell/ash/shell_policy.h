@@ -63,6 +63,9 @@ bool ash_shell_policy_expands_aliases(
 bool ash_shell_policy_allows_startup(
     const struct ash_shell_policy* policy
 );
+bool ash_shell_policy_fatal_special_builtin_errors(
+    const struct ash_shell_policy* policy
+);
 const char* ash_shell_policy_bash_version(
     const struct ash_shell_policy* policy
 );
