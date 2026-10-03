@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -56,6 +57,8 @@ struct bx_cpio_options {
     const char* pass_dir;
     bool list;
     bool quiet;
+    bool create_dirs;
+    bool format_explicit;
     bool null_input;
     bool preserve_mtime;
     bool to_stdout;
@@ -269,8 +272,7 @@ static bool bx_cpio_parse_owner_spec(const char* text,
     }
 
     *colon = '\0';
-    if (!bx_id_parse_numeric(spec, (uintmax_t)((uid_t)-1), &owner)
-        || !bx_id_parse_numeric(colon + 1, (uintmax_t)((gid_t)-1), &group)) {
+    if (!bx_id_parse_numeric(spec, (uintmax_t)((uid_t)-1) - 1u, &owner) || !bx_id_parse_numeric(colon + 1, (uintmax_t)((gid_t)-1) - 1u, &group)) {
         bx_diag(diag, "invalid owner spec '%s'", text);
         free(spec);
         return false;
@@ -976,7 +978,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
         errno = EINTR;
         goto fail;
     }
-    parent = bx_dir_path_open_destination_parent(root_fd, entry->name, BX_DIR_PATH_NO_MOUNT_CROSSING, true, 0777, &leaf);
+    parent = bx_dir_path_open_destination_parent(root_fd, entry->name, BX_DIR_PATH_NO_MOUNT_CROSSING, options->create_dirs, 0777, &leaf);
     if (parent < 0)
         goto fail;
     if (entry->kind == BX_CPIO_KIND_DIR) {
@@ -1151,7 +1153,7 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
     return status;
 }
 
-static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx_diag_ctx* diag) {
+static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx_diag_ctx* diag, uintmax_t* copied_bytes) {
     char** names = NULL;
     size_t name_count = 0;
     struct bx_archive_fs_list files = {0};
@@ -1210,7 +1212,16 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         else {
             continue;
         }
+        size_t bytes = entry.kind == BX_CPIO_KIND_SYMLINK ? strlen(entry.link_target) : entry.data_len;
+        if (UINTMAX_MAX - *copied_bytes < bytes) {
+            bx_diag(diag, "copied byte count: %s", strerror(EOVERFLOW));
+            bx_archive_buffer_free(&data);
+            status = 2;
+            break;
+        }
         bool ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, state, diag);
+        if (ok)
+            *copied_bytes += bytes;
         bx_archive_buffer_free(&data);
         if (!ok) {
             status = 2;
@@ -1226,6 +1237,19 @@ done:
     bx_cpio_free_name_list(names, name_count);
     bx_fd_cleanup(&root_fd);
     return status;
+}
+
+static bool bx_cpio_select_format(struct bx_cpio_options* options, const char* value, struct bx_diag_ctx* diag) {
+    if (strcmp(value, "newc") == 0)
+        options->format = BX_CPIO_FORMAT_NEWC;
+    else if (strcmp(value, "odc") == 0)
+        options->format = BX_CPIO_FORMAT_ODC;
+    else {
+        bx_diag(diag, "unsupported format '%s'", value);
+        return false;
+    }
+    options->format_explicit = true;
+    return true;
 }
 
 static bool bx_cpio_parse_options(struct bx_cpio_options* options,
@@ -1278,16 +1302,8 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                     return false;
                 }
                 value = value ? value + 1 : argv[i];
-                if (strcmp(value, "newc") == 0) {
-                    options->format = BX_CPIO_FORMAT_NEWC;
-                }
-                else if (strcmp(value, "odc") == 0) {
-                    options->format = BX_CPIO_FORMAT_ODC;
-                }
-                else {
-                    bx_diag(diag, "unsupported format '%s'", value);
+                if (!bx_cpio_select_format(options, value, diag))
                     return false;
-                }
             }
             else {
                 bx_diag(diag, "unrecognized option '%s'", arg);
@@ -1302,17 +1318,26 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                 char ch = letters[j];
                 const char* attached = &letters[j + 1u];
                 switch (ch) {
-                    case 'o': options->mode = BX_CPIO_MODE_COPY_OUT; break;
-                    case 'i': options->mode = BX_CPIO_MODE_COPY_IN; break;
-                    case 'p': options->mode = BX_CPIO_MODE_PASS; break;
+                    case 'o':
+                    case 'i':
+                    case 'p': {
+                        enum bx_cpio_mode mode = ch == 'o' ? BX_CPIO_MODE_COPY_OUT : ch == 'i' ? BX_CPIO_MODE_COPY_IN : BX_CPIO_MODE_PASS;
+                        if (options->mode != BX_CPIO_MODE_NONE && options->mode != mode) {
+                            bx_diag(diag, "conflicting operation modes");
+                            return false;
+                        }
+                        options->mode = mode;
+                        break;
+                    }
                     case 't': options->list = true; break;
-                    case 'd': break;
+                    case 'd':
+                        options->create_dirs = true;
+                        break;
                     case 'm': options->preserve_mtime = true; break;
                     case '0': options->null_input = true; break;
                     case 'F':
                         if (*attached != '\0') {
                             options->archive_path = attached;
-                            j = strlen(letters) - 1u;
                         }
                         else if (++i < argc) {
                             options->archive_path = argv[i];
@@ -1324,29 +1349,12 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                         goto next_arg;
                     case 'H':
                         if (*attached != '\0') {
-                            if (strcmp(attached, "newc") == 0) {
-                                options->format = BX_CPIO_FORMAT_NEWC;
-                            }
-                            else if (strcmp(attached, "odc") == 0) {
-                                options->format = BX_CPIO_FORMAT_ODC;
-                            }
-                            else {
-                                bx_diag(diag, "unsupported format '%s'", attached);
+                            if (!bx_cpio_select_format(options, attached, diag))
                                 return false;
-                            }
-                            j = strlen(letters) - 1u;
                         }
                         else if (++i < argc) {
-                            if (strcmp(argv[i], "newc") == 0) {
-                                options->format = BX_CPIO_FORMAT_NEWC;
-                            }
-                            else if (strcmp(argv[i], "odc") == 0) {
-                                options->format = BX_CPIO_FORMAT_ODC;
-                            }
-                            else {
-                                bx_diag(diag, "unsupported format '%s'", argv[i]);
+                            if (!bx_cpio_select_format(options, argv[i], diag))
                                 return false;
-                            }
                         }
                         else {
                             bx_diag(diag, "option requires an argument -- 'H'");
@@ -1358,7 +1366,6 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                             if (!bx_cpio_parse_owner_spec(attached, options, diag)) {
                                 return false;
                             }
-                            j = strlen(letters) - 1u;
                         }
                         else if (++i < argc) {
                             if (!bx_cpio_parse_owner_spec(argv[i], options, diag)) {
@@ -1386,9 +1393,43 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
         bx_diag(diag, "must specify one of -i, -o, or -p");
         return false;
     }
+    const char* invalid = NULL;
+    bool filesystem_copy = options->mode == BX_CPIO_MODE_PASS || (options->mode == BX_CPIO_MODE_COPY_IN && !options->list && !options->to_stdout);
+    if (options->list && options->mode != BX_CPIO_MODE_COPY_IN)
+        invalid = "-t requires -i";
+    else if (options->to_stdout && (options->mode != BX_CPIO_MODE_COPY_IN || options->list))
+        invalid = "--to-stdout requires extraction without -t";
+    else if (options->format_explicit && options->mode != BX_CPIO_MODE_COPY_OUT)
+        invalid = "-H/--format requires -o; input format is detected automatically";
+    else if (options->archive_path && options->mode == BX_CPIO_MODE_PASS)
+        invalid = "-F/--file is not supported with -p";
+    else if (options->reproducible && options->mode != BX_CPIO_MODE_COPY_OUT)
+        invalid = "--reproducible requires -o";
+    else if (options->null_input && options->mode == BX_CPIO_MODE_COPY_IN)
+        invalid = "-0/--null requires -o or -p";
+    else if (options->create_dirs && !filesystem_copy)
+        invalid = "-d requires filesystem extraction or -p";
+    else if (options->preserve_mtime && !filesystem_copy)
+        invalid = "-m requires filesystem extraction or -p";
+    else if (options->sparse && !filesystem_copy)
+        invalid = "--sparse requires filesystem extraction or -p";
+    else if (options->owner_override && !filesystem_copy && options->mode != BX_CPIO_MODE_COPY_OUT)
+        invalid = "-R requires -o, filesystem extraction, or -p";
+    if (invalid) {
+        bx_diag(diag, "%s", invalid);
+        return false;
+    }
+    if (options->mode == BX_CPIO_MODE_COPY_OUT && options->operand_index < argc) {
+        bx_cli_diag_extra_operand(diag, argv[options->operand_index]);
+        return false;
+    }
     if (options->mode == BX_CPIO_MODE_PASS) {
         if (options->operand_index >= argc) {
             bx_diag(diag, "missing destination directory operand");
+            return false;
+        }
+        if (options->operand_index + 1 < argc) {
+            bx_cli_diag_extra_operand(diag, argv[options->operand_index + 1]);
             return false;
         }
         options->pass_dir = argv[options->operand_index];
@@ -1397,19 +1438,7 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
     return true;
 }
 
-int bx_cpio_run(int argc, char** argv) {
-    struct bx_cpio_options options;
-    struct bx_diag_ctx diag = {
-        .progname = bx_cpio_progname(argv, argc),
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
-    };
-
-    if (!bx_cpio_parse_options(&options, argc, argv, &diag)) {
-        return 2;
-    }
-
+static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv, struct bx_diag_ctx diag, uintmax_t* copied_bytes) {
     if (options.mode == BX_CPIO_MODE_COPY_OUT) {
         char** names = NULL;
         size_t name_count = 0u;
@@ -1424,12 +1453,13 @@ int bx_cpio_run(int argc, char** argv) {
             return 2;
         }
         rc = bx_cpio_write_archive_output(&options, &archive, &diag) ? 0 : 2;
+        *copied_bytes = archive.len;
         bx_archive_buffer_free(&archive);
         bx_cpio_free_name_list(names, name_count);
         return rc;
     }
     if (options.mode == BX_CPIO_MODE_PASS) {
-        return bx_cpio_pass_through(&options, &diag);
+        return bx_cpio_pass_through(&options, &diag, copied_bytes);
     }
     else {
         struct bx_archive_buffer archive = {0};
@@ -1440,6 +1470,7 @@ int bx_cpio_run(int argc, char** argv) {
             bx_archive_buffer_free(&archive);
             return 2;
         }
+        *copied_bytes = archive.len;
         if (!bx_cpio_detect_archive_format(&archive, &input_format, &diag)) {
             bx_archive_buffer_free(&archive);
             return 2;
@@ -1463,4 +1494,19 @@ int bx_cpio_run(int argc, char** argv) {
         bx_cpio_entry_list_free(&entries);
         return rc;
     }
+}
+
+int bx_cpio_run(int argc, char** argv) {
+    struct bx_cpio_options options;
+    struct bx_diag_ctx diag = {.progname = bx_cpio_progname(argv, argc)};
+    uintmax_t copied_bytes = 0;
+    if (!bx_cpio_parse_options(&options, argc, argv, &diag))
+        return 2;
+    int rc = bx_cpio_execute(options, argc, argv, diag, &copied_bytes);
+    if (rc == 0 && !options.quiet) {
+        uintmax_t blocks = copied_bytes / 512u + (copied_bytes % 512u != 0);
+        if (fprintf(stderr, "%" PRIuMAX " block%s\n", blocks, blocks == 1 ? "" : "s") < 0 || fflush(stderr) != 0)
+            return 2;
+    }
+    return rc;
 }
