@@ -13,6 +13,14 @@ struct bx_cpio_member_bounds {
     size_t next_offset;
 };
 
+static inline bool bx_cpio_zero_padding(const unsigned char* data, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        if (data[i] != 0)
+            return false;
+    }
+    return true;
+}
+
 /* A rejected field remains private to the caller's uncommitted header. */
 static inline bool bx_cpio_format_number(unsigned char* field, size_t width, uintmax_t value, unsigned int bits) {
     static const char digits[] = "0123456789ABCDEF";

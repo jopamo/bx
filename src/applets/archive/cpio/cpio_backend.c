@@ -436,6 +436,10 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
     size_t size = 0u;
     uintmax_t wide_limit = options->format == BX_CPIO_FORMAT_NEWC ? UINT32_MAX : UINT64_C(077777777777);
 
+    if (strcmp(entry->archive_path, "TRAILER!!!") == 0) {
+        bx_diag(diag, "%s: reserved cpio trailer name", entry->archive_path);
+        return false;
+    }
     if (mtime.tv_sec < 0 || (uintmax_t)mtime.tv_sec > wide_limit || (S_ISREG(mode) && (entry->st.st_size < 0 || (uintmax_t)entry->st.st_size > wide_limit))) {
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(EOVERFLOW));
         return false;
@@ -652,13 +656,21 @@ static bool bx_cpio_parse_payload(struct bx_cpio_entry* entry, const unsigned ch
     return true;
 }
 
+static bool bx_cpio_finish_stream(const struct bx_archive_buffer* archive, size_t offset, struct bx_diag_ctx* diag) {
+    if (!bx_cpio_zero_padding(archive->data + offset, archive->len - offset)) {
+        bx_diag(diag, "trailing data after cpio trailer");
+        return false;
+    }
+    return true;
+}
+
 static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
                                        struct bx_cpio_entry_list* entries,
                                        struct bx_diag_ctx* diag) {
     size_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_NEWC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
-        size_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor, rdevmajor, rdevminor;
+        size_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor, rdevmajor, rdevminor, check;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
         if (memcmp(header, "070701", 6u) != 0) {
@@ -668,7 +680,8 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
         if (!bx_cpio_parse_hex_field(header + 6, 8u, &ino) || !bx_cpio_parse_hex_field(header + 14, 8u, &mode) || !bx_cpio_parse_hex_field(header + 22, 8u, &uid) ||
             !bx_cpio_parse_hex_field(header + 30, 8u, &gid) || !bx_cpio_parse_hex_field(header + 38, 8u, &nlink) || !bx_cpio_parse_hex_field(header + 46, 8u, &mtime) ||
             !bx_cpio_parse_hex_field(header + 54, 8u, &size) || !bx_cpio_parse_hex_field(header + 62, 8u, &devmajor) || !bx_cpio_parse_hex_field(header + 70, 8u, &devminor) ||
-            !bx_cpio_parse_hex_field(header + 78, 8u, &rdevmajor) || !bx_cpio_parse_hex_field(header + 86, 8u, &rdevminor) || !bx_cpio_parse_hex_field(header + 94, 8u, &namesize)) {
+            !bx_cpio_parse_hex_field(header + 78, 8u, &rdevmajor) || !bx_cpio_parse_hex_field(header + 86, 8u, &rdevminor) || !bx_cpio_parse_hex_field(header + 94, 8u, &namesize) ||
+            !bx_cpio_parse_hex_field(header + 102, 8u, &check) || check != 0) {
             bx_diag(diag, "invalid newc header");
             return false;
         }
@@ -679,13 +692,18 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             bx_diag(diag, "invalid or truncated newc member");
             return false;
         }
+        if (!bx_cpio_zero_padding(archive->data + pos + namesize, bounds.data_offset - (pos + namesize)) ||
+            !bx_cpio_zero_padding(archive->data + bounds.data_offset + size, bounds.next_offset - (bounds.data_offset + size))) {
+            bx_diag(diag, "invalid newc padding");
+            return false;
+        }
         entry.name = xmalloc(namesize);
         memcpy(entry.name, archive->data + pos, namesize);
         pos = bounds.data_offset;
         if (strcmp(entry.name, "TRAILER!!!") == 0) {
             bx_cpio_entry_free(&entry);
             if (size == 0)
-                return true;
+                return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
             bx_diag(diag, "invalid newc trailer");
             return false;
         }
@@ -747,7 +765,7 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
         if (strcmp(entry.name, "TRAILER!!!") == 0) {
             bx_cpio_entry_free(&entry);
             if (size == 0)
-                return true;
+                return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
             bx_diag(diag, "invalid odc trailer");
             return false;
         }
