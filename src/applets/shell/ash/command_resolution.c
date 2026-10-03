@@ -199,7 +199,12 @@ struct ash_command_resolution ash_command_resolve(
 
     const struct ash_builtin_definition* builtin =
         ash_builtin_find(name);
+    bool functions_first = shell != NULL &&
+        ash_shell_policy_valid(&shell->policy) &&
+        ash_shell_policy_is_bash(&shell->policy) &&
+        !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX);
     if (builtin != NULL &&
+        !functions_first &&
         ash_builtin_resolution_kind(builtin->builtin) ==
             ASH_COMMAND_SPECIAL_BUILTIN) {
         return ash_builtin_resolution(name, builtin);

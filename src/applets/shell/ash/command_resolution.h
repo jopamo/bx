@@ -71,8 +71,9 @@ struct ash_command_resolution {
 };
 
 /*
- * Shell precedence is special builtin, function, regular builtin, then
- * external lookup. Slash-containing names bypass shell namespaces. The
+ * POSIX policy resolves special builtins before functions; default Bash
+ * resolves functions before all builtins. External lookup follows both
+ * namespaces. Slash-containing names bypass shell namespaces. The
  * explicit standalone-applets policy may select a registered applet only at
  * that final external stage; ordinary policy never consults the registry.
  */
