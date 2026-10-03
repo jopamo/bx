@@ -15,6 +15,8 @@ const char* ash_input_default_prompt(void);
  * Execute one source as the active top of the context-owned input stack.
  * String input is copied before publication. A TAKE stream is consumed even
  * when publication fails; a BORROW stream always remains caller-owned.
+ * Main-input streams must not have prior stdio I/O; ingress disables their
+ * read-ahead. Sourced-file streams retain their caller-selected buffering.
  */
 int ash_input_execute_string(
     struct ash_shell* shell,
