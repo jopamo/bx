@@ -1460,15 +1460,18 @@ static enum ash_lexer_result ash_lexer_scan_text(
 static enum ash_lexer_result ash_lexer_scan_double_quote(
     struct ash_lexer* lexer,
     struct ash_word* word,
-    enum ash_quote_kind quote
+    enum ash_quote_kind quote,
+    bool delimited
 ) {
     assert(quote == ASH_QUOTE_DOUBLE || quote == ASH_QUOTE_LOCALE);
     struct ash_source_location location =
         ash_lexer_current_location(lexer);
-    if (quote == ASH_QUOTE_LOCALE) {
+    if (delimited) {
+        if (quote == ASH_QUOTE_LOCALE) {
+            (void)ash_lexer_advance_logical(lexer);
+        }
         (void)ash_lexer_advance_logical(lexer);
     }
-    (void)ash_lexer_advance_logical(lexer);
     bool produced_part = false;
 
     while (!ash_lexer_at_end(lexer)) {
@@ -1477,7 +1480,7 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             break;
         }
         char ch = ash_lexer_peek(lexer, 0u);
-        if (ch == '"') {
+        if (ch == '"' && delimited) {
             if (!produced_part && ash_word_append_span(
                     word,
                     ASH_WORD_TEXT,
@@ -1490,6 +1493,14 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             }
             (void)ash_lexer_advance(lexer);
             return ASH_LEXER_TOKEN;
+        }
+        if (ch == '"') {
+            if (ash_word_append_span(word, ASH_WORD_TEXT, quote, ash_lexer_current_location(lexer), &ch, 1u) != 0) {
+                return ash_lexer_fail(lexer, ASH_LEXER_ERROR, location, "out of memory");
+            }
+            (void)ash_lexer_advance(lexer);
+            produced_part = true;
+            continue;
         }
         if (ch == '\\') {
             struct ash_source_location escaped_location =
@@ -1554,12 +1565,20 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
         produced_part = true;
     }
 
+    if (!delimited) {
+        return ASH_LEXER_TOKEN;
+    }
     return ash_lexer_fail(
         lexer,
         ASH_LEXER_INCOMPLETE,
         location,
         "unterminated double quote"
     );
+}
+
+enum ash_lexer_result ash_lexer_scan_expansion_string(struct ash_lexer* lexer, struct ash_word* word) {
+    ash_word_init(word, ash_lexer_current_location(lexer));
+    return ash_lexer_scan_double_quote(lexer, word, ASH_QUOTE_DOUBLE, false);
 }
 
 static enum ash_lexer_result ash_lexer_scan_backslash(
@@ -1661,7 +1680,8 @@ static enum ash_lexer_result ash_lexer_scan_extglob(
             result = ash_lexer_scan_double_quote(
                 lexer,
                 word,
-                ASH_QUOTE_DOUBLE
+                ASH_QUOTE_DOUBLE,
+                true
             );
         }
         else if (ch == '$' && ash_lexer_starts_with(lexer, "$'")) {
@@ -1671,7 +1691,8 @@ static enum ash_lexer_result ash_lexer_scan_extglob(
             result = ash_lexer_scan_double_quote(
                 lexer,
                 word,
-                ASH_QUOTE_LOCALE
+                ASH_QUOTE_LOCALE,
+                true
             );
         }
         else if (ch == '$') {
@@ -1779,7 +1800,8 @@ static enum ash_lexer_result ash_lexer_scan_word(
             result = ash_lexer_scan_double_quote(
                 lexer,
                 &token->word,
-                ASH_QUOTE_DOUBLE
+                ASH_QUOTE_DOUBLE,
+                true
             );
         }
         else if (ch == '$' && ash_lexer_starts_with(lexer, "$'")) {
@@ -1789,7 +1811,8 @@ static enum ash_lexer_result ash_lexer_scan_word(
             result = ash_lexer_scan_double_quote(
                 lexer,
                 &token->word,
-                ASH_QUOTE_LOCALE
+                ASH_QUOTE_LOCALE,
+                true
             );
         }
         else if (ch == '$') {

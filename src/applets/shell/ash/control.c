@@ -1,6 +1,13 @@
 #include "applets/shell/ash/control.h"
 #include "applets/shell/ash/shell_context.h"
 
+void ash_control_publish_status(struct ash_shell* shell, int status) {
+    /* Return status belongs to its owner until that owner consumes it. */
+    if (shell->control.pending != ASH_CONTROL_RETURN) {
+        shell->last_status = status;
+    }
+}
+
 void ash_control_enter_loop(struct ash_shell* shell) {
     shell->control.loop_depth++;
 }

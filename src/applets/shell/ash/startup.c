@@ -1,12 +1,16 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "applets/shell/ash/control.h"
 #include "applets/shell/ash/diagnostic.h"
+#include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/input_execution.h"
+#include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/shell_policy.h"
 #include "applets/shell/ash/startup.h"
@@ -202,6 +206,54 @@ static enum ash_startup_outcome ash_startup_execute_bashrc(
     return ash_startup_file_outcome(result);
 }
 
+static enum ash_startup_outcome ash_startup_execute_bash_env(struct ash_shell* shell) {
+    const char* requested = ash_var_get(shell, "BASH_ENV");
+    if (requested == NULL || requested[0] == '\0') {
+        return ASH_STARTUP_CONTINUE;
+    }
+
+    struct ash_lexer lexer;
+    ash_lexer_init(&lexer, "BASH_ENV", requested, strlen(requested));
+    struct ash_word word;
+    errno = 0;
+    enum ash_lexer_result lexed = ash_lexer_scan_expansion_string(&lexer, &word);
+    char* path = NULL;
+    bool expanded = lexed == ASH_LEXER_TOKEN && ash_expand_word(shell, &word, &path, NULL);
+    int error = errno;
+    ash_word_destroy(&word);
+    if (!expanded) {
+        free(path);
+        if (error == ENOMEM || error == EOVERFLOW) {
+            if (error == ENOMEM) {
+                ash_diag_oom(shell);
+            }
+            else {
+                ash_exec_error(shell, "BASH_ENV expansion", error);
+            }
+            return ASH_STARTUP_FATAL;
+        }
+        if (lexed != ASH_LEXER_TOKEN) {
+            ash_diag(shell, "%s: bad substitution", requested);
+        }
+        /* Filename expansion errors return to startup, not the input owner. */
+        int status = 1;
+        (void)ash_control_consume_unit_discard(shell, &status);
+        shell->last_status = 1;
+        shell->should_exit = (shell->options & ASH_SHELL_OPTION_NOEXEC) != 0u;
+        shell->requested_exit_status = shell->should_exit ? 1 : 0;
+        return shell->should_exit ? ASH_STARTUP_EXIT : ASH_STARTUP_CONTINUE;
+    }
+
+    char* filename = ash_startup_expand_path(shell, path);
+    free(path);
+    if (filename == NULL) {
+        return ASH_STARTUP_FATAL;
+    }
+    enum ash_startup_file_result result = filename[0] != '\0' ? ash_startup_execute_file(shell, filename) : ASH_STARTUP_FILE_COMPLETE;
+    free(filename);
+    return ash_startup_file_outcome(result);
+}
+
 enum ash_startup_outcome ash_startup_execute(
     struct ash_shell* shell,
     const struct ash_startup_request* request
@@ -213,11 +265,16 @@ enum ash_startup_outcome ash_startup_execute(
         }
         return ASH_STARTUP_FATAL;
     }
+    enum ash_startup_outcome outcome = ASH_STARTUP_CONTINUE;
     if (ash_startup_should_read_profiles(shell, request)) {
-        return ash_startup_execute_profiles(shell);
+        outcome = ash_startup_execute_profiles(shell);
     }
-    if (ash_startup_should_read_bashrc(shell, request)) {
-        return ash_startup_execute_bashrc(shell, request);
+    else if (ash_startup_should_read_bashrc(shell, request)) {
+        outcome = ash_startup_execute_bashrc(shell, request);
     }
-    return ASH_STARTUP_CONTINUE;
+    if (outcome == ASH_STARTUP_CONTINUE &&
+        ash_shell_policy_reads_bash_env(&shell->policy)) {
+        outcome = ash_startup_execute_bash_env(shell);
+    }
+    return outcome;
 }
