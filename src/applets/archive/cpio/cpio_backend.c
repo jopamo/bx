@@ -48,6 +48,8 @@ enum bx_cpio_kind {
     BX_CPIO_KIND_DIR,
     BX_CPIO_KIND_SYMLINK,
     BX_CPIO_KIND_FIFO,
+    BX_CPIO_KIND_CHAR,
+    BX_CPIO_KIND_BLOCK,
 };
 
 struct bx_cpio_options {
@@ -80,6 +82,7 @@ struct bx_cpio_entry {
     struct timespec mtime;
     uint64_t ino;
     uint64_t device;
+    dev_t rdev;
     size_t size;
     char* link_target;
     unsigned char* data;
@@ -313,6 +316,7 @@ static bool bx_cpio_emit_newc_entry(struct bx_archive_buffer* archive,
                                     gid_t gid,
                                     nlink_t nlink,
                                     struct timespec mtime,
+                                    dev_t rdev,
                                     size_t size,
                                     const unsigned char* data) {
     unsigned char header[BX_CPIO_NEWC_HEADER_LEN + 1u];
@@ -329,8 +333,8 @@ static bool bx_cpio_emit_newc_entry(struct bx_archive_buffer* archive,
     bx_cpio_format_hex_field(header + 54, 8u, size);
     bx_cpio_format_hex_field(header + 62, 8u, 0u);
     bx_cpio_format_hex_field(header + 70, 8u, 0u);
-    bx_cpio_format_hex_field(header + 78, 8u, 0u);
-    bx_cpio_format_hex_field(header + 86, 8u, 0u);
+    bx_cpio_format_hex_field(header + 78, 8u, major(rdev));
+    bx_cpio_format_hex_field(header + 86, 8u, minor(rdev));
     bx_cpio_format_hex_field(header + 94, 8u, namesize);
     bx_cpio_format_hex_field(header + 102, 8u, 0u);
     if (!bx_archive_buffer_append(archive, header, BX_CPIO_NEWC_HEADER_LEN)
@@ -357,11 +361,16 @@ static bool bx_cpio_emit_odc_entry(struct bx_archive_buffer* archive,
                                    gid_t gid,
                                    nlink_t nlink,
                                    struct timespec mtime,
+                                   dev_t rdev,
                                    size_t size,
                                    const unsigned char* data) {
     unsigned char header[BX_CPIO_ODC_HEADER_LEN + 1u];
     size_t namesize = strlen(name) + 1u;
 
+    if ((uintmax_t)rdev > 0777777u) {
+        errno = EOVERFLOW;
+        return false;
+    }
     memcpy(header, "070707", 6u);
     bx_cpio_format_octal_field(header + 6, 6u, 0u);
     bx_cpio_format_octal_field(header + 12, 6u, ino & 0777777u);
@@ -369,7 +378,7 @@ static bool bx_cpio_emit_odc_entry(struct bx_archive_buffer* archive,
     bx_cpio_format_octal_field(header + 24, 6u, uid & 0777777u);
     bx_cpio_format_octal_field(header + 30, 6u, gid & 0777777u);
     bx_cpio_format_octal_field(header + 36, 6u, nlink & 0777777u);
-    bx_cpio_format_octal_field(header + 42, 6u, 0u);
+    bx_cpio_format_octal_field(header + 42, 6u, rdev);
     bx_cpio_format_octal_field(header + 48, 11u, (size_t)mtime.tv_sec);
     bx_cpio_format_octal_field(header + 59, 6u, namesize);
     bx_cpio_format_octal_field(header + 65, 11u, size);
@@ -406,13 +415,18 @@ static void bx_cpio_free_name_list(char** names, size_t count) {
     free(names);
 }
 
+static bool bx_cpio_include_source(const struct bx_archive_fs_visit_entry* entry, void* user_data) {
+    (void)user_data;
+    return !S_ISSOCK(entry->st->st_mode);
+}
+
 static bool bx_cpio_build_fs_list(struct bx_archive_fs_list* list,
                                   char** names,
                                   size_t count,
                                   struct bx_diag_ctx* diag) {
     size_t i;
     for (i = 0u; i < count; i++) {
-        if (!bx_archive_fs_add_path(list, names[i], names[i], false, false, diag)) {
+        if (!bx_archive_fs_add_path_filtered(list, names[i], names[i], false, false, bx_cpio_include_source, NULL, NULL, NULL, diag)) {
             return false;
         }
     }
@@ -440,6 +454,7 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
     gid_t gid = options->owner_override ? options->group : entry->st.st_gid;
     nlink_t nlink = S_ISDIR(mode) ? 2u : entry->st.st_nlink;
     struct timespec mtime = entry->st.st_mtim;
+    dev_t rdev = S_ISCHR(mode) || S_ISBLK(mode) ? entry->st.st_rdev : 0;
     struct bx_archive_buffer data = {0};
     const unsigned char* payload = NULL;
     size_t size = 0u;
@@ -465,31 +480,15 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_buffer* archive,
     }
 
     if (options->format == BX_CPIO_FORMAT_NEWC) {
-        if (!bx_cpio_emit_newc_entry(archive,
-                                     entry->archive_path,
-                                     ino,
-                                     mode,
-                                     uid,
-                                     gid,
-                                     nlink,
-                                     mtime,
-                                     size,
-                                     payload)) {
+        if (!bx_cpio_emit_newc_entry(archive, entry->archive_path, ino, mode, uid, gid, nlink, mtime, rdev, size, payload)) {
+            bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
             bx_archive_buffer_free(&data);
             return false;
         }
     }
     else {
-        if (!bx_cpio_emit_odc_entry(archive,
-                                    entry->archive_path,
-                                    ino,
-                                    mode,
-                                    uid,
-                                    gid,
-                                    nlink,
-                                    mtime,
-                                    size,
-                                    payload)) {
+        if (!bx_cpio_emit_odc_entry(archive, entry->archive_path, ino, mode, uid, gid, nlink, mtime, rdev, size, payload)) {
+            bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
             bx_archive_buffer_free(&data);
             return false;
         }
@@ -564,14 +563,14 @@ static bool bx_cpio_build_archive(struct bx_archive_buffer* archive,
 
     if (options->format == BX_CPIO_FORMAT_NEWC) {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_newc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, NULL);
+        bx_cpio_emit_newc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, NULL);
         while (archive->len % 512u != 0u) {
             bx_archive_buffer_append_byte(archive, 0u);
         }
     }
     else {
         struct timespec zero = {0, 0};
-        bx_cpio_emit_odc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, NULL);
+        bx_cpio_emit_odc_entry(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, NULL);
         if (archive->len % 2u != 0u) {
             bx_archive_buffer_append_byte(archive, 0u);
         }
@@ -634,29 +633,61 @@ static bool bx_cpio_read_archive_input(const struct bx_cpio_options* options,
     return true;
 }
 
+static bool bx_cpio_parse_payload(struct bx_cpio_entry* entry, const unsigned char* data, struct bx_diag_ctx* diag) {
+    if (S_ISREG(entry->mode)) {
+        entry->kind = BX_CPIO_KIND_REG;
+        entry->data_len = entry->size;
+        entry->data = xmalloc(entry->size ? entry->size : 1u);
+        memcpy(entry->data, data, entry->size);
+        return true;
+    }
+    if (S_ISLNK(entry->mode)) {
+        if (!bx_cpio_symlink_target_valid(data, entry->size)) {
+            bx_diag(diag, "invalid symlink target");
+            return false;
+        }
+        entry->kind = BX_CPIO_KIND_SYMLINK;
+        entry->link_target = xmalloc(entry->size + 1u);
+        memcpy(entry->link_target, data, entry->size);
+        entry->link_target[entry->size] = '\0';
+        return true;
+    }
+    if (S_ISDIR(entry->mode))
+        entry->kind = BX_CPIO_KIND_DIR;
+    else if (S_ISFIFO(entry->mode))
+        entry->kind = BX_CPIO_KIND_FIFO;
+    else if (S_ISCHR(entry->mode))
+        entry->kind = BX_CPIO_KIND_CHAR;
+    else if (S_ISBLK(entry->mode))
+        entry->kind = BX_CPIO_KIND_BLOCK;
+    else {
+        bx_diag(diag, "%s: unsupported cpio file type", entry->name);
+        return false;
+    }
+    if (entry->size != 0) {
+        bx_diag(diag, "%s: unexpected payload for cpio file type", entry->name);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
                                        struct bx_cpio_entry_list* entries,
                                        struct bx_diag_ctx* diag) {
     size_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_NEWC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
-        size_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor;
+        size_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor, rdevmajor, rdevminor;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
         if (memcmp(header, "070701", 6u) != 0) {
             bx_diag(diag, "invalid newc header");
             return false;
         }
-        if (!bx_cpio_parse_hex_field(header + 6, 8u, &ino)
-            || !bx_cpio_parse_hex_field(header + 14, 8u, &mode)
-            || !bx_cpio_parse_hex_field(header + 22, 8u, &uid)
-            || !bx_cpio_parse_hex_field(header + 30, 8u, &gid)
-            || !bx_cpio_parse_hex_field(header + 38, 8u, &nlink)
-            || !bx_cpio_parse_hex_field(header + 46, 8u, &mtime)
-            || !bx_cpio_parse_hex_field(header + 54, 8u, &size)
-            || !bx_cpio_parse_hex_field(header + 62, 8u, &devmajor)
-            || !bx_cpio_parse_hex_field(header + 70, 8u, &devminor)
-            || !bx_cpio_parse_hex_field(header + 94, 8u, &namesize)) {
+        if (!bx_cpio_parse_hex_field(header + 6, 8u, &ino) || !bx_cpio_parse_hex_field(header + 14, 8u, &mode) || !bx_cpio_parse_hex_field(header + 22, 8u, &uid) ||
+            !bx_cpio_parse_hex_field(header + 30, 8u, &gid) || !bx_cpio_parse_hex_field(header + 38, 8u, &nlink) || !bx_cpio_parse_hex_field(header + 46, 8u, &mtime) ||
+            !bx_cpio_parse_hex_field(header + 54, 8u, &size) || !bx_cpio_parse_hex_field(header + 62, 8u, &devmajor) || !bx_cpio_parse_hex_field(header + 70, 8u, &devminor) ||
+            !bx_cpio_parse_hex_field(header + 78, 8u, &rdevmajor) || !bx_cpio_parse_hex_field(header + 86, 8u, &rdevminor) || !bx_cpio_parse_hex_field(header + 94, 8u, &namesize)) {
             bx_diag(diag, "invalid newc header");
             return false;
         }
@@ -686,28 +717,14 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
         entry.mtime.tv_sec = (time_t)mtime;
         entry.mtime.tv_nsec = 0;
         entry.size = size;
-        if (S_ISDIR(entry.mode)) {
-            entry.kind = BX_CPIO_KIND_DIR;
+        if ((S_ISCHR(entry.mode) || S_ISBLK(entry.mode)) && !bx_fd_device_from_numbers(rdevmajor, rdevminor, &entry.rdev)) {
+            bx_diag(diag, "%s: invalid device metadata", entry.name);
+            bx_cpio_entry_free(&entry);
+            return false;
         }
-        else if (S_ISLNK(entry.mode)) {
-            if (!bx_cpio_symlink_target_valid(archive->data + pos, size)) {
-                bx_diag(diag, "invalid symlink target");
-                bx_cpio_entry_free(&entry);
-                return false;
-            }
-            entry.kind = BX_CPIO_KIND_SYMLINK;
-            entry.link_target = xmalloc(size + 1u);
-            memcpy(entry.link_target, archive->data + pos, size);
-            entry.link_target[size] = '\0';
-        }
-        else if (S_ISFIFO(entry.mode)) {
-            entry.kind = BX_CPIO_KIND_FIFO;
-        }
-        else {
-            entry.kind = BX_CPIO_KIND_REG;
-            entry.data_len = size;
-            entry.data = xmalloc(size ? size : 1u);
-            memcpy(entry.data, archive->data + pos, size);
+        if (!bx_cpio_parse_payload(&entry, archive->data + pos, diag)) {
+            bx_cpio_entry_free(&entry);
+            return false;
         }
         pos = bounds.next_offset;
         bx_cpio_entry_list_push(entries, &entry);
@@ -722,22 +739,17 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
     size_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_ODC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
-        size_t ino, mode, uid, gid, nlink, mtime, namesize, size, device;
+        size_t ino, mode, uid, gid, nlink, mtime, namesize, size, device, rdev;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
         if (memcmp(header, "070707", 6u) != 0) {
             bx_diag(diag, "invalid odc header");
             return false;
         }
-        if (!bx_cpio_parse_octal_field(header + 6, 6u, &device)
-            || !bx_cpio_parse_octal_field(header + 12, 6u, &ino)
-            || !bx_cpio_parse_octal_field(header + 18, 6u, &mode)
-            || !bx_cpio_parse_octal_field(header + 24, 6u, &uid)
-            || !bx_cpio_parse_octal_field(header + 30, 6u, &gid)
-            || !bx_cpio_parse_octal_field(header + 36, 6u, &nlink)
-            || !bx_cpio_parse_octal_field(header + 48, 11u, &mtime)
-            || !bx_cpio_parse_octal_field(header + 59, 6u, &namesize)
-            || !bx_cpio_parse_octal_field(header + 65, 11u, &size)) {
+        if (!bx_cpio_parse_octal_field(header + 6, 6u, &device) || !bx_cpio_parse_octal_field(header + 12, 6u, &ino) || !bx_cpio_parse_octal_field(header + 18, 6u, &mode) ||
+            !bx_cpio_parse_octal_field(header + 24, 6u, &uid) || !bx_cpio_parse_octal_field(header + 30, 6u, &gid) || !bx_cpio_parse_octal_field(header + 36, 6u, &nlink) ||
+            !bx_cpio_parse_octal_field(header + 42, 6u, &rdev) || !bx_cpio_parse_octal_field(header + 48, 11u, &mtime) || !bx_cpio_parse_octal_field(header + 59, 6u, &namesize) ||
+            !bx_cpio_parse_octal_field(header + 65, 11u, &size)) {
             bx_diag(diag, "invalid odc header");
             return false;
         }
@@ -767,28 +779,14 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
         entry.mtime.tv_sec = (time_t)mtime;
         entry.mtime.tv_nsec = 0;
         entry.size = size;
-        if (S_ISDIR(entry.mode)) {
-            entry.kind = BX_CPIO_KIND_DIR;
+        if ((S_ISCHR(entry.mode) || S_ISBLK(entry.mode)) && !bx_fd_device_from_numbers(major((dev_t)rdev), minor((dev_t)rdev), &entry.rdev)) {
+            bx_diag(diag, "%s: invalid device metadata", entry.name);
+            bx_cpio_entry_free(&entry);
+            return false;
         }
-        else if (S_ISLNK(entry.mode)) {
-            if (!bx_cpio_symlink_target_valid(archive->data + pos, size)) {
-                bx_diag(diag, "invalid symlink target");
-                bx_cpio_entry_free(&entry);
-                return false;
-            }
-            entry.kind = BX_CPIO_KIND_SYMLINK;
-            entry.link_target = xmalloc(size + 1u);
-            memcpy(entry.link_target, archive->data + pos, size);
-            entry.link_target[size] = '\0';
-        }
-        else if (S_ISFIFO(entry.mode)) {
-            entry.kind = BX_CPIO_KIND_FIFO;
-        }
-        else {
-            entry.kind = BX_CPIO_KIND_REG;
-            entry.data_len = size;
-            entry.data = xmalloc(size ? size : 1u);
-            memcpy(entry.data, archive->data + pos, size);
+        if (!bx_cpio_parse_payload(&entry, archive->data + pos, diag)) {
+            bx_cpio_entry_free(&entry);
+            return false;
         }
         pos = bounds.next_offset;
         bx_cpio_entry_list_push(entries, &entry);
@@ -1046,28 +1044,27 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 if (bx_fd_staged_symlink_begin(&stage, parent, leaf, entry->link_target) != 0)
                     goto fail;
             }
-            else if (entry->kind == BX_CPIO_KIND_FIFO) {
-                if (bx_fd_staged_node_begin(&stage, parent, leaf, S_IFIFO | (entry->mode & 07777u), 0) != 0)
+            else if (entry->kind == BX_CPIO_KIND_FIFO || entry->kind == BX_CPIO_KIND_CHAR || entry->kind == BX_CPIO_KIND_BLOCK) {
+                if (bx_fd_staged_node_begin(&stage, parent, leaf, entry->mode, entry->rdev) != 0)
                     goto fail;
             }
         }
-        if ((entry->kind == BX_CPIO_KIND_SYMLINK || entry->kind == BX_CPIO_KIND_FIFO) && (restore.set_mtime || restore.set_owner || restore.set_group)) {
+        if (entry->kind != BX_CPIO_KIND_REG) {
             struct stat status;
             if (fstat(stage.fd, &status) != 0)
                 goto fail;
-            mode_t type = entry->kind == BX_CPIO_KIND_SYMLINK ? S_IFLNK : S_IFIFO;
-            if ((status.st_mode & S_IFMT) != type) {
+            if ((status.st_mode & S_IFMT) != (entry->mode & S_IFMT) || ((entry->kind == BX_CPIO_KIND_CHAR || entry->kind == BX_CPIO_KIND_BLOCK) && status.st_rdev != entry->rdev)) {
                 errno = ESTALE;
                 goto fail;
             }
-            if (entry->kind == BX_CPIO_KIND_FIFO && (restore.set_owner || restore.set_group)) {
+            if (entry->kind != BX_CPIO_KIND_SYMLINK && (restore.set_owner || restore.set_group)) {
                 restore.mode = stage.mode;
                 restore.set_mode = true;
             }
             if (!bx_archive_restore_leaf(&restore, stage.parent_fd, stage.name, &status, entry->name, diag))
                 goto done;
         }
-        if (entry->kind == BX_CPIO_KIND_SYMLINK || entry->kind == BX_CPIO_KIND_FIFO) {
+        if (entry->kind != BX_CPIO_KIND_REG) {
             if (bx_archive_temp_pending_signal()) {
                 errno = EINTR;
                 goto fail;
@@ -1180,6 +1177,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
             .mtime = file->st.st_mtim,
             .ino = file->st.st_ino,
             .device = file->st.st_dev,
+            .rdev = file->st.st_rdev,
             .link_target = file->link_target,
         };
         struct bx_archive_buffer data = {0};
@@ -1192,6 +1190,12 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         }
         else if (S_ISFIFO(file->st.st_mode)) {
             entry.kind = BX_CPIO_KIND_FIFO;
+        }
+        else if (S_ISCHR(file->st.st_mode)) {
+            entry.kind = BX_CPIO_KIND_CHAR;
+        }
+        else if (S_ISBLK(file->st.st_mode)) {
+            entry.kind = BX_CPIO_KIND_BLOCK;
         }
         else if (S_ISREG(file->st.st_mode)) {
             entry.kind = BX_CPIO_KIND_REG;
