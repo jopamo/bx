@@ -301,14 +301,8 @@ static bool bx_archive_write_payload_bytes(int fd, const unsigned char* data, si
     return true;
 }
 
-bool bx_archive_write_regular_payload(int fd,
-                                      const unsigned char* data,
-                                      size_t len,
-                                      bool sparse,
-                                      struct bx_diag_ctx* diag) {
+static bool bx_archive_write_payload_span(int fd, const unsigned char* data, size_t len, bool sparse, bool* used_sparse, struct bx_diag_ctx* diag) {
     size_t offset = 0u;
-    off_t logical_end = 0;
-    bool used_sparse = false;
 
     if (!sparse) {
         if (!bx_archive_write_payload_bytes(fd, data, len)) {
@@ -334,9 +328,8 @@ bool bx_archive_write_regular_payload(int fd,
                 bx_diag(diag, "write error: %s", strerror(errno));
                 return false;
             }
-            logical_end += (off_t)span;
             offset += span;
-            used_sparse = true;
+            *used_sparse = true;
             continue;
         }
 
@@ -347,15 +340,67 @@ bool bx_archive_write_regular_payload(int fd,
             bx_diag(diag, "write error: %s", strerror(errno));
             return false;
         }
-        logical_end += (off_t)span;
         offset += span;
     }
+    return true;
+}
 
+static bool bx_archive_finish_payload(int fd, off_t logical_end, bool used_sparse, struct bx_diag_ctx* diag) {
     if (used_sparse && ftruncate(fd, logical_end) != 0) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
     return true;
+}
+
+bool bx_archive_write_regular_payload(int fd, const unsigned char* data, size_t len, bool sparse, struct bx_diag_ctx* diag) {
+    bool used_sparse = false;
+    if (sparse && ((off_t)len < 0 || (uintmax_t)(off_t)len != len)) {
+        bx_diag(diag, "write error: %s", strerror(EOVERFLOW));
+        return false;
+    }
+    return bx_archive_write_payload_span(fd, data, len, sparse, &used_sparse, diag) && bx_archive_finish_payload(fd, sparse ? (off_t)len : 0, used_sparse, diag);
+}
+
+bool bx_archive_copy_regular_payload(int source_fd, int fd, off_t limit, bool sparse, off_t* copied, struct bx_diag_ctx* diag) {
+    struct bx_fd_input input = BX_FD_INPUT_INIT;
+    unsigned char chunk[65536];
+    bool used_sparse = false;
+    bool ok = false;
+    *copied = 0;
+    if (limit < 0 || bx_fd_input_init(&input, source_fd, BX_FD_INPUT_BORROWED) != 0) {
+        bx_diag(diag, "read error: %s", strerror(limit < 0 ? EOVERFLOW : errno));
+        return false;
+    }
+    while (*copied < limit) {
+        off_t remaining = limit - *copied;
+        size_t length = remaining < (off_t)sizeof(chunk) ? (size_t)remaining : sizeof(chunk);
+        ssize_t nread;
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            nread = -1;
+        }
+        else {
+            nread = bx_fd_input_read(&input, chunk, length, bx_archive_temp_signal_fd());
+            if (bx_archive_temp_pending_signal()) {
+                errno = EINTR;
+                nread = -1;
+            }
+        }
+        if (nread < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            goto done;
+        }
+        if (nread == 0)
+            break;
+        if (!bx_archive_write_payload_span(fd, chunk, (size_t)nread, sparse, &used_sparse, diag))
+            goto done;
+        *copied += nread;
+    }
+    ok = bx_archive_finish_payload(fd, *copied, used_sparse, diag);
+done:
+    bx_fd_input_close(&input);
+    return ok;
 }
 
 static bool bx_archive_output_file_open_direct(struct bx_archive_output_file* out,
