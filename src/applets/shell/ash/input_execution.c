@@ -361,6 +361,21 @@ int ash_input_execute_stream(
     enum ash_input_stream_ownership ownership,
     bool prompt
 ) {
+    if (stream != NULL &&
+        (kind == ASH_INPUT_STDIN ||
+         kind == ASH_INPUT_INTERACTIVE ||
+         kind == ASH_INPUT_SCRIPT_FILE)) {
+        /* Main input must leave bytes after the current line for commands. */
+        errno = 0;
+        if (setvbuf(stream, NULL, _IONBF, 0u) != 0) {
+            int error = errno != 0 ? errno : EIO;
+            if (ownership == ASH_INPUT_TAKE_STREAM) {
+                fclose(stream);
+            }
+            ash_exec_error(shell, "input buffering", error);
+            return 2;
+        }
+    }
     if (!ash_input_push_file(
             shell,
             kind,
