@@ -1207,7 +1207,10 @@ static int ash_execute_single_command_parent(struct ash_shell* shell, const stru
 
     int status = ash_run_builtin(shell, resolution->target.builtin, command, false);
 
-    if (!shell->should_exit) {
+    bool permanent_redirections = status == 0 &&
+        resolution->target.builtin == ASH_BUILTIN_EXEC &&
+        command->word_count == 1u;
+    if (!shell->should_exit && !permanent_redirections) {
         if (ash_redirection_transaction_rollback(shell, &saved) != 0) {
             status = 1;
         }
