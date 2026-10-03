@@ -75,13 +75,16 @@ static bool bx_archive_fs_collect_entry(const struct bx_archive_fs_visit_entry* 
                                         void* user_data,
                                         struct bx_diag_ctx* diag) {
     struct bx_archive_fs_list* list = user_data;
-    (void)diag;
-
-    return bx_archive_fs_list_push(list,
-                                   entry->source_path,
-                                   entry->archive_path,
-                                   entry->st,
-                                   entry->link_target);
+    struct stat parent;
+    if (fstat(entry->source_parent_fd, &parent) != 0) {
+        bx_diag(diag, "%s: cannot inspect source parent: %s", entry->source_path, strerror(errno));
+        return false;
+    }
+    if (!bx_archive_fs_list_push(list, entry->source_path, entry->archive_path, entry->st, entry->link_target))
+        return false;
+    list->entries[list->len - 1].source_parent_dev = parent.st_dev;
+    list->entries[list->len - 1].source_parent_ino = parent.st_ino;
+    return true;
 }
 
 static int bx_archive_name_compare(const void* left, const void* right) {
@@ -398,6 +401,7 @@ bool bx_archive_fs_visit_at_filtered(int source_parent_fd,
 }
 
 bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
+                                     int source_root_fd,
                                      const char* source_path,
                                      const char* archive_path,
                                      bool recurse,
@@ -407,20 +411,16 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                      bx_archive_fs_error_fn error_fn,
                                      void* error_user_data,
                                      struct bx_diag_ctx* diag) {
-    return bx_archive_fs_visit_at_filtered(AT_FDCWD,
-                                             source_path,
-                                             source_path,
-                                             archive_path,
-                                             recurse,
-                                             sort_children,
-                                             false,
-                                             include_fn,
-                                             include_user_data,
-                                             error_fn,
-                                             error_user_data,
-                                             bx_archive_fs_collect_entry,
-                                             list,
-                                             diag);
+    char* leaf = NULL;
+    int parent = bx_dir_path_open_source_parent_at(source_root_fd, source_path, &leaf);
+    if (parent < 0)
+        return bx_archive_fs_handle_error(source_path, BX_ARCHIVE_FS_ERROR_LSTAT, errno, error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+    bool ok = bx_archive_fs_visit_at_filtered(parent, leaf, source_path, archive_path, recurse, sort_children, false, include_fn, include_user_data, error_fn, error_user_data,
+                                              bx_archive_fs_collect_entry, list, diag);
+    if (close(parent) != 0 && ok)
+        ok = bx_archive_fs_handle_error(source_path, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno, error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+    free(leaf);
+    return ok;
 }
 
 bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
@@ -429,16 +429,7 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                             bool recurse,
                             bool sort_children,
                             struct bx_diag_ctx* diag) {
-    return bx_archive_fs_add_path_filtered(list,
-                                           source_path,
-                                           archive_path,
-                                           recurse,
-                                           sort_children,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           NULL,
-                                           diag);
+    return bx_archive_fs_add_path_filtered(list, AT_FDCWD, source_path, archive_path, recurse, sort_children, NULL, NULL, NULL, NULL, diag);
 }
 
 void bx_archive_pending_metadata_free(struct bx_archive_pending_metadata* dirs) {

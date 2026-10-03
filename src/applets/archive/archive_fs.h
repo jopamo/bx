@@ -15,7 +15,7 @@ struct bx_archive_fs_entry {
     char* archive_path;
     struct stat st;
     char* link_target;
-    /* Buffered tar readers verify the parent before opening the leaf. */
+    /* Buffered readers verify the parent before opening the leaf. */
     dev_t source_parent_dev;
     ino_t source_parent_ino;
 };
@@ -105,6 +105,7 @@ bool bx_archive_fs_visit_at_filtered(int source_parent_fd,
                                        void* visit_user_data,
                                        struct bx_diag_ctx* diag);
 bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
+                                     int source_root_fd,
                                      const char* source_path,
                                      const char* archive_path,
                                      bool recurse,
