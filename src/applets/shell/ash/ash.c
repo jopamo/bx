@@ -277,7 +277,7 @@ static char* ash_getcwd_dup(void) {
     }
 }
 
-static int ash_apply_command_assignments_shell(struct ash_shell* shell, const struct ash_command* command) {
+static int ash_apply_command_assignments_shell(struct ash_shell* shell, const struct ash_command* command, bool force_export) {
     for (size_t i = 0; i < command->assignment_count; i++) {
         size_t name_len = 0;
         const char* value = NULL;
@@ -286,7 +286,7 @@ static int ash_apply_command_assignments_shell(struct ash_shell* shell, const st
             return 1;
         }
 
-        if (!ash_var_set_with_export(shell, command->assignments[i], name_len, value, false)) {
+        if (!ash_var_set_with_export(shell, command->assignments[i], name_len, value, force_export)) {
             return 1;
         }
     }
@@ -984,14 +984,14 @@ static int ash_execute_in_child(
     }
 
     if (command->word_count == 0u) {
-        if (ash_apply_command_assignments_shell(shell, command) != 0) {
+        if (ash_apply_command_assignments_shell(shell, command, false) != 0) {
             return 1;
         }
         return 0;
     }
 
     if (ash_command_resolution_is_builtin(resolution)) {
-        if (ash_apply_command_assignments_shell(shell, command) != 0) {
+        if (ash_apply_command_assignments_shell(shell, command, true) != 0) {
             return 1;
         }
         return ash_run_builtin(
@@ -1024,7 +1024,7 @@ static int ash_execute_in_child(
 
 static int ash_execute_single_command_parent(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution) {
     bool temporary_scope = command->assignment_count != 0u && (resolution->kind == ASH_COMMAND_REGULAR_BUILTIN || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX));
-    if (temporary_scope ? !ash_apply_command_assignments_temporary(shell, command) : ash_apply_command_assignments_shell(shell, command) != 0) {
+    if (temporary_scope ? !ash_apply_command_assignments_temporary(shell, command) : ash_apply_command_assignments_shell(shell, command, true) != 0) {
         return 1;
     }
 
@@ -1160,7 +1160,7 @@ static int ash_execute_command(
     const struct ash_command* command
 ) {
     if (command->word_count == 0u) {
-        if (ash_apply_command_assignments_shell(shell, command) != 0) {
+        if (ash_apply_command_assignments_shell(shell, command, false) != 0) {
             return 1;
         }
         if (command->redir_count == 0u) {
