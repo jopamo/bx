@@ -341,6 +341,7 @@ bx_lib_sources = [
   'src/lib/output_quote.c',
   'src/lib/overwrite_ops.c',
   'src/lib/path_ops.c',
+  'src/lib/path_ops_directory.c',
   'src/lib/path_quote.c',
   'src/lib/pidfile_ops.c',
   'src/lib/poll_deadline.c',

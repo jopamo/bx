@@ -11,6 +11,7 @@
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
+#include "lib/path_ops.h"
 
 extern char** environ;
 
@@ -556,7 +557,13 @@ bool ash_import_environment(struct ash_shell* shell) {
             stat(inherited_pwd, &pwd_stat) == 0 &&
             cwd_stat.st_dev == pwd_stat.st_dev &&
             cwd_stat.st_ino == pwd_stat.st_ino;
-        const char* logical = valid_pwd ? inherited_pwd : cwd;
+        char* normalized_pwd = valid_pwd ? bx_path_normalize_directory_dup(inherited_pwd) : NULL;
+        if (valid_pwd && normalized_pwd == NULL && errno == ENOMEM) {
+            ash_vars_oom(shell);
+            free(cwd);
+            return false;
+        }
+        const char* logical = normalized_pwd != NULL ? normalized_pwd : cwd;
 
         shell->cwd.physical = ash_vars_duplicate(shell, cwd, strlen(cwd));
         shell->cwd.logical = ash_vars_duplicate(
@@ -574,13 +581,16 @@ bool ash_import_environment(struct ash_shell* shell) {
         }
         if (shell->cwd.physical == NULL || shell->cwd.logical == NULL ||
             (inherited_oldpwd != NULL && shell->cwd.old_logical == NULL)) {
+            free(normalized_pwd);
             free(cwd);
             return false;
         }
-        if (!valid_pwd && !ash_var_set(shell, "PWD", cwd, true)) {
+        if ((!valid_pwd || ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX)) && !ash_var_set(shell, "PWD", logical, true)) {
+            free(normalized_pwd);
             free(cwd);
             return false;
         }
+        free(normalized_pwd);
         free(cwd);
     }
 

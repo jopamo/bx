@@ -49,6 +49,11 @@ char* bx_path_realpath_dup(const char* path);
 char* bx_path_make_absolute_dup(const char* path);
 char* bx_path_normalize_absolute_lexical_dup(const char* path);
 char* bx_path_normalize_relative_lexical_dup(const char* path);
+/* Normalize an absolute directory path without resolving symlinks. Check
+ * each component before removing ".."; preserve exactly two leading slashes.
+ * Return owned storage, or NULL with errno on invalid input, allocation or
+ * filesystem failure. */
+char* bx_path_normalize_directory_dup(const char* path);
 bool bx_path_is_within(const char* path, const char* base);
 char* bx_path_relative_path_between(const char* from_abs, const char* to_abs);
 
