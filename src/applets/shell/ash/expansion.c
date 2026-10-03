@@ -18,10 +18,15 @@ static bool ash_expansion_oom(const struct ash_shell* shell) {
     return ash_diag_oom(shell);
 }
 
+static bool ash_expansion_errexit(const struct ash_shell* shell) {
+    return (shell->options & ASH_SHELL_OPTION_ERREXIT) != 0u && !shell->errexit_diagnostics_suppressed;
+}
+
 static bool ash_expansion_fail(struct ash_shell* shell, bool terminate_context) {
-    if (shell->forked_execution || terminate_context) {
+    bool errexit = ash_expansion_errexit(shell);
+    if (shell->forked_execution || terminate_context || errexit) {
         shell->should_exit = true;
-        shell->requested_exit_status = shell->forked_execution ? 1 : 127;
+        shell->requested_exit_status = shell->forked_execution || errexit ? 1 : 127;
     }
     else {
         ash_control_discard_unit(shell, 1);
@@ -125,6 +130,9 @@ static bool ash_append_numbered_parameter(struct ash_shell* shell, struct bx_tex
                 if (value == NULL && (shell->options & ASH_SHELL_OPTION_NOUNSET) != 0u) {
                     char fallback[] = {'$', digits[0]};
                     ash_diag_unbound_parameter(shell, fallback, sizeof(fallback));
+                    if (ash_expansion_errexit(shell)) {
+                        return ash_expansion_fail(shell, true);
+                    }
                 }
             }
             return ash_append_parameter_value(shell, output, value, name, name_length);

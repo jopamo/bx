@@ -790,6 +790,14 @@ static int ash_builtin_wait(
     return status;
 }
 
+static int ash_run_input_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command) {
+    bool saved = shell->errexit_diagnostics_suppressed;
+    shell->errexit_diagnostics_suppressed = saved || shell->errexit_suppressed;
+    int status = builtin == ASH_BUILTIN_EVAL ? ash_input_builtin_eval(shell, command) : ash_input_builtin_source(shell, command);
+    shell->errexit_diagnostics_suppressed = saved;
+    return status;
+}
+
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
     switch (builtin) {
         case ASH_BUILTIN_ALIAS:
@@ -800,9 +808,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_builtin_cd(shell, command);
         case ASH_BUILTIN_DOT:
         case ASH_BUILTIN_SOURCE:
-            return ash_input_builtin_source(shell, command);
         case ASH_BUILTIN_EVAL:
-            return ash_input_builtin_eval(shell, command);
+            return ash_run_input_builtin(shell, builtin, command);
         case ASH_BUILTIN_EXIT:
             return ash_builtin_exit(shell, command, in_child);
         case ASH_BUILTIN_EXPORT:
@@ -1232,6 +1239,9 @@ static int ash_substitution_child_main(void* user_data) {
 
     struct ash_shell* child = context->shell;
     ash_shell_context_detach_after_fork(child);
+    if (!ash_shell_policy_has(&child->policy, ASH_SHELL_POLICY_POSIX)) {
+        child->options &= ~ASH_SHELL_OPTION_ERREXIT;
+    }
     child->should_exit = false;
     child->requested_exit_status = 0;
     return ash_input_execute_string(
@@ -1580,6 +1590,22 @@ static int ash_command_build_status(
     return result == ASH_COMMAND_BUILD_COMMAND_ERROR ? 1 : 2;
 }
 
+static int ash_errexit_status(struct ash_shell* shell, int status) {
+    if (status != 0 && (shell->options & ASH_SHELL_OPTION_ERREXIT) != 0u && !shell->errexit_suppressed && !shell->should_exit && !ash_control_pending(shell)) {
+        shell->should_exit = true;
+        shell->requested_exit_status = status;
+    }
+    return status;
+}
+
+static int ash_execute_ast_ignoring_errexit(struct ash_shell* shell, const struct ash_ast* node, bool ignore) {
+    bool saved = shell->errexit_suppressed;
+    shell->errexit_suppressed = saved || ignore;
+    int status = ash_execute_ast(shell, node);
+    shell->errexit_suppressed = saved;
+    return status;
+}
+
 static int ash_execute_ast_simple(
     struct ash_shell* shell,
     const struct ash_ast* node
@@ -1664,7 +1690,7 @@ static int ash_execute_ast_group(
             &redirections
         );
     if (build != ASH_COMMAND_BUILD_OK) {
-        return ash_command_build_status(build);
+        return ash_errexit_status(shell, ash_command_build_status(build));
     }
     struct ash_redirection_transaction saved;
     ash_redirection_transaction_init(&saved);
@@ -1674,12 +1700,12 @@ static int ash_execute_ast_group(
             &saved
         ) != 0) {
         ash_command_destroy(&redirections);
-        return 1;
+        return ash_errexit_status(shell, 1);
     }
     ash_command_destroy(&redirections);
     int status = ash_execute_ast(shell, node->value.group.body);
     return ash_redirection_transaction_rollback(shell, &saved) == 0 ?
-        status : 1;
+        status : ash_errexit_status(shell, 1);
 }
 
 struct ash_pipeline_child_context {
@@ -1812,12 +1838,18 @@ static int ash_execute_ast_pipeline(
     struct ash_shell* shell,
     const struct ash_ast* node
 ) {
+    bool saved = shell->errexit_suppressed;
+    shell->errexit_suppressed = saved || node->value.pipeline.negated;
     int status;
     if (node->value.pipeline.count == 1u) {
         status = ash_execute_ast(shell, node->value.pipeline.commands[0]);
     }
     else {
         status = ash_execute_ast_pipeline_forked(shell, node);
+    }
+    shell->errexit_suppressed = saved;
+    if (!node->value.pipeline.negated && node->value.pipeline.count > 1u) {
+        (void)ash_errexit_status(shell, status);
     }
 
     return node->value.pipeline.negated ? (status == 0 ? 1 : 0) : status;
@@ -1849,7 +1881,7 @@ static int ash_execute_ast_and_or(
                 continue;
             }
         }
-        status = ash_execute_ast(shell, node->value.and_or.pipelines[i]);
+        status = ash_execute_ast_ignoring_errexit(shell, node->value.and_or.pipelines[i], i + 1u < node->value.and_or.count);
         shell->last_status = status;
         if (shell->should_exit || ash_control_pending(shell)) {
             break;
@@ -1944,7 +1976,7 @@ static int ash_execute_ast_if(
     struct ash_shell* shell,
     const struct ash_ast* node
 ) {
-    int condition = ash_execute_ast(shell, node->value.conditional.condition);
+    int condition = ash_execute_ast_ignoring_errexit(shell, node->value.conditional.condition, true);
     if (shell->should_exit || ash_control_pending(shell)) {
         return condition;
     }
@@ -1964,7 +1996,7 @@ static int ash_execute_ast_loop(
     int status = 0;
     ash_control_enter_loop(shell);
     while (!shell->should_exit && !ash_execution_suppressed(shell)) {
-        int condition = ash_execute_ast(shell, node->value.loop.condition);
+        int condition = ash_execute_ast_ignoring_errexit(shell, node->value.loop.condition, true);
         if (shell->should_exit || ash_execution_suppressed(shell)) {
             break;
         }
@@ -2155,7 +2187,7 @@ static int ash_execute_ast_case(
             &redirections
         );
     if (build != ASH_COMMAND_BUILD_OK) {
-        return ash_command_build_status(build);
+        return ash_errexit_status(shell, ash_command_build_status(build));
     }
     struct ash_redirection_transaction saved;
     ash_redirection_transaction_init(&saved);
@@ -2165,12 +2197,12 @@ static int ash_execute_ast_case(
             &saved
         ) != 0) {
         ash_command_destroy(&redirections);
-        return 1;
+        return ash_errexit_status(shell, 1);
     }
     ash_command_destroy(&redirections);
     int status = ash_execute_ast_case_body(shell, node);
     return ash_redirection_transaction_rollback(shell, &saved) == 0 ?
-        status : 1;
+        status : ash_errexit_status(shell, 1);
 }
 
 static int ash_execute_ast_function(
@@ -2202,7 +2234,7 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     int status = 2;
     switch (node->kind) {
         case ASH_AST_SIMPLE:
-            status = ash_execute_ast_simple(shell, node);
+            status = ash_errexit_status(shell, ash_execute_ast_simple(shell, node));
             break;
         case ASH_AST_LIST:
             status = ash_execute_ast_list(shell, node);
@@ -2214,7 +2246,7 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
             status = ash_execute_ast_pipeline(shell, node);
             break;
         case ASH_AST_SUBSHELL:
-            status = ash_execute_ast_group(shell, node, true);
+            status = ash_errexit_status(shell, ash_execute_ast_group(shell, node, true));
             break;
         case ASH_AST_BRACE_GROUP:
             status = ash_execute_ast_group(shell, node, false);
@@ -2267,7 +2299,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCfinpsuv] "
+            "Usage: %s [--standalone-applets] [-aCefinpsuv] "
             "[-o option-name] [-c command] [script [arg ...]]\n",
             progname
         );
@@ -2292,7 +2324,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCfilnpstuv or -c command or -o/+o option-name\n"
+            "\t-aCefilnpstuv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2314,6 +2346,7 @@ static void ash_print_help(FILE* stream, const char* progname) {
         fprintf(stream, "  -l           make the shell a login shell\n");
         fprintf(stream, "  -t           exit after one top-level input unit\n");
     }
+    fprintf(stream, "  -e           exit on unsuppressed command failure\n");
     fprintf(stream, "  -u           report unset parameters during expansion\n");
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
@@ -2326,9 +2359,9 @@ static void ash_print_help(FILE* stream, const char* progname) {
     }
     const char* onecmd = strcmp(progname, "bash") == 0 ? "onecmd, " : "";
     fprintf(stream, "  -o option-name\n");
-    fprintf(stream, "               set allexport, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
+    fprintf(stream, "               set allexport, errexit, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
     fprintf(stream, "  +o option-name\n");
-    fprintf(stream, "               clear allexport, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
+    fprintf(stream, "               clear allexport, errexit, noclobber, noexec, noglob, nounset, %spipefail, or verbose\n", onecmd);
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
