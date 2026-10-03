@@ -112,6 +112,10 @@ static struct ash_input_unit_result ash_input_execute_buffer(
         ash_shell_context_end_parse(shell);
         ash_ast_destroy(program);
         shell->last_status = 2;
+        if (ash_shell_policy_noninteractive_posix(&shell->policy)) {
+            shell->should_exit = true;
+            shell->requested_exit_status = 2;
+        }
         return (struct ash_input_unit_result){
             .state = ASH_INPUT_UNIT_PARSE_ERROR,
             .status = 2,
