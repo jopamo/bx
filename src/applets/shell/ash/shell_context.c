@@ -122,7 +122,7 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
 
 static bool ash_control_invariants(const struct ash_control_state* control) {
     if (control->pending < ASH_CONTROL_NONE ||
-        control->pending > ASH_CONTROL_RETURN) {
+        control->pending > ASH_CONTROL_DISCARD_UNIT) {
         return false;
     }
     switch (control->pending) {
@@ -135,6 +135,9 @@ static bool ash_control_invariants(const struct ash_control_state* control) {
         case ASH_CONTROL_RETURN:
             return control->remaining_levels == 0u &&
                 control->function_depth != 0u;
+        case ASH_CONTROL_DISCARD_UNIT:
+            return control->remaining_levels == 0u &&
+                control->status > 0 && control->status <= 255;
     }
     return false;
 }
@@ -250,6 +253,7 @@ static bool ash_shell_context_empty(const struct ash_shell* shell) {
         shell->redirections.entry_capacity == 0u &&
         !shell->owns_self_executable_fd &&
         shell->shell_pid == 0 &&
+        !shell->forked_execution &&
         shell->command_substitution == NULL;
 }
 #endif
@@ -378,6 +382,7 @@ void ash_shell_context_detach_after_fork(struct ash_shell* shell) {
     assert(ash_shell_context_invariants(shell));
     ash_jobs_detach_after_fork(shell);
     bx_fd_transaction_stack_discard(&shell->redirections);
+    shell->forked_execution = true;
     assert(ash_shell_context_invariants(shell));
 }
 

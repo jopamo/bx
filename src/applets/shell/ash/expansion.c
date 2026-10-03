@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "applets/shell/ash/control.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/pathname_expansion.h"
@@ -17,8 +18,15 @@ static bool ash_expansion_oom(const struct ash_shell* shell) {
     return ash_diag_oom(shell);
 }
 
-static bool ash_expansion_bad_substitution(const struct ash_shell* shell) {
-    ash_diag(shell, "bad substitution");
+static bool ash_expansion_bad_substitution(struct ash_shell* shell, const char* input) {
+    ash_diag_expansion(shell, "%s: bad substitution", input);
+    if (shell->forked_execution || ash_shell_policy_noninteractive_posix(&shell->policy)) {
+        shell->should_exit = true;
+        shell->requested_exit_status = shell->forked_execution ? 1 : 127;
+    }
+    else {
+        ash_control_discard_unit(shell, 1);
+    }
     return false;
 }
 
@@ -223,14 +231,14 @@ static bool ash_expand_parameter(
                 position++;
             }
             if (input[position] != '}' || input[position + 1u] != '\0') {
-                return ash_expansion_bad_substitution(shell);
+                return ash_expansion_bad_substitution(shell, input);
             }
             return ash_append_numbered_parameter(shell, output, input + start, position - start);
         }
         if (strchr("?$#-!@*", input[position]) != NULL) {
             char special = input[position++];
             if (input[position] != '}' || input[position + 1u] != '\0') {
-                return ash_expansion_bad_substitution(shell);
+                return ash_expansion_bad_substitution(shell, input);
             }
             return ash_append_special(shell, special, output);
         }
@@ -241,7 +249,7 @@ static bool ash_expand_parameter(
         }
         if (position == start || input[position] != '}' ||
             input[position + 1u] != '\0') {
-            return ash_expansion_bad_substitution(shell);
+            return ash_expansion_bad_substitution(shell, input);
         }
         const char* value = ash_var_get_len(
             shell,
@@ -257,7 +265,7 @@ static bool ash_expand_parameter(
 
     if (isdigit((unsigned char)character)) {
         if (input[position + 1u] != '\0') {
-            return ash_expansion_bad_substitution(shell);
+            return ash_expansion_bad_substitution(shell, input);
         }
         return ash_append_numbered_parameter(shell, output, input + position, 1u);
     }
@@ -270,7 +278,7 @@ static bool ash_expand_parameter(
         position++;
     }
     if (input[position] != '\0') {
-        return ash_expansion_bad_substitution(shell);
+        return ash_expansion_bad_substitution(shell, input);
     }
     const char* value = ash_var_get_len(
         shell,

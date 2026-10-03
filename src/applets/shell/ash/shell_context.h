@@ -139,6 +139,8 @@ struct ash_shell {
     /* Cached from the latest committed published async job for `$!`. */
     pid_t last_async_pid;
     int last_status;
+    /* Set at child detachment; input-unit errors cannot resume a fork child. */
+    bool forked_execution;
     bool should_exit;
     int requested_exit_status;
     struct ash_control_state control;

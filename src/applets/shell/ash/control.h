@@ -10,6 +10,7 @@ enum ash_control_kind {
     ASH_CONTROL_BREAK,
     ASH_CONTROL_CONTINUE,
     ASH_CONTROL_RETURN,
+    ASH_CONTROL_DISCARD_UNIT,
 };
 
 enum ash_loop_control {
@@ -40,5 +41,8 @@ void ash_control_enter_function(struct ash_shell* shell);
 void ash_control_leave_function(struct ash_shell* shell);
 bool ash_control_request_return(struct ash_shell* shell, int status);
 bool ash_control_consume_return(struct ash_shell* shell, int* status);
+void ash_control_discard_unit(struct ash_shell* shell, int status);
+bool ash_control_unit_discarded(const struct ash_shell* shell);
+bool ash_control_consume_unit_discard(struct ash_shell* shell, int* status);
 
 #endif /* BX_APPLETS_SHELL_ASH_CONTROL_H */
