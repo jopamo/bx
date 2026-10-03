@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "applets/shell/ash/ast.h"
+#include "applets/shell/ash/control.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/executor.h"
 #include "applets/shell/ash/input.h"
@@ -119,8 +120,10 @@ static struct ash_input_unit_result ash_input_execute_buffer(
 
     ash_shell_context_end_parse(shell);
     int status = ash_execute_ast(shell, program);
-    shell->last_status = status;
     ash_ast_destroy(program);
+    /* Nested eval/source input consumes its own unit discard. */
+    (void)ash_control_consume_unit_discard(shell, &status);
+    shell->last_status = status;
     return (struct ash_input_unit_result){
         .state = ASH_INPUT_UNIT_EXECUTED,
         .status = status,

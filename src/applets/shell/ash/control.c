@@ -76,3 +76,23 @@ bool ash_control_consume_return(struct ash_shell* shell, int* status) {
     shell->control.status = 0;
     return true;
 }
+
+void ash_control_discard_unit(struct ash_shell* shell, int status) {
+    shell->control.pending = ASH_CONTROL_DISCARD_UNIT;
+    shell->control.remaining_levels = 0u;
+    shell->control.status = status;
+}
+
+bool ash_control_unit_discarded(const struct ash_shell* shell) {
+    return shell->control.pending == ASH_CONTROL_DISCARD_UNIT;
+}
+
+bool ash_control_consume_unit_discard(struct ash_shell* shell, int* status) {
+    if (!ash_control_unit_discarded(shell)) {
+        return false;
+    }
+    *status = shell->control.status;
+    shell->control.pending = ASH_CONTROL_NONE;
+    shell->control.status = 0;
+    return true;
+}

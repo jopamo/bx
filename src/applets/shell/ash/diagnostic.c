@@ -8,6 +8,7 @@
 enum ash_diagnostic_phase {
     ASH_DIAGNOSTIC_RUNTIME = 0,
     ASH_DIAGNOSTIC_PARSE,
+    ASH_DIAGNOSTIC_EXPANSION,
 };
 
 static bool ash_diag_location_active(
@@ -78,12 +79,17 @@ static void ash_diag_prefix(
     enum ash_diagnostic_phase phase,
     struct ash_source_location location
 ) {
+    if (phase == ASH_DIAGNOSTIC_EXPANSION &&
+        ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE)) {
+        fprintf(stderr, "%s: ", shell->progname);
+        return;
+    }
     if (!ash_diag_location_active(&location)) {
         fprintf(stderr, "%s: ", shell->progname);
         return;
     }
 
-    if (phase == ASH_DIAGNOSTIC_RUNTIME) {
+    if (phase != ASH_DIAGNOSTIC_PARSE) {
         location = ash_diag_runtime_location(location);
         fprintf(
             stderr,
@@ -188,6 +194,13 @@ void ash_diag_parse(
 bool ash_diag_oom(const struct ash_shell* shell) {
     ash_diag(shell, "out of memory");
     return false;
+}
+
+void ash_diag_expansion(const struct ash_shell* shell, const char* format, ...) {
+    va_list arguments;
+    va_start(arguments, format);
+    ash_diag_v(shell, ASH_DIAGNOSTIC_EXPANSION, shell->execution_location, format, arguments);
+    va_end(arguments);
 }
 
 void ash_exec_error(

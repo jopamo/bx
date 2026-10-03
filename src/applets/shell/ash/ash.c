@@ -1036,7 +1036,7 @@ static int ash_execute_single_command_parent(struct ash_shell* shell, const stru
             (void)ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT);
         }
         if (resolution->kind == ASH_COMMAND_SPECIAL_BUILTIN &&
-            ash_shell_policy_fatal_special_builtin_errors(&shell->policy)) {
+            ash_shell_policy_noninteractive_posix(&shell->policy)) {
             shell->should_exit = true;
             shell->requested_exit_status = 1;
         }
@@ -2187,6 +2187,9 @@ static int ash_execute_ast_function(
 
 int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     ash_shell_context_assert_invariants(shell);
+    if (ash_control_unit_discarded(shell)) {
+        return shell->control.status;
+    }
     if (ash_execution_suppressed(shell)) {
         return 0;
     }
@@ -2244,7 +2247,8 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     }
     ash_execution_location_leave(shell, &location_guard);
     ash_shell_context_assert_invariants(shell);
-    return shell->should_exit ? shell->requested_exit_status : status;
+    return shell->should_exit ? shell->requested_exit_status :
+        ash_control_unit_discarded(shell) ? shell->control.status : status;
 }
 
 static void ash_print_usage(FILE* stream, const char* progname) {
