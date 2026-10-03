@@ -14,17 +14,22 @@ static void bx_cpio_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -o                    create an archive from standard input names\n");
     fprintf(stream, "  -i                    extract files from an archive\n");
     fprintf(stream, "  -p                    pass files through to a target directory\n");
-    fprintf(stream, "  -t                    list archive members\n");
+    fprintf(stream, "  -t                    list archive members (with -i)\n");
     fprintf(stream, "  -d                    create leading directories as needed\n");
-    fprintf(stream, "  -m                    preserve archived modification times\n");
-    fprintf(stream, "  -0, --null            read NUL-terminated input names\n");
-    fprintf(stream, "  -F, --file=ARCHIVE    use ARCHIVE instead of standard input/output\n");
-    fprintf(stream, "  -H, --format=FORMAT   select the archive format\n");
+    fprintf(stream, "  -m                    preserve modification times during filesystem copy\n");
+    fprintf(stream, "  -0, --null            read NUL-terminated input names (-o or -p)\n");
+    fprintf(stream, "  -F, --file=ARCHIVE    use ARCHIVE instead of standard input/output (-o or -i)\n");
+    fprintf(stream, "  -H, --format=FORMAT   create newc (default) or odc archives (-o only)\n");
+    fprintf(stream, "  -R UID:GID            override numeric ownership (-o, extraction, or -p)\n");
+    fprintf(stream, "      --reproducible     normalize inode/device IDs and default ownership (-o)\n");
     fprintf(stream, "      --quiet           suppress the copied-blocks summary\n");
-    fprintf(stream, "      --to-stdout       write selected file data to standard output\n");
-    fprintf(stream, "      --sparse          recreate holes in extracted regular files\n");
+    fprintf(stream, "      --to-stdout       write selected file data to standard output (-i, no -t)\n");
+    fprintf(stream, "      --sparse          recreate holes during filesystem copy\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
+    fprintf(stream, "\nInput format is detected automatically. Archive modes preserve only cpio fields,\n");
+    fprintf(stream, "not ACLs, xattrs, labels, capabilities, flags, or fractional timestamps.\n");
+    fprintf(stream, "--preserve-all and other formats are unsupported.\n");
 }
 
 int bx_cpio_main(int argc, char** argv) {
