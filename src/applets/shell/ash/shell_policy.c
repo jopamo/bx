@@ -119,6 +119,11 @@ bool ash_shell_policy_allows_startup(
         );
 }
 
+bool ash_shell_policy_reads_bash_env(const struct ash_shell_policy* policy) {
+    return ash_shell_policy_allows_startup(policy) && ash_shell_policy_is_bash(policy) && !ash_shell_policy_has(policy, ASH_SHELL_POLICY_POSIX) &&
+           !ash_shell_policy_has(policy, ASH_SHELL_POLICY_INTERACTIVE) && !ash_shell_policy_has(policy, ASH_SHELL_POLICY_PRIVILEGED);
+}
+
 const char* ash_shell_policy_bash_version(
     const struct ash_shell_policy* policy
 ) {

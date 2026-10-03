@@ -127,7 +127,7 @@ static struct ash_input_unit_result ash_input_execute_buffer(
     ash_ast_destroy(program);
     /* Nested eval/source input consumes its own unit discard. */
     (void)ash_control_consume_unit_discard(shell, &status);
-    shell->last_status = status;
+    ash_control_publish_status(shell, status);
     return (struct ash_input_unit_result){
         .state = ASH_INPUT_UNIT_EXECUTED,
         .status = status,

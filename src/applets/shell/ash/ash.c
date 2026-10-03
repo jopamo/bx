@@ -1508,7 +1508,7 @@ static bool ash_command_substitute(
     }
     (void)ash_job_release(job);
     if (!ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX)) {
-        shell->last_status = status;
+        ash_control_publish_status(shell, status);
     }
     if (!read_ok) {
         bx_text_buffer_destroy(&captured);
@@ -2042,7 +2042,7 @@ static int ash_execute_ast_and_or(
             }
         }
         status = ash_execute_ast_ignoring_errexit(shell, node->value.and_or.pipelines[i], i + 1u < node->value.and_or.count);
-        shell->last_status = status;
+        ash_control_publish_status(shell, status);
         if (shell->should_exit || ash_control_pending(shell)) {
             break;
         }
@@ -2124,7 +2124,7 @@ static int ash_execute_ast_list(
         status = entry->asynchronous ?
             ash_execute_ast_async(shell, entry->command) :
             ash_execute_ast(shell, entry->command);
-        shell->last_status = status;
+        ash_control_publish_status(shell, status);
         if (shell->should_exit || ash_control_pending(shell)) {
             break;
         }

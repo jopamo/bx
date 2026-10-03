@@ -63,6 +63,7 @@ bool ash_shell_policy_expands_aliases(
 bool ash_shell_policy_allows_startup(
     const struct ash_shell_policy* policy
 );
+bool ash_shell_policy_reads_bash_env(const struct ash_shell_policy* policy);
 bool ash_shell_policy_noninteractive_posix(
     const struct ash_shell_policy* policy
 );

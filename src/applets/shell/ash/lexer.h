@@ -128,6 +128,15 @@ enum ash_lexer_fragment_result ash_lexer_classify_fragment_with_options(
     const struct ash_lexer_options* options
 );
 enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* token);
+/*
+ * Initialize an owned word from an expansion-only, double-quoted string.
+ * Quotes and whitespace are literal; substitutions and quoted escapes retain
+ * their structure. Destroy the word on success or failure.
+ */
+enum ash_lexer_result ash_lexer_scan_expansion_string(
+    struct ash_lexer* lexer,
+    struct ash_word* word
+);
 void ash_token_destroy(struct ash_token* token);
 const char* ash_token_kind_name(enum ash_token_kind kind);
 bool ash_token_kind_valid(enum ash_token_kind kind);
