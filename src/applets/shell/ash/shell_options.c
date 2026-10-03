@@ -128,7 +128,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
     {
         "nounset",
         ASH_SHELL_OPTION_NOUNSET,
-        0u,
+        ASH_OPTION_INVOCATION_AND_SET,
         'u',
         ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,

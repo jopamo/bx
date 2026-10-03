@@ -203,6 +203,12 @@ void ash_diag_expansion(const struct ash_shell* shell, const char* format, ...) 
     va_end(arguments);
 }
 
+void ash_diag_unbound_parameter(const struct ash_shell* shell, const char* name, size_t length) {
+    ash_diag_prefix(shell, ASH_DIAGNOSTIC_EXPANSION, shell->execution_location);
+    (void)fwrite(name, 1u, length, stderr);
+    fputs(": unbound variable\n", stderr);
+}
+
 void ash_exec_error(
     const struct ash_shell* shell,
     const char* subject,
