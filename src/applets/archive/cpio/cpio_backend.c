@@ -30,6 +30,7 @@
 
 #define BX_CPIO_NEWC_HEADER_LEN 110u
 #define BX_CPIO_ODC_HEADER_LEN 76u
+#define BX_CPIO_NAME_INPUT_BYTE_LIMIT (256u * 1024u * 1024u)
 
 enum bx_cpio_mode {
     BX_CPIO_MODE_NONE = 0,
@@ -372,7 +373,8 @@ static bool bx_cpio_read_name_list(const struct bx_cpio_options* options,
                                    struct bx_diag_ctx* diag) {
     struct bx_archive_name_list names = {0};
 
-    if (!bx_archive_name_list_read_fd(STDIN_FILENO, options->null_input ? '\0' : '\n', &names, diag)) {
+    if (!bx_archive_name_list_read_fd_bounded(STDIN_FILENO, options->null_input ? '\0' : '\n', &names, BX_ARCHIVE_PENDING_METADATA_LIMIT, BX_CPIO_NAME_INPUT_BYTE_LIMIT, diag)) {
+        bx_archive_name_list_free(&names);
         return false;
     }
 
