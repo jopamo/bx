@@ -190,6 +190,10 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
         ) &&
         ash_shell_policy_valid(&shell->policy) &&
         ash_aliases_invariants(shell->aliases) &&
+        shell->traps == NULL &&
+        shell->command_cache == NULL &&
+        shell->history == NULL &&
+        shell->completion == NULL &&
         ash_interactive_state_valid(&shell->interactive) &&
         interactive ==
             ash_interactive_state_enabled(&shell->interactive) &&

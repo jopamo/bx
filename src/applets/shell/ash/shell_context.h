@@ -85,8 +85,10 @@ struct ash_shell_context_config {
  * One invocation owns one active context. These fields are the sole roots for
  * shell-language state; subsystems may not publish parallel global authority.
  * Invocation strings and positional arrays are borrowed for the context
- * lifetime. Subsystem root pointers are context-owned when non-NULL. Every
- * stable execution boundary satisfies ash_shell_context_invariants(); a
+ * lifetime. Subsystem root pointers are context-owned when non-NULL. Deferred
+ * trap/cache/history/completion roots remain NULL until their subsystems
+ * provide validation and teardown. Every stable execution boundary satisfies
+ * ash_shell_context_invariants(); a
  * subsystem may violate only its own invariant while a private transition is
  * in progress and must restore it before returning.
  */
