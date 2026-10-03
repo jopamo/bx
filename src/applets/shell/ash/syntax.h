@@ -21,6 +21,28 @@ struct ash_source_location {
 bool ash_source_location_valid(const struct ash_source_location* location);
 bool ash_source_location_is_none(const struct ash_source_location* location);
 
+enum ash_reserved_word {
+    ASH_RESERVED_NONE = 0,
+    ASH_RESERVED_BANG,
+    ASH_RESERVED_LBRACE,
+    ASH_RESERVED_RBRACE,
+    ASH_RESERVED_CASE,
+    ASH_RESERVED_DO,
+    ASH_RESERVED_DONE,
+    ASH_RESERVED_ELIF,
+    ASH_RESERVED_ELSE,
+    ASH_RESERVED_ESAC,
+    ASH_RESERVED_FI,
+    ASH_RESERVED_FOR,
+    ASH_RESERVED_IF,
+    ASH_RESERVED_IN,
+    ASH_RESERVED_THEN,
+    ASH_RESERVED_UNTIL,
+    ASH_RESERVED_WHILE,
+};
+
+enum ash_reserved_word ash_reserved_word_from_span(const char* text, size_t length);
+
 enum ash_quote_kind {
     ASH_QUOTE_NONE = 0,
     ASH_QUOTE_BACKSLASH,

@@ -6,6 +6,31 @@
 
 #include "applets/shell/ash/syntax.h"
 
+struct ash_reserved_word_entry {
+    enum ash_reserved_word word;
+    const char* spelling;
+    size_t length;
+};
+
+#define ASH_RESERVED_ENTRY(word, spelling) {word, spelling, sizeof(spelling) - 1u}
+static const struct ash_reserved_word_entry ash_reserved_words[] = {
+    ASH_RESERVED_ENTRY(ASH_RESERVED_BANG, "!"),    ASH_RESERVED_ENTRY(ASH_RESERVED_LBRACE, "{"),  ASH_RESERVED_ENTRY(ASH_RESERVED_RBRACE, "}"),    ASH_RESERVED_ENTRY(ASH_RESERVED_CASE, "case"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_DO, "do"),     ASH_RESERVED_ENTRY(ASH_RESERVED_DONE, "done"), ASH_RESERVED_ENTRY(ASH_RESERVED_ELIF, "elif"),   ASH_RESERVED_ENTRY(ASH_RESERVED_ELSE, "else"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_ESAC, "esac"), ASH_RESERVED_ENTRY(ASH_RESERVED_FI, "fi"),     ASH_RESERVED_ENTRY(ASH_RESERVED_FOR, "for"),     ASH_RESERVED_ENTRY(ASH_RESERVED_IF, "if"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_IN, "in"),     ASH_RESERVED_ENTRY(ASH_RESERVED_THEN, "then"), ASH_RESERVED_ENTRY(ASH_RESERVED_UNTIL, "until"), ASH_RESERVED_ENTRY(ASH_RESERVED_WHILE, "while"),
+};
+#undef ASH_RESERVED_ENTRY
+
+enum ash_reserved_word ash_reserved_word_from_span(const char* text, size_t length) {
+    for (size_t i = 0u; i < sizeof(ash_reserved_words) / sizeof(ash_reserved_words[0]); i++) {
+        const struct ash_reserved_word_entry* entry = &ash_reserved_words[i];
+        if (entry->length == length && memcmp(entry->spelling, text, length) == 0) {
+            return entry->word;
+        }
+    }
+    return ASH_RESERVED_NONE;
+}
+
 bool ash_source_location_valid(const struct ash_source_location* location) {
     return location != NULL &&
         location->source != NULL &&
