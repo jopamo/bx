@@ -161,7 +161,12 @@ bool bx_archive_name_list_append(struct bx_archive_name_list* list, const char* 
     char** next_items;
 
     if (list->len == list->cap) {
-        size_t next_cap = list->cap ? list->cap * 2u : 16u;
+        size_t maximum = SIZE_MAX / sizeof(*list->items);
+        if (list->cap >= maximum) {
+            errno = EOVERFLOW;
+            return false;
+        }
+        size_t next_cap = list->cap ? (list->cap > maximum / 2u ? maximum : list->cap * 2u) : 16u;
         next_items = xrealloc(list->items, next_cap * sizeof(*list->items));
         list->items = next_items;
         list->cap = next_cap;
@@ -171,52 +176,81 @@ bool bx_archive_name_list_append(struct bx_archive_name_list* list, const char* 
     return true;
 }
 
-static bool bx_archive_name_list_split_buffer(const struct bx_archive_buffer* input,
-                                              unsigned char separator,
-                                              struct bx_archive_name_list* list,
-                                              struct bx_diag_ctx* diag) {
-    size_t start = 0u;
-    size_t i;
-
-    for (i = 0u; i <= input->len; i++) {
-        bool at_end = (i == input->len);
-        bool is_sep = !at_end && input->data[i] == separator;
-
-        if (!at_end && !is_sep) {
-            continue;
-        }
-        if (i > start) {
-            size_t item_len = i - start;
-            char* item = xmalloc(item_len + 1u);
-
-            memcpy(item, input->data + start, item_len);
-            item[item_len] = '\0';
-            if (!bx_archive_name_list_append(list, item)) {
-                free(item);
-                bx_diag(diag, "buffer growth failed: %s", strerror(errno));
-                return false;
-            }
-            free(item);
-        }
-        start = i + 1u;
+bool bx_archive_name_list_read_fd_bounded(int fd, unsigned char separator, struct bx_archive_name_list* list, size_t count_limit, size_t input_byte_limit, struct bx_diag_ctx* diag) {
+    struct bx_fd_input input = BX_FD_INPUT_INIT;
+    struct bx_archive_buffer name = {0};
+    unsigned char chunk[8192];
+    size_t remaining = input_byte_limit;
+    bool ok = false;
+    if (list->len > count_limit)
+        goto limit_error;
+    if (bx_fd_input_init(&input, fd, BX_FD_INPUT_BORROWED) != 0) {
+        bx_diag(diag, "read error: %s", strerror(errno));
+        return false;
     }
-
-    return true;
+    while (true) {
+        size_t request = remaining < sizeof(chunk) ? remaining + 1u : sizeof(chunk);
+        ssize_t nread;
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            goto read_error;
+        }
+        nread = bx_fd_input_read(&input, chunk, request, bx_archive_temp_signal_fd());
+        if (bx_archive_temp_pending_signal()) {
+            errno = EINTR;
+            goto read_error;
+        }
+        if (nread < 0)
+            goto read_error;
+        if ((size_t)nread > remaining)
+            goto limit_error;
+        remaining -= (size_t)nread;
+        size_t start = 0;
+        for (size_t i = 0; i <= (size_t)nread; i++) {
+            bool at_end = i == (size_t)nread;
+            if (!at_end && chunk[i] != separator)
+                continue;
+            size_t length = i - start;
+            if (length > 0) {
+                if (list->len >= count_limit)
+                    goto limit_error;
+                if (separator != '\0' && memchr(chunk + start, '\0', length)) {
+                    errno = EINVAL;
+                    bx_diag(diag, "NUL byte in newline-delimited name list");
+                    goto done;
+                }
+                if (!bx_archive_buffer_append(&name, chunk + start, length))
+                    goto growth_error;
+            }
+            if ((!at_end || nread == 0) && name.len > 0) {
+                if (!bx_archive_buffer_append_byte(&name, '\0') || !bx_archive_name_list_append(list, (const char*)name.data))
+                    goto growth_error;
+                name.len = 0;
+            }
+            start = i + 1u;
+        }
+        if (nread == 0) {
+            ok = true;
+            goto done;
+        }
+    }
+read_error:
+    bx_diag(diag, "read error: %s", strerror(errno));
+    goto done;
+limit_error:
+    errno = E2BIG;
+    bx_diag(diag, "name list limit exceeded");
+    goto done;
+growth_error:
+    bx_diag(diag, "buffer growth failed: %s", strerror(errno));
+done:
+    bx_archive_buffer_free(&name);
+    bx_fd_input_close(&input);
+    return ok;
 }
 
 bool bx_archive_name_list_read_fd(int fd, unsigned char separator, struct bx_archive_name_list* list, struct bx_diag_ctx* diag) {
-    struct bx_archive_buffer input = {0};
-    bool ok;
-
-    bx_archive_buffer_init(&input);
-    if (!bx_archive_buffer_read_all(fd, &input, diag)) {
-        bx_archive_buffer_free(&input);
-        return false;
-    }
-
-    ok = bx_archive_name_list_split_buffer(&input, separator, list, diag);
-    bx_archive_buffer_free(&input);
-    return ok;
+    return bx_archive_name_list_read_fd_bounded(fd, separator, list, SIZE_MAX / sizeof(*list->items), SIZE_MAX, diag);
 }
 
 bool bx_archive_name_list_read_path(const char* path,
