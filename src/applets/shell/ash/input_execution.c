@@ -149,12 +149,12 @@ static void ash_input_print_prompt(
     fflush(stderr);
 }
 
-static bool ash_input_print_verbose(
+static void ash_input_print_verbose(
     struct ash_shell* shell,
     const struct bx_text_buffer* line
 ) {
     if ((shell->options & ASH_SHELL_OPTION_VERBOSE) == 0u) {
-        return true;
+        return;
     }
     bool needs_newline =
         line->length == 0u ||
@@ -163,14 +163,9 @@ static bool ash_input_print_verbose(
          fwrite(line->data, 1u, line->length, stderr) != line->length) ||
         (needs_newline && fputc('\n', stderr) == EOF) ||
         fflush(stderr) == EOF) {
-        ash_exec_error(
-            shell,
-            "verbose input",
-            errno != 0 ? errno : EIO
-        );
-        return false;
+        /* Failed echo does not discard input or determine command status. */
+        clearerr(stderr);
     }
-    return true;
 }
 
 static bool ash_input_onecmd_boundary(const struct ash_shell* shell) {
@@ -269,10 +264,7 @@ static int ash_input_execute_current(
             status = 2;
             break;
         }
-        if (!ash_input_print_verbose(shell, read_buffer)) {
-            status = 1;
-            break;
-        }
+        ash_input_print_verbose(shell, read_buffer);
         if (!extending_logical_input) {
             pending_origin = line_origin;
         }
