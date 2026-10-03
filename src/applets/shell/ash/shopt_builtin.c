@@ -117,23 +117,18 @@ int ash_shopt_builtin(
 
     bool named = operand != command->word_count;
     if (!named) {
-        bool enabled = ash_shopt_enabled(
-            &shell->shopt,
-            ASH_SHOPT_EXTGLOB
-        );
-        if (set || unset) {
-            if ((set && enabled) || (unset && !enabled)) {
-                if (!ash_shopt_write(
-                        ASH_SHOPT_EXTGLOB,
-                        enabled,
-                        ASH_SHOPT_OUTPUT_STATUS
-                    )) {
-                    return ash_shopt_flush(shell);
-                }
+        for (size_t i = 0u;; i++) {
+            enum ash_shopt_option option = ash_shopt_implemented_at(i);
+            if (option == 0u) {
+                break;
             }
-        }
-        else if (!ash_shopt_write(ASH_SHOPT_EXTGLOB, enabled, output)) {
-            return ash_shopt_flush(shell);
+            bool enabled = ash_shopt_enabled(&shell->shopt, option);
+            if ((set && !enabled) || (unset && enabled)) {
+                continue;
+            }
+            if (!ash_shopt_write(option, enabled, set || unset ? ASH_SHOPT_OUTPUT_STATUS : output)) {
+                return ash_shopt_flush(shell);
+            }
         }
         return ash_shopt_flush(shell);
     }

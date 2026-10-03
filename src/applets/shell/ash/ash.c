@@ -1239,7 +1239,8 @@ static int ash_substitution_child_main(void* user_data) {
 
     struct ash_shell* child = context->shell;
     ash_shell_context_detach_after_fork(child);
-    if (!ash_shell_policy_has(&child->policy, ASH_SHELL_POLICY_POSIX)) {
+    if (!ash_shell_policy_has(&child->policy, ASH_SHELL_POLICY_POSIX) &&
+        !ash_shopt_enabled(&child->shopt, ASH_SHOPT_INHERIT_ERREXIT)) {
         child->options &= ~ASH_SHELL_OPTION_ERREXIT;
     }
     child->should_exit = false;

@@ -14,6 +14,7 @@ struct ash_shopt_descriptor {
 
 static const struct ash_shopt_descriptor ash_shopt_options[] = {
     {"extglob", ASH_SHOPT_EXTGLOB, ASH_SHOPT_PERSONALITY_BASH},
+    {"inherit_errexit", ASH_SHOPT_INHERIT_ERREXIT, ASH_SHOPT_PERSONALITY_BASH},
 };
 
 #undef ASH_SHOPT_PERSONALITY_BASH
@@ -58,6 +59,10 @@ enum ash_shopt_option ash_shopt_resolve(const char* name) {
         }
     }
     return 0u;
+}
+
+enum ash_shopt_option ash_shopt_implemented_at(size_t index) {
+    return index < sizeof(ash_shopt_options) / sizeof(ash_shopt_options[0]) ? ash_shopt_options[index].option : 0u;
 }
 
 const char* ash_shopt_name(enum ash_shopt_option option) {
