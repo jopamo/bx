@@ -121,6 +121,19 @@ class UpdateError(RuntimeError):
     pass
 
 
+def import_commit(path: Path) -> str:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise UpdateError(f"cannot read import metadata {path}: {error}") from error
+    if not isinstance(record, dict) or record.get("schema") != 1:
+        raise UpdateError(f"invalid import metadata schema: {path}")
+    commit = record.get("commit")
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise UpdateError(f"invalid import commit: {path}")
+    return commit
+
+
 def run(
     argv: list[str],
     *,
@@ -319,7 +332,7 @@ def prepare_candidate(
         if actual_drivers != set(CORPUS_DRIVERS):
             raise UpdateError(
                 "jq test-driver surface changed; update CORPUS_DRIVERS and "
-                f"bx-tests matrix deliberately: {sorted(actual_drivers)}"
+                f"validation matrix deliberately: {sorted(actual_drivers)}"
             )
 
         commit_date = run(
@@ -327,14 +340,7 @@ def prepare_candidate(
             capture=True,
         ).stdout.strip()
         current_import_path = bx_root / "src/vendor/jq/IMPORT.json"
-        if current_import_path.exists():
-            current_import = json.loads(current_import_path.read_text(encoding="utf-8"))
-            old_commit = str(current_import["commit"])
-        else:
-            old_commit = re.search(
-                r"[0-9a-f]{40}",
-                (bx_root / "src/vendor/jq/README.bx").read_text(encoding="utf-8"),
-            ).group(0)  # type: ignore[union-attr]
+        old_commit = import_commit(current_import_path)
 
         import_record = {
             "schema": 1,
@@ -352,11 +358,6 @@ def prepare_candidate(
         metadata: dict[Path, bytes] = {}
 
         metadata[current_import_path] = (json.dumps(import_record, indent=2) + "\n").encode()
-
-        source_readme = bx_root / "src/vendor/jq/README.bx"
-        metadata[source_readme] = replace_commit(
-            source_readme.read_text(encoding="utf-8"), old_commit, commit, source_readme
-        ).encode()
 
         build_info = bx_root / "src/applets/text/jq/bx_jq_build_info.h"
         build_text = build_info.read_text(encoding="utf-8")
@@ -660,8 +661,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--tests-root",
         type=Path,
         help=(
-            "bx-tests checkout; defaults to ../bx-tests when present, "
-            "otherwise validates with the imported upstream corpus"
+            "optional validation checkout; without it, validate with "
+            "the imported upstream corpus"
         ),
     )
     parser.add_argument(
@@ -675,28 +676,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     bx_root = Path(__file__).resolve().parents[1]
-    requested_tests_root = (
-        args.tests_root.resolve()
-        if args.tests_root is not None
-        else bx_root.parent / "bx-tests"
-    )
-    tests_root = requested_tests_root if requested_tests_root.is_dir() else None
+    tests_root = args.tests_root.resolve() if args.tests_root is not None else None
+    if tests_root is not None and not tests_root.is_dir():
+        raise UpdateError(f"validation checkout is not a directory: {tests_root}")
     if tests_root is None:
         print(
-            f"update-jq: {requested_tests_root} is absent; "
-            "using standalone upstream-corpus validation"
+            "update-jq: using standalone upstream-corpus validation"
         )
 
     import_path = bx_root / "src/vendor/jq/IMPORT.json"
-    old_commit = None
-    if import_path.exists():
-        old_commit = str(json.loads(import_path.read_text(encoding="utf-8"))["commit"])
-    else:
-        match = re.search(
-            r"[0-9a-f]{40}",
-            (bx_root / "src/vendor/jq/README.bx").read_text(encoding="utf-8"),
-        )
-        old_commit = match.group(0) if match else None
+    old_commit = import_commit(import_path)
 
     with tempfile.TemporaryDirectory(prefix="bx-update-jq-") as tmp:
         temp_root = Path(tmp)
