@@ -1,4 +1,5 @@
 #include "lib/poll_deadline.h"
+#include "lib/time_parse.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -6,19 +7,15 @@
 
 static bool bx_poll_monotonic_milliseconds(uint64_t* milliseconds_out) {
     struct timespec now;
+    uintmax_t milliseconds;
 
     if (milliseconds_out == NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0 ||
-        now.tv_sec < 0 || now.tv_nsec < 0) {
+        !bx_time_timespec_to_milliseconds_uint(&now, &milliseconds) ||
+        milliseconds > UINT64_MAX) {
         return false;
     }
 
-    uint64_t seconds = (uint64_t)now.tv_sec;
-    uint64_t milliseconds = (uint64_t)now.tv_nsec / 1000000u;
-    if (seconds > (UINT64_MAX - milliseconds) / 1000u) {
-        return false;
-    }
-
-    *milliseconds_out = seconds * 1000u + milliseconds;
+    *milliseconds_out = (uint64_t)milliseconds;
     return true;
 }
 
