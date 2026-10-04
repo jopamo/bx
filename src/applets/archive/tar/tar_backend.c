@@ -16,6 +16,7 @@
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/archive_temp.h"
 #include "applets/archive/tar/tar_backend.h"
+#include "applets/archive/tar/tar_compression.h"
 #include "applets/archive/tar/tar_create.h"
 #include "applets/archive/tar/tar_names.h"
 #include "applets/archive/tar/tar_report.h"
@@ -77,6 +78,7 @@ enum bx_tar_permission_policy {
 
 struct bx_tar_options {
     enum bx_tar_mode mode;
+    int frontend_action;
     const char* invalid_mode_option[BX_TAR_MODE_EXTRACT + 1];
     const char* gzip_output_option;
     const char* filesystem_option;
@@ -94,6 +96,7 @@ struct bx_tar_options {
     bool report_totals;
     char* index_file_path;
     const struct bx_archive_codec* codec;
+    struct bx_tar_compression_spec compression;
     bool auto_compress;
     bool absolute_names;
     bool touch_mtime;
@@ -137,6 +140,9 @@ enum bx_tar_option_arg_mode {
 
 enum bx_tar_option_effect {
     BX_TAR_OPT_INVALID = 0,
+    BX_TAR_OPT_HELP,
+    BX_TAR_OPT_USAGE,
+    BX_TAR_OPT_VERSION,
     BX_TAR_OPT_SPARSE,
     BX_TAR_OPT_SPARSE_VERSION,
     BX_TAR_OPT_HOLE_DETECTION,
@@ -189,6 +195,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_EXCLUDE_VCS_IGNORES,
     BX_TAR_OPT_THREADS,
     BX_TAR_OPT_COMPRESS_THREADS,
+    BX_TAR_OPT_COMPRESS_PROGRAM,
     BX_TAR_OPT_MT_CHUNK_SIZE,
     BX_TAR_OPT_NO_MT,
     BX_TAR_OPT_BZIP2_ON,
@@ -246,6 +253,9 @@ struct bx_tar_short_option_spec {
 };
 
 static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
+    {"--help", BX_TAR_OPTARG_NONE, BX_TAR_OPT_HELP},
+    {"--usage", BX_TAR_OPTARG_NONE, BX_TAR_OPT_USAGE},
+    {"--version", BX_TAR_OPTARG_NONE, BX_TAR_OPT_VERSION},
     {"--create", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
     {"--list", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {"--extract", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
@@ -295,6 +305,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--recursive-unlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSIVE_UNLINK},
     {"--threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_THREADS},
     {"--compress-threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_THREADS},
+    {"--use-compress-program", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_PROGRAM},
     {"--mt-chunk-size", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MT_CHUNK_SIZE},
     {"--no-mt", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_MT},
     {"--skip-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SKIP_OLD_FILES},
@@ -349,6 +360,8 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
 };
 
 static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
+    {'?', "-?", BX_TAR_OPTARG_NONE, BX_TAR_OPT_HELP},
+    {'I', "-I", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_PROGRAM},
     {'c', "-c", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
     {'t', "-t", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {'x', "-x", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
@@ -461,6 +474,8 @@ static const struct bx_archive_codec* bx_tar_codec_from_suffix(const char* path)
 }
 
 static const struct bx_archive_codec* bx_tar_output_codec(const struct bx_tar_options* options) {
+    if (options->compression.codec != NULL)
+        return options->compression.codec;
     if (options->codec != NULL) {
         return options->codec;
     }
@@ -475,6 +490,8 @@ static const struct bx_archive_codec* bx_tar_output_codec(const struct bx_tar_op
 }
 
 static const struct bx_archive_codec* bx_tar_input_required_codec(const struct bx_tar_options* options) {
+    if (options->compression.codec != NULL)
+        return options->compression.codec;
     if (options->codec != NULL) {
         return options->codec;
     }
@@ -485,6 +502,8 @@ static const struct bx_archive_codec* bx_tar_input_required_codec(const struct b
 }
 
 static size_t bx_tar_effective_compress_threads(const struct bx_tar_options* options) {
+    if (options->compression.threads >= 0)
+        return bx_thread_count_resolve(options->compression.threads);
     if (options->no_mt) {
         return 1u;
     }
@@ -628,6 +647,7 @@ static bool bx_tar_write_create_archive_direct(const struct bx_archive_fs_list* 
     }
     else {
         ok = bx_archive_codec_run_encode_stream(codec,
+                                                &options->compression.encode,
                                                 bx_tar_codec_stream_produce,
                                                 &create_ctx,
                                                 &sink,
@@ -670,6 +690,7 @@ static bool bx_tar_write_create_archive_mt_direct(const struct bx_archive_fs_lis
     sink.user = output.stream;
     create_ctx.total_bytes_written = 0u;
     ok = bx_archive_codec_run_encode_mt_stream(codec,
+                                               &options->compression.encode,
                                                bx_tar_codec_stream_produce,
                                                &create_ctx,
                                                &sink,
@@ -732,6 +753,7 @@ static bool bx_tar_write_create_archive_stream_direct(bx_tar_stream_fs_entry_pro
     }
     else {
         ok = bx_archive_codec_run_encode_stream(codec,
+                                                &options->compression.encode,
                                                 bx_tar_codec_stream_produce,
                                                 &create_ctx,
                                                 &sink,
@@ -777,6 +799,7 @@ static bool bx_tar_write_create_archive_stream_mt_direct(bx_tar_stream_fs_entry_
     sink.user = output.stream;
     create_ctx.total_bytes_written = 0u;
     ok = bx_archive_codec_run_encode_mt_stream(codec,
+                                               &options->compression.encode,
                                                bx_tar_codec_stream_produce,
                                                &create_ctx,
                                                &sink,
@@ -2532,9 +2555,20 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
     switch (effect) {
         case BX_TAR_OPT_INVALID:
             return false;
+        case BX_TAR_OPT_HELP:
+            options->frontend_action = BX_TAR_PRINT_HELP;
+            return true;
+        case BX_TAR_OPT_USAGE:
+            options->frontend_action = BX_TAR_PRINT_USAGE;
+            return true;
+        case BX_TAR_OPT_VERSION:
+            options->frontend_action = BX_TAR_PRINT_VERSION;
+            return true;
         case BX_TAR_OPT_SPARSE:
             options->sparse = true;
             return true;
+        case BX_TAR_OPT_COMPRESS_PROGRAM:
+            return bx_tar_compression_parse(value, &options->compression, diag);
         case BX_TAR_OPT_SPARSE_VERSION:
         case BX_TAR_OPT_HOLE_DETECTION:
             if (strcmp(value, effect == BX_TAR_OPT_SPARSE_VERSION ? "1.0" : "seek") != 0) {
@@ -2933,6 +2967,7 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
     memset(options, 0, sizeof(*options));
     options->threads = -1;
     options->compress_threads = -1;
+    options->compression.threads = -1;
 
     if (i < argc && argv[i][0] != '-' && argv[i][0] != '\0') {
         oldstyle = true;
@@ -2986,6 +3021,8 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
             if (!bx_tar_apply_option_effect(options, spec->effect, spec->name, parsed_value, diag)) {
                 return false;
             }
+            if (options->frontend_action)
+                return true;
             i++;
             continue;
         }
@@ -3005,7 +3042,7 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
                 }
 
                 if (spec->arg_mode == BX_TAR_OPTARG_REQUIRED) {
-                    if (*attached != '\0') {
+                    if (!oldstyle && *attached != '\0') {
                         parsed_value = attached;
                         j = strlen(letters) - 1u;
                     }
@@ -3021,8 +3058,10 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
                 if (!bx_tar_apply_option_effect(options, spec->effect, spec->display, parsed_value, diag)) {
                     return false;
                 }
+                if (options->frontend_action)
+                    return true;
 
-                if (spec->arg_mode == BX_TAR_OPTARG_REQUIRED) {
+                if (!oldstyle && spec->arg_mode == BX_TAR_OPTARG_REQUIRED) {
                     goto next_arg;
                 }
             }
@@ -3102,6 +3141,27 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         bx_diag(diag, "%s cannot be combined with --to-stdout", options->filesystem_option);
         return false;
     }
+    if (options->compression.codec != NULL) {
+        if (options->codec != NULL && options->codec != options->compression.codec) {
+            bx_diag(diag, "conflicting compression options");
+            return false;
+        }
+        bool creating = options->mode == BX_TAR_MODE_CREATE;
+        if ((creating && options->compression.direction == BX_TAR_COMPRESSION_DECODE)
+            || (!creating && options->compression.direction == BX_TAR_COMPRESSION_ENCODE)) {
+            bx_diag(diag, "-I compression direction conflicts with --%s", mode_name);
+            return false;
+        }
+        if (!creating && (options->compression.encode.level_set || options->compression.threads >= 0)) {
+            bx_diag(diag, "-I compression level and process count require --create");
+            return false;
+        }
+        if (options->compression.threads >= 0
+            && (options->no_mt || options->threads >= 0 || options->compress_threads >= 0)) {
+            bx_diag(diag, "-I process count conflicts with tar worker options");
+            return false;
+        }
+    }
     if (options->gzip_output_option != NULL && bx_tar_output_codec(options) != bx_archive_codec_gzip()) {
         bx_diag(diag, "%s requires gzip output", options->gzip_output_option);
         return false;
@@ -3136,6 +3196,11 @@ int bx_tar_run(int argc, char** argv) {
     if (!bx_tar_parse_options(&options, argc, argv, &diag)) {
         bx_tar_options_cleanup(&options);
         return 2;
+    }
+    if (options.frontend_action) {
+        rc = options.frontend_action;
+        bx_tar_options_cleanup(&options);
+        return rc;
     }
 
     if (options.mode == BX_TAR_MODE_CREATE) {

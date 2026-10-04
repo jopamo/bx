@@ -286,6 +286,7 @@ bool bx_archive_run_zstd_filter(const struct bx_archive_buffer* input,
 bool bx_archive_run_zstd_filter_stream(bx_archive_zstd_stream_producer_fn producer,
                                        void* producer_user,
                                        const struct bx_archive_zstd_stream_sink* output_sink,
+                                       int level,
                                        struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBZSTD
     struct bx_archive_zstd_filter_stream_state state = {0};
@@ -305,7 +306,7 @@ bool bx_archive_run_zstd_filter_stream(bx_archive_zstd_stream_producer_fn produc
         bx_archive_zstd_diag_failed("compression", (size_t)-1, "stream allocation failed", diag);
         return false;
     }
-    rc = ZSTD_initCStream(state.stream, ZSTD_CLEVEL_DEFAULT);
+    rc = ZSTD_initCStream(state.stream, level < 0 ? ZSTD_CLEVEL_DEFAULT : level);
     if (ZSTD_isError(rc)) {
         bx_archive_zstd_diag_failed("compression", rc, NULL, diag);
         goto out;
@@ -328,6 +329,7 @@ out:
     (void)producer;
     (void)producer_user;
     (void)output_sink;
+    (void)level;
     bx_diag(diag, "zstd support is unavailable in this build");
     return false;
 #endif

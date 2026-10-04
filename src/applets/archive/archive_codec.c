@@ -280,11 +280,40 @@ bool bx_archive_codec_decode_buffer(const struct bx_archive_codec* codec,
     return false;
 }
 
+bool bx_archive_codec_level_valid(const struct bx_archive_codec* codec, int level) {
+    if (codec == bx_archive_codec_gzip() || codec == bx_archive_codec_bzip2())
+        return level >= 1 && level <= 9;
+    if (codec == bx_archive_codec_xz())
+        return level >= 0 && level <= 9;
+    if (codec == bx_archive_codec_zstd())
+        return level >= 1 && level <= 19;
+    return false;
+}
+
+static bool bx_archive_codec_encode_level(const struct bx_archive_codec* codec,
+                                          const struct bx_archive_codec_encode_options* options,
+                                          int* level,
+                                          struct bx_diag_ctx* diag) {
+    *level = -1;
+    if (options == NULL || !options->level_set)
+        return true;
+    if (!bx_archive_codec_level_valid(codec, options->level)) {
+        bx_diag(diag, "invalid %s compression level %d", bx_archive_codec_name(codec), options->level);
+        return false;
+    }
+    *level = options->level;
+    return true;
+}
+
 bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
+                                        const struct bx_archive_codec_encode_options* options,
                                         bx_archive_codec_stream_producer_fn producer,
                                         void* producer_user,
                                         const struct bx_archive_codec_stream_sink* output_sink,
                                         struct bx_diag_ctx* diag) {
+    int level;
+    if (!bx_archive_codec_encode_level(codec, options, &level, diag))
+        return false;
     if (producer == NULL || output_sink == NULL || output_sink->write == NULL) {
         bx_diag(diag, "invalid archive codec stream configuration");
         return false;
@@ -305,6 +334,7 @@ bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
         return bx_archive_run_gzip_filter_stream(bx_archive_codec_gzip_producer_bridge,
                                                  &producer_adapter,
                                                  &gzip_sink,
+                                                 level,
                                                  diag);
     }
     if (codec == bx_archive_codec_bzip2()) {
@@ -320,6 +350,7 @@ bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
         return bx_archive_run_bzip2_filter_stream(bx_archive_codec_bzip2_producer_bridge,
                                                   &producer_adapter,
                                                   &bzip2_sink,
+                                                  level,
                                                   diag);
     }
     if (codec == bx_archive_codec_xz()) {
@@ -335,6 +366,7 @@ bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
         return bx_archive_run_xz_filter_stream(bx_archive_codec_xz_producer_bridge,
                                                &producer_adapter,
                                                &xz_sink,
+                                               level,
                                                diag);
     }
     if (codec == bx_archive_codec_zstd()) {
@@ -350,6 +382,7 @@ bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
         return bx_archive_run_zstd_filter_stream(bx_archive_codec_zstd_producer_bridge,
                                                  &producer_adapter,
                                                  &zstd_sink,
+                                                 level,
                                                  diag);
     }
     bx_diag(diag, "unsupported archive codec '%s'", bx_archive_codec_name(codec));
@@ -357,11 +390,15 @@ bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
 }
 
 bool bx_archive_codec_run_encode_mt_stream(const struct bx_archive_codec* codec,
+                                           const struct bx_archive_codec_encode_options* options,
                                            bx_archive_codec_stream_producer_fn producer,
                                            void* producer_user,
                                            const struct bx_archive_codec_stream_sink* output_sink,
                                            const struct bx_archive_codec_mt_options* mt_options,
                                            struct bx_diag_ctx* diag) {
+    int level;
+    if (!bx_archive_codec_encode_level(codec, options, &level, diag))
+        return false;
     if (codec == NULL || codec == bx_archive_codec_none()) {
         bx_diag(diag, "archive codec '%s' does not support multithreaded encoding",
                 bx_archive_codec_name(codec));
@@ -387,6 +424,7 @@ bool bx_archive_codec_run_encode_mt_stream(const struct bx_archive_codec* codec,
                                                     mt_options->thread_count,
                                                     mt_options->chunk_size,
                                                     mt_options->max_inflight_chunks,
+                                                    level,
                                                     diag);
     }
     bx_diag(diag, "unsupported archive codec '%s'", bx_archive_codec_name(codec));

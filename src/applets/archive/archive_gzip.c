@@ -117,6 +117,7 @@ struct bx_archive_gzip_stream_state {
     struct bx_archive_buffer current_chunk;
     size_t chunk_size;
     size_t max_inflight_chunks;
+    int level;
     unsigned int test_delay_first_chunk_ms;
     bool pool_initialized;
 };
@@ -171,14 +172,15 @@ static void bx_archive_gzip_test_delay_job(const struct bx_archive_gzip_stream_s
 static bool bx_archive_gzip_compress_member(const unsigned char* input,
                                             size_t input_len,
                                             struct bx_archive_buffer* output,
-                                            const char** zmsg_out) {
+                                            const char** zmsg_out,
+                                            int level) {
     z_stream stream;
     size_t input_pos = 0u;
     int rc;
 
     memset(&stream, 0, sizeof(stream));
     rc = deflateInit2(&stream,
-                      Z_DEFAULT_COMPRESSION,
+                      level,
                       Z_DEFLATED,
                       MAX_WBITS + 16,
                       8,
@@ -320,7 +322,7 @@ bool bx_archive_run_gzip_filter(const struct bx_archive_buffer* input,
         return bx_archive_gzip_decompress_all(input->data, input->len, output, diag);
     }
 
-    if (!bx_archive_gzip_compress_member(input->data, input->len, output, &zmsg)) {
+    if (!bx_archive_gzip_compress_member(input->data, input->len, output, &zmsg, Z_DEFAULT_COMPRESSION)) {
         bx_archive_gzip_diag_compression_failed(diag, zmsg);
         return false;
     }
@@ -405,6 +407,7 @@ static bool bx_archive_gzip_filter_stream_input_write(void* user, const void* da
 bool bx_archive_run_gzip_filter_stream(bx_archive_gzip_stream_producer_fn producer,
                                        void* producer_user,
                                        const struct bx_archive_gzip_stream_sink* output_sink,
+                                       int level,
                                        struct bx_diag_ctx* diag) {
     struct bx_archive_gzip_filter_stream_state state;
     struct bx_archive_gzip_stream_sink input_sink;
@@ -421,7 +424,7 @@ bool bx_archive_run_gzip_filter_stream(bx_archive_gzip_stream_producer_fn produc
     state.diag = diag;
 
     rc = deflateInit2(&state.stream,
-                      Z_DEFAULT_COMPRESSION,
+                      level,
                       Z_DEFLATED,
                       MAX_WBITS + 16,
                       8,
@@ -501,7 +504,7 @@ static void bx_archive_gzip_stream_process_job(void* user,
     }
     else {
         bx_archive_buffer_init(&output);
-        if (!bx_archive_gzip_compress_member(job->input, job->input_len, &output, NULL)) {
+        if (!bx_archive_gzip_compress_member(job->input, job->input_len, &output, NULL, state->level)) {
             bx_archive_buffer_free(&output);
             job->status = BX_ARCHIVE_GZIP_PACKET_FAILED;
             bx_cancel_state_request(&state->cancel);
@@ -586,6 +589,7 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
                                           size_t thread_count,
                                           size_t chunk_size,
                                           size_t max_inflight_chunks,
+                                          int level,
                                           struct bx_diag_ctx* diag) {
     struct bx_archive_gzip_stream_state state;
     struct bx_archive_gzip_stream_sink input_sink;
@@ -601,6 +605,7 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     state.output_sink = output_sink;
     state.diag = diag;
     state.chunk_size = chunk_size;
+    state.level = level;
     state.max_inflight_chunks = max_inflight_chunks != 0u ? max_inflight_chunks : thread_count * 4u;
     size_t archive_member_limit =
         bx_backpressure_limit_default(BX_BACKPRESSURE_LIMIT_PENDING_ARCHIVE_MEMBERS);

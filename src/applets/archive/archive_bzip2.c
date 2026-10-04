@@ -284,6 +284,7 @@ bool bx_archive_run_bzip2_filter(const struct bx_archive_buffer* input,
 bool bx_archive_run_bzip2_filter_stream(bx_archive_bzip2_stream_producer_fn producer,
                                         void* producer_user,
                                         const struct bx_archive_bzip2_stream_sink* output_sink,
+                                        int level,
                                         struct bx_diag_ctx* diag) {
     struct bx_archive_bzip2_filter_stream_state state = {0};
     struct bx_archive_bzip2_stream_sink input_sink;
@@ -295,7 +296,7 @@ bool bx_archive_run_bzip2_filter_stream(bx_archive_bzip2_stream_producer_fn prod
         return false;
     }
 
-    rc = BZ2_bzCompressInit(&state.stream, 9, 0, 30);
+    rc = BZ2_bzCompressInit(&state.stream, level < 0 ? 9 : level, 0, 30);
     if (rc != BZ_OK) {
         bx_archive_bzip2_diag_failed("compression", rc, diag);
         return false;
@@ -396,10 +397,12 @@ bool bx_archive_run_bzip2_filter(const struct bx_archive_buffer* input,
 bool bx_archive_run_bzip2_filter_stream(bx_archive_bzip2_stream_producer_fn producer,
                                         void* producer_user,
                                         const struct bx_archive_bzip2_stream_sink* output_sink,
+                                        int level,
                                         struct bx_diag_ctx* diag) {
     (void)producer;
     (void)producer_user;
     (void)output_sink;
+    (void)level;
     bx_diag(diag, "bzip2 support is unavailable in this build");
     return false;
 }

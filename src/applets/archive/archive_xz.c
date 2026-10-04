@@ -222,6 +222,7 @@ bool bx_archive_run_xz_filter(const struct bx_archive_buffer* input,
 bool bx_archive_run_xz_filter_stream(bx_archive_xz_stream_producer_fn producer,
                                      void* producer_user,
                                      const struct bx_archive_xz_stream_sink* output_sink,
+                                     int level,
                                      struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBLZMA
     struct bx_archive_xz_filter_stream_state state;
@@ -239,7 +240,7 @@ bool bx_archive_run_xz_filter_stream(bx_archive_xz_stream_producer_fn producer,
     state.diag = diag;
     state.stream = (lzma_stream)LZMA_STREAM_INIT;
 
-    rc = lzma_easy_encoder(&state.stream, LZMA_PRESET_DEFAULT, LZMA_CHECK_CRC64);
+    rc = lzma_easy_encoder(&state.stream, level < 0 ? LZMA_PRESET_DEFAULT : (uint32_t)level, LZMA_CHECK_CRC64);
     if (rc != LZMA_OK) {
         bx_archive_xz_diag_failed("compression", rc, diag);
         return false;
@@ -263,6 +264,7 @@ out:
     (void)producer;
     (void)producer_user;
     (void)output_sink;
+    (void)level;
     bx_diag(diag, "xz support is unavailable in this build");
     return false;
 #endif
