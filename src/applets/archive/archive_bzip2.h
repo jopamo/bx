@@ -26,6 +26,7 @@ bool bx_archive_run_bzip2_filter(const struct bx_archive_buffer* input,
 bool bx_archive_run_bzip2_filter_stream(bx_archive_bzip2_stream_producer_fn producer,
                                         void* producer_user,
                                         const struct bx_archive_bzip2_stream_sink* output_sink,
+                                        int level,
                                         struct bx_diag_ctx* diag);
 
 bool bx_archive_bzip2_reader_open(struct bx_archive_bzip2_reader** reader_out, struct bx_diag_ctx* diag);

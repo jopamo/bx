@@ -31,6 +31,11 @@ struct bx_archive_codec_mt_options {
     size_t max_inflight_chunks;
 };
 
+struct bx_archive_codec_encode_options {
+    bool level_set;
+    int level;
+};
+
 struct bx_archive_codec_input_options {
     const char* archive_path;
     const struct bx_archive_codec* required_codec;
@@ -44,6 +49,7 @@ const struct bx_archive_codec* bx_archive_codec_xz(void);
 const struct bx_archive_codec* bx_archive_codec_zstd(void);
 
 const char* bx_archive_codec_name(const struct bx_archive_codec* codec);
+bool bx_archive_codec_level_valid(const struct bx_archive_codec* codec, int level);
 bool bx_archive_codec_supports_mt_encode(const struct bx_archive_codec* codec);
 bool bx_archive_codec_matches_path_suffix(const struct bx_archive_codec* codec, const char* path);
 const struct bx_archive_codec* bx_archive_codec_detect_path_suffix(const char* path);
@@ -59,11 +65,13 @@ bool bx_archive_codec_decode_buffer(const struct bx_archive_codec* codec,
                                     struct bx_diag_ctx* diag);
 
 bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
+                                        const struct bx_archive_codec_encode_options* options,
                                         bx_archive_codec_stream_producer_fn producer,
                                         void* producer_user,
                                         const struct bx_archive_codec_stream_sink* output_sink,
                                         struct bx_diag_ctx* diag);
 bool bx_archive_codec_run_encode_mt_stream(const struct bx_archive_codec* codec,
+                                           const struct bx_archive_codec_encode_options* options,
                                            bx_archive_codec_stream_producer_fn producer,
                                            void* producer_user,
                                            const struct bx_archive_codec_stream_sink* output_sink,

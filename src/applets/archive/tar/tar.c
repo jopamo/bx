@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 
 #include "applets/archive/archive_temp.h"
 #include "applets/archive/tar/tar_backend.h"
@@ -25,6 +24,12 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "                        creation publishes regular output only on success;\n"
                     "                        stdout/pipes may contain partial data on failure\n");
     fprintf(stream, "  -C DIR                change to DIR before processing files\n");
+    fprintf(stream, "  -I, --use-compress-program=SPEC\n"
+                    "                        select built-in gzip, bzip2, xz or zstd by name/alias;\n"
+                    "                        paths select by basename and are never executed\n"
+                    "                        creation levels: gzip/bzip2 1-9, xz 0-9, zstd 1-19;\n"
+                    "                        pigz -p N selects gzip workers (creation only)\n"
+                    "                        -c streams; -d/-z must match tar's operation\n");
     fprintf(stream, "  -T FILE               read create inputs from FILE\n");
     fprintf(stream, "  -S, --sparse          discover data extents and write GNU sparse 1.0 PAX\n"
                     "                        creation only; unsupported discovery fails\n"
@@ -109,48 +114,28 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version         output version information and exit\n");
 }
 
-static int bx_tar_maybe_handle_usage(int argc, char** argv) {
-    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "tar");
-
-    for (int i = 1; i < argc; i++) {
-        const char* arg = argv[i];
-
-        if (arg == NULL) {
-            continue;
-        }
-        if (strcmp(arg, "--") == 0) {
-            break;
-        }
-        if (strcmp(arg, "--usage") == 0) {
-            bx_tar_print_usage(stdout, progname);
-            return 0;
-        }
-    }
-
-    return -1;
-}
-
 int bx_tar_main(int argc, char** argv) {
     int rc;
     int pending_signal;
-
-    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "tar", "-?", NULL, bx_tar_print_help);
-    if (handled >= 0) {
-        return handled;
-    }
-
-    handled = bx_tar_maybe_handle_usage(argc, argv);
-    if (handled >= 0) {
-        return handled;
-    }
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "tar");
 
     if (!bx_archive_temp_install_signal_cleanup()) {
         fprintf(stderr, "%s: failed to install archive temp signal cleanup\n",
-                bx_cli_progname((argc > 0) ? argv[0] : NULL, "tar"));
+                progname);
         return 2;
     }
 
     rc = bx_tar_run(argc, argv);
+    if (rc == BX_TAR_PRINT_HELP) {
+        bx_tar_print_help(stdout, progname);
+        rc = 0;
+    } else if (rc == BX_TAR_PRINT_USAGE) {
+        bx_tar_print_usage(stdout, progname);
+        rc = 0;
+    } else if (rc == BX_TAR_PRINT_VERSION) {
+        bx_cli_print_version(progname);
+        rc = 0;
+    }
     pending_signal = bx_archive_temp_pending_signal();
     if (pending_signal != 0) {
         bx_archive_temp_cleanup_all();
