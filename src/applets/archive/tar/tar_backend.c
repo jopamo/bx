@@ -2969,7 +2969,7 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
     options->compress_threads = -1;
     options->compression.threads = -1;
 
-    if (i < argc && argv[i][0] != '-' && argv[i][0] != '\0') {
+    if (i < argc && argv[i][0] != '-') {
         oldstyle = true;
     }
 
