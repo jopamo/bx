@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "mira.h"
 #include "options.h"
+#include "lib/args_common.h"
 #include "lib/fetch/credential_file.h"
 #include "lib/fetch/error.h"
 #include "lib/fetch/html.h"
@@ -384,10 +385,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
 
     /* Discover the output format before reporting any parse error. Use the
      * same grammar so an option argument named --json-diagnostics is data. */
-    opterr = 0;
-    optind = 0;
+    bx_args_getopt_reset();
     int diagnostic_option;
-    while ((diagnostic_option = getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), NULL)) != -1) {
+    while ((diagnostic_option = bx_args_getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), NULL)) != -1) {
         if (diagnostic_option == MIRA_OPT_JSON_DIAGNOSTICS)
             config->logging.json_diagnostics = true;
     }
@@ -397,10 +397,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     MiraTimeoutPresence timeout_presence = {0};
     MiraOptionPresence presence = {0};
     int timeout_value = 0;
-    opterr = 0;
-    optind = 0;
+    bx_args_getopt_reset();
     for (;;) {
-        int option = getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), NULL);
+        int option = bx_args_getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), NULL);
         if (option == -1)
             break;
         const MiraOptionSpec* spec = bx_mira_option_spec_for_value(option);

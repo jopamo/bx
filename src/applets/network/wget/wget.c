@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "applets.h"
+#include "lib/args_common.h"
 #include "lib/fetch/exit_code.h"
 #include "lib/fetch/http_header.h"
 #include "lib/fetch/http_status.h"
@@ -231,10 +232,9 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
     if (wget_replace_string(&config->http.user_agent, "Wget/1.25.0") != 0)
         goto allocation_failure;
 
-    opterr = 0;
-    optind = 0;
+    bx_args_getopt_reset();
     for (;;) {
-        int option = getopt_long(argc, argv, "Vhqvn:t:O:cNST:w:Y:Q:46P:U:x", wget_options, NULL);
+        int option = bx_args_getopt_long(argc, argv, "Vhqvn:t:O:cNST:w:Y:Q:46P:U:x", wget_options, NULL);
         if (option == -1)
             break;
         switch (option) {
