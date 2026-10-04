@@ -42,7 +42,7 @@ extern void jv_tsd_dtoa_ctx_init();
 #include "lib/path_ops.h"
 
 int jq_testsuite(jv lib_dirs, int verbose, int argc, char* argv[]);
-int bx_jq_cli_main(int argc, char* argv[]);
+int bx_jq_cli_run(int argc, char* argv[]);
 
 /*
  * For a longer help message we could use a better option parsing
@@ -305,7 +305,7 @@ int wmain(int argc, wchar_t* wargv[]) {
 
 int umain(int argc, char* argv[]) {
 #else /*}*/
-int bx_jq_cli_main(int argc, char* argv[]) {
+int bx_jq_cli_run(int argc, char* argv[]) {
 #endif
   jq_state *jq = NULL;
   jq_util_input_state *input_state = NULL;

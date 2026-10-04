@@ -18,7 +18,7 @@ static void gitlab_help(void) {
           "Custom API roots require explicit credentials.\n", stdout);
 }
 
-int bx_mira_gitlab_main(int argc, char** argv) {
+int bx_mira_gitlab_run(int argc, char** argv) {
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         gitlab_help();
         return 0;

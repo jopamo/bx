@@ -412,7 +412,7 @@ static int github_search_issues(const MiraGithubArguments* arguments) {
     return result;
 }
 
-int bx_mira_github_main(int argc, char** argv) {
+int bx_mira_github_run(int argc, char** argv) {
     if (argc < 2 || !argv) {
         github_parse_error("missing GitHub command");
         return BX_FETCH_EXIT_PARSE_OR_CONFIG;
