@@ -12,7 +12,7 @@ Boundary:
 
 The imported jq `main.c` is intentionally absent. bx links the engine and
 adapter libraries directly into the multicall executable and enters through
-`bx_jq_main()` and `bx_jq_cli_main()`. There is no external jq process and no
+`bx_jq_main()` and `bx_jq_cli_run()`. There is no external jq process and no
 preprocessor renaming of `main`.
 
 Local engine patches are pinned by the jq allocation, JSON-parser, filter

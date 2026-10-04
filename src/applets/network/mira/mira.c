@@ -9,9 +9,9 @@
 
 static int mira_run_main(int argc, char** argv) {
     if (argc > 1 && strcmp(argv[1], "github") == 0)
-        return bx_mira_github_main(argc - 1, argv + 1);
+        return bx_mira_github_run(argc - 1, argv + 1);
     if (argc > 1 && strcmp(argv[1], "gitlab") == 0)
-        return bx_mira_gitlab_main(argc - 1, argv + 1);
+        return bx_mira_gitlab_run(argc - 1, argv + 1);
 
     struct bx_fetch_config* config = bx_mira_parse_cli(argc, argv);
     if (!config)

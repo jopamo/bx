@@ -13,6 +13,6 @@ void bx_mira_print_help(void);
 void bx_mira_print_read_help(void);
 int bx_mira_run_config(const struct bx_fetch_config* config);
 int bx_mira_run_config_with_budget(const struct bx_fetch_config* config, BxFetchBudget* budget);
-int bx_mira_gitlab_main(int argc, char** argv);
+int bx_mira_gitlab_run(int argc, char** argv);
 
 #endif
