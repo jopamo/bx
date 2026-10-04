@@ -192,26 +192,3 @@ void bx_fetch_response_reset_headers(BxFetchResponse* response) {
     response->header_capacity = 0;
     response->header_bytes = 0;
 }
-
-bool bx_fetch_parse_resume_from_request(const BxFetchRequest* request, long long* resume_from) {
-    if (!request || !resume_from)
-        return false;
-
-    for (size_t i = 0; i < request->header_count; i++) {
-        if (!request->headers[i].name || !request->headers[i].value || strcasecmp(request->headers[i].name, "Range") != 0) {
-            continue;
-        }
-
-        const char* value = request->headers[i].value;
-        if (strncasecmp(value, "bytes=", 6) != 0)
-            continue;
-
-        char* end = NULL;
-        long long parsed = strtoll(value + 6, &end, 10);
-        if (end != value + 6 && parsed >= 0 && end && *end == '-') {
-            *resume_from = parsed;
-            return true;
-        }
-    }
-    return false;
-}

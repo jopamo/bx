@@ -36,6 +36,29 @@ static int parse_nonnegative_long_long(const char** cursor, long long* value_out
     return 0;
 }
 
+bool bx_fetch_parse_resume_from_request(const BxFetchRequest* request, long long* resume_from) {
+    if (!request || !resume_from)
+        return false;
+
+    for (size_t i = 0; i < request->header_count; i++) {
+        if (!request->headers[i].name || !request->headers[i].value || strcasecmp(request->headers[i].name, "Range") != 0) {
+            continue;
+        }
+
+        const char* value = request->headers[i].value;
+        if (strncasecmp(value, "bytes=", 6) != 0)
+            continue;
+
+        const char* end = value + 6;
+        long long parsed;
+        if (parse_nonnegative_long_long(&end, &parsed) == 0 && *end == '-') {
+            *resume_from = parsed;
+            return true;
+        }
+    }
+    return false;
+}
+
 int bx_fetch_parse_content_range(const char* content_range, BxFetchContentRange* range_out) {
     if (!content_range || !range_out)
         return -1;

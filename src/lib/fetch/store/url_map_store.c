@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -288,7 +289,7 @@ static int cleanup_orphan_temp_files(int dirfd, const char* basename, bool* remo
         errno = 0;
         char* end = NULL;
         long parsed = strtol(pid_text, &end, 10);
-        if (errno != 0 || !end || end == pid_text || *end != '.' || parsed <= 0) {
+        if (errno != 0 || !end || end == pid_text || *end != '.' || parsed <= 0 || parsed > INT_MAX) {
             continue;
         }
 

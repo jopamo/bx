@@ -15,6 +15,7 @@
  */
 
 #include <stdbool.h>
+#include "lib/fetch/request.h"
 
 typedef enum {
     BX_FETCH_RESUME_ACTION_APPEND = 0,
@@ -30,6 +31,7 @@ typedef struct {
 } BxFetchContentRange;
 
 BxFetchResumeAction bx_fetch_resume_action_for_status(int status_code);
+bool bx_fetch_parse_resume_from_request(const BxFetchRequest* request, long long* resume_from);
 int bx_fetch_parse_content_range(const char* content_range, BxFetchContentRange* range_out);
 bool bx_fetch_resume_restart_preserves_verified_prefix(long long verified_prefix_bytes, long long replacement_body_bytes);
 

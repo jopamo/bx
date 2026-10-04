@@ -479,7 +479,7 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
     }
 
     int parsed_status = 0;
-    bool starts_response = len >= 5 && strncasecmp(line, "HTTP/", 5) == 0 && sscanf(line, "HTTP/%*s %d", &parsed_status) == 1;
+    bool starts_response = len >= 5 && strncasecmp(line, "HTTP/", 5) == 0 && sscanf(line, "HTTP/%*s %3d", &parsed_status) == 1;
     if (!account_response_header_line(t, total, starts_response)) {
         free(line);
         return 0;
