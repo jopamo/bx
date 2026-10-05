@@ -85,6 +85,19 @@ bool bx_tar_compression_parse(const char* text,
             }
             continue;
         }
+        if (parsed.codec == bx_archive_codec_xz()
+            && (strncmp(arg, "-T", 2) == 0 || strcmp(arg, "--threads") == 0
+                || strncmp(arg, "--threads=", 10) == 0)) {
+            const char* value = arg[1] == 'T' ? arg + 2
+                : arg + (arg[9] == '=' ? 10 : 9);
+            if (strcmp(arg, "-T") == 0 || strcmp(arg, "--threads") == 0)
+                value = args[++i];
+            if (value == NULL || !bx_args_parse_int_range(value, 0, INT_MAX, &parsed.threads)) {
+                bx_diag(diag, "invalid -I xz thread count");
+                goto out;
+            }
+            continue;
+        }
         enum bx_tar_compression_direction direction = BX_TAR_COMPRESSION_AUTO;
         if (strcmp(arg, "--decompress") == 0 || strcmp(arg, "--uncompress") == 0)
             direction = BX_TAR_COMPRESSION_DECODE;

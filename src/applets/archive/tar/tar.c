@@ -29,6 +29,7 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
                     "                        paths select by basename and are never executed\n"
                     "                        creation levels: gzip/bzip2 1-9, xz 0-9, zstd 1-19;\n"
                     "                        pigz -p N selects gzip workers (creation only)\n"
+                    "                        xz -T N/--threads=N selects native xz threads (0 uses online CPUs)\n"
                     "                        -c streams; -d/-z must match tar's operation\n");
     fprintf(stream, "  -T FILE               read create inputs from FILE\n");
     fprintf(stream, "  -S, --sparse          discover data extents and write GNU sparse 1.0 PAX\n"
