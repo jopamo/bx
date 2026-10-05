@@ -46,6 +46,7 @@ struct mk_buf {
 struct mk_title {
 	char	*title;
 	char	*sec;
+	char	*date;
 };
 
 struct mk_lines {
@@ -68,6 +69,7 @@ static	void	 mk_emit_font(struct mk_buf *, enum mk_font);
 static	void	 mk_emit_heading(struct mk_buf *, const char *, const char *);
 static	void	 mk_emit_inline(struct mk_buf *, const char *);
 static	void	 mk_emit_macro(struct mk_buf *, const char *);
+static	void	 mk_emit_quoted(struct mk_buf *, const char *);
 static	void	 mk_emit_raw_line(struct mk_buf *, const char *);
 static	void	 mk_emit_table(struct mk_buf *, const struct mk_cells *,
 			   const char *, struct mk_cells *, size_t);
@@ -365,13 +367,25 @@ mk_emit_heading(struct mk_buf *buf, const char *macro, const char *text)
 
 	mk_append_char(buf, '.');
 	mk_append_cstr(buf, macro);
-	mk_append_cstr(buf, " \"");
+	mk_append_char(buf, ' ');
+	mk_emit_quoted(buf, text);
+	mk_append_char(buf, '\n');
+}
+
+static void
+mk_emit_quoted(struct mk_buf *buf, const char *text)
+{
+
+	mk_append_char(buf, '"');
 	for (; *text != '\0'; text++) {
-		if (*text == '\\' || *text == '"')
-			mk_append_char(buf, '\\');
-		mk_append_char(buf, *text);
+		if (*text == '\\')
+			mk_append_cstr(buf, "\\e");
+		else if (*text == '"')
+			mk_append_cstr(buf, "\\(dq");
+		else
+			mk_append_char(buf, *text);
 	}
-	mk_append_cstr(buf, "\"\n");
+	mk_append_char(buf, '"');
 }
 
 static int
@@ -412,18 +426,44 @@ mk_is_setext_underline(const char *line)
 static int
 mk_parse_title(const char *line, struct mk_title *title)
 {
-	const char	*lp, *rp;
+	const char	*lp, *rp, *sec, *date, *end;
 	char		*head;
 	size_t		 depth;
 	char		*text;
 
-	if (!mk_parse_atx_heading(line, &depth, &text) || depth != 1)
+	if (!mk_parse_atx_heading(line, &depth, &text))
 		return 0;
+	if (depth != 1) {
+		free(text);
+		return 0;
+	}
 	rp = strrchr(text, ')');
 	lp = rp == NULL ? NULL : strrchr(text, '(');
 	if (lp == NULL || rp == NULL || lp >= rp) {
+		lp = text + strcspn(text, " \t");
+		sec = mk_trim_left(lp);
+		if (lp == text || !isdigit((unsigned char)*sec)) {
+			free(text);
+			return 0;
+		}
+		for (rp = sec; isalnum((unsigned char)*rp); rp++)
+			/* Nothing. */ ;
+		if (*rp != '\0' && *rp != ' ' && *rp != '\t') {
+			free(text);
+			return 0;
+		}
+		date = mk_trim_left(rp);
+		end = date + strcspn(date, " \t");
+		if (*mk_trim_left(end) != '\0') {
+			free(text);
+			return 0;
+		}
+		title->title = mk_slice_trim(text, (size_t)(lp - text));
+		title->sec = mk_slice_trim(sec, (size_t)(rp - sec));
+		if (*date != '\0')
+			title->date = mandoc_strdup(date);
 		free(text);
-		return 0;
+		return 1;
 	}
 	head = mk_slice_trim(text, (size_t)(lp - text));
 	if (*head == '\0') {
@@ -755,11 +795,15 @@ man_from_markdown(const char *input, size_t sz)
 
 		if (!saw_title) {
 			if (mk_parse_title(line, &title)) {
-				mk_append_cstr(&out, ".TH \"");
-				mk_append_cstr(&out, title.title);
-				mk_append_cstr(&out, "\" \"");
-				mk_append_cstr(&out, title.sec);
-				mk_append_cstr(&out, "\"\n");
+				mk_append_cstr(&out, ".TH ");
+				mk_emit_quoted(&out, title.title);
+				mk_append_char(&out, ' ');
+				mk_emit_quoted(&out, title.sec);
+				if (title.date != NULL) {
+					mk_append_char(&out, ' ');
+					mk_emit_quoted(&out, title.date);
+				}
+				mk_append_char(&out, '\n');
 				saw_title = 1;
 				after_head = 1;
 				continue;
@@ -931,6 +975,7 @@ man_from_markdown(const char *input, size_t sz)
 
 	free(title.title);
 	free(title.sec);
+	free(title.date);
 	mk_free_lines(&lines);
 	return out.buf;
 }
