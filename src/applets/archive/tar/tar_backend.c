@@ -2108,6 +2108,9 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         .archive_path = options->archive_path,
         .required_codec = bx_tar_input_required_codec(options),
         .seek_mode = options->seek_mode,
+        .thread_count = options->compression.codec == bx_archive_codec_xz()
+            && options->compression.threads >= 0
+            ? bx_thread_count_resolve(options->compression.threads) : 0u,
         .skip_owner_group_names = true,
         .skip_owner_group_ids = options->mode == BX_TAR_MODE_LIST && options->verbose_count < 2u,
     };
@@ -3152,10 +3155,14 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
             bx_diag(diag, "-I compression direction conflicts with --%s", mode_name);
             return false;
         }
-        if (!creating && (options->compression.encode.level_set || options->compression.threads >= 0)) {
+        bool xz = options->compression.codec == bx_archive_codec_xz();
+        if (!creating && (options->compression.encode.level_set
+                         || (!xz && options->compression.threads >= 0))) {
             bx_diag(diag, "-I compression level and process count require --create");
             return false;
         }
+        if (creating && xz && options->compression.threads >= 0)
+            options->compression.encode.thread_count = bx_thread_count_resolve(options->compression.threads);
         if (options->compression.threads >= 0
             && (options->no_mt || options->threads >= 0 || options->compress_threads >= 0)) {
             bx_diag(diag, "-I process count conflicts with tar worker options");

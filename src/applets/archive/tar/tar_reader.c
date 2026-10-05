@@ -942,6 +942,7 @@ static bool bx_tar_stream_input_open(struct bx_tar_stream_input* input,
                                            .archive_path = options->archive_path,
                                            .required_codec = options->required_codec,
                                            .seek_mode = options->seek_mode,
+                                           .thread_count = options->thread_count,
                                        },
                                        diag);
 }

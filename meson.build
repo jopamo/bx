@@ -240,6 +240,12 @@ if not liblzma_dep.found()
   error('liblzma is required; bx man/mandoc must not silently build without xz-compressed manual page support.')
 endif
 add_project_arguments('-DBX_HAVE_LIBLZMA=1', language : 'c')
+foreach direction : ['encoder', 'decoder']
+  have_liblzma_mt = cc.has_function('lzma_stream_' + direction + '_mt',
+    prefix : '#include <lzma.h>', dependencies : [liblzma_dep, threads_dep])
+  add_project_arguments('-DBX_HAVE_LIBLZMA_MT_' + direction.to_upper() + '='
+    + (have_liblzma_mt ? '1' : '0'), language : 'c')
+endforeach
 
 libzstd_dep = dependency('libzstd', required : false, static: use_static_binary)
 if not libzstd_dep.found()

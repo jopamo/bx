@@ -41,6 +41,7 @@ struct bx_archive_codec_input {
     bool source_eof;
     bool decoder_end;
     void* codec_reader;
+    size_t thread_count;
     const struct bx_archive_codec* required_codec;
     bool checked_mode;
     bool detect_all;
@@ -367,6 +368,7 @@ bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
                                                &producer_adapter,
                                                &xz_sink,
                                                level,
+                                               options != NULL ? options->thread_count : 0u,
                                                diag);
     }
     if (codec == bx_archive_codec_zstd()) {
@@ -483,7 +485,9 @@ static bool bx_archive_codec_input_start_decoder(struct bx_archive_codec_input* 
     }
     if (codec == bx_archive_codec_xz()) {
         input->kind = BX_ARCHIVE_CODEC_INPUT_XZ;
-        return bx_archive_xz_reader_open((struct bx_archive_xz_reader**)&input->codec_reader, diag);
+        return bx_archive_xz_reader_open((struct bx_archive_xz_reader**)&input->codec_reader,
+                                         input->thread_count,
+                                         diag);
     }
     if (codec == bx_archive_codec_zstd()) {
         input->kind = BX_ARCHIVE_CODEC_INPUT_ZSTD;
@@ -524,6 +528,7 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
                                                enum bx_fd_input_ownership ownership,
                                                const struct bx_archive_codec* required_codec,
                                                enum bx_archive_codec_seek_mode seek_mode,
+                                               size_t thread_count,
                                                struct bx_diag_ctx* diag) {
     struct bx_archive_codec_input* input;
 
@@ -537,6 +542,7 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
     memset(input, 0, sizeof(*input));
     input->source = (struct bx_fd_input)BX_FD_INPUT_INIT;
     input->force_seek = seek_mode == BX_ARCHIVE_CODEC_SEEK_FORCE;
+    input->thread_count = thread_count;
     if (bx_fd_input_init(&input->source, fd, ownership) != 0) {
         int error = errno;
         if (ownership == BX_FD_INPUT_OWNED)
@@ -576,7 +582,7 @@ bool bx_archive_codec_input_open_fd(struct bx_archive_codec_input** input_out,
         bx_diag(diag, "invalid archive codec reader configuration");
         return false;
     }
-    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_DUPLICATE_BORROWED, required_codec, BX_ARCHIVE_CODEC_SEEK_AUTO, diag);
+    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_DUPLICATE_BORROWED, required_codec, BX_ARCHIVE_CODEC_SEEK_AUTO, 0u, diag);
 }
 
 bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
@@ -590,7 +596,7 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
     }
 
     if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
-        return bx_archive_codec_input_open_source(input_out, STDIN_FILENO, BX_FD_INPUT_DUPLICATE_BORROWED, options->required_codec, options->seek_mode, diag);
+        return bx_archive_codec_input_open_source(input_out, STDIN_FILENO, BX_FD_INPUT_DUPLICATE_BORROWED, options->required_codec, options->seek_mode, options->thread_count, diag);
     }
     else {
         fd = bx_fd_open_cloexec(options->archive_path, O_RDONLY, 0);
@@ -600,7 +606,7 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
         }
     }
 
-    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_OWNED, options->required_codec, options->seek_mode, diag);
+    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_OWNED, options->required_codec, options->seek_mode, options->thread_count, diag);
 }
 
 static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* input, unsigned char* buffer, size_t len, size_t* nread_out, struct bx_diag_ctx* diag) {

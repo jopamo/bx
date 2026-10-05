@@ -223,6 +223,7 @@ bool bx_archive_run_xz_filter_stream(bx_archive_xz_stream_producer_fn producer,
                                      void* producer_user,
                                      const struct bx_archive_xz_stream_sink* output_sink,
                                      int level,
+                                     size_t thread_count,
                                      struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBLZMA
     struct bx_archive_xz_filter_stream_state state;
@@ -230,7 +231,8 @@ bool bx_archive_run_xz_filter_stream(bx_archive_xz_stream_producer_fn producer,
     lzma_ret rc;
     bool ok = false;
 
-    if (producer == NULL || output_sink == NULL || output_sink->write == NULL) {
+    if (producer == NULL || output_sink == NULL || output_sink->write == NULL
+        || thread_count > UINT32_MAX) {
         bx_diag(diag, "invalid xz stream configuration");
         return false;
     }
@@ -240,8 +242,24 @@ bool bx_archive_run_xz_filter_stream(bx_archive_xz_stream_producer_fn producer,
     state.diag = diag;
     state.stream = (lzma_stream)LZMA_STREAM_INIT;
 
-    rc = lzma_easy_encoder(&state.stream, level < 0 ? LZMA_PRESET_DEFAULT : (uint32_t)level, LZMA_CHECK_CRC64);
+    uint32_t preset = level < 0 ? LZMA_PRESET_DEFAULT : (uint32_t)level;
+    if (thread_count > 1u) {
+#if BX_HAVE_LIBLZMA_MT_ENCODER
+        lzma_mt options = {
+            .threads = (uint32_t)thread_count,
+            .preset = preset,
+            .check = LZMA_CHECK_CRC64,
+        };
+        rc = lzma_stream_encoder_mt(&state.stream, &options);
+#else
+        bx_diag(diag, "xz multithreaded compression is unavailable in this build");
+        return false;
+#endif
+    } else {
+        rc = lzma_easy_encoder(&state.stream, preset, LZMA_CHECK_CRC64);
+    }
     if (rc != LZMA_OK) {
+        lzma_end(&state.stream);
         bx_archive_xz_diag_failed("compression", rc, diag);
         return false;
     }
@@ -265,14 +283,17 @@ out:
     (void)producer_user;
     (void)output_sink;
     (void)level;
+    (void)thread_count;
     bx_diag(diag, "xz support is unavailable in this build");
     return false;
 #endif
 }
 
-bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out, struct bx_diag_ctx* diag) {
+bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
+                              size_t thread_count,
+                              struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBLZMA
-    if (!reader_out) {
+    if (!reader_out || thread_count > UINT32_MAX) {
         bx_diag(diag, "invalid xz reader configuration");
         return false;
     }
@@ -280,8 +301,26 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out, struct 
     struct bx_archive_xz_reader* reader = xmalloc(sizeof(*reader));
     memset(reader, 0, sizeof(*reader));
     reader->stream = (lzma_stream)LZMA_STREAM_INIT;
-    lzma_ret rc = lzma_stream_decoder(&reader->stream, UINT64_MAX, LZMA_CONCATENATED);
+    lzma_ret rc;
+    if (thread_count > 1u) {
+#if BX_HAVE_LIBLZMA_MT_DECODER
+        lzma_mt options = {
+            .flags = LZMA_CONCATENATED,
+            .threads = (uint32_t)thread_count,
+            .memlimit_threading = UINT64_MAX,
+            .memlimit_stop = UINT64_MAX,
+        };
+        rc = lzma_stream_decoder_mt(&reader->stream, &options);
+#else
+        free(reader);
+        bx_diag(diag, "xz multithreaded decompression is unavailable in this build");
+        return false;
+#endif
+    } else {
+        rc = lzma_stream_decoder(&reader->stream, UINT64_MAX, LZMA_CONCATENATED);
+    }
     if (rc != LZMA_OK) {
+        lzma_end(&reader->stream);
         free(reader);
         bx_archive_xz_diag_failed("decompression", rc, diag);
         return false;
@@ -291,6 +330,7 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out, struct 
     return true;
 #else
     (void)reader_out;
+    (void)thread_count;
     bx_diag(diag, "xz support is unavailable in this build");
     return false;
 #endif

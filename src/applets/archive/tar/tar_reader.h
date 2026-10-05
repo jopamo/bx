@@ -69,6 +69,7 @@ struct bx_tar_reader_stream_options {
     const char* archive_path;
     const struct bx_archive_codec* required_codec;
     enum bx_archive_codec_seek_mode seek_mode;
+    size_t thread_count;
     bool skip_owner_group_names;
     bool skip_owner_group_ids;
 };
