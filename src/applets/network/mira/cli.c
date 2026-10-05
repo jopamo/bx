@@ -399,7 +399,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     int timeout_value = 0;
     bx_args_getopt_reset();
     for (;;) {
-        int option = bx_args_getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), NULL);
+        int long_index = -1;
+        int option = bx_args_getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), &long_index);
         if (option == -1)
             break;
         const MiraOptionSpec* spec = bx_mira_option_spec_for_value(option);
@@ -758,7 +759,39 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->http.save_headers = true;
                 break;
             case 'U':
+                if (long_index >= 0) {
+                    BxFetchClientProfile profile = BX_FETCH_PROFILE_LITERAL;
+                    if (strcmp(optarg, "auto") == 0)
+                        profile = BX_FETCH_PROFILE_AUTO;
+                    else if (strcmp(optarg, "mira") == 0)
+                        profile = BX_FETCH_PROFILE_MIRA;
+                    else if (strcmp(optarg, "browser") == 0 || strcmp(optarg, "chrome") == 0)
+                        profile = BX_FETCH_PROFILE_CHROME;
+                    else if (strcmp(optarg, "firefox") == 0)
+                        profile = BX_FETCH_PROFILE_FIREFOX;
+                    else if (strcmp(optarg, "curl") == 0)
+                        profile = BX_FETCH_PROFILE_CURL;
+                    if (profile != BX_FETCH_PROFILE_LITERAL) {
+                        const char* selected = config->http.profile_agents[
+                            profile == BX_FETCH_PROFILE_AUTO ? BX_FETCH_PROFILE_CURL : profile];
+                        if (!selected) {
+                            mira_parse_errorf(config, "client profile '%s' is disabled in this build", optarg);
+                            goto parse_failure;
+                        }
+                        char* agent = strdup(selected);
+                        if (!agent)
+                            goto allocation_failure;
+                        free(config->http.user_agent);
+                        config->http.user_agent = agent;
+                        config->http.client_profile = profile;
+                        break;
+                    }
+                }
                 MIRA_SET_STRING(config->http.user_agent);
+                config->http.client_profile = BX_FETCH_PROFILE_LITERAL;
+                break;
+            case MIRA_OPT_NO_USER_AGENT_FALLBACK:
+                config->http.no_user_agent_fallback = true;
                 break;
             case MIRA_OPT_NO_HTTP_KEEP_ALIVE:
                 config->http.no_http_keep_alive = true;

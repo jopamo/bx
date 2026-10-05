@@ -86,6 +86,7 @@ MIRA_OPTION("proxy-password", required_argument, MIRA_OPT_PROXY_PASSWORD, "", NU
 MIRA_OPTION("referer", required_argument, MIRA_OPT_REFERER, "", NULL, "URL", "set request referrer", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("save-headers", no_argument, MIRA_OPT_SAVE_HEADERS, "", NULL, NULL, "prepend bounded response headers", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("user-agent", required_argument, 'U', "U:", NULL, "AGENT", "set request user agent", MIRA_OPTION_CATEGORY_HTTP, true)
+MIRA_OPTION("no-user-agent-fallback", no_argument, MIRA_OPT_NO_USER_AGENT_FALLBACK, "", NULL, NULL, "disable automatic client profile selection", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("no-http-keep-alive", no_argument, MIRA_OPT_NO_HTTP_KEEP_ALIVE, "", NULL, NULL, "disable connection reuse", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("no-cookies", no_argument, MIRA_OPT_NO_COOKIES, "", NULL, NULL, "disable cookies", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("load-cookies", required_argument, MIRA_OPT_LOAD_COOKIES, "", NULL, "FILE", "load cookies from FILE", MIRA_OPTION_CATEGORY_HTTP, true)

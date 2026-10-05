@@ -3,6 +3,7 @@
 #include "lib/fetch/secure_path.h"
 #include "lib/fetch/url_map_store.h"
 #include "lib/fetch/url.h"
+#include "lib/fetch/state_directory.h"
 #include "lib/path_ops.h"
 #include "lib/fd_ops.h"
 #include <dirent.h>
@@ -84,37 +85,11 @@ static uint64_t fnv1a64(const char* value) {
     return hash;
 }
 
-static char* state_dir_for_store(void) {
-    const char* xdg_state_home = getenv("XDG_STATE_HOME");
-    if (xdg_state_home && xdg_state_home[0] != '\0') {
-        char* path = NULL;
-        if (asprintf(&path, "%s/mira", xdg_state_home) == -1) {
-            return NULL;
-        }
-        return path;
-    }
-
-    const char* home = getenv("HOME");
-    if (home && home[0] != '\0') {
-        char* path = NULL;
-        if (asprintf(&path, "%s/.local/state/mira", home) == -1) {
-            return NULL;
-        }
-        return path;
-    }
-
-    char* path = NULL;
-    if (asprintf(&path, "/tmp/mira-%lu", (unsigned long)getuid()) == -1) {
-        return NULL;
-    }
-    return path;
-}
-
 static char* store_path_for(const struct bx_fetch_config* cfg) {
     if (!cfg)
         return NULL;
 
-    char* store_dir = state_dir_for_store();
+    char* store_dir = bx_fetch_state_directory();
     if (!store_dir)
         return NULL;
 

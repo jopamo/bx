@@ -1,4 +1,16 @@
 option(
+  'mira_chrome_version',
+  type : 'string',
+  value : '',
+  description : 'Chrome/Chromium package version for Mira compatibility (empty disables the profile)'
+)
+option(
+  'mira_firefox_version',
+  type : 'string',
+  value : '',
+  description : 'Firefox package version for Mira compatibility (empty disables the profile)'
+)
+option(
   'build_version',
   type : 'string',
   value : '',

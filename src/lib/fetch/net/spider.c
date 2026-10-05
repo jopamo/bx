@@ -53,6 +53,8 @@ bool bx_fetch_spider_retry_get(BxFetchTransfer* transfer, int status) {
     transfer->pending_redirect_target = NULL;
     transfer->response_headers_finalized = false;
     transfer->spider_get = true;
+    if (!bx_fetch_profile_apply(transfer, target))
+        return false;
     if (curl_multi_add_handle(engine->multi, transfer->easy) != CURLM_OK) {
         errno = EIO;
         bx_fetch_transfer_mark_io_failure(transfer, EIO);

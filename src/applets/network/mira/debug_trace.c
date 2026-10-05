@@ -266,7 +266,9 @@ void bx_mira_debug_trace_completion(MiraDebugTrace* trace, const struct bx_fetch
     fputs(",\"method\":", trace->stream);
     bx_mira_json_write_string(trace->stream, method);
     fputs(",\"user_agent\":", trace->stream);
-    bx_mira_json_write_string(trace->stream, config->http.user_agent ? config->http.user_agent : "");
+    bx_mira_json_write_string(trace->stream, response && response->user_agent
+                                               ? response->user_agent
+                                               : config->http.user_agent ? config->http.user_agent : "");
     fputs(",\"recovery_reason\":", trace->stream);
     bx_mira_json_write_string(trace->stream, bx_mira_recovery_reason(completion->recovery.reason));
     fprintf(trace->stream, ",\"request_count\":%" PRIu64 ",\"elapsed_ms\":%" PRIu64,

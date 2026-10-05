@@ -6,6 +6,17 @@
 
 One binary, many commands.
 
+Mira browser compatibility identities are build inputs, not browser
+dependencies:
+
+```sh
+meson setup build -Dmira_chrome_version=154.0.8037.92.1 -Dmira_firefox_version=157.0
+```
+
+Only the major version is advertised. Empty values (the default) disable
+the corresponding profile. Automatic selection starts with the runtime
+libcurl identity, then tries enabled Chrome and Firefox profiles on eligible
+403/406 responses. `-U STRING` preserves an explicit identity.
 
 ## Licensing
 

@@ -177,7 +177,7 @@ static void advance_redirect_target(BxFetchTransfer* transfer) {
     transfer->pending_redirect_target = NULL;
 }
 
-static void reset_response_state(BxFetchTransfer* transfer) {
+void bx_fetch_transfer_reset_response_state(BxFetchTransfer* transfer) {
     bx_fetch_response_reset_headers(transfer->resp);
     save_headers_reset(transfer);
     transfer->resume_needs_content_range = false;
@@ -452,7 +452,7 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
         bool starts_response = t->pending_redirect_target != NULL;
         advance_redirect_target(t);
         if (starts_response)
-            reset_response_state(t);
+            bx_fetch_transfer_reset_response_state(t);
         if (!account_response_header_line(t, total, starts_response))
             return 0;
         if (t->engine && t->engine->observer.on_response_header)
@@ -503,6 +503,13 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
             free(line);
             return 0;
         }
+        if (t->pending_redirect_target && !bx_fetch_profile_apply(t, t->pending_redirect_target)) {
+            free(line);
+            return 0;
+        }
+        if ((t->resp->status_code == 403 || t->resp->status_code == 406) &&
+            bx_fetch_profile_automatic(t))
+            t->discard_body = true;
         if (capture_headers && t->save_headers_len > 0 && save_headers_append(t, ptr, total) != 0) {
             int append_error = errno;
             free(line);
@@ -597,7 +604,7 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
         int status = parsed_status;
         if (status > 0) {
             t->resp->status_code = status;
-            reset_response_state(t);
+            bx_fetch_transfer_reset_response_state(t);
             if (capture_headers) {
                 if (save_headers_append(t, ptr, total) != 0) {
                     int append_error = errno;
@@ -831,6 +838,7 @@ static void engine_cleanup(BxFetchEngine* engine) {
         close(engine->epoll_fd);
     if (engine->timer_fd >= 0)
         close(engine->timer_fd);
+    bx_fetch_profile_cache_free(engine->profiles);
     free(engine);
 }
 
@@ -1008,7 +1016,7 @@ static void fail_active_transfers(BxFetchEngine* engine, BxFetchError result) {
 static void reset_response_for_anubis_request(BxFetchTransfer* transfer,
                                               BxFetchAnubisPhase phase) {
     BxFetchResponse* response = transfer->resp;
-    reset_response_state(transfer);
+    bx_fetch_transfer_reset_response_state(transfer);
     bx_fetch_prepared_url_free(response->effective_target);
     response->effective_target = NULL;
     free(response->content_type);
@@ -1497,6 +1505,8 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
 
     if (message->data.result == CURLE_OK && bx_fetch_request_budget_check(transfer) && bx_fetch_spider_retry_get(transfer, status))
         return true;
+    if (message->data.result == CURLE_OK && bx_fetch_profile_retry(transfer, status))
+        return true;
 
     CURLcode terminal_result =
         transfer->downstream_closed || transfer->spider_verified ? CURLE_OK : message->data.result;
@@ -1509,6 +1519,8 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         terminal_result,
         status,
         invariant_ok && !engine->invariant_failed);
+    if (result == BX_FETCH_OK)
+        bx_fetch_profile_learn(transfer);
     bx_fetch_engine_dispose_transfer(engine, transfer, result);
     return !engine->invariant_failed;
 }

@@ -131,6 +131,8 @@ void bx_fetch_config_free(struct bx_fetch_config* cfg) {
     free(cfg->http.proxy_password);
     free(cfg->http.referer);
     free(cfg->http.user_agent);
+    for (size_t i = 0; i < BX_FETCH_PROFILE_AUTO; i++)
+        free(cfg->http.profile_agents[i]);
     free(cfg->http.load_cookies);
     free(cfg->http.save_cookies);
     free(cfg->http.post_data);

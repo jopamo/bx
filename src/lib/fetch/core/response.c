@@ -22,6 +22,7 @@ void bx_fetch_response_free(BxFetchResponse* resp) {
 
     bx_fetch_prepared_url_free(resp->effective_target);
     free(resp->content_type);
+    free(resp->user_agent);
     free(resp->transport_error_detail);
 
     if (resp->headers) {
