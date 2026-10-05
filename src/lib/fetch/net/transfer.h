@@ -30,6 +30,12 @@ typedef struct BxFetchTransfer {
     BxFetchEngine* engine;
     struct BxFetchTransfer* next_active;
     struct curl_slist* headers;
+    struct curl_slist* profile_headers;
+    BxFetchClientProfile profile;
+    BxFetchClientProfile retry_profiles[2];
+    BxFetchClientProfile rejected_profiles[2];
+    BxFetchPreparedUrl* profile_retry_targets[2];
+    unsigned profile_retries;
     BxFetchTransferState state;
     bool multi_attached;
 

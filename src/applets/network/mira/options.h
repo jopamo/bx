@@ -116,6 +116,7 @@ enum {
     MIRA_OPT_EXCLUDE_DOMAINS,
     MIRA_OPT_TRUST_SERVER_NAMES,
     MIRA_OPT_NO_PARENT,
+    MIRA_OPT_NO_USER_AGENT_FALLBACK,
 };
 
 const struct option* bx_mira_long_options(void);

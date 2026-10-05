@@ -4,6 +4,36 @@ project('bx', 'c',
 )
 
 python3 = find_program('python3', required : true)
+mira_profile_config = configuration_data()
+foreach browser : ['chrome', 'firefox']
+  browser_version = get_option('mira_' + browser + '_version')
+  browser_major = ''
+  if browser_version != ''
+    version_revision = browser_version.split('-r')
+    if version_revision.length() > 2
+      error('mira_' + browser + '_version must be a dotted numeric package version with an optional -rN revision')
+    endif
+    if version_revision.length() == 2
+      revision = version_revision[1]
+      if revision == '' or revision.strip('0123456789') != ''
+        error('invalid revision in mira_' + browser + '_version')
+      endif
+    endif
+    version_parts = version_revision[0].split('.')
+    foreach part : version_parts
+      if part == '' or part.strip('0123456789') != ''
+        error('mira_' + browser + '_version must contain numeric version components')
+      endif
+    endforeach
+    major = version_parts[0].to_int()
+    if major <= 0
+      error('mira_' + browser + '_version must have a positive major version')
+    endif
+    browser_major = major.to_string()
+  endif
+  mira_profile_config.set_quoted('BX_MIRA_' + browser.to_upper() + '_MAJOR', browser_major)
+endforeach
+configure_file(output : 'mira-profile-config.h', configuration : mira_profile_config)
 bx_version_source = vcs_tag(
   input : 'src/bx/version.c.in',
   output : 'bx-version.c',
@@ -1570,6 +1600,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/net/progress.c',
   'src/lib/fetch/net/request_budget.c',
   'src/lib/fetch/net/spider.c',
+  'src/lib/fetch/net/client_profile.c',
   'src/lib/fetch/policy/representation.c',
   'src/lib/fetch/policy/rate_limit.c',
   'src/lib/fetch/net/resume_validation.c',
@@ -1578,6 +1609,8 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/net/url.c',
   'src/lib/fetch/policy/filter.c',
   'src/lib/fetch/store/url_map_store.c',
+  'src/lib/fetch/store/state_directory.c',
+  'src/lib/fetch/store/client_profile_store.c',
   'src/lib/fetch/util/error.c',
   'src/lib/fetch/util/exit_code.c',
   'src/lib/fetch/util/hashset.c',

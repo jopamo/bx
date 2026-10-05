@@ -122,6 +122,15 @@ typedef struct {
     bool trust_server_names;
 } BxFetchDirectoryConfig;
 
+typedef enum {
+    BX_FETCH_PROFILE_LITERAL = 0,
+    BX_FETCH_PROFILE_CURL,
+    BX_FETCH_PROFILE_CHROME,
+    BX_FETCH_PROFILE_FIREFOX,
+    BX_FETCH_PROFILE_MIRA,
+    BX_FETCH_PROFILE_AUTO,
+} BxFetchClientProfile;
+
 typedef struct {
     char* http_user;
     char* http_password;
@@ -140,6 +149,10 @@ typedef struct {
     char* referer;
     bool save_headers;
     char* user_agent;
+    BxFetchClientProfile client_profile;
+    bool no_user_agent_fallback;
+    /* Applet-provided identities; NULL means that profile is unavailable. */
+    char* profile_agents[BX_FETCH_PROFILE_AUTO];
     bool no_http_keep_alive;
     bool no_cookies;
     char* load_cookies;

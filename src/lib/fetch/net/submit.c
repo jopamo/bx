@@ -331,10 +331,8 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
 #endif
     }
 
-    // Set user agent if configured
-    if (engine->cfg->http.user_agent) {
-        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_USERAGENT, engine->cfg->http.user_agent);
-    }
+    if (!bx_fetch_profile_apply(t, t->current_target))
+        return -1;
 
     // Set referer if configured
     if (engine->cfg->http.referer) {
@@ -344,10 +342,6 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     if (engine->cfg->http.no_http_keep_alive) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FORBID_REUSE, 1L);
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FRESH_CONNECT, 1L);
-    }
-
-    if (t->headers) {
-        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_HTTPHEADER, t->headers);
     }
 
     if (!engine->cfg->http.no_cookies) {

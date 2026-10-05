@@ -4,6 +4,7 @@
 #include "lib/fetch/net.h"
 #include "lib/fetch/rate_limiter.h"
 #include "lib/fetch/resume_validation.h"
+#include "lib/fetch/client_profile_store.h"
 #include "transfer.h"
 #include <curl/curl.h>
 #include <stdbool.h>
@@ -26,8 +27,14 @@ struct BxFetchEngine {
     bool invariant_failed;
     bool cancelled;
     BxFetchTokenBucket rate_limiter;
+    BxFetchProfileCache* profiles;
 };
 
+bool bx_fetch_profile_apply(BxFetchTransfer* transfer, const BxFetchPreparedUrl* target);
+bool bx_fetch_profile_automatic(const BxFetchTransfer* transfer);
+bool bx_fetch_profile_retry(BxFetchTransfer* transfer, int status);
+void bx_fetch_profile_learn(BxFetchTransfer* transfer);
+void bx_fetch_transfer_reset_response_state(BxFetchTransfer* transfer);
 void bx_fetch_engine_detach_transfer(BxFetchEngine* engine, BxFetchTransfer* target);
 bool bx_fetch_net_require(BxFetchEngine* engine, bool condition);
 bool bx_fetch_transfer_abort_writer(BxFetchTransfer* transfer);

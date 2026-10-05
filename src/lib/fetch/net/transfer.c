@@ -49,6 +49,9 @@ void bx_fetch_transfer_free(BxFetchTransfer* t) {
     if (t->headers) {
         curl_slist_free_all(t->headers);
     }
+    curl_slist_free_all(t->profile_headers);
+    for (size_t i = 0; i < 2; i++)
+        bx_fetch_prepared_url_free(t->profile_retry_targets[i]);
 
     if (t->resp) {
         bx_fetch_response_free(t->resp);

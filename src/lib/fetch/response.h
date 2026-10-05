@@ -57,6 +57,7 @@ typedef enum {
 typedef struct {
     int status_code;
     BxFetchPreparedUrl* effective_target;
+    char* user_agent;
 
     BxFetchHeader* headers;
     size_t header_count;
