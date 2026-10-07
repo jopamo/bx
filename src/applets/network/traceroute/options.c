@@ -414,6 +414,7 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
         {"help", no_argument, NULL, 297},
         {NULL, 0, NULL, 0},
     };
+    bool posix = getenv("POSIXLY_CORRECT") != NULL;
     bx_args_getopt_reset();
     while (true) {
         int index = optind > 0 ? optind : 1;
@@ -429,10 +430,10 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
         }
         bool ok = true;
         const char* argument_name = option_argument_name(c);
-        /* Keep joined arguments ungrouped: -f1, not -nf1. */
+        /* Keep joined arguments ungrouped; POSIX also forbids -nf 1. */
         if (argument_name && optarg && spelling[0] == '-' && spelling[1] != '-') {
             const char* position = strchr(spelling + 1, c);
-            if (position && position != spelling + 1 && optarg == position + 1) {
+            if (position && position != spelling + 1 && (optarg == position + 1 || posix)) {
                 bx_diag(&ctx->diag, "Option `-%c' (argc %d) requires an argument: `-%c %s'", c, index, c, argument_name);
                 ctx->diag.exit_status = 2;
                 return false;
