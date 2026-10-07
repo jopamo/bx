@@ -28,17 +28,17 @@
 #define ORIGIN_PREFIX "origin:"
 #define IFACE_NAME_LEN 64
 
-static sockaddr_any ra_addr = {0};
-static char ra_buf[MAX_RA_BUF_SIZE] = {0};
 
-const char* get_as_path(const char* query) {
+
+
+const char* bx_traceroute_get_as_path(struct bx_traceroute_ctx* ctx, const char* query) {
     int sk, n;
     char buf[MAX_BUF_SIZE];
     FILE* fp;
     int prefix = 0, best_prefix = 0;
-    char *rb, *re = &ra_buf[MAX_RA_BUF_SIZE - 1];
+    char *rb, *re = &ctx->as_buffer[MAX_RA_BUF_SIZE - 1];
 
-    if (!ra_addr.sa.sa_family) {
+    if (!ctx->as_address.sa.sa_family) {
         const char *server, *service;
         struct addrinfo* res;
         int ret;
@@ -49,22 +49,23 @@ const char* get_as_path(const char* query) {
         ret = getaddrinfo(server, service, NULL, &res);
         if (ret) {
             fprintf(stderr, "%s/%s: %s\n", server, service, gai_strerror(ret));
+            bx_traceroute_ctx_destroy(ctx);
             exit(2);
         }
 
-        memcpy(&ra_addr, res->ai_addr, res->ai_addrlen);
+        memcpy(&ctx->as_address, res->ai_addr, res->ai_addrlen);
         freeaddrinfo(res);
     }
 
     // Create socket
-    sk = bx_fd_socket_cloexec(ra_addr.sa.sa_family, SOCK_STREAM, 0);
+    sk = bx_fd_socket_cloexec(ctx->as_address.sa.sa_family, SOCK_STREAM, 0);
     if (sk < 0) {
         perror("socket");
         return "!!";
     }
 
     // Connect to the remote server
-    if (connect(sk, &ra_addr.sa, sizeof(ra_addr)) < 0) {
+    if (connect(sk, &ctx->as_address.sa, sizeof(ctx->as_address)) < 0) {
         perror("connect");
         close(sk);
         return "!!";
@@ -92,8 +93,8 @@ const char* get_as_path(const char* query) {
     }
 
     // Initialize buffer and read data
-    strcpy(ra_buf, "*");
-    rb = ra_buf;
+    strcpy(ctx->as_buffer, "*");
+    rb = ctx->as_buffer;
 
     while (fgets(buf, sizeof(buf), fp) != NULL) {
         if (strncmp(buf, ROUTE_PREFIX, strlen(ROUTE_PREFIX)) == 0 ||
@@ -119,15 +120,15 @@ const char* get_as_path(const char* query) {
             // If prefix is better or equal, store the result
             if (prefix > best_prefix) {
                 best_prefix = prefix;
-                rb = ra_buf;
+                rb = ctx->as_buffer;
                 while (rb < re && (*rb++ = *as++))
                     ;
             }
             else if (prefix == best_prefix) {
                 // Handle multiple equal prefix origins
-                char* q = strstr(ra_buf, as);
+                char* q = strstr(ctx->as_buffer, as);
                 if (!q || (*(q += strlen(as)) != '\0' && *q != '/')) {
-                    if (rb > ra_buf)
+                    if (rb > ctx->as_buffer)
                         rb[-1] = '/';
                     while (rb < re && (*rb++ = *as++))
                         ;
@@ -139,5 +140,5 @@ const char* get_as_path(const char* query) {
     fclose(fp);
     close(sk);
 
-    return ra_buf;
+    return ctx->as_buffer;
 }
