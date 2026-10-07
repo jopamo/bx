@@ -44,14 +44,15 @@ static void json_escape(const char* s) {
     putchar('"');
 }
 
-void tr_export_jsonl_header(const char* dst_name,
+void bx_traceroute_export_jsonl_header(struct bx_traceroute_ctx* ctx, const char* dst_name,
                             const sockaddr_any* dst_addr,
                             unsigned int max_hops,
                             size_t packet_len) {
+    (void)ctx;
     printf("{\"type\":\"header\", \"version\":1, \"dst_name\":");
     json_escape(dst_name);
     printf(", \"dst_addr\":");
-    json_escape(addr2str(dst_addr));
+    json_escape(bx_traceroute_addr2str(ctx, dst_addr));
     printf(", \"max_hops\":%u, \"packet_len\":%zu}\n", max_hops, packet_len);
     fflush(stdout);
 }
@@ -59,16 +60,16 @@ void tr_export_jsonl_header(const char* dst_name,
 extern probe* probes;
 extern unsigned int probes_per_hop;
 
-void tr_export_jsonl_probe(probe* pb) {
-    unsigned int idx = (pb - probes);
-    unsigned int ttl = idx / probes_per_hop + 1;
-    unsigned int probe_idx = idx % probes_per_hop + 1;
+void bx_traceroute_export_jsonl_probe(struct bx_traceroute_ctx* ctx, probe* pb) {
+    unsigned int idx = (pb - ctx->probes);
+    unsigned int ttl = idx / ctx->options.probes_per_hop + 1;
+    unsigned int probe_idx = idx % ctx->options.probes_per_hop + 1;
 
     printf("{\"type\":\"probe\", \"ttl\":%u, \"probe\":%u", ttl, probe_idx);
 
     if (pb->res.sa.sa_family) {
         printf(", \"replied\":true, \"addr\":");
-        json_escape(addr2str(&pb->res));
+        json_escape(bx_traceroute_addr2str(ctx, &pb->res));
     }
     else {
         printf(", \"replied\":false");
@@ -106,7 +107,7 @@ void tr_export_jsonl_probe(probe* pb) {
     fflush(stdout);
 }
 
-void tr_export_jsonl_end(void) {
+void bx_traceroute_export_jsonl_end(void) {
     printf("{\"type\":\"end\"}\n");
     fflush(stdout);
 }

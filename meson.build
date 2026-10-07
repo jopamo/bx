@@ -828,6 +828,28 @@ sources += bx_base_applet_sources
 sources += bx_shell_applet_sources
 sources += bx_text_applet_sources
 sources += bx_system_applet_sources
+bx_network_applet_sources += files(
+  'src/applets/network/traceroute/traceroute.c',
+  'src/applets/network/traceroute/as_lookups.c',
+  'src/applets/network/traceroute/csum.c',
+  'src/applets/network/traceroute/export.c',
+  'src/applets/network/traceroute/extension.c',
+  'src/applets/network/traceroute/method_dccp.c',
+  'src/applets/network/traceroute/method_icmp.c',
+  'src/applets/network/traceroute/method_raw.c',
+  'src/applets/network/traceroute/method_tcp.c',
+  'src/applets/network/traceroute/method_tcpconn.c',
+  'src/applets/network/traceroute/method_udp.c',
+  'src/applets/network/traceroute/method.c',
+  'src/applets/network/traceroute/probe.c',
+  'src/applets/network/traceroute/poll.c',
+  'src/applets/network/traceroute/random.c',
+  'src/applets/network/traceroute/time.c',
+  'src/applets/network/traceroute/options.c',
+  'src/applets/network/traceroute/bpf_disabled.c',
+  'src/applets/network/traceroute/xdp_disabled.c',
+)
+
 sources += bx_network_applet_sources
 sources += bx_search_sources
 
@@ -947,39 +969,6 @@ socat_lib = static_library('bx_socat',
     'src/lib/socat/runtime',
   ),
   c_args : socat_c_args,
-)
-
-traceroute_sources = files(
-  'src/applets/network/traceroute/traceroute.c',
-  'src/applets/network/traceroute/as_lookups.c',
-  'src/applets/network/traceroute/csum.c',
-  'src/applets/network/traceroute/export.c',
-  'src/applets/network/traceroute/extension.c',
-  'src/applets/network/traceroute/mod-dccp.c',
-  'src/applets/network/traceroute/mod-icmp.c',
-  'src/applets/network/traceroute/mod-raw.c',
-  'src/applets/network/traceroute/mod-tcp.c',
-  'src/applets/network/traceroute/mod-tcpconn.c',
-  'src/applets/network/traceroute/mod-udp.c',
-  'src/applets/network/traceroute/module.c',
-  'src/applets/network/traceroute/poll.c',
-  'src/applets/network/traceroute/random.c',
-  'src/applets/network/traceroute/time.c',
-  'src/applets/network/traceroute/clif.c',
-  'src/applets/network/traceroute/bpf_disabled.c',
-  'src/applets/network/traceroute/xdp_disabled.c',
-)
-
-traceroute_c_args = cc.get_supported_arguments([
-  '-D_DEFAULT_SOURCE',
-  '-Dmain=bx_traceroute_main',
-  '-Wno-pedantic',
-])
-
-traceroute_lib = static_library('bx_traceroute',
-  traceroute_sources,
-  include_directories : include_directories('src', 'src/applets/network/traceroute'),
-  c_args : traceroute_c_args,
 )
 
 screen_termcap_dep = declare_dependency()
@@ -1672,9 +1661,6 @@ bx_exe = executable('bx',
     manual_lib,
     bx_zip_lib,
   ],
-  # Traceroute transport modules self-register from constructors and have no
-  # ordinary symbol edge from the frontend.
-  link_whole : [traceroute_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir

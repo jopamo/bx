@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE
+
 /*
     Copyright (c)  2006, 2007		Dmitry Butskoy
                                         <dmitry@butskoy.name>
@@ -7,6 +9,7 @@
 */
 
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <poll.h>
@@ -29,77 +32,70 @@
 #define TCPHDR_DPORT(TH) ((TH)->th_dport)
 #endif
 
-static sockaddr_any dest_addr = {
-    {
-        0,
-    },
-};
-
-static int icmp_sk = -1;
-
-static int tcp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* packet_len_p) {
+static int tcp_init(struct bx_traceroute_ctx* ctx, unsigned int port_seq, size_t* packet_len_p) {
+    const sockaddr_any* dest = &ctx->destination;
     int af = dest->sa.sa_family;
 
     (void)packet_len_p;
 
-    dest_addr = *dest;
-    dest_addr.sin.sin_port = htons(DEF_TCP_PORT);
+    ctx->method_state.tcpconn.dest_addr = *dest;
+    ctx->method_state.tcpconn.dest_addr.sin.sin_port = htons(DEF_TCP_PORT);
 
     if (port_seq)
-        dest_addr.sin.sin_port = htons(port_seq);
+        ctx->method_state.tcpconn.dest_addr.sin.sin_port = htons(port_seq);
 
     /*  Currently an ICMP socket is the only way
       to obtain the needed info...
     */
-    icmp_sk = bx_fd_socket_cloexec(af, SOCK_RAW, (af == AF_INET) ? IPPROTO_ICMP : IPPROTO_ICMPV6);
-    if (icmp_sk < 0)
-        error_or_perm("socket");
+    ctx->method_state.tcpconn.icmp_sk = bx_fd_socket_cloexec(af, SOCK_RAW, (af == AF_INET) ? IPPROTO_ICMP : IPPROTO_ICMPV6);
+    if (ctx->method_state.tcpconn.icmp_sk < 0)
+        bx_traceroute_error_or_perm(ctx, "socket");
 
-    /*  icmp_sk not need full tune_socket() here, just a receiving one  */
-    bind_socket(icmp_sk, NULL);
-    use_timestamp(icmp_sk);
-    use_recv_ttl(icmp_sk);
+    /*  icmp_sk not need full bx_traceroute_tune_socket() here, just a receiving one  */
+    bx_traceroute_bind_socket(ctx, ctx->method_state.tcpconn.icmp_sk, NULL);
+    bx_traceroute_use_timestamp(ctx, ctx->method_state.tcpconn.icmp_sk);
+    bx_traceroute_use_recv_ttl(ctx, ctx->method_state.tcpconn.icmp_sk);
 
-    add_poll(icmp_sk, POLLIN);
+    bx_traceroute_add_poll(ctx, ctx->method_state.tcpconn.icmp_sk, POLLIN);
 
     return 0;
 }
 
-static void tcp_send_probe(probe* pb, int ttl) {
+static void tcp_send_probe(struct bx_traceroute_ctx* ctx, probe* pb, int ttl) {
     int sk;
-    int af = dest_addr.sa.sa_family;
+    int af = ctx->method_state.tcpconn.dest_addr.sa.sa_family;
     sockaddr_any addr;
     socklen_t length = sizeof(addr);
 
     sk = bx_fd_socket_cloexec(af, SOCK_STREAM, 0);
     if (sk < 0)
-        error("socket");
+        bx_traceroute_error(ctx, "socket");
 
-    tune_socket(sk, pb); /*  common stuff   */
+    bx_traceroute_tune_socket(ctx, sk, pb); /*  common stuff   */
 
-    set_ttl(sk, ttl);
+    bx_traceroute_set_ttl(ctx, sk, ttl);
 
-    pb->send_time = get_time();
+    pb->send_time = bx_traceroute_get_time();
 
-    if (connect(sk, &dest_addr.sa, sizeof(dest_addr)) < 0) {
+    if (connect(sk, &ctx->method_state.tcpconn.dest_addr.sa, sizeof(ctx->method_state.tcpconn.dest_addr)) < 0) {
         if (errno != EINPROGRESS)
-            error("connect");
+            bx_traceroute_error(ctx, "connect");
     }
 
     if (getsockname(sk, &addr.sa, &length) < 0)
-        error("getsockname");
+        bx_traceroute_error(ctx, "getsockname");
 
     pb->seq = addr.sin.sin_port; /*  both ipv4/ipv6  */
 
     pb->sk = sk;
 
-    add_poll(sk, POLLERR | POLLHUP | POLLOUT);
+    bx_traceroute_add_poll(ctx, sk, POLLERR | POLLHUP | POLLOUT);
 
     return;
 }
 
-static probe* tcp_check_reply(int sk, int err, sockaddr_any* from, char* buf, size_t len) {
-    int af = dest_addr.sa.sa_family;
+static probe* tcp_check_reply(struct bx_traceroute_ctx* ctx, int sk, int err, sockaddr_any* from, char* buf, size_t len) {
+    int af = ctx->method_state.tcpconn.dest_addr.sa.sa_family;
     int type, code, info;
     probe* pb;
     struct tcphdr* tcp;
@@ -158,44 +154,44 @@ static probe* tcp_check_reply(int sk, int err, sockaddr_any* from, char* buf, si
         tcp = (struct tcphdr*)(ip6 + 1);
     }
 
-    if (TCPHDR_DPORT(tcp) != dest_addr.sin.sin_port)
+    if (TCPHDR_DPORT(tcp) != ctx->method_state.tcpconn.dest_addr.sin.sin_port)
         return NULL;
 
-    pb = probe_by_seq(TCPHDR_SPORT(tcp));
+    pb = bx_traceroute_probe_by_seq(ctx, TCPHDR_SPORT(tcp));
     if (!pb)
         return NULL;
 
     /*  here only, high level has no data to do this   */
-    parse_icmp_res(pb, type, code, info);
+    bx_traceroute_parse_icmp_res(ctx, pb, type, code, info);
 
     return pb;
 }
 
-static void tcp_recv_probe(int sk, int revents) {
-    if (sk != icmp_sk) { /*  a tcp socket   */
+static void tcp_recv_probe(struct bx_traceroute_ctx* ctx, int sk, int revents) {
+    if (sk != ctx->method_state.tcpconn.icmp_sk) { /*  a tcp socket   */
         probe* pb;
 
-        pb = probe_by_sk(sk);
+        pb = bx_traceroute_probe_by_sk(ctx, sk);
         if (!pb) {
-            del_poll(sk);
+            bx_traceroute_del_poll(ctx, sk);
             return;
         }
 
         /*  do connect() again and check errno, regardless of revents  */
-        if (connect(sk, &dest_addr.sa, sizeof(dest_addr)) < 0) {
+        if (connect(sk, &ctx->method_state.tcpconn.dest_addr.sa, sizeof(ctx->method_state.tcpconn.dest_addr)) < 0) {
             if (errno != EISCONN && errno != ECONNREFUSED)
                 return; /*  ICMP say more   */
         }
 
         /*  we have reached the dest host (either connected or refused)  */
 
-        memcpy(&pb->res, &dest_addr, sizeof(pb->res));
+        memcpy(&pb->res, &ctx->method_state.tcpconn.dest_addr, sizeof(pb->res));
 
         pb->final = 1;
 
-        pb->recv_time = get_time();
+        pb->recv_time = bx_traceroute_get_time();
 
-        probe_done(pb);
+        bx_traceroute_probe_done(ctx, pb);
 
         return;
     }
@@ -205,14 +201,30 @@ static void tcp_recv_probe(int sk, int revents) {
     if (!(revents & POLLIN))
         return;
 
-    recv_reply(icmp_sk, 0, tcp_check_reply);
+    bx_traceroute_recv_reply(ctx, ctx->method_state.tcpconn.icmp_sk, 0, tcp_check_reply);
 }
 
-static void tcp_expire_probe(probe* pb) {
-    probe_done(pb);
+static void tcp_expire_probe(struct bx_traceroute_ctx* ctx, probe* pb) {
+    bx_traceroute_probe_done(ctx, pb);
 }
 
-static tr_module tcp_ops = {
+static void tcpconn_reset(struct bx_traceroute_ctx* ctx) {
+    memset(&ctx->method_state.tcpconn, 0, sizeof(ctx->method_state.tcpconn));
+    ctx->method_state.tcpconn.icmp_sk = -1;
+}
+
+static void tcpconn_destroy(struct bx_traceroute_ctx* ctx) {
+    if (ctx->method_state.tcpconn.icmp_sk >= 0) {
+        bx_traceroute_del_poll(ctx, ctx->method_state.tcpconn.icmp_sk);
+        close(ctx->method_state.tcpconn.icmp_sk);
+        ctx->method_state.tcpconn.icmp_sk = -1;
+    }
+}
+
+const struct bx_traceroute_method bx_traceroute_method_tcpconn = {
+    .reset = tcpconn_reset,
+    .destroy = tcpconn_destroy,
+    .id = BX_TRACEROUTE_METHOD_TCPCONN,
     .name = "tcpconn",
     .init = tcp_init,
     .send_probe = tcp_send_probe,
@@ -220,4 +232,3 @@ static tr_module tcp_ops = {
     .expire_probe = tcp_expire_probe,
 };
 
-TR_MODULE(tcp_ops)

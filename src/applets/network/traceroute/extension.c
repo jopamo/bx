@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,7 +56,7 @@ static void append_snprintf(char** curr, char* end, const char* fmt, ...) {
 
 /*	rfc 5837 stuff    */
 
-static int print_iface_info(struct icmp_ext_object* obj, char* buf, size_t length) {
+static int print_iface_info(struct bx_traceroute_ctx* ctx, struct icmp_ext_object* obj, char* buf, size_t length) {
     uint32_t* ui;
     char tmp[128]; /*  enough: 4 + (4 + 16) + 64 + 4 = 92   */
     size_t data_len;
@@ -104,7 +106,7 @@ static int print_iface_info(struct icmp_ext_object* obj, char* buf, size_t lengt
         memcpy(ptr, ui, len);
         ui += len / sizeof(*ui);
 
-        append_snprintf(&curr, end, "%s%s", (curr > start) ? "," : "", addr2str(&addr));
+        append_snprintf(&curr, end, "%s%s", (curr > start) ? "," : "", bx_traceroute_addr2str(ctx, &addr));
     }
 
     if (obj->c_type & 0x02) { /*  name   */
@@ -112,7 +114,7 @@ static int print_iface_info(struct icmp_ext_object* obj, char* buf, size_t lengt
         uint8_t len = *name;
         char str[IFACE_INFO_NAME_LEN * 4]; /*  enough...   */
         char* p = str;
-        static char hex[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+        static const char hex[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
         int i;
 
         if (!len || (len % sizeof(uint32_t)) || len > IFACE_INFO_NAME_LEN)
@@ -147,7 +149,7 @@ static int print_iface_info(struct icmp_ext_object* obj, char* buf, size_t lengt
     return (curr - buf);
 }
 
-static int try_extension(probe* pb, char* buf, size_t len) {
+static int try_extension(struct bx_traceroute_ctx* ctx, probe* pb, char* buf, size_t len) {
     struct icmp_ext_header* iext = (struct icmp_ext_header*)buf;
     char str[1024];
     char* curr = str;
@@ -160,7 +162,7 @@ static int try_extension(probe* pb, char* buf, size_t len) {
     if (iext->version != 2)
         return -1;
 
-    if (iext->checksum && in_csum(iext, len) != (uint16_t)~0)
+    if (iext->checksum && bx_traceroute_in_csum(iext, len) != (uint16_t)~0)
         return -1;
 
     buf += sizeof(*iext);
@@ -197,7 +199,7 @@ static int try_extension(probe* pb, char* buf, size_t len) {
                                 (mpls >> 8) & 0x1, mpls & 0xff);
             }
         }
-        else if (obj->class == IFACE_INFO_CLASS && (i = print_iface_info(obj, curr, end - curr)) > 0) {
+        else if (obj->class == IFACE_INFO_CLASS && (i = print_iface_info(ctx, obj, curr, end - curr)) > 0) {
             curr += i; /*  successfully parsed   */
         }
         else { /*  common case...  */
@@ -221,12 +223,12 @@ static int try_extension(probe* pb, char* buf, size_t len) {
     return 0;
 }
 
-void handle_extensions(probe* pb, char* buf, int len, int step) {
+void bx_traceroute_handle_extensions(struct bx_traceroute_ctx* ctx, probe* pb, char* buf, int len, int step) {
     if (!step)
-        try_extension(pb, buf, len);
+        try_extension(ctx, pb, buf, len);
     else {
         for (; len >= 8; buf += step, len -= step)
-            if (try_extension(pb, buf, len) == 0)
+            if (try_extension(ctx, pb, buf, len) == 0)
                 break;
     }
 

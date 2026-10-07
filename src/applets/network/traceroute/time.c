@@ -15,7 +15,7 @@
 
 /*  Just returns current time as double, with most possible precision...  */
 
-double get_time(void) {
+double bx_traceroute_get_time(void) {
     struct timespec ts;
     double d = 0.0;
 

@@ -6,28 +6,13 @@
     See COPYING for the status of this software.
 */
 
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/times.h>
-
-#include "lib/random_bytes.h"
 #include "traceroute.h"
 
-static void __init_random_seq(void) __attribute__((constructor));
-static void __init_random_seq(void) {
-    // Prefer shared nonblocking system entropy.
-    unsigned int seed = 0;
-
-    // Do not let startup wait for entropy; this seed has a local fallback.
-    if (!bx_random_bytes_nonblocking(&seed, sizeof(seed))) {
-        // Fall back to time and PID when system entropy is unavailable.
-        seed = times(NULL) + getpid();
-    }
-
-    srand(seed);
-}
-
-unsigned int random_seq(void) {
-    // Using random() instead of rand() for better randomness
-    return (random() << 16) ^ (random() << 8) ^ random() ^ (random() >> 8);
+unsigned int bx_traceroute_random_seq(struct bx_traceroute_ctx* ctx) {
+    uint32_t value = ctx->random_state;
+    value ^= value << 13;
+    value ^= value >> 17;
+    value ^= value << 5;
+    ctx->random_state = value;
+    return value;
 }
