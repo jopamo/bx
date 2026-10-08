@@ -1509,6 +1509,10 @@ static struct ash_ast* ash_parse_list(
                 if (newline) {
                     break;
                 }
+                if (!ash_parser_prepare_alias(parser, true, true, ash_parser_token_is_reserved)) {
+                    ash_ast_destroy(node);
+                    return NULL;
+                }
                 token = ash_parser_peek(parser);
                 if (token == NULL) {
                     ash_ast_destroy(node);
