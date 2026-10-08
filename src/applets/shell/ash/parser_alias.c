@@ -239,8 +239,7 @@ static bool ash_parser_alias_is_active(
     const struct ash_alias* alias
 ) {
     for (size_t i = 0u; i < parser->alias_frame_count; i++) {
-        if (parser->alias_frames[i].alias_active &&
-            parser->alias_frames[i].alias == alias) {
+        if (parser->alias_frames[i].alias_active && strcmp(ash_alias_name(parser->alias_frames[i].alias), ash_alias_name(alias)) == 0) {
             return true;
         }
     }
