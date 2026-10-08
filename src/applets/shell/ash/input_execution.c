@@ -49,95 +49,132 @@ static const char* ash_input_parser_diagnostic(const char* diagnostic) {
     return diagnostic;
 }
 
-static struct ash_input_unit_result ash_input_execute_buffer(
-    struct ash_shell* shell,
-    struct ash_source_location origin,
-    const char* input,
-    size_t length,
-    enum ash_input_boundary boundary
-) {
-    struct ash_parser storage;
-    struct ash_parser* parser = ash_shell_context_begin_parse(
-        shell,
-        &storage,
-        origin,
-        input,
-        length
-    );
-    if (parser == NULL) {
-        ash_diag(shell, "parser state is already active");
-        shell->last_status = 2;
-        return (struct ash_input_unit_result){
-            .state = ASH_INPUT_UNIT_PARSE_ERROR,
-            .status = 2,
-        };
+struct ash_input_parser {
+    struct ash_parser storage[2];
+    struct ash_parser* checkpoint;
+};
+
+static void ash_input_parser_clear(struct ash_input_parser* state) {
+    if (state->checkpoint != NULL) {
+        ash_parser_destroy(state->checkpoint);
+        *state->checkpoint = (struct ash_parser){0};
+        state->checkpoint = NULL;
     }
-    struct ash_ast* program = NULL;
-    enum ash_parser_result result = ash_parser_parse_program(
-        parser,
-        &program
-    );
-    struct ash_source_location parser_position =
-        ash_lexer_current_location(&parser->lexer);
-    bool line_continuation =
-        ash_lexer_ended_with_line_continuation(&parser->lexer);
-    if (!ash_input_note_parse(
-            shell,
-            origin,
-            parser_position.offset
-        )) {
-        ash_diag(shell, "invalid parser source position");
-        ash_shell_context_end_parse(shell);
-        ash_ast_destroy(program);
-        shell->last_status = 2;
-        return (struct ash_input_unit_result){
-            .state = ASH_INPUT_UNIT_PARSE_ERROR,
-            .status = 2,
-        };
+}
+
+static bool ash_input_onecmd_boundary(const struct ash_shell* shell) {
+    if ((shell->options & ASH_SHELL_OPTION_ONECMD) == 0u) {
+        return false;
     }
-    if ((result == ASH_PARSER_INCOMPLETE ||
-         (result == ASH_PARSER_COMPLETE && line_continuation)) &&
-        boundary == ASH_INPUT_BOUNDARY_PHYSICAL_LINE) {
-        ash_shell_context_end_parse(shell);
-        ash_ast_destroy(program);
-        return (struct ash_input_unit_result){
-            .state = ASH_INPUT_UNIT_NEEDS_MORE,
-            .status = shell->last_status,
-        };
+    switch (ash_input_source_kind(shell)) {
+        case ASH_INPUT_STDIN:
+        case ASH_INPUT_INTERACTIVE:
+        case ASH_INPUT_SCRIPT_FILE:
+            return true;
+        case ASH_INPUT_INVALID:
+        case ASH_INPUT_COMMAND_STRING:
+        case ASH_INPUT_SOURCED_FILE:
+        case ASH_INPUT_EVAL:
+        case ASH_INPUT_TRAP:
+        case ASH_INPUT_COMMAND_SUBSTITUTION:
+        case ASH_INPUT_PROMPT_COMMAND:
+        case ASH_INPUT_COMPLETION_HOOK:
+            return false;
     }
-    if (result != ASH_PARSER_COMPLETE) {
-        ash_diag_parse(
-            shell,
-            parser->error_location,
-            "%s",
-            ash_input_parser_diagnostic(parser->error)
-        );
-        ash_shell_context_end_parse(shell);
-        ash_ast_destroy(program);
-        shell->last_status = 2;
-        if (ash_shell_policy_noninteractive_posix(&shell->policy)) {
-            shell->should_exit = true;
-            shell->requested_exit_status = 2;
-            if (ash_input_source_kind(shell) != ASH_INPUT_TRAP) {
-                ash_trap_exit_override_status(shell);
+    return false;
+}
+
+static struct ash_input_unit_result ash_input_parse_error(struct ash_shell* shell) {
+    shell->last_status = 2;
+    if (ash_shell_policy_noninteractive_posix(&shell->policy)) {
+        shell->should_exit = true;
+        shell->requested_exit_status = 2;
+        if (ash_input_source_kind(shell) != ASH_INPUT_TRAP) {
+            ash_trap_exit_override_status(shell);
+        }
+    }
+    return (struct ash_input_unit_result){.state = ASH_INPUT_UNIT_PARSE_ERROR, .status = 2};
+}
+
+static struct ash_input_unit_result ash_input_execute_buffer(struct ash_shell* shell,
+                                                             struct ash_input_parser* state,
+                                                             struct ash_source_location origin,
+                                                             const char* input,
+                                                             size_t length,
+                                                             enum ash_input_boundary boundary) {
+    int status = shell->last_status;
+    while (!shell->should_exit && !ash_control_pending(shell)) {
+        struct ash_parser* parser = state->checkpoint == &state->storage[0] ? &state->storage[1] : &state->storage[0];
+        if (state->checkpoint == NULL) {
+            if (ash_shell_context_begin_parse(shell, parser, origin, input, length) == NULL) {
+                ash_diag(shell, "parser state is already active");
+                return ash_input_parse_error(shell);
             }
         }
-        return (struct ash_input_unit_result){
-            .state = ASH_INPUT_UNIT_PARSE_ERROR,
-            .status = 2,
-        };
+        else {
+            if (!ash_parser_clone_boundary(parser, state->checkpoint)) {
+                ash_exec_error(shell, "parser checkpoint", errno);
+                return ash_input_parse_error(shell);
+            }
+            if (!ash_shell_context_resume_parse(shell, parser)) {
+                ash_parser_destroy(parser);
+                *parser = (struct ash_parser){0};
+                ash_diag(shell, "invalid parser checkpoint binding");
+                return ash_input_parse_error(shell);
+            }
+        }
+        struct ash_ast* command = NULL;
+        enum ash_parser_result result = ash_parser_parse_complete_command(parser, &command);
+        struct ash_source_location parser_position = ash_lexer_current_location(&parser->lexer);
+        bool line_continuation = ash_lexer_ended_with_line_continuation(&parser->lexer);
+        for (size_t i = 0u; i < parser->alias_frame_count; i++) {
+            line_continuation |= ash_lexer_ended_with_line_continuation(&parser->alias_frames[i].lexer);
+        }
+        if (!ash_input_note_parse(shell, origin, parser_position.offset)) {
+            ash_diag(shell, "invalid parser source position");
+            ash_shell_context_end_parse(shell);
+            ash_ast_destroy(command);
+            return ash_input_parse_error(shell);
+        }
+        if ((result == ASH_PARSER_INCOMPLETE || (result == ASH_PARSER_COMPLETE && line_continuation)) && boundary == ASH_INPUT_BOUNDARY_PHYSICAL_LINE) {
+            ash_shell_context_end_parse(shell);
+            ash_ast_destroy(command);
+            return (struct ash_input_unit_result){.state = ASH_INPUT_UNIT_NEEDS_MORE, .status = status};
+        }
+        if (result != ASH_PARSER_COMPLETE) {
+            ash_diag_parse(shell, parser->error_location, "%s", ash_input_parser_diagnostic(parser->error));
+            ash_shell_context_end_parse(shell);
+            ash_ast_destroy(command);
+            return ash_input_parse_error(shell);
+        }
+        if (command == NULL) {
+            ash_shell_context_end_parse(shell);
+            break;
+        }
+        if (line_continuation) {
+            ash_shell_context_end_parse(shell);
+            ash_input_parser_clear(state);
+        }
+        else {
+            if (ash_shell_context_suspend_parse(shell) == NULL) {
+                ash_diag(shell, "invalid parser command boundary");
+                ash_shell_context_end_parse(shell);
+                ash_ast_destroy(command);
+                return ash_input_parse_error(shell);
+            }
+            ash_input_parser_clear(state);
+            state->checkpoint = parser;
+        }
+        status = ash_execute_ast(shell, command);
+        ash_ast_destroy(command);
+        /* Nested eval/source input consumes its own unit discard. */
+        bool discard = ash_control_consume_unit_discard(shell, &status);
+        ash_control_publish_status(shell, status);
+        if (discard || line_continuation || ash_input_onecmd_boundary(shell)) {
+            break;
+        }
     }
-
-    ash_shell_context_end_parse(shell);
-    int status = ash_execute_ast(shell, program);
-    ash_ast_destroy(program);
-    /* Nested eval/source input consumes its own unit discard. */
-    (void)ash_control_consume_unit_discard(shell, &status);
-    ash_control_publish_status(shell, status);
-    return (struct ash_input_unit_result){
-        .state = ASH_INPUT_UNIT_EXECUTED,
-        .status = status,
-    };
+    return (struct ash_input_unit_result){.state = ASH_INPUT_UNIT_EXECUTED, .status = status};
 }
 
 const char* ash_input_default_prompt(void) {
@@ -178,28 +215,6 @@ static void ash_input_print_verbose(
     }
 }
 
-static bool ash_input_onecmd_boundary(const struct ash_shell* shell) {
-    if ((shell->options & ASH_SHELL_OPTION_ONECMD) == 0u) {
-        return false;
-    }
-    switch (ash_input_source_kind(shell)) {
-        case ASH_INPUT_STDIN:
-        case ASH_INPUT_INTERACTIVE:
-        case ASH_INPUT_SCRIPT_FILE:
-            return true;
-        case ASH_INPUT_INVALID:
-        case ASH_INPUT_COMMAND_STRING:
-        case ASH_INPUT_SOURCED_FILE:
-        case ASH_INPUT_EVAL:
-        case ASH_INPUT_TRAP:
-        case ASH_INPUT_COMMAND_SUBSTITUTION:
-        case ASH_INPUT_PROMPT_COMMAND:
-        case ASH_INPUT_COMPLETION_HOOK:
-            return false;
-    }
-    return false;
-}
-
 static int ash_input_execute_current(
     struct ash_shell* shell,
     bool prompt
@@ -210,6 +225,7 @@ static int ash_input_execute_current(
     bx_text_buffer_init(&logical_input);
     bx_text_buffer_init(&physical_line);
     struct ash_source_location pending_origin = {0};
+    struct ash_input_parser parser = {0};
 
     while (!shell->should_exit && !ash_control_pending(shell)) {
         bool awaiting_more_input = logical_input.length != 0u;
@@ -256,14 +272,7 @@ static int ash_input_execute_current(
                 status = 1;
             }
             else if (logical_input.length != 0u) {
-                struct ash_input_unit_result result =
-                    ash_input_execute_buffer(
-                        shell,
-                        pending_origin,
-                        logical_input.data,
-                        logical_input.length,
-                        ASH_INPUT_BOUNDARY_SOURCE_END
-                    );
+                struct ash_input_unit_result result = ash_input_execute_buffer(shell, &parser, pending_origin, logical_input.data, logical_input.length, ASH_INPUT_BOUNDARY_SOURCE_END);
                 assert(result.state != ASH_INPUT_UNIT_NEEDS_MORE);
                 status = result.status;
             }
@@ -281,18 +290,19 @@ static int ash_input_execute_current(
         }
         else {
             assert((size_t)read_length == physical_line.length);
-            if (!bx_text_buffer_append_span(
-                    &logical_input,
-                    physical_line.data,
-                    physical_line.length
-                )) {
+            struct bx_text_buffer grown;
+            bx_text_buffer_init(&grown);
+            struct bx_text_buffer* target = parser.checkpoint != NULL ? &grown : &logical_input;
+            bool appended = (parser.checkpoint == NULL || bx_text_buffer_append_span(target, logical_input.data, logical_input.length)) &&
+                            bx_text_buffer_append_span(target, physical_line.data, physical_line.length);
+            if (appended && parser.checkpoint != NULL) {
+                appended = ash_parser_extend_input(parser.checkpoint, target->data, target->length);
+            }
+            if (!appended) {
                 int error = errno;
-                if (error == EOVERFLOW) {
-                    ash_exec_error(
-                        shell,
-                        "logical input",
-                        error
-                    );
+                bx_text_buffer_destroy(&grown);
+                if (error == EOVERFLOW || error == EINVAL) {
+                    ash_exec_error(shell, "logical input", error);
                 }
                 else {
                     ash_diag_oom(shell);
@@ -300,21 +310,20 @@ static int ash_input_execute_current(
                 status = 2;
                 break;
             }
+            if (parser.checkpoint != NULL) {
+                bx_text_buffer_destroy(&logical_input);
+                logical_input = grown;
+            }
         }
 
-        struct ash_input_unit_result result = ash_input_execute_buffer(
-            shell,
-            pending_origin,
-            logical_input.data,
-            logical_input.length,
-            ASH_INPUT_BOUNDARY_PHYSICAL_LINE
-        );
+        struct ash_input_unit_result result = ash_input_execute_buffer(shell, &parser, pending_origin, logical_input.data, logical_input.length, ASH_INPUT_BOUNDARY_PHYSICAL_LINE);
         status = result.status;
         if (result.state == ASH_INPUT_UNIT_NEEDS_MORE) {
             continue;
         }
 
         bool onecmd_boundary = ash_input_onecmd_boundary(shell);
+        ash_input_parser_clear(&parser);
         bx_text_buffer_clear(&logical_input);
         pending_origin = (struct ash_source_location){0};
         if (result.state == ASH_INPUT_UNIT_PARSE_ERROR &&
@@ -329,6 +338,7 @@ static int ash_input_execute_current(
         }
     }
 
+    ash_input_parser_clear(&parser);
     bx_text_buffer_destroy(&physical_line);
     bx_text_buffer_destroy(&logical_input);
     if (ash_input_source_kind(shell) == ASH_INPUT_SOURCED_FILE) {
