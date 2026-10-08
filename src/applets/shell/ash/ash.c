@@ -2820,6 +2820,12 @@ int bx_ash_main(int argc, char** argv) {
         return 2;
     }
 
+    int signal_error = ash_traps_enter_signals(&shell);
+    if (signal_error != 0) {
+        ash_exec_error(&shell, "signal startup", signal_error);
+        ash_shell_context_release_owned(&shell);
+        return 1;
+    }
     if (!ash_import_environment(&shell)) {
         ash_shell_context_release_owned(&shell);
         return 1;
