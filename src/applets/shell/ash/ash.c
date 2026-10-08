@@ -824,6 +824,13 @@ static int ash_builtin_exec(struct ash_shell* shell, const struct ash_command* c
         argv,
         &resolution
     );
+    if (shell->forked_execution || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE)) {
+        if (resolution.kind == ASH_COMMAND_EXPLICIT_PATH)
+            ash_trap_exit_deactivate_for_exec(shell);
+        ash_trap_exit_override_status(shell);
+        shell->should_exit = true;
+        shell->requested_exit_status = status;
+    }
     return status;
 }
 

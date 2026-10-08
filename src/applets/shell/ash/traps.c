@@ -109,6 +109,12 @@ void ash_trap_exit_override_status(struct ash_shell* shell) {
     }
 }
 
+void ash_trap_exit_deactivate_for_exec(struct ash_shell* shell) {
+    assert(ash_traps_invariants(shell));
+    if (shell->traps != NULL)
+        shell->traps->exit_enabled = false;
+}
+
 bool ash_trap_exit_finish(struct ash_shell* shell) {
     assert(ash_traps_invariants(shell));
     struct ash_trap_table* table = shell->traps;
