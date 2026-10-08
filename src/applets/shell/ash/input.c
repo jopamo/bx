@@ -567,17 +567,7 @@ ssize_t ash_input_read_line(
         result = ash_input_read_string(input, line);
     }
     else {
-        result = getline(
-            &line->data,
-            &line->capacity,
-            input->source.file.stream
-        );
-        if (result >= 0) {
-            line->length = (size_t)result;
-        }
-        else {
-            bx_text_buffer_clear(line);
-        }
+        result = bx_text_buffer_read_line(line, input->source.file.stream);
     }
 
     if (result >= 0) {

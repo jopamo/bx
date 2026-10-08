@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <sys/types.h>
 
 struct bx_text_buffer {
     char* data;
@@ -29,5 +31,11 @@ bool bx_text_buffer_append_text(
     const char* text
 );
 char* bx_text_buffer_take(struct bx_text_buffer* buffer);
+/*
+ * Borrow a serialized stream and replace buffer with one physical line.
+ * Retry EINTR without losing consumed bytes. EOF without bytes and failures
+ * clear buffer and return -1 with errno zero for EOF or nonzero for failure.
+ */
+ssize_t bx_text_buffer_read_line(struct bx_text_buffer* buffer, FILE* stream);
 
 #endif /* BX_LIB_TEXT_BUFFER_H */
