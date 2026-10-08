@@ -121,6 +121,9 @@ bool ash_quote_append_dollar_single(struct bx_text_buffer* output, const char* t
                 }
                 else {
                     unsigned char controlled = (unsigned char)text[++i];
+                    if (controlled == '\\' && i + 1u < length && text[i + 1u] == '\\') {
+                        i++;
+                    }
                     decoded = controlled == '?' ? 0x7f : (char)(controlled & 0x1fu);
                 }
                 break;
