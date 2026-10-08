@@ -22,6 +22,7 @@ struct ash_signal_trap {
 struct ash_signal_traps {
     struct ash_signal_trap entries[NSIG];
     struct bx_signal_pending* pending;
+    bool restore_blocked_child;
 };
 
 static bool ash_signal_traps_invariants(const struct ash_signal_traps* signals) {
@@ -159,6 +160,25 @@ int ash_trap_signal_limit(void) {
     return NSIG;
 }
 
+int ash_traps_enter_signals(struct ash_shell* shell) {
+    assert(ash_traps_invariants(shell));
+    sigset_t mask;
+    if (sigprocmask(SIG_SETMASK, NULL, &mask) < 0)
+        return errno;
+    if (sigismember(&mask, SIGCHLD) != 1)
+        return 0;
+    int error = ash_trap_signals_init(shell);
+    if (error != 0)
+        return error;
+    sigset_t child;
+    sigemptyset(&child);
+    sigaddset(&child, SIGCHLD);
+    if (sigprocmask(SIG_UNBLOCK, &child, NULL) < 0)
+        return errno;
+    shell->traps->signals->restore_blocked_child = true;
+    return 0;
+}
+
 const char* ash_trap_signal_action(const struct ash_shell* shell, int number) {
     assert(ash_traps_invariants(shell));
     if (number <= 0 || number >= NSIG || shell->traps == NULL || shell->traps->signals == NULL) {
@@ -272,6 +292,7 @@ void ash_traps_detach_after_fork(struct ash_shell* shell) {
         if (shell->traps->signals != NULL) {
             struct ash_signal_traps* signals = shell->traps->signals;
             bx_signal_pending_detach_after_fork(signals->pending);
+            signals->restore_blocked_child = false;
             for (int number = 1; number < NSIG; number++) {
                 struct ash_signal_trap* entry = &signals->entries[number];
                 entry->enabled = false;
@@ -297,6 +318,16 @@ void ash_traps_destroy(struct ash_shell* shell) {
                 free(entry->action);
             }
             bx_signal_pending_destroy(signals->pending);
+            if (signals->restore_blocked_child) {
+                sigset_t child;
+                sigemptyset(&child);
+                sigaddset(&child, SIGCHLD);
+                if (sigprocmask(SIG_BLOCK, &child, NULL) < 0) {
+                    int error = errno;
+                    (void)sigprocmask(SIG_BLOCK, &child, NULL);
+                    ash_exec_error(shell, "signal mask restore", error);
+                }
+            }
             free(signals);
         }
         free(shell->traps->exit_action);

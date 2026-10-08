@@ -27,6 +27,8 @@ void ash_trap_exit_override_status(struct ash_shell* shell);
 bool ash_trap_exit_finish(struct ash_shell* shell);
 /* Capture ingress dispositions before the shell first changes a signal. */
 int ash_trap_signals_init(struct ash_shell* shell);
+/* Unblock inherited SIGCHLD while retaining ownership of the caller's bit. */
+int ash_traps_enter_signals(struct ash_shell* shell);
 int ash_trap_signal_limit(void);
 bool ash_trap_signal_supported(const struct ash_shell* shell, int number, const char* action);
 const char* ash_trap_signal_action(const struct ash_shell* shell, int number);
