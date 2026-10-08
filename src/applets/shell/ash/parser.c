@@ -1503,25 +1503,16 @@ static struct ash_ast* ash_parse_list(
             ash_ast_destroy(node);
             return NULL;
         }
-        bool had_separator = false;
-        if (token->kind == ASH_TOKEN_AMP) {
-            node->value.list.entries[node->value.list.count - 1u].asynchronous = true;
+        bool had_separator = token->kind == ASH_TOKEN_AMP ||
+            token->kind == ASH_TOKEN_SEMI || token->kind == ASH_TOKEN_NEWLINE;
+        if (had_separator) {
+            if (token->kind == ASH_TOKEN_AMP) {
+                node->value.list.entries[node->value.list.count - 1u].asynchronous = true;
+            }
             struct ash_token separator;
             (void)ash_parser_take(parser, &separator);
             ash_token_destroy(&separator);
-            had_separator = true;
-        }
-        else if (token->kind == ASH_TOKEN_SEMI ||
-                 token->kind == ASH_TOKEN_NEWLINE) {
-            do {
-                struct ash_token separator;
-                (void)ash_parser_take(parser, &separator);
-                ash_token_destroy(&separator);
-                had_separator = true;
-                token = ash_parser_peek(parser);
-            } while (token != NULL &&
-                     (token->kind == ASH_TOKEN_SEMI ||
-                      token->kind == ASH_TOKEN_NEWLINE));
+            ash_parser_skip_newlines(parser);
         }
 
         if (ash_parser_at_end(parser) || ash_parser_at_stop(parser, stop)) {
