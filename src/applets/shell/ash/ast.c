@@ -5,6 +5,28 @@
 
 #include "applets/shell/ash/ast.h"
 
+/* Pending cleanup links live in uniquely owned nodes; teardown never allocates. */
+struct ash_ast_cleanup {
+    struct ash_ast* nodes;
+    struct ash_condition* conditions;
+};
+
+static void ash_ast_cleanup_drain(struct ash_ast_cleanup* cleanup);
+
+static void ash_ast_cleanup_push(struct ash_ast_cleanup* cleanup, struct ash_ast* node) {
+    if (node != NULL) {
+        node->destroy_next = cleanup->nodes;
+        cleanup->nodes = node;
+    }
+}
+
+static void ash_condition_cleanup_push(struct ash_ast_cleanup* cleanup, struct ash_condition* condition) {
+    if (condition != NULL) {
+        condition->destroy_next = cleanup->conditions;
+        cleanup->conditions = condition;
+    }
+}
+
 static int ash_ast_grow(
     void** items,
     size_t* capacity,
@@ -63,16 +85,22 @@ void ash_ast_word_init(
     word->has_syntax = true;
 }
 
-void ash_ast_word_destroy(struct ash_ast_word* word) {
+static void ash_ast_word_cleanup(struct ash_ast_cleanup* cleanup, struct ash_ast_word* word) {
     if (word == NULL) {
         return;
     }
     ash_word_destroy(&word->syntax);
     for (size_t i = 0u; i < word->process_substitution_count; i++) {
-        ash_ast_destroy(word->process_substitutions[i].command);
+        ash_ast_cleanup_push(cleanup, word->process_substitutions[i].command);
     }
     free(word->process_substitutions);
     *word = (struct ash_ast_word){0};
+}
+
+void ash_ast_word_destroy(struct ash_ast_word* word) {
+    struct ash_ast_cleanup cleanup = {0};
+    ash_ast_word_cleanup(&cleanup, word);
+    ash_ast_cleanup_drain(&cleanup);
 }
 
 int ash_ast_word_clone(
@@ -236,30 +264,36 @@ struct ash_condition* ash_condition_create(
     return condition;
 }
 
-void ash_condition_destroy(struct ash_condition* condition) {
+static void ash_condition_cleanup(struct ash_ast_cleanup* cleanup, struct ash_condition* condition) {
     if (condition == NULL) {
         return;
     }
     switch (condition->kind) {
         case ASH_CONDITION_WORD:
-            ash_ast_word_destroy(&condition->value.word);
+            ash_ast_word_cleanup(cleanup, &condition->value.word);
             break;
         case ASH_CONDITION_UNARY:
-            ash_ast_word_destroy(&condition->value.unary.operand);
+            ash_ast_word_cleanup(cleanup, &condition->value.unary.operand);
             break;
         case ASH_CONDITION_BINARY:
-            ash_ast_word_destroy(&condition->value.binary.left);
-            ash_ast_word_destroy(&condition->value.binary.right);
+            ash_ast_word_cleanup(cleanup, &condition->value.binary.left);
+            ash_ast_word_cleanup(cleanup, &condition->value.binary.right);
             break;
         case ASH_CONDITION_NOT:
         case ASH_CONDITION_AND:
         case ASH_CONDITION_OR:
         case ASH_CONDITION_GROUP:
-            ash_condition_destroy(condition->value.branches.left);
-            ash_condition_destroy(condition->value.branches.right);
+            ash_condition_cleanup_push(cleanup, condition->value.branches.left);
+            ash_condition_cleanup_push(cleanup, condition->value.branches.right);
             break;
     }
     free(condition);
+}
+
+void ash_condition_destroy(struct ash_condition* condition) {
+    struct ash_ast_cleanup cleanup = {0};
+    ash_condition_cleanup_push(&cleanup, condition);
+    ash_ast_cleanup_drain(&cleanup);
 }
 
 struct ash_condition* ash_condition_clone(
@@ -886,39 +920,36 @@ fail:
     return NULL;
 }
 
-void ash_redirection_destroy(struct ash_redirection* redirection) {
+static void ash_redirection_cleanup(struct ash_ast_cleanup* cleanup, struct ash_redirection* redirection) {
     if (redirection == NULL) {
         return;
     }
     free(redirection->prefix.text);
-    ash_ast_word_destroy(&redirection->target);
+    ash_ast_word_cleanup(cleanup, &redirection->target);
     ash_here_document_destroy(redirection->here_document);
     *redirection = (struct ash_redirection){0};
 }
 
-void ash_case_clause_destroy(struct ash_case_clause* clause) {
+static void ash_case_clause_cleanup(struct ash_ast_cleanup* cleanup, struct ash_case_clause* clause) {
     if (clause == NULL) {
         return;
     }
     for (size_t i = 0u; i < clause->pattern_count; i++) {
-        ash_ast_word_destroy(&clause->patterns[i]);
+        ash_ast_word_cleanup(cleanup, &clause->patterns[i]);
     }
     free(clause->patterns);
-    ash_ast_destroy(clause->body);
+    ash_ast_cleanup_push(cleanup, clause->body);
     *clause = (struct ash_case_clause){0};
 }
 
-static void ash_ast_destroy_redirections(
-    struct ash_redirection* redirections,
-    size_t count
-) {
+static void ash_ast_cleanup_redirections(struct ash_ast_cleanup* cleanup, struct ash_redirection* redirections, size_t count) {
     for (size_t i = 0u; i < count; i++) {
-        ash_redirection_destroy(&redirections[i]);
+        ash_redirection_cleanup(cleanup, &redirections[i]);
     }
     free(redirections);
 }
 
-void ash_ast_destroy(struct ash_ast* node) {
+static void ash_ast_cleanup_node(struct ash_ast_cleanup* cleanup, struct ash_ast* node) {
     if (node == NULL) {
         return;
     }
@@ -928,71 +959,69 @@ void ash_ast_destroy(struct ash_ast* node) {
             for (size_t i = 0u; i < node->value.simple.count; i++) {
                 struct ash_simple_item* item = &node->value.simple.items[i];
                 if (item->kind == ASH_SIMPLE_REDIRECTION) {
-                    ash_redirection_destroy(&item->value.redirection);
+                    ash_redirection_cleanup(cleanup, &item->value.redirection);
                 }
                 else {
-                    ash_ast_word_destroy(&item->value.word);
+                    ash_ast_word_cleanup(cleanup, &item->value.word);
                 }
             }
             free(node->value.simple.items);
             break;
         case ASH_AST_LIST:
             for (size_t i = 0u; i < node->value.list.count; i++) {
-                ash_ast_destroy(node->value.list.entries[i].command);
+                ash_ast_cleanup_push(cleanup, node->value.list.entries[i].command);
             }
             free(node->value.list.entries);
             break;
         case ASH_AST_AND_OR:
             for (size_t i = 0u; i < node->value.and_or.count; i++) {
-                ash_ast_destroy(node->value.and_or.pipelines[i]);
+                ash_ast_cleanup_push(cleanup, node->value.and_or.pipelines[i]);
             }
             free(node->value.and_or.pipelines);
             free(node->value.and_or.operators);
             break;
         case ASH_AST_PIPELINE:
             for (size_t i = 0u; i < node->value.pipeline.count; i++) {
-                ash_ast_destroy(node->value.pipeline.commands[i]);
+                ash_ast_cleanup_push(cleanup, node->value.pipeline.commands[i]);
             }
             free(node->value.pipeline.commands);
             free(node->value.pipeline.operators);
             break;
         case ASH_AST_SUBSHELL:
         case ASH_AST_BRACE_GROUP:
-            ash_ast_destroy(node->value.group.body);
+            ash_ast_cleanup_push(cleanup, node->value.group.body);
             break;
         case ASH_AST_IF:
-            ash_ast_destroy(node->value.conditional.condition);
-            ash_ast_destroy(node->value.conditional.then_branch);
-            ash_ast_destroy(node->value.conditional.else_branch);
+            ash_ast_cleanup_push(cleanup, node->value.conditional.condition);
+            ash_ast_cleanup_push(cleanup, node->value.conditional.then_branch);
+            ash_ast_cleanup_push(cleanup, node->value.conditional.else_branch);
             break;
         case ASH_AST_WHILE:
         case ASH_AST_UNTIL:
-            ash_ast_destroy(node->value.loop.condition);
-            ash_ast_destroy(node->value.loop.body);
+            ash_ast_cleanup_push(cleanup, node->value.loop.condition);
+            ash_ast_cleanup_push(cleanup, node->value.loop.body);
             break;
         case ASH_AST_FOR:
         case ASH_AST_SELECT:
             free(node->value.for_loop.name);
             for (size_t i = 0u; i < node->value.for_loop.word_count; i++) {
-                ash_ast_word_destroy(&node->value.for_loop.words[i]);
+                ash_ast_word_cleanup(cleanup, &node->value.for_loop.words[i]);
             }
             free(node->value.for_loop.words);
-            ash_ast_destroy(node->value.for_loop.body);
+            ash_ast_cleanup_push(cleanup, node->value.for_loop.body);
             break;
         case ASH_AST_CASE:
-            ash_ast_word_destroy(&node->value.case_command.subject);
+            ash_ast_word_cleanup(cleanup, &node->value.case_command.subject);
             for (size_t i = 0u;
                  i < node->value.case_command.clause_count;
                  i++) {
-                ash_case_clause_destroy(
-                    &node->value.case_command.clauses[i]
-                );
+                ash_case_clause_cleanup(cleanup, &node->value.case_command.clauses[i]);
             }
             free(node->value.case_command.clauses);
             break;
         case ASH_AST_FUNCTION:
             free(node->value.function.name);
-            ash_ast_destroy(node->value.function.body);
+            ash_ast_cleanup_push(cleanup, node->value.function.body);
             break;
         case ASH_AST_ARITHMETIC_COMMAND:
             ash_arithmetic_expression_destroy(
@@ -1000,7 +1029,7 @@ void ash_ast_destroy(struct ash_ast* node) {
             );
             break;
         case ASH_AST_CONDITIONAL_COMMAND:
-            ash_condition_destroy(node->value.conditional_command.root);
+            ash_condition_cleanup_push(cleanup, node->value.conditional_command.root);
             break;
         case ASH_AST_C_STYLE_FOR:
             ash_arithmetic_expression_destroy(
@@ -1012,22 +1041,52 @@ void ash_ast_destroy(struct ash_ast* node) {
             ash_arithmetic_expression_destroy(
                 &node->value.c_style_for.updater
             );
-            ash_ast_destroy(node->value.c_style_for.body);
+            ash_ast_cleanup_push(cleanup, node->value.c_style_for.body);
             break;
         case ASH_AST_TIME:
-            ash_ast_destroy(node->value.time_command.pipeline);
+            ash_ast_cleanup_push(cleanup, node->value.time_command.pipeline);
             break;
         case ASH_AST_COPROC:
             free(node->value.coproc.name);
-            ash_ast_destroy(node->value.coproc.command);
+            ash_ast_cleanup_push(cleanup, node->value.coproc.command);
             break;
     }
 
-    ash_ast_destroy_redirections(
-        node->trailing_redirections,
-        node->trailing_redirection_count
-    );
+    ash_ast_cleanup_redirections(cleanup, node->trailing_redirections, node->trailing_redirection_count);
     free(node);
+}
+
+static void ash_ast_cleanup_drain(struct ash_ast_cleanup* cleanup) {
+    while (cleanup->nodes != NULL || cleanup->conditions != NULL) {
+        if (cleanup->nodes != NULL) {
+            struct ash_ast* node = cleanup->nodes;
+            cleanup->nodes = node->destroy_next;
+            ash_ast_cleanup_node(cleanup, node);
+        }
+        else {
+            struct ash_condition* condition = cleanup->conditions;
+            cleanup->conditions = condition->destroy_next;
+            ash_condition_cleanup(cleanup, condition);
+        }
+    }
+}
+
+void ash_ast_destroy(struct ash_ast* node) {
+    struct ash_ast_cleanup cleanup = {0};
+    ash_ast_cleanup_push(&cleanup, node);
+    ash_ast_cleanup_drain(&cleanup);
+}
+
+void ash_redirection_destroy(struct ash_redirection* redirection) {
+    struct ash_ast_cleanup cleanup = {0};
+    ash_redirection_cleanup(&cleanup, redirection);
+    ash_ast_cleanup_drain(&cleanup);
+}
+
+void ash_case_clause_destroy(struct ash_case_clause* clause) {
+    struct ash_ast_cleanup cleanup = {0};
+    ash_case_clause_cleanup(&cleanup, clause);
+    ash_ast_cleanup_drain(&cleanup);
 }
 
 int ash_ast_simple_take_word(
