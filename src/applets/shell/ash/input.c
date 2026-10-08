@@ -398,7 +398,7 @@ bool ash_input_push_string_span(
         return false;
     }
     assert(ash_input_stack_invariants(shell));
-    assert(!shell->parser_state.active);
+    assert(shell->active_parser == NULL);
 
     struct ash_input_source* input = ash_input_create(
         shell,
@@ -438,7 +438,7 @@ bool ash_input_push_file(
         return false;
     }
     assert(ash_input_stack_invariants(shell));
-    assert(!shell->parser_state.active);
+    assert(shell->active_parser == NULL);
 
     struct ash_input_source* input = ash_input_create(
         shell,
@@ -465,7 +465,7 @@ void ash_input_pop(struct ash_shell* shell) {
         return;
     }
     assert(ash_input_stack_invariants(shell));
-    assert(!shell->parser_state.active);
+    assert(shell->active_parser == NULL);
 
     struct ash_input_source* input = shell->input_stack;
     bool trace_popped = ash_execution_pop(
@@ -489,7 +489,7 @@ void ash_input_pop(struct ash_shell* shell) {
 void ash_input_release_all(struct ash_shell* shell) {
     if (shell != NULL) {
         assert(ash_input_stack_invariants(shell));
-        assert(!shell->parser_state.active);
+        assert(shell->active_parser == NULL);
     }
     while (shell != NULL && shell->input_stack != NULL) {
         ash_input_pop(shell);
@@ -502,7 +502,7 @@ void ash_input_source_registry_destroy(struct ash_shell* shell) {
         assert(shell->execution_frames == NULL);
         assert(shell->source_identities == NULL);
         assert(ash_input_stack_invariants(shell));
-        assert(!shell->parser_state.active);
+        assert(shell->active_parser == NULL);
     }
     while (shell != NULL && shell->source_names != NULL) {
         struct ash_source_name* name = shell->source_names;
