@@ -2,6 +2,7 @@
 #define BX_APPLETS_SHELL_ASH_TRAPS_H
 
 #include <stdbool.h>
+#include <sys/types.h>
 
 struct ash_shell;
 struct ash_signal_traps;
@@ -33,6 +34,7 @@ int ash_trap_signal_set(struct ash_shell* shell, int number, const char* action)
 /* Copy one pending action independently of replacements during dispatch. */
 bool ash_trap_signal_prepare(struct ash_shell* shell, char** action);
 void ash_trap_signal_finish(struct ash_shell* shell);
+int ash_trap_signal_wait_child(struct ash_shell* shell, pid_t pid, int* number);
 void ash_traps_detach_after_fork(struct ash_shell* shell);
 void ash_traps_destroy(struct ash_shell* shell);
 

@@ -2,6 +2,7 @@
 #define BX_LIB_SIGNAL_PENDING_H
 
 #include <signal.h>
+#include <sys/types.h>
 
 struct bx_signal_pending;
 
@@ -18,6 +19,13 @@ void bx_signal_pending_destroy(struct bx_signal_pending* pending);
 int bx_signal_pending_set(struct bx_signal_pending* pending, int number, const struct sigaction* replacement);
 /* Consume one recorded signal, or return number zero when none is pending. */
 int bx_signal_pending_take(struct bx_signal_pending* pending, int* number);
+/*
+ * Wait for one child's terminal status without reaping it, or report a pending
+ * caught signal without consuming it (return 1 and set number). Return 0 when
+ * ready, -1 on error. ENOTSUP leaves nondefault/blocked/auto-reap SIGCHLD
+ * policy untouched.
+ */
+int bx_signal_pending_wait_child(struct bx_signal_pending* pending, pid_t pid, int* number);
 /* Call only after the fork boundary has reset caught kernel dispositions. */
 void bx_signal_pending_detach_after_fork(struct bx_signal_pending* pending);
 

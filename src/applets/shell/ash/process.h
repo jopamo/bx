@@ -89,6 +89,8 @@ struct ash_job {
 };
 
 typedef int (*ash_child_callback)(void* user_data);
+/* Return 1 with a caught signal, 0 to wait normally, or -1 with errno. */
+typedef int (*ash_child_wait_interrupt)(struct ash_shell* shell, pid_t pid, int* number);
 
 struct ash_job* ash_job_create(
     struct ash_shell* shell,
@@ -122,12 +124,9 @@ int ash_job_signal(const struct ash_job* job, int signal_number);
 void ash_job_abort(struct ash_job* job);
 bool ash_job_release(struct ash_job* job);
 
-int ash_jobs_wait_pid(
-    struct ash_shell* shell,
-    pid_t pid,
-    int* exit_status
-);
-int ash_jobs_wait_all(struct ash_shell* shell, int* exit_status);
+/* Return 1 on interruption, retaining unfinished published jobs. */
+int ash_jobs_wait_pid(struct ash_shell* shell, pid_t pid, int* exit_status, ash_child_wait_interrupt interrupt);
+int ash_jobs_wait_all(struct ash_shell* shell, int* exit_status, ash_child_wait_interrupt interrupt);
 bool ash_jobs_invariants(const struct ash_shell* shell);
 void ash_jobs_destroy(struct ash_shell* shell);
 
