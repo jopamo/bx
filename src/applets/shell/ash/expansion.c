@@ -1,9 +1,11 @@
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "applets/shell/ash/control.h"
 #include "applets/shell/ash/diagnostic.h"
@@ -91,12 +93,39 @@ static bool ash_expansion_append_char(
         ash_expansion_oom(shell);
 }
 
-static bool ash_append_parameter_value(struct ash_shell* shell, struct bx_text_buffer* output, const char* value, const char* name, size_t name_length) {
+static size_t ash_parameter_character_count(const char* value) {
+    size_t remaining = strlen(value);
+    if (MB_CUR_MAX == 1u) {
+        return remaining;
+    }
+    size_t count = 0u;
+    mbstate_t state = {0};
+    while (remaining != 0u) {
+        size_t width = mbrlen(value, remaining, &state);
+        if (width == 0u || width == (size_t)-1 || width == (size_t)-2) {
+            /* Undefined malformed input counts one byte and resets conversion. */
+            width = 1u;
+            state = (mbstate_t){0};
+        }
+        value += width;
+        remaining -= width;
+        count++;
+    }
+    return count;
+}
+
+static bool ash_append_parameter_value(struct ash_shell* shell, struct bx_text_buffer* output, const char* value, const char* name, size_t name_length, bool length) {
     if (value == NULL && (shell->options & ASH_SHELL_OPTION_NOUNSET) != 0u) {
         ash_diag_unbound_parameter(shell, name, name_length);
         return ash_expansion_fail(shell, !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE));
     }
-    return ash_expansion_append_text(shell, output, value != NULL ? value : "");
+    value = value != NULL ? value : "";
+    if (length) {
+        char number[sizeof(size_t) * CHAR_BIT + 1u];
+        snprintf(number, sizeof(number), "%zu", ash_parameter_character_count(value));
+        return ash_expansion_append_text(shell, output, number);
+    }
+    return ash_expansion_append_text(shell, output, value);
 }
 
 static const char* ash_positional(
@@ -117,7 +146,7 @@ static const char* ash_positional(
     return positionals->values[index - 1];
 }
 
-static bool ash_append_numbered_parameter(struct ash_shell* shell, struct bx_text_buffer* output, const char* digits, size_t length, bool braced) {
+static bool ash_append_numbered_parameter(struct ash_shell* shell, struct bx_text_buffer* output, const char* digits, size_t length, bool braced, bool measure) {
     const char* name = braced ? digits : digits - 1;
     size_t name_length = length + (braced ? 0u : 1u);
     uintmax_t index = 0u;
@@ -136,11 +165,11 @@ static bool ash_append_numbered_parameter(struct ash_shell* shell, struct bx_tex
                     }
                 }
             }
-            return ash_append_parameter_value(shell, output, value, name, name_length);
+            return ash_append_parameter_value(shell, output, value, name, name_length, measure);
         }
         index = index * 10u + digit;
     }
-    return ash_append_parameter_value(shell, output, ash_positional(shell, index), name, name_length);
+    return ash_append_parameter_value(shell, output, ash_positional(shell, index), name, name_length, measure);
 }
 
 static const char* ash_ifs_joiner(const struct ash_shell* shell) {
@@ -183,20 +212,15 @@ static bool ash_append_positionals_joined(
     return true;
 }
 
-static bool ash_append_special(
-    struct ash_shell* shell,
-    char parameter,
-    struct bx_text_buffer* output,
-    bool braced
-) {
+static bool ash_append_special(struct ash_shell* shell, char parameter, struct bx_text_buffer* output, bool braced, bool length) {
     char number[32];
     switch (parameter) {
         case '?':
             snprintf(number, sizeof(number), "%d", shell->last_status);
-            return ash_expansion_append_text(shell, output, number);
+            return ash_append_parameter_value(shell, output, number, NULL, 0u, length);
         case '$':
             snprintf(number, sizeof(number), "%ld", (long)shell->shell_pid);
-            return ash_expansion_append_text(shell, output, number);
+            return ash_append_parameter_value(shell, output, number, NULL, 0u, length);
         case '#': {
             const struct ash_positional_frame* positionals =
                 ash_scope_positionals(shell);
@@ -206,16 +230,16 @@ static bool ash_append_special(
                 "%zu",
                 positionals != NULL ? positionals->count : 0u
             );
-            return ash_expansion_append_text(shell, output, number);
+            return ash_append_parameter_value(shell, output, number, NULL, 0u, length);
         }
         case '-': {
             char letters[16];
             ash_shell_option_letters(shell, letters, sizeof(letters));
-            return ash_expansion_append_text(shell, output, letters);
+            return ash_append_parameter_value(shell, output, letters, NULL, 0u, length);
         }
         case '!':
             if (shell->last_async_pid <= 0) {
-                return ash_append_parameter_value(shell, output, NULL, braced ? "!" : "$!", braced ? 1u : 2u);
+                return ash_append_parameter_value(shell, output, NULL, braced ? "!" : "$!", braced ? 1u : 2u, length);
             }
             snprintf(
                 number,
@@ -223,7 +247,7 @@ static bool ash_append_special(
                 "%ld",
                 (long)shell->last_async_pid
             );
-            return ash_expansion_append_text(shell, output, number);
+            return ash_append_parameter_value(shell, output, number, NULL, 0u, length);
         case '@':
         case '*':
             return ash_append_positionals_joined(shell, output);
@@ -244,12 +268,15 @@ static bool ash_expand_parameter(
     }
 
     if (strchr("?$#-!@*", character) != NULL) {
-        return input[position + 1u] == '\0' &&
-            ash_append_special(shell, character, output, false);
+        return input[position + 1u] == '\0' && ash_append_special(shell, character, output, false, false);
     }
 
     if (character == '{') {
         position++;
+        bool measure = input[position] == '#' && input[position + 1u] != '}';
+        if (measure) {
+            position++;
+        }
         if (isdigit((unsigned char)input[position])) {
             size_t start = position;
             while (isdigit((unsigned char)input[position])) {
@@ -258,14 +285,14 @@ static bool ash_expand_parameter(
             if (input[position] != '}' || input[position + 1u] != '\0') {
                 return ash_expansion_bad_substitution(shell, input);
             }
-            return ash_append_numbered_parameter(shell, output, input + start, position - start, true);
+            return ash_append_numbered_parameter(shell, output, input + start, position - start, true, measure);
         }
-        if (strchr("?$#-!@*", input[position]) != NULL) {
+        if (input[position] != '\0' && strchr("?$#-!@*", input[position]) != NULL) {
             char special = input[position++];
-            if (input[position] != '}' || input[position + 1u] != '\0') {
+            if (input[position] != '}' || input[position + 1u] != '\0' || (measure && (special == '@' || special == '*'))) {
                 return ash_expansion_bad_substitution(shell, input);
             }
-            return ash_append_special(shell, special, output, true);
+            return ash_append_special(shell, special, output, true, measure);
         }
 
         size_t start = position;
@@ -281,14 +308,14 @@ static bool ash_expand_parameter(
             input + start,
             position - start
         );
-        return ash_append_parameter_value(shell, output, value, input + start, position - start);
+        return ash_append_parameter_value(shell, output, value, input + start, position - start, measure);
     }
 
     if (isdigit((unsigned char)character)) {
         if (input[position + 1u] != '\0') {
             return ash_expansion_bad_substitution(shell, input);
         }
-        return ash_append_numbered_parameter(shell, output, input + position, 1u, false);
+        return ash_append_numbered_parameter(shell, output, input + position, 1u, false, false);
     }
 
     if (!ash_is_name_start((unsigned char)character)) {
@@ -306,7 +333,7 @@ static bool ash_expand_parameter(
         input + start,
         position - start
     );
-    return ash_append_parameter_value(shell, output, value, input + start, position - start);
+    return ash_append_parameter_value(shell, output, value, input + start, position - start, false);
 }
 
 static bool ash_expand_part(
