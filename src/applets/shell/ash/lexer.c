@@ -559,6 +559,14 @@ enum ash_matched_case_phase {
     ASH_MATCH_CASE_BODY,
 };
 
+enum ash_matched_for_phase {
+    ASH_MATCH_FOR_NONE = 0,
+    ASH_MATCH_FOR_NAME,
+    ASH_MATCH_FOR_AFTER_NAME,
+    ASH_MATCH_FOR_WORDLIST,
+    ASH_MATCH_FOR_DO,
+};
+
 struct ash_matched_document {
     struct ash_matched_document* next;
     struct bx_text_buffer delimiter;
@@ -580,6 +588,7 @@ struct ash_matched_frame {
     bool case_subject_seen;
     bool case_pattern_start;
     enum ash_matched_case_phase case_phase;
+    enum ash_matched_for_phase for_phase;
     struct ash_matched_document* documents;
     struct ash_matched_document* last_document;
     struct ash_matched_document* delimiter;
@@ -1178,8 +1187,11 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                     scanner_result = result;
                     goto scanner_error;
                 }
+                if (active->for_phase == ASH_MATCH_FOR_WORDLIST) {
+                    active->for_phase = ASH_MATCH_FOR_DO;
+                }
                 active->word_start = true;
-                active->command_start = true;
+                active->command_start = active->for_phase == ASH_MATCH_FOR_NONE;
                 active->comment_eligible = true;
                 continue;
             }
@@ -1464,6 +1476,21 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             }
             bool command_context = frame != ASH_MATCH_CASE ||
                 active->case_phase == ASH_MATCH_CASE_BODY;
+            if (command_context && active->word_start && !blank) {
+                if (active->for_phase == ASH_MATCH_FOR_NAME) {
+                    active->for_phase = ASH_MATCH_FOR_AFTER_NAME;
+                }
+                else if (active->for_phase == ASH_MATCH_FOR_AFTER_NAME && keyword == ASH_RESERVED_IN) {
+                    active->for_phase = ASH_MATCH_FOR_WORDLIST;
+                }
+                else if ((active->for_phase == ASH_MATCH_FOR_AFTER_NAME || active->for_phase == ASH_MATCH_FOR_DO) && keyword == ASH_RESERVED_DO) {
+                    active->for_phase = ASH_MATCH_FOR_NONE;
+                    active->command_start = true;
+                }
+                else if (active->for_phase == ASH_MATCH_FOR_NONE && active->command_start && keyword == ASH_RESERVED_FOR) {
+                    active->for_phase = ASH_MATCH_FOR_NAME;
+                }
+            }
             if (command_context && active->command_start &&
                 keyword == ASH_RESERVED_CASE) {
                 for (size_t i = 0u; i < 4u; i++) {
@@ -1496,6 +1523,12 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                        keyword == ASH_RESERVED_LBRACE))) {
                     active->command_start = false;
                 }
+            }
+            if (active->for_phase != ASH_MATCH_FOR_NONE) {
+                if ((active->for_phase == ASH_MATCH_FOR_WORDLIST && (ch == '\n' || ch == ';')) || (active->for_phase == ASH_MATCH_FOR_AFTER_NAME && ch == ';')) {
+                    active->for_phase = ASH_MATCH_FOR_DO;
+                }
+                active->command_start = false;
             }
         }
 
