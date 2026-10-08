@@ -510,16 +510,21 @@ bool ash_alias_value_ends_blank(const struct ash_alias* alias) {
     return alias != NULL && alias->value_ends_blank;
 }
 
-bool ash_alias_requires_tail(
-    const struct ash_alias* alias,
-    const struct ash_lexer_options* options
-) {
-    if (alias == NULL || !ash_lexer_options_valid(options)) {
+bool ash_alias_requires_tail(const struct ash_alias* alias, const struct ash_lexer_options* options, bool* requires_tail) {
+    if (alias == NULL || !ash_lexer_options_valid(options) || requires_tail == NULL) {
+        errno = EINVAL;
         return false;
     }
-    return (options->flags & ASH_LEXER_EXTGLOB) != 0u ?
-        alias->requires_extglob_tail :
-        alias->requires_tail;
+    if ((options->flags & ~(uint32_t)ASH_LEXER_EXTGLOB) == 0u) {
+        *requires_tail = (options->flags & ASH_LEXER_EXTGLOB) != 0u ? alias->requires_extglob_tail : alias->requires_tail;
+        return true;
+    }
+    enum ash_lexer_fragment_result result = ash_lexer_classify_fragment_with_options(alias->value, alias->value_length, options);
+    if (result == ASH_LEXER_FRAGMENT_ERROR) {
+        return false;
+    }
+    *requires_tail = result == ASH_LEXER_FRAGMENT_NEEDS_TAIL;
+    return true;
 }
 
 static int ash_alias_compare(const void* left, const void* right) {

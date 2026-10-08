@@ -36,7 +36,7 @@ static const struct ash_operator ash_operators[] = {
     ASH_OPERATOR("<", ASH_TOKEN_LESS),
     ASH_OPERATOR("<<", ASH_TOKEN_DLESS),
     ASH_OPERATOR("<<-", ASH_TOKEN_DLESS_DASH),
-    ASH_OPERATOR("<<<", ASH_TOKEN_TLESS),
+    ASH_OPERATOR_FLAGS("<<<", ASH_TOKEN_TLESS, ASH_LEXER_HERE_STRING),
     ASH_OPERATOR("<&", ASH_TOKEN_LESS_AND),
     ASH_OPERATOR("<>", ASH_TOKEN_LESS_GREAT),
     ASH_OPERATOR(">", ASH_TOKEN_GREAT),
@@ -2511,8 +2511,12 @@ enum ash_lexer_fragment_result ash_lexer_classify_fragment_with_options(
         }
         ash_token_destroy(&token);
         if (result == ASH_LEXER_ERROR) {
-            errno = ENOMEM;
-            return ASH_LEXER_FRAGMENT_ERROR;
+            if (lexer.error != NULL && strcmp(lexer.error, "out of memory") == 0) {
+                errno = ENOMEM;
+                return ASH_LEXER_FRAGMENT_ERROR;
+            }
+            /* A syntax error belongs to activation, not alias definition. */
+            return ASH_LEXER_FRAGMENT_SELF_CONTAINED;
         }
         if (result == ASH_LEXER_INCOMPLETE ||
             (result == ASH_LEXER_END &&

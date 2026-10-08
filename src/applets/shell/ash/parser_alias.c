@@ -291,10 +291,11 @@ static bool ash_parser_push_alias(
 ) {
     size_t alias_length = ash_alias_value_length(alias);
     size_t tail_length = 0u;
-    bool bridge_tail = ash_alias_requires_tail(
-        alias,
-        &parser->lexer.options
-    );
+    bool bridge_tail;
+    if (!ash_alias_requires_tail(alias, &parser->lexer.options, &bridge_tail)) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+        return false;
+    }
     if (bridge_tail) {
         for (size_t i = parser->alias_frame_count; i != 0u; i--) {
             const struct ash_lexer* lexer =
