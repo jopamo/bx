@@ -441,24 +441,20 @@ struct ash_tilde_prefix {
     size_t length;
 };
 
-static bool ash_leading_tilde(struct ash_shell* shell, const struct ash_word* word, struct ash_tilde_prefix* prefix) {
+static bool ash_tilde_prefix_expand(struct ash_shell* shell, const struct ash_word_part* part, bool word_end, bool assignment, struct ash_tilde_prefix* prefix) {
     *prefix = (struct ash_tilde_prefix){0};
-    if (word->count == 0u) {
-        return true;
-    }
-    const struct ash_word_part* part = &word->parts[0];
     if (part->kind != ASH_WORD_TEXT || ash_word_part_is_quoted(part) || part->length == 0u || part->text[0] != '~') {
         return true;
     }
     size_t length = 1u;
-    while (length < part->length && part->text[length] != '/') {
+    while (length < part->length && part->text[length] != '/' && !(assignment && part->text[length] == ':')) {
         unsigned char c = (unsigned char)part->text[length];
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) {
             return true;
         }
         length++;
     }
-    if (length == part->length && word->count != 1u) {
+    if (length == part->length && !word_end) {
         return true;
     }
     if (length == 1u) {
@@ -492,9 +488,53 @@ static bool ash_leading_tilde(struct ash_shell* shell, const struct ash_word* wo
     return true;
 }
 
-static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, int* substitution_status) {
-    struct ash_tilde_prefix prefix;
-    if (!ash_leading_tilde(shell, word, &prefix)) {
+static bool ash_leading_tilde(struct ash_shell* shell, const struct ash_word* word, struct ash_tilde_prefix* prefix) {
+    *prefix = (struct ash_tilde_prefix){0};
+    return word->count == 0u || ash_tilde_prefix_expand(shell, &word->parts[0], word->count == 1u, false, prefix);
+}
+
+static bool ash_expand_assignment_text(struct ash_shell* shell, const struct ash_word_part* part, bool word_end, bool* value_started, bool* tilde_position, struct bx_text_buffer* output) {
+    struct ash_word_part remainder = *part;
+    if (!*value_started) {
+        const char* equal = memchr(remainder.text, '=', remainder.length);
+        size_t length = equal != NULL ? (size_t)(equal - remainder.text) + 1u : remainder.length;
+        if (!ash_expansion_append_span(shell, output, remainder.text, length)) {
+            return false;
+        }
+        remainder.text += length;
+        remainder.length -= length;
+        *value_started = equal != NULL;
+        *tilde_position = equal != NULL;
+    }
+    while (remainder.length != 0u) {
+        if (*tilde_position) {
+            struct ash_tilde_prefix prefix;
+            if (!ash_tilde_prefix_expand(shell, &remainder, word_end, true, &prefix)) {
+                return false;
+            }
+            bool appended = prefix.value == NULL || ash_expansion_append_text(shell, output, prefix.value);
+            free(prefix.owned);
+            if (!appended) {
+                return false;
+            }
+            remainder.text += prefix.length;
+            remainder.length -= prefix.length;
+        }
+        const char* colon = memchr(remainder.text, ':', remainder.length);
+        size_t length = colon != NULL ? (size_t)(colon - remainder.text) + 1u : remainder.length;
+        if (!ash_expansion_append_span(shell, output, remainder.text, length)) {
+            return false;
+        }
+        remainder.text += length;
+        remainder.length -= length;
+        *tilde_position = colon != NULL;
+    }
+    return true;
+}
+
+static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, bool assignment, int* substitution_status) {
+    struct ash_tilde_prefix prefix = {0};
+    if (!assignment && !ash_leading_tilde(shell, word, &prefix)) {
         return false;
     }
     bool prefix_appended = prefix.value == NULL || ((value == NULL || ash_expansion_append_text(shell, value, prefix.value)) &&
@@ -503,8 +543,17 @@ static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* w
     if (!prefix_appended) {
         return false;
     }
+    bool value_started = false;
+    bool tilde_position = false;
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
+        if (assignment && part->kind == ASH_WORD_TEXT && !ash_word_part_is_quoted(part)) {
+            if (!ash_expand_assignment_text(shell, part, i + 1u == word->count, &value_started, &tilde_position, value)) {
+                return false;
+            }
+            continue;
+        }
+        tilde_position = false;
         struct ash_word_part adjusted;
         if (i == 0u && prefix.length != 0u) {
             adjusted = *part;
@@ -540,10 +589,7 @@ bool ash_expand(
     struct bx_text_buffer output;
     bx_text_buffer_init(&output);
     bool pattern = context == ASH_EXPANSION_PATTERN;
-    if (!ash_expand_buffers(
-            shell, word, pattern ? NULL : &output, pattern ? &output : NULL,
-            substitution_status
-        )) {
+    if (!ash_expand_buffers(shell, word, pattern ? NULL : &output, pattern ? &output : NULL, context == ASH_EXPANSION_ASSIGNMENT, substitution_status)) {
         bx_text_buffer_destroy(&output);
         return false;
     }
@@ -879,13 +925,7 @@ enum ash_redirection_expansion_result ash_expand_redirection(
     struct bx_text_buffer pattern_buffer;
     bx_text_buffer_init(&value_buffer);
     bx_text_buffer_init(&pattern_buffer);
-    if (!ash_expand_buffers(
-            shell,
-            word,
-            &value_buffer,
-            needs_pattern ? &pattern_buffer : NULL,
-            substitution_status
-        )) {
+    if (!ash_expand_buffers(shell, word, &value_buffer, needs_pattern ? &pattern_buffer : NULL, false, substitution_status)) {
         bx_text_buffer_destroy(&value_buffer);
         bx_text_buffer_destroy(&pattern_buffer);
         return ASH_REDIRECTION_EXPANSION_ERROR;

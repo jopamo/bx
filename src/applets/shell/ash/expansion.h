@@ -10,6 +10,8 @@ struct ash_word;
 enum ash_expansion_context {
     ASH_EXPANSION_WORD = 0,
     ASH_EXPANSION_PATTERN,
+    /* Full assignment word, with tilde positions after '=' and unquoted ':'. */
+    ASH_EXPANSION_ASSIGNMENT,
 };
 
 struct ash_expanded_fields {
