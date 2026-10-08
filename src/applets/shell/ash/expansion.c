@@ -350,6 +350,10 @@ static bool ash_expand_part(
     if (part->kind == ASH_WORD_PARAMETER) {
         return ash_expand_parameter(shell, part->text, output);
     }
+    if (part->kind == ASH_WORD_ARITHMETIC) {
+        ash_diag_expansion(shell, "arithmetic expansion is unavailable");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
     if (part->kind == ASH_WORD_COMMAND_SUBSTITUTION ||
         part->kind == ASH_WORD_BACKQUOTE) {
         size_t prefix = part->kind == ASH_WORD_COMMAND_SUBSTITUTION ?
