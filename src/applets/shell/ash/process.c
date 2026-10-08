@@ -524,13 +524,19 @@ int ash_child_exit_status(const struct ash_child* child) {
     return 1;
 }
 
-static int ash_job_wait_process(
-    struct ash_job* job,
-    size_t process_index
-) {
+static int ash_job_wait_process(struct ash_job* job, size_t process_index, ash_child_wait_interrupt interrupt, int* exit_status) {
     struct ash_process* process = &job->processes[process_index];
     if (ash_process_terminal(process)) {
         return 0;
+    }
+    if (interrupt != NULL) {
+        int number = 0;
+        int result = interrupt(job->owner, process->child.pid, &number);
+        if (result != 0) {
+            if (result > 0)
+                *exit_status = 128 + number;
+            return result;
+        }
     }
     int wait_status;
     while (waitpid(process->child.pid, &wait_status, 0) < 0) {
@@ -546,16 +552,16 @@ static int ash_job_wait_process(
     return 0;
 }
 
-int ash_job_wait(struct ash_job* job, int* exit_status) {
+static int ash_job_wait_with_interrupt(struct ash_job* job, int* exit_status, ash_child_wait_interrupt interrupt) {
     if (!ash_job_owned(job) || job->state == ASH_JOB_PREPARING ||
         exit_status == NULL) {
         errno = EINVAL;
         return -1;
     }
     for (size_t i = 0u; i < job->process_count; i++) {
-        if (ash_job_wait_process(job, i) != 0) {
-            return -1;
-        }
+        int result = ash_job_wait_process(job, i, interrupt, exit_status);
+        if (result != 0)
+            return result;
     }
     *exit_status = ash_child_exit_status(
         &job->processes[job->status_process].child
@@ -572,6 +578,10 @@ int ash_job_wait(struct ash_job* job, int* exit_status) {
         }
     }
     return 0;
+}
+
+int ash_job_wait(struct ash_job* job, int* exit_status) {
+    return ash_job_wait_with_interrupt(job, exit_status, NULL);
 }
 
 int ash_job_signal(const struct ash_job* job, int signal_number) {
@@ -679,11 +689,7 @@ static struct ash_job* ash_jobs_find_pid(
     return NULL;
 }
 
-int ash_jobs_wait_pid(
-    struct ash_shell* shell,
-    pid_t pid,
-    int* exit_status
-) {
+int ash_jobs_wait_pid(struct ash_shell* shell, pid_t pid, int* exit_status, ash_child_wait_interrupt interrupt) {
     if (shell == NULL || pid <= 0 || exit_status == NULL) {
         errno = EINVAL;
         return -1;
@@ -698,9 +704,9 @@ int ash_jobs_wait_pid(
         errno = ECHILD;
         return -1;
     }
-    if (ash_job_wait_process(job, process_index) != 0) {
-        return -1;
-    }
+    int result = ash_job_wait_process(job, process_index, interrupt, exit_status);
+    if (result != 0)
+        return result;
     *exit_status = ash_child_exit_status(
         &job->processes[process_index].child
     );
@@ -711,7 +717,7 @@ int ash_jobs_wait_pid(
     return 0;
 }
 
-int ash_jobs_wait_all(struct ash_shell* shell, int* exit_status) {
+int ash_jobs_wait_all(struct ash_shell* shell, int* exit_status, ash_child_wait_interrupt interrupt) {
     if (shell == NULL || exit_status == NULL) {
         errno = EINVAL;
         return -1;
@@ -726,9 +732,9 @@ int ash_jobs_wait_all(struct ash_shell* shell, int* exit_status) {
         if (job == NULL) {
             return 0;
         }
-        if (ash_job_wait(job, exit_status) != 0) {
-            return -1;
-        }
+        int result = ash_job_wait_with_interrupt(job, exit_status, interrupt);
+        if (result != 0)
+            return result;
         (void)ash_job_release(job);
     }
 }

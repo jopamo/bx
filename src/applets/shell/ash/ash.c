@@ -994,7 +994,10 @@ static int ash_builtin_wait(
 ) {
     if (command->word_count == 1u) {
         int status;
-        if (ash_jobs_wait_all(shell, &status) != 0) {
+        int result = ash_jobs_wait_all(shell, &status, ash_trap_signal_wait_child);
+        if (result > 0)
+            return status;
+        if (result < 0) {
             ash_exec_error(shell, "wait", errno);
             return 1;
         }
@@ -1014,11 +1017,10 @@ static int ash_builtin_wait(
         }
 
         int child_status;
-        if (ash_jobs_wait_pid(
-                shell,
-                (pid_t)parsed,
-                &child_status
-            ) != 0) {
+        int result = ash_jobs_wait_pid(shell, (pid_t)parsed, &child_status, ash_trap_signal_wait_child);
+        if (result > 0)
+            return child_status;
+        if (result < 0) {
             ash_exec_error(shell, command->words[i], errno);
             status = 127;
             continue;

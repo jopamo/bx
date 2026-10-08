@@ -254,6 +254,13 @@ void ash_trap_signal_finish(struct ash_shell* shell) {
     shell->traps->signal_running = false;
 }
 
+int ash_trap_signal_wait_child(struct ash_shell* shell, pid_t pid, int* number) {
+    assert(ash_traps_invariants(shell));
+    struct ash_trap_table* table = shell->traps;
+    int result = bx_signal_pending_wait_child(table == NULL || table->signal_running || table->signals == NULL ? NULL : table->signals->pending, pid, number);
+    return result < 0 && errno == ENOTSUP ? 0 : result;
+}
+
 void ash_traps_detach_after_fork(struct ash_shell* shell) {
     assert(ash_traps_invariants(shell));
     if (shell->traps != NULL) {
