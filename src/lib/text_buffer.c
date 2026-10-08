@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,4 +110,50 @@ char* bx_text_buffer_take(struct bx_text_buffer* buffer) {
     char* result = buffer->data;
     *buffer = (struct bx_text_buffer){0};
     return result;
+}
+
+ssize_t bx_text_buffer_read_line(struct bx_text_buffer* buffer, FILE* stream) {
+    if (buffer == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    bx_text_buffer_clear(buffer);
+    if (stream == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    errno = 0;
+    for (;;) {
+        int byte = getc_unlocked(stream);
+        if (byte == EOF) {
+            if (ferror(stream)) {
+                int error = errno != 0 ? errno : EIO;
+                if (error == EINTR) {
+                    clearerr(stream);
+                    errno = 0;
+                    continue;
+                }
+                bx_text_buffer_clear(buffer);
+                errno = error;
+                return -1;
+            }
+            errno = 0;
+            return buffer->length == 0u ? -1 : (ssize_t)buffer->length;
+        }
+        if (buffer->length == (size_t)SSIZE_MAX) {
+            bx_text_buffer_clear(buffer);
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if (!bx_text_buffer_append_char(buffer, (char)byte)) {
+            int error = errno;
+            bx_text_buffer_clear(buffer);
+            errno = error;
+            return -1;
+        }
+        if (byte == '\n') {
+            errno = 0;
+            return (ssize_t)buffer->length;
+        }
+    }
 }
