@@ -14,6 +14,7 @@ struct ash_parse_stop {
     enum ash_reserved_word words[4];
     bool require_separator;
     bool case_clause;
+    bool complete_command;
 };
 
 /*
@@ -1497,8 +1498,33 @@ static struct ash_ast* ash_parse_list(
                 node->value.list.entries[node->value.list.count - 1u].asynchronous = true;
             }
             struct ash_token separator;
-            (void)ash_parser_take(parser, &separator);
+            bool taken = ash_parser_take(parser, &separator);
+            bool newline = separator.kind == ASH_TOKEN_NEWLINE;
             ash_token_destroy(&separator);
+            if (!taken) {
+                ash_ast_destroy(node);
+                return NULL;
+            }
+            if (stop->complete_command) {
+                if (newline) {
+                    break;
+                }
+                token = ash_parser_peek(parser);
+                if (token == NULL) {
+                    ash_ast_destroy(node);
+                    return NULL;
+                }
+                if (token->kind == ASH_TOKEN_NEWLINE) {
+                    struct ash_token closing_newline;
+                    taken = ash_parser_take(parser, &closing_newline);
+                    ash_token_destroy(&closing_newline);
+                    if (!taken) {
+                        ash_ast_destroy(node);
+                        return NULL;
+                    }
+                    break;
+                }
+            }
             ash_parser_skip_newlines(parser);
         }
 
@@ -1604,11 +1630,8 @@ void ash_parser_destroy(struct ash_parser* parser) {
     ash_parser_alias_state_destroy(parser);
 }
 
-enum ash_parser_result ash_parser_parse_program(
-    struct ash_parser* parser,
-    struct ash_ast** program
-) {
-    *program = NULL;
+enum ash_parser_result ash_parser_parse_complete_command(struct ash_parser* parser, struct ash_ast** command) {
+    *command = NULL;
     ash_parser_skip_newlines(parser);
     if (!ash_parser_prepare_command_alias(
             parser,
@@ -1621,20 +1644,12 @@ enum ash_parser_result ash_parser_parse_program(
         return parser->result;
     }
     if (first->kind == ASH_TOKEN_EOF) {
-        *program = ash_ast_create(ASH_AST_LIST, first->location);
-        if (*program == NULL) {
-            return ash_parser_fail(
-                parser,
-                ASH_PARSER_ERROR,
-                first->location,
-                "out of memory"
-            );
-        }
         return ASH_PARSER_COMPLETE;
     }
 
     struct ash_parse_stop stop = {
         .token = ASH_TOKEN_EOF,
+        .complete_command = true,
     };
     struct ash_ast* node = ash_parse_list(parser, &stop);
     if (node == NULL) {
@@ -1653,22 +1668,45 @@ enum ash_parser_result ash_parser_parse_program(
         return parser->result;
     }
 
-    struct ash_token* token = ash_parser_peek(parser);
-    if (token == NULL) {
-        ash_ast_destroy(node);
-        return parser->result;
-    }
-    if (token->kind != ASH_TOKEN_EOF) {
-        ash_parser_fail(
-            parser,
-            ASH_PARSER_ERROR,
-            token->location,
-            "unexpected token after command list"
-        );
-        ash_ast_destroy(node);
-        return parser->result;
-    }
-
-    *program = node;
+    *command = node;
     return ASH_PARSER_COMPLETE;
+}
+
+enum ash_parser_result ash_parser_parse_program(struct ash_parser* parser, struct ash_ast** program) {
+    *program = NULL;
+    struct ash_ast* accumulated = NULL;
+    while (true) {
+        struct ash_ast* command = NULL;
+        enum ash_parser_result result = ash_parser_parse_complete_command(parser, &command);
+        if (result != ASH_PARSER_COMPLETE) {
+            ash_ast_destroy(accumulated);
+            return result;
+        }
+        if (command == NULL) {
+            if (accumulated == NULL) {
+                accumulated = ash_ast_create(ASH_AST_LIST, parser->lookahead.location);
+                if (accumulated == NULL) {
+                    return ash_parser_fail(parser, ASH_PARSER_ERROR, parser->lookahead.location, "out of memory");
+                }
+            }
+            *program = accumulated;
+            return ASH_PARSER_COMPLETE;
+        }
+        if (accumulated == NULL) {
+            accumulated = command;
+            continue;
+        }
+        for (size_t i = 0u; i < command->value.list.count; i++) {
+            struct ash_list_entry* entry = &command->value.list.entries[i];
+            struct ash_source_location location = entry->command->location;
+            if (ash_ast_list_take(accumulated, &entry->command) != 0) {
+                ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+                ash_ast_destroy(command);
+                ash_ast_destroy(accumulated);
+                return parser->result;
+            }
+            accumulated->value.list.entries[accumulated->value.list.count - 1u].asynchronous = entry->asynchronous;
+        }
+        ash_ast_destroy(command);
+    }
 }
