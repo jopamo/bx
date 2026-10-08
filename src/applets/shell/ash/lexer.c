@@ -5,6 +5,9 @@
 #include <string.h>
 
 #include "applets/shell/ash/lexer.h"
+#include "applets/shell/ash/here_document.h"
+#include "applets/shell/ash/quote.h"
+#include "lib/text_buffer.h"
 
 struct ash_operator {
     const char* text;
@@ -539,6 +542,7 @@ enum ash_matched_frame_kind {
     ASH_MATCH_ANSI_C_QUOTE,
     ASH_MATCH_LOCALE_QUOTE,
     ASH_MATCH_CASE,
+    ASH_MATCH_DELIMITER,
     ASH_MATCH_COUNT,
 };
 
@@ -547,6 +551,15 @@ enum ash_matched_case_phase {
     ASH_MATCH_CASE_IN,
     ASH_MATCH_CASE_PATTERN,
     ASH_MATCH_CASE_BODY,
+};
+
+struct ash_matched_document {
+    struct ash_matched_document* next;
+    struct bx_text_buffer delimiter;
+    struct ash_source_location location;
+    bool quoted;
+    bool strip_tabs;
+    bool word_started;
 };
 
 #define ASH_MATCH_INLINE_FRAMES 8u
@@ -561,6 +574,15 @@ struct ash_matched_frame {
     bool case_subject_seen;
     bool case_pattern_start;
     enum ash_matched_case_phase case_phase;
+    struct ash_matched_document* documents;
+    struct ash_matched_document* last_document;
+    struct ash_matched_document* delimiter;
+    /* Indices survive frame-array relocation; delimiter frames borrow queue entries. */
+    size_t delimiter_owner;
+    size_t capture_start;
+    size_t capture_body_start;
+    size_t capture_end;
+    bool capture_raw;
 };
 
 struct ash_matched_stack {
@@ -580,6 +602,15 @@ static void ash_matched_stack_init(struct ash_matched_stack* stack) {
 }
 
 static void ash_matched_stack_destroy(struct ash_matched_stack* stack) {
+    for (size_t i = 0u; i < stack->count; i++) {
+        struct ash_matched_document* document = stack->frames[i].documents;
+        while (document != NULL) {
+            struct ash_matched_document* next = document->next;
+            bx_text_buffer_destroy(&document->delimiter);
+            free(document);
+            document = next;
+        }
+    }
     if (stack->frames != stack->inline_frames) {
         free(stack->frames);
     }
@@ -653,6 +684,7 @@ static int ash_matched_stack_push(
         .commands_enabled = commands_enabled,
         .word_start = true,
         .command_start = true,
+        .delimiter_owner = SIZE_MAX,
     };
     return 0;
 }
@@ -676,6 +708,7 @@ static size_t ash_matched_opener_length(
             return 1u;
         case ASH_MATCH_COUNT:
         case ASH_MATCH_CASE:
+        case ASH_MATCH_DELIMITER:
             break;
     }
     return 0u;
@@ -774,6 +807,7 @@ static const char* ash_matched_error(
         case ASH_MATCH_LOCALE_QUOTE:
         case ASH_MATCH_COUNT:
         case ASH_MATCH_CASE:
+        case ASH_MATCH_DELIMITER:
             break;
     }
     return "unterminated shell construct";
@@ -837,6 +871,7 @@ static int ash_word_append_matched_span(
         case ASH_MATCH_LOCALE_QUOTE:
         case ASH_MATCH_COUNT:
         case ASH_MATCH_CASE:
+        case ASH_MATCH_DELIMITER:
             errno = EINVAL;
             return -1;
     }
@@ -884,6 +919,93 @@ static enum ash_reserved_word ash_lexer_matched_reserved_word(const struct ash_l
     return next == '\0' || ash_matched_comment_separator(next) || next == '(' || next == ')' ? ash_reserved_word_from_span(spelling, length) : ASH_RESERVED_NONE;
 }
 
+static bool ash_lexer_word_boundary(const struct ash_lexer* lexer);
+
+static size_t ash_matched_input_owner(const struct ash_matched_stack* stack) {
+    for (size_t i = stack->count; i != 0u; i--) {
+        enum ash_matched_frame_kind kind = stack->frames[i - 1u].kind;
+        if (kind == ASH_MATCH_COMMAND || kind == ASH_MATCH_PROCESS || kind == ASH_MATCH_BACKQUOTE) {
+            return i - 1u;
+        }
+    }
+    return SIZE_MAX;
+}
+
+static bool ash_matched_pop(struct ash_matched_stack* stack, const struct ash_lexer* lexer) {
+    struct ash_matched_frame* frame = &stack->frames[stack->count - 1u];
+    if (frame->capture_raw) {
+        struct ash_matched_document* document = stack->frames[frame->delimiter_owner].delimiter;
+        struct ash_word word;
+        ash_word_init(&word, ash_lexer_current_location(lexer));
+        bool appended = ash_word_append_matched_span(&word, ASH_QUOTE_NONE, frame->kind, word.location, lexer, frame->capture_start, frame->capture_body_start, frame->capture_end) == 0;
+        if (appended) {
+            for (size_t i = 0u; i < word.count && appended; i++) {
+                appended = bx_text_buffer_append_span(&document->delimiter, word.parts[i].text, word.parts[i].length);
+            }
+        }
+        ash_word_destroy(&word);
+        if (!appended) {
+            return false;
+        }
+    }
+    assert(frame->documents == NULL);
+    stack->count--;
+    return true;
+}
+
+static int ash_matched_push_delimiter_part(struct ash_lexer* lexer, struct ash_matched_stack* stack, enum ash_matched_frame_kind kind, bool raw) {
+    size_t owner = stack->count - 1u;
+    if (stack->frames[owner].kind != ASH_MATCH_DELIMITER) {
+        owner = stack->frames[owner].delimiter_owner;
+    }
+    size_t start = lexer->offset;
+    if (ash_lexer_push_matched_frame(lexer, stack, kind) != 0) {
+        return -1;
+    }
+    struct ash_matched_frame* child = &stack->frames[stack->count - 1u];
+    child->delimiter_owner = owner;
+    child->capture_raw = raw;
+    child->capture_start = raw ? start : lexer->offset;
+    child->capture_body_start = lexer->offset;
+    return 0;
+}
+
+static enum ash_lexer_result ash_matched_read_documents(struct ash_lexer* lexer, struct ash_matched_frame* owner) {
+    struct bx_text_buffer logical_line;
+    bx_text_buffer_init(&logical_line);
+    while (owner->documents != NULL) {
+        struct ash_matched_document* document = owner->documents;
+        bool matched = false;
+        while (!ash_lexer_at_end(lexer)) {
+            size_t start = lexer->offset;
+            while (!ash_lexer_at_end(lexer) && ash_lexer_advance(lexer) != '\n') {
+            }
+            enum ash_here_document_line_result result =
+                ash_here_document_match_line(&logical_line, lexer->input + start, lexer->offset - start, document->delimiter.data, document->delimiter.length, document->quoted, document->strip_tabs);
+            if (result == ASH_HERE_DOCUMENT_LINE_ERROR) {
+                bx_text_buffer_destroy(&logical_line);
+                return ash_lexer_fail(lexer, ASH_LEXER_ERROR, document->location, "out of memory");
+            }
+            if (result == ASH_HERE_DOCUMENT_LINE_DELIMITER) {
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            bx_text_buffer_destroy(&logical_line);
+            return ash_lexer_fail(lexer, ASH_LEXER_INCOMPLETE, document->location, "here-document delimited by end-of-file");
+        }
+        owner->documents = document->next;
+        if (owner->documents == NULL) {
+            owner->last_document = NULL;
+        }
+        bx_text_buffer_destroy(&document->delimiter);
+        free(document);
+    }
+    bx_text_buffer_destroy(&logical_line);
+    return ASH_LEXER_TOKEN;
+}
+
 /*
  * Matched shell constructs share one iterative scanner. The explicit frame
  * stack makes nesting depth input-owned rather than C-stack-owned, while the
@@ -918,6 +1040,7 @@ static enum ash_lexer_result ash_lexer_scan_matched(
     }
     size_t body_start = lexer->offset;
     size_t body_end = body_start;
+    enum ash_lexer_result scanner_result = ASH_LEXER_ERROR;
 
     while (stack.count != 0u) {
         struct ash_matched_frame* active =
@@ -928,10 +1051,86 @@ static enum ash_lexer_result ash_lexer_scan_matched(
         }
 
         char ch = ash_lexer_peek(lexer, 0u);
+        if (frame == ASH_MATCH_DELIMITER) {
+            struct ash_matched_document* document = active->delimiter;
+            ash_lexer_skip_line_continuations(lexer);
+            if (ash_lexer_at_end(lexer)) {
+                break;
+            }
+            ch = ash_lexer_peek(lexer, 0u);
+            if (!document->word_started && ash_is_blank(ch)) {
+                (void)ash_lexer_advance(lexer);
+                continue;
+            }
+            if (ash_lexer_word_boundary(lexer) || (!document->word_started && ch == '#')) {
+                if (!document->word_started) {
+                    ash_lexer_fail(lexer, ASH_LEXER_ERROR, document->location, "expected here-document delimiter");
+                    goto scanner_error;
+                }
+                if (!ash_matched_pop(&stack, lexer)) {
+                    goto out_of_memory;
+                }
+                continue;
+            }
+            document->word_started = true;
+            enum ash_matched_frame_kind nested;
+            bool raw = false;
+            bool push = true;
+            if (ch == '\\') {
+                document->quoted = true;
+                (void)ash_lexer_advance(lexer);
+                if (ash_lexer_at_end(lexer)) {
+                    break;
+                }
+                char escaped = ash_lexer_advance(lexer);
+                if (!bx_text_buffer_append_char(&document->delimiter, escaped)) {
+                    goto out_of_memory;
+                }
+                continue;
+            }
+            if (ch == '\'') {
+                nested = ASH_MATCH_SINGLE_QUOTE;
+            }
+            else if (ch == '"') {
+                nested = ASH_MATCH_DOUBLE_QUOTE;
+            }
+            else if (ch == '$' && ash_lexer_dollar_frame(lexer, true, &nested)) {
+                raw = nested != ASH_MATCH_ANSI_C_QUOTE && nested != ASH_MATCH_LOCALE_QUOTE;
+            }
+            else if (ch == '`') {
+                nested = ASH_MATCH_BACKQUOTE;
+                raw = true;
+            }
+            else if (ash_lexer_starts_process_substitution(lexer)) {
+                nested = ASH_MATCH_PROCESS;
+                raw = true;
+            }
+            else {
+                push = false;
+            }
+            if (push) {
+                document->quoted |= !raw;
+                if (ash_matched_push_delimiter_part(lexer, &stack, nested, raw) != 0) {
+                    goto out_of_memory;
+                }
+                continue;
+            }
+            if (!bx_text_buffer_append_char(&document->delimiter, ch)) {
+                goto out_of_memory;
+            }
+            (void)ash_lexer_advance(lexer);
+            continue;
+        }
         if (frame == ASH_MATCH_SINGLE_QUOTE) {
             (void)ash_lexer_advance(lexer);
             if (ch == '\'') {
-                stack.count--;
+                if (active->delimiter_owner != SIZE_MAX &&
+                    !bx_text_buffer_append_span(&stack.frames[active->delimiter_owner].delimiter->delimiter, lexer->input + active->capture_start, lexer->offset - active->capture_start - 1u)) {
+                    goto out_of_memory;
+                }
+                if (!ash_matched_pop(&stack, lexer)) {
+                    goto out_of_memory;
+                }
             }
             continue;
         }
@@ -942,31 +1141,92 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             else {
                 (void)ash_lexer_advance(lexer);
                 if (ch == '\'') {
-                    stack.count--;
+                    if (active->delimiter_owner != SIZE_MAX && !ash_quote_append_dollar_single(&stack.frames[active->delimiter_owner].delimiter->delimiter, lexer->input + active->capture_start,
+                                                                                               lexer->offset - active->capture_start - 1u)) {
+                        goto out_of_memory;
+                    }
+                    if (!ash_matched_pop(&stack, lexer)) {
+                        goto out_of_memory;
+                    }
                 }
             }
             continue;
         }
-        if (frame == ASH_MATCH_BACKQUOTE) {
-            if (ash_is_line_continuation_at(
-                    lexer->input,
-                    lexer->length,
-                    lexer->offset
-                )) {
-                ash_lexer_advance_count(lexer, 2u);
+        ash_lexer_skip_line_continuations(lexer);
+        if (ash_lexer_at_end(lexer)) {
+            break;
+        }
+        ch = ash_lexer_peek(lexer, 0u);
+        if (active->capture_raw) {
+            active->capture_end = lexer->offset;
+        }
+        bool input_context = active->commands_enabled || (frame == ASH_MATCH_BACKQUOTE && active->backquote_quote == ASH_QUOTE_NONE);
+        bool case_pattern = frame == ASH_MATCH_CASE && active->case_phase != ASH_MATCH_CASE_BODY;
+        if (input_context && !case_pattern && (ch == '\n' || ch == '<')) {
+            size_t owner_index = ash_matched_input_owner(&stack);
+            struct ash_matched_frame* owner = owner_index == SIZE_MAX ? NULL : &stack.frames[owner_index];
+            if (ch == '\n' && owner != NULL && owner->documents != NULL) {
+                (void)ash_lexer_advance(lexer);
+                enum ash_lexer_result result = ash_matched_read_documents(lexer, owner);
+                if (result != ASH_LEXER_TOKEN) {
+                    scanner_result = result;
+                    goto scanner_error;
+                }
+                active->word_start = true;
+                active->command_start = true;
+                active->comment_eligible = true;
                 continue;
             }
+            const struct ash_operator* operator = ch == '<' ? ash_lexer_operator(lexer) : NULL;
+            if (operator != NULL && operator->kind == ASH_TOKEN_TLESS) {
+                for (size_t i = 0u; i < operator->length; i++) {
+                    (void)ash_lexer_advance_logical(lexer);
+                }
+                continue;
+            }
+            if (owner != NULL && operator != NULL && (operator->kind == ASH_TOKEN_DLESS || operator->kind == ASH_TOKEN_DLESS_DASH)) {
+                struct ash_matched_document* document = calloc(1u, sizeof(*document));
+                if (document == NULL) {
+                    goto out_of_memory;
+                }
+                bx_text_buffer_init(&document->delimiter);
+                document->location = ash_lexer_current_location(lexer);
+                document->strip_tabs = operator->kind == ASH_TOKEN_DLESS_DASH;
+                if (owner->last_document == NULL) {
+                    owner->documents = document;
+                }
+                else {
+                    owner->last_document->next = document;
+                }
+                owner->last_document = document;
+                for (size_t i = 0u; i < operator->length; i++) {
+                    (void)ash_lexer_advance_logical(lexer);
+                }
+                if (ash_matched_stack_push(&stack, ASH_MATCH_DELIMITER) != 0) {
+                    goto out_of_memory;
+                }
+                stack.frames[stack.count - 1u].delimiter = document;
+                continue;
+            }
+        }
+        if (frame == ASH_MATCH_BACKQUOTE) {
             if (ch == '\\' && ash_lexer_peek(lexer, 1u) != '\0') {
                 ash_lexer_advance_count(lexer, 2u);
                 active->comment_eligible = false;
                 continue;
             }
             if (ch == '`') {
+                if (active->documents != NULL) {
+                    ash_lexer_fail(lexer, ASH_LEXER_ERROR, ash_lexer_current_location(lexer), "here-document requires newline before substitution close");
+                    goto scanner_error;
+                }
                 if (stack.count == 1u) {
                     body_end = lexer->offset;
                 }
                 (void)ash_lexer_advance(lexer);
-                stack.count--;
+                if (!ash_matched_pop(&stack, lexer)) {
+                    goto out_of_memory;
+                }
                 continue;
             }
 
@@ -1043,51 +1303,52 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             continue;
         }
 
-        ash_lexer_skip_line_continuations(lexer);
-        if (ash_lexer_at_end(lexer)) {
-            break;
-        }
-        ch = ash_lexer_peek(lexer, 0u);
         if (frame == ASH_MATCH_DOUBLE_QUOTE ||
             frame == ASH_MATCH_LOCALE_QUOTE) {
+            struct ash_matched_document* delimiter_document = active->delimiter_owner == SIZE_MAX ? NULL : stack.frames[active->delimiter_owner].delimiter;
             if (ch == '\\') {
                 char next = ash_lexer_peek(lexer, 1u);
                 if (next != '\0' &&
                     strchr("$`\"\\", next) != NULL) {
+                    if (delimiter_document != NULL && !bx_text_buffer_append_char(&delimiter_document->delimiter, next)) {
+                        goto out_of_memory;
+                    }
                     ash_lexer_advance_count(lexer, 2u);
                 }
                 else {
+                    if (delimiter_document != NULL && !bx_text_buffer_append_char(&delimiter_document->delimiter, ch)) {
+                        goto out_of_memory;
+                    }
                     (void)ash_lexer_advance(lexer);
                 }
                 continue;
             }
             if (ch == '"') {
                 (void)ash_lexer_advance(lexer);
-                stack.count--;
+                if (!ash_matched_pop(&stack, lexer)) {
+                    goto out_of_memory;
+                }
                 continue;
             }
 
             enum ash_matched_frame_kind nested;
             if (ch == '$' &&
                 ash_lexer_dollar_frame(lexer, false, &nested)) {
-                if (ash_lexer_push_matched_frame(
-                        lexer,
-                        &stack,
-                        nested
-                    ) != 0) {
+                int pushed = delimiter_document != NULL ? ash_matched_push_delimiter_part(lexer, &stack, nested, true) : ash_lexer_push_matched_frame(lexer, &stack, nested);
+                if (pushed != 0) {
                     goto out_of_memory;
                 }
                 continue;
             }
             if (ch == '`') {
-                if (ash_lexer_push_matched_frame(
-                        lexer,
-                        &stack,
-                        ASH_MATCH_BACKQUOTE
-                    ) != 0) {
+                int pushed = delimiter_document != NULL ? ash_matched_push_delimiter_part(lexer, &stack, ASH_MATCH_BACKQUOTE, true) : ash_lexer_push_matched_frame(lexer, &stack, ASH_MATCH_BACKQUOTE);
+                if (pushed != 0) {
                     goto out_of_memory;
                 }
                 continue;
+            }
+            if (delimiter_document != NULL && !bx_text_buffer_append_char(&delimiter_document->delimiter, ch)) {
+                goto out_of_memory;
             }
             (void)ash_lexer_advance(lexer);
             continue;
@@ -1147,7 +1408,9 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                         for (size_t i = 0u; i < 4u; i++) {
                             (void)ash_lexer_advance_logical(lexer);
                         }
-                        stack.count--;
+                        if (!ash_matched_pop(&stack, lexer)) {
+                            goto out_of_memory;
+                        }
                         continue;
                     }
                     if (ch == ')') {
@@ -1173,7 +1436,9 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                         for (size_t i = 0u; i < 4u; i++) {
                             (void)ash_lexer_advance_logical(lexer);
                         }
-                        stack.count--;
+                        if (!ash_matched_pop(&stack, lexer)) {
+                            goto out_of_memory;
+                        }
                         continue;
                     }
                     if (ch == ';' &&
@@ -1287,7 +1552,9 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                 body_end = lexer->offset;
             }
             (void)ash_lexer_advance(lexer);
-            stack.count--;
+            if (!ash_matched_pop(&stack, lexer)) {
+                goto out_of_memory;
+            }
             continue;
         }
         if (frame == ASH_MATCH_ARITHMETIC &&
@@ -1297,18 +1564,26 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             }
             (void)ash_lexer_advance_logical(lexer);
             (void)ash_lexer_advance_logical(lexer);
-            stack.count--;
+            if (!ash_matched_pop(&stack, lexer)) {
+                goto out_of_memory;
+            }
             continue;
         }
         if ((frame == ASH_MATCH_COMMAND ||
              frame == ASH_MATCH_PROCESS ||
              frame == ASH_MATCH_PAREN) &&
             ch == ')') {
+            if (active->documents != NULL) {
+                ash_lexer_fail(lexer, ASH_LEXER_ERROR, ash_lexer_current_location(lexer), "here-document requires newline before substitution close");
+                goto scanner_error;
+            }
             if (root_closing) {
                 body_end = lexer->offset;
             }
             (void)ash_lexer_advance(lexer);
-            stack.count--;
+            if (!ash_matched_pop(&stack, lexer)) {
+                goto out_of_memory;
+            }
             if (frame == ASH_MATCH_PAREN && stack.count != 0u &&
                 active->commands_enabled) {
                 struct ash_matched_frame* parent = &stack.frames[stack.count - 1u];
@@ -1368,13 +1643,10 @@ static enum ash_lexer_result ash_lexer_scan_matched(
     return ASH_LEXER_TOKEN;
 
 out_of_memory:
+    ash_lexer_fail(lexer, ASH_LEXER_ERROR, location, "out of memory");
+scanner_error:
     ash_matched_stack_destroy(&stack);
-    return ash_lexer_fail(
-        lexer,
-        ASH_LEXER_ERROR,
-        location,
-        "out of memory"
-    );
+    return scanner_result;
 }
 
 static enum ash_lexer_result ash_lexer_scan_dollar(

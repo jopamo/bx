@@ -633,6 +633,7 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/parser.c',
   'src/applets/shell/ash/parser_alias.c',
   'src/applets/shell/ash/parser_heredoc.c',
+  'src/applets/shell/ash/here_document.c',
   'src/applets/shell/ash/process.c',
   'src/applets/shell/ash/privilege.c',
   'src/applets/shell/ash/quote.c',
