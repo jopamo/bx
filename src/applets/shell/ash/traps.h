@@ -24,6 +24,7 @@ const char* ash_trap_exit_action(const struct ash_shell* shell);
 /* Claim dispatch once, then copy the action independently of replacements. */
 bool ash_trap_exit_prepare(struct ash_shell* shell, char** action);
 void ash_trap_exit_override_status(struct ash_shell* shell);
+void ash_trap_exit_deactivate_for_exec(struct ash_shell* shell);
 bool ash_trap_exit_finish(struct ash_shell* shell);
 /* Capture ingress dispositions before the shell first changes a signal. */
 int ash_trap_signals_init(struct ash_shell* shell);
