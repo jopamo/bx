@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 struct ash_shell;
+struct ash_signal_traps;
 
 struct ash_trap_table {
     struct ash_shell* owner;
@@ -12,6 +13,7 @@ struct ash_trap_table {
     bool exit_fired;
     bool exit_running;
     bool exit_status_override;
+    struct ash_signal_traps* signals;
 };
 
 bool ash_traps_invariants(const struct ash_shell* shell);
@@ -21,6 +23,12 @@ const char* ash_trap_exit_action(const struct ash_shell* shell);
 bool ash_trap_exit_prepare(struct ash_shell* shell, char** action);
 void ash_trap_exit_override_status(struct ash_shell* shell);
 bool ash_trap_exit_finish(struct ash_shell* shell);
+/* Capture ingress dispositions before the shell first changes a signal. */
+int ash_trap_signals_init(struct ash_shell* shell);
+int ash_trap_signal_limit(void);
+bool ash_trap_signal_supported(const struct ash_shell* shell, int number, const char* action);
+const char* ash_trap_signal_action(const struct ash_shell* shell, int number);
+int ash_trap_signal_set(struct ash_shell* shell, int number, const char* action);
 void ash_traps_detach_after_fork(struct ash_shell* shell);
 void ash_traps_destroy(struct ash_shell* shell);
 
