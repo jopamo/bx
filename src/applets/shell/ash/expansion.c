@@ -15,6 +15,7 @@
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/syntax.h"
 #include "applets/shell/ash/variables.h"
+#include "lib/path_ops.h"
 #include "lib/text_buffer.h"
 
 static bool ash_expansion_oom(const struct ash_shell* shell) {
@@ -434,32 +435,81 @@ static bool ash_append_pattern_component(
     );
 }
 
-static const char* ash_leading_home(const struct ash_shell* shell, const struct ash_word* word) {
+struct ash_tilde_prefix {
+    const char* value;
+    char* owned;
+    size_t length;
+};
+
+static bool ash_leading_tilde(struct ash_shell* shell, const struct ash_word* word, struct ash_tilde_prefix* prefix) {
+    *prefix = (struct ash_tilde_prefix){0};
     if (word->count == 0u) {
-        return NULL;
+        return true;
     }
     const struct ash_word_part* part = &word->parts[0];
     if (part->kind != ASH_WORD_TEXT || ash_word_part_is_quoted(part) || part->length == 0u || part->text[0] != '~') {
-        return NULL;
+        return true;
     }
-    if ((part->length == 1u && word->count == 1u) || (part->length > 1u && part->text[1] == '/')) {
-        return ash_var_get(shell, "HOME");
+    size_t length = 1u;
+    while (length < part->length && part->text[length] != '/') {
+        unsigned char c = (unsigned char)part->text[length];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) {
+            return true;
+        }
+        length++;
     }
-    return NULL;
+    if (length == part->length && word->count != 1u) {
+        return true;
+    }
+    if (length == 1u) {
+        prefix->value = ash_var_get(shell, "HOME");
+        prefix->length = prefix->value != NULL ? 1u : 0u;
+        return true;
+    }
+    if (part->text[1] == '-') {
+        return true;
+    }
+    char* name = strndup(part->text, length);
+    if (name == NULL) {
+        return ash_expansion_oom(shell);
+    }
+    prefix->owned = bx_path_expand_tilde_dup(name, NULL);
+    if (prefix->owned == NULL) {
+        int error = errno;
+        if (error == ENOMEM || error == EOVERFLOW) {
+            (void)ash_expansion_oom(shell);
+        }
+        else {
+            ash_diag_expansion(shell, "%s: tilde lookup: %s", name, strerror(error));
+            (void)ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        }
+        free(name);
+        return false;
+    }
+    free(name);
+    prefix->value = prefix->owned;
+    prefix->length = length;
+    return true;
 }
 
 static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, int* substitution_status) {
-    const char* home = ash_leading_home(shell, word);
-    if (home != NULL && ((value != NULL && !ash_expansion_append_text(shell, value, home)) || (pattern != NULL && !ash_append_pattern_span(shell, pattern, home, strlen(home), true)))) {
+    struct ash_tilde_prefix prefix;
+    if (!ash_leading_tilde(shell, word, &prefix)) {
+        return false;
+    }
+    bool prefix_appended = prefix.value == NULL || ((value == NULL || ash_expansion_append_text(shell, value, prefix.value)) &&
+                                                    (pattern == NULL || ash_append_pattern_span(shell, pattern, prefix.value, strlen(prefix.value), true)));
+    free(prefix.owned);
+    if (!prefix_appended) {
         return false;
     }
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
         struct ash_word_part adjusted;
-        if (i == 0u && home != NULL) {
+        if (i == 0u && prefix.length != 0u) {
             adjusted = *part;
-            adjusted.text++;
-            adjusted.length--;
+            adjusted.text += prefix.length;
+            adjusted.length -= prefix.length;
             part = &adjusted;
         }
         struct bx_text_buffer component;
@@ -921,9 +971,14 @@ bool ash_expand_argument(
     const struct ash_positional_frame* positionals =
         ash_scope_positionals(shell);
 
-    const char* home = ash_leading_home(shell, word);
-    if (home != NULL) {
-        if (!ash_expanded_fields_add_component(shell, fields, active_patterns, home, true, false)) {
+    struct ash_tilde_prefix prefix;
+    if (!ash_leading_tilde(shell, word, &prefix)) {
+        goto fail;
+    }
+    if (prefix.value != NULL) {
+        bool added = ash_expanded_fields_add_component(shell, fields, active_patterns, prefix.value, true, false);
+        free(prefix.owned);
+        if (!added) {
             goto fail;
         }
         field_present = true;
@@ -931,10 +986,10 @@ bool ash_expand_argument(
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
         struct ash_word_part adjusted;
-        if (i == 0u && home != NULL) {
+        if (i == 0u && prefix.length != 0u) {
             adjusted = *part;
-            adjusted.text++;
-            adjusted.length--;
+            adjusted.text += prefix.length;
+            adjusted.length -= prefix.length;
             part = &adjusted;
         }
         if (ash_parameter_is(part, '@')) {
