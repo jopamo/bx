@@ -319,19 +319,26 @@ static bool ash_parser_take_trailing_redirections(
     }
 }
 
-static char* ash_parser_word_name(const struct ash_word* word) {
+static char* ash_parser_word_name(struct ash_parser* parser, const struct ash_word* word) {
     size_t length = 0u;
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
-        if (part->kind != ASH_WORD_TEXT ||
-            ash_word_part_is_quoted(part) ||
-            part->length > SIZE_MAX - length) {
+        if (part->kind != ASH_WORD_TEXT || ash_word_part_is_quoted(part)) {
+            return NULL;
+        }
+        if (part->length > SIZE_MAX - length) {
+            ash_parser_fail(parser, ASH_PARSER_ERROR, word->location, "out of memory");
             return NULL;
         }
         length += part->length;
     }
+    if (length == SIZE_MAX) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, word->location, "out of memory");
+        return NULL;
+    }
     char* name = malloc(length + 1u);
     if (name == NULL) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, word->location, "out of memory");
         return NULL;
     }
     size_t offset = 0u;
@@ -429,10 +436,12 @@ static struct ash_ast* ash_parse_simple(
         token = ash_parser_peek(parser);
         if (node->value.simple.count == 1u && !assignment &&
             token != NULL && token->kind == ASH_TOKEN_LPAREN) {
-            char* function_name = ash_parser_word_name(
-                &node->value.simple.items[0].value.word.syntax
-            );
+            char* function_name = ash_parser_word_name(parser, &node->value.simple.items[0].value.word.syntax);
             if (function_name == NULL) {
+                if (parser->result != ASH_PARSER_COMPLETE) {
+                    ash_ast_destroy(node);
+                    return NULL;
+                }
                 continue;
             }
 
@@ -973,36 +982,8 @@ static char* ash_parser_take_name(
         return NULL;
     }
 
-    size_t length = 0u;
-    for (size_t i = 0u; i < token->word.count; i++) {
-        const struct ash_word_part* part = &token->word.parts[i];
-        if (part->kind != ASH_WORD_TEXT ||
-            ash_word_part_is_quoted(part) ||
-            part->length > SIZE_MAX - length) {
-            ash_parser_fail(parser, ASH_PARSER_ERROR, token->location, error);
-            return NULL;
-        }
-        length += part->length;
-    }
-    if (length == SIZE_MAX) {
-        ash_parser_fail(parser, ASH_PARSER_ERROR, token->location, "out of memory");
-        return NULL;
-    }
-
-    char* name = malloc(length + 1u);
+    char* name = ash_parser_word_name(parser, &token->word);
     if (name == NULL) {
-        ash_parser_fail(parser, ASH_PARSER_ERROR, token->location, "out of memory");
-        return NULL;
-    }
-    size_t offset = 0u;
-    for (size_t i = 0u; i < token->word.count; i++) {
-        const struct ash_word_part* part = &token->word.parts[i];
-        memcpy(name + offset, part->text, part->length);
-        offset += part->length;
-    }
-    name[offset] = '\0';
-    if (!ash_is_valid_name_span(name, length)) {
-        free(name);
         ash_parser_fail(parser, ASH_PARSER_ERROR, token->location, error);
         return NULL;
     }
