@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #define ASH_ALIAS_MIN_BUCKETS 16u
 
 struct ash_alias {
+    size_t reference_count;
     char* name;
     char* value;
     size_t name_length;
@@ -89,29 +91,7 @@ static struct ash_alias* ash_alias_find_key(
     return NULL;
 }
 
-const struct ash_alias* ash_alias_find(
-    const struct ash_alias_table* table,
-    const char* name
-) {
-    if (table == NULL || name == NULL ||
-        !ash_alias_table_shape_valid(table)) {
-        return NULL;
-    }
-    size_t length = strlen(name);
-    uint64_t hash = ash_alias_hash(name, length);
-    size_t bucket = ash_alias_bucket(hash, table->bucket_count);
-    return ash_alias_find_key(
-        table->buckets[bucket],
-        name,
-        length,
-        hash
-    );
-}
-
-static struct ash_alias* ash_alias_find_mutable(
-    struct ash_alias_table* table,
-    const char* name
-) {
+struct ash_alias* ash_alias_find(const struct ash_alias_table* table, const char* name) {
     if (table == NULL || name == NULL ||
         !ash_alias_table_shape_valid(table)) {
         return NULL;
@@ -174,10 +154,7 @@ static bool ash_alias_word_matches(
     return offset == alias->name_length;
 }
 
-const struct ash_alias* ash_alias_find_word(
-    const struct ash_alias_table* table,
-    const struct ash_word* word
-) {
+struct ash_alias* ash_alias_find_word(const struct ash_alias_table* table, const struct ash_word* word) {
     if (table == NULL || !ash_alias_table_shape_valid(table)) {
         return NULL;
     }
@@ -187,9 +164,7 @@ const struct ash_alias* ash_alias_find_word(
         return NULL;
     }
     size_t bucket = ash_alias_bucket(hash, table->bucket_count);
-    for (const struct ash_alias* alias = table->buckets[bucket];
-         alias != NULL;
-         alias = alias->next) {
+    for (struct ash_alias* alias = table->buckets[bucket]; alias != NULL; alias = alias->next) {
         if (alias->hash == hash &&
             alias->name_length == length &&
             ash_alias_word_matches(alias, word)) {
@@ -346,6 +321,7 @@ static struct ash_alias* ash_alias_create(
 
     size_t name_length = strlen(name);
     *alias = (struct ash_alias){
+        .reference_count = 1u,
         .name = name_copy,
         .value = value_copy,
         .name_length = name_length,
@@ -369,48 +345,29 @@ bool ash_alias_define(
         return false;
     }
 
-    struct ash_alias* existing =
-        ash_alias_find_mutable(*table, name);
-    if (existing != NULL) {
-        size_t value_length;
-        bool value_ends_blank;
-        bool requires_tail;
-        bool requires_extglob_tail;
-        if (!ash_alias_value_metadata(
-                value,
-                &value_length,
-                &value_ends_blank,
-                &requires_tail,
-                &requires_extglob_tail
-            )) {
-            return false;
-        }
-        char* value_copy = strdup(value);
-        if (value_copy == NULL) {
-            return false;
-        }
-        char* old_value = existing->value;
-        existing->value = value_copy;
-        existing->value_length = value_length;
-        existing->value_ends_blank = value_ends_blank;
-        existing->requires_tail = requires_tail;
-        existing->requires_extglob_tail = requires_extglob_tail;
-        free(old_value);
-        return true;
-    }
-
+    struct ash_alias* existing = ash_alias_find(*table, name);
     struct ash_alias* candidate = ash_alias_create(name, value);
     if (candidate == NULL) {
         return false;
+    }
+    if (existing != NULL) {
+        size_t bucket = ash_alias_bucket(existing->hash, (*table)->bucket_count);
+        struct ash_alias** link = &(*table)->buckets[bucket];
+        while (*link != existing) {
+            link = &(*link)->next;
+        }
+        candidate->next = existing->next;
+        *link = candidate;
+        existing->next = NULL;
+        ash_alias_release(existing);
+        return true;
     }
     struct ash_alias_table* active = *table;
     bool new_table = active == NULL;
     if (new_table) {
         active = ash_alias_table_create();
         if (active == NULL) {
-            free(candidate->name);
-            free(candidate->value);
-            free(candidate);
+            ash_alias_release(candidate);
             return false;
         }
     }
@@ -419,9 +376,7 @@ bool ash_alias_define(
             free(active->buckets);
             free(active);
         }
-        free(candidate->name);
-        free(candidate->value);
-        free(candidate);
+        ash_alias_release(candidate);
         return false;
     }
 
@@ -438,7 +393,27 @@ bool ash_alias_define(
     return true;
 }
 
-static void ash_alias_destroy(struct ash_alias* alias) {
+bool ash_alias_retain(struct ash_alias* alias) {
+    if (alias == NULL || alias->reference_count == 0u) {
+        errno = EINVAL;
+        return false;
+    }
+    if (alias->reference_count == SIZE_MAX) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    alias->reference_count++;
+    return true;
+}
+
+void ash_alias_release(struct ash_alias* alias) {
+    if (alias == NULL) {
+        return;
+    }
+    assert(alias->reference_count != 0u);
+    if (--alias->reference_count != 0u) {
+        return;
+    }
     free(alias->name);
     free(alias->value);
     free(alias);
@@ -463,7 +438,8 @@ bool ash_alias_unset(
             memcmp(alias->name, name, length) == 0) {
             *link = alias->next;
             active->count--;
-            ash_alias_destroy(alias);
+            alias->next = NULL;
+            ash_alias_release(alias);
             if (active->count == 0u) {
                 free(active->buckets);
                 free(active);
@@ -485,7 +461,8 @@ void ash_aliases_destroy(struct ash_alias_table** table) {
         struct ash_alias* alias = active->buckets[i];
         while (alias != NULL) {
             struct ash_alias* next = alias->next;
-            ash_alias_destroy(alias);
+            alias->next = NULL;
+            ash_alias_release(alias);
             alias = next;
         }
     }
@@ -610,7 +587,7 @@ bool ash_aliases_invariants(const struct ash_alias_table* table) {
                     strlen(alias->value) :
                     0u;
             count++;
-            if (alias->name == NULL || alias->value == NULL ||
+            if (alias->reference_count == 0u || alias->name == NULL || alias->value == NULL ||
                 !ash_alias_name_valid(alias->name) ||
                 strlen(alias->name) != alias->name_length ||
                 value_length != alias->value_length ||

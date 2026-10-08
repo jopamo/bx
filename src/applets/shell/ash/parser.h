@@ -24,7 +24,7 @@ struct ash_parser_alias_release {
 
 struct ash_parser_alias_frame {
     struct ash_lexer lexer;
-    const struct ash_alias* alias;
+    struct ash_alias* alias;
     bool continue_alias;
     bool alias_active;
     size_t alias_length;
