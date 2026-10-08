@@ -15,14 +15,9 @@ bool ash_alias_define(
     const char* name,
     const char* value
 );
-const struct ash_alias* ash_alias_find(
-    const struct ash_alias_table* table,
-    const char* name
-);
-const struct ash_alias* ash_alias_find_word(
-    const struct ash_alias_table* table,
-    const struct ash_word* word
-);
+/* Lookups borrow handles; retained immutable entries survive table mutation. */
+struct ash_alias* ash_alias_find(const struct ash_alias_table* table, const char* name);
+struct ash_alias* ash_alias_find_word(const struct ash_alias_table* table, const struct ash_word* word);
 bool ash_alias_table_contains(
     const struct ash_alias_table* table,
     const struct ash_alias* alias
@@ -33,6 +28,9 @@ bool ash_alias_unset(
 );
 void ash_aliases_destroy(struct ash_alias_table** table);
 bool ash_aliases_invariants(const struct ash_alias_table* table);
+
+bool ash_alias_retain(struct ash_alias* alias);
+void ash_alias_release(struct ash_alias* alias);
 
 const char* ash_alias_name(const struct ash_alias* alias);
 const char* ash_alias_value(const struct ash_alias* alias);

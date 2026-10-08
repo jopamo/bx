@@ -28,6 +28,7 @@ static void ash_parser_pop_alias(
     }
     free(frame->owned_input);
     free(frame->releases);
+    ash_alias_release(frame->alias);
     *frame = (struct ash_parser_alias_frame){0};
     parser->alias_frame_count--;
 }
@@ -284,11 +285,7 @@ static bool ash_parser_reserve_alias_frame(
     return true;
 }
 
-static bool ash_parser_push_alias(
-    struct ash_parser* parser,
-    const struct ash_alias* alias,
-    struct ash_source_location location
-) {
+static bool ash_parser_push_alias(struct ash_parser* parser, struct ash_alias* alias, struct ash_source_location location) {
     size_t alias_length = ash_alias_value_length(alias);
     size_t tail_length = 0u;
     bool bridge_tail;
@@ -491,6 +488,12 @@ static bool ash_parser_push_alias(
         );
         return false;
     }
+    if (!ash_alias_retain(alias)) {
+        free(owned_input);
+        free(releases);
+        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+        return false;
+    }
 
     struct ash_parser_alias_frame* frame =
         &parser->alias_frames[parser->alias_frame_count++];
@@ -550,10 +553,7 @@ bool ash_parser_prepare_alias(
             return true;
         }
 
-        const struct ash_alias* alias = ash_alias_find_word(
-            parser->aliases,
-            &token->word
-        );
+        struct ash_alias* alias = ash_alias_find_word(parser->aliases, &token->word);
         if (alias == NULL ||
             ash_parser_alias_is_active(parser, alias)) {
             parser->lookahead_alias_checked = true;
@@ -617,9 +617,8 @@ void ash_parser_alias_state_destroy(struct ash_parser* parser) {
     }
     parser->has_lookahead = false;
     parser->lookahead_alias_checked = false;
-    for (size_t i = 0u; i < parser->alias_frame_count; i++) {
-        free(parser->alias_frames[i].owned_input);
-        free(parser->alias_frames[i].releases);
+    while (parser->alias_frame_count != 0u) {
+        ash_parser_pop_alias(parser, false);
     }
     if (parser->alias_frames != parser->inline_alias_frames) {
         free(parser->alias_frames);
