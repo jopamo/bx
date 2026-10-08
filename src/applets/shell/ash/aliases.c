@@ -174,28 +174,6 @@ struct ash_alias* ash_alias_find_word(const struct ash_alias_table* table, const
     return NULL;
 }
 
-bool ash_alias_table_contains(
-    const struct ash_alias_table* table,
-    const struct ash_alias* alias
-) {
-    if (table == NULL || alias == NULL ||
-        !ash_alias_table_shape_valid(table)) {
-        return false;
-    }
-    size_t bucket = ash_alias_bucket(
-        alias->hash,
-        table->bucket_count
-    );
-    for (const struct ash_alias* current = table->buckets[bucket];
-         current != NULL;
-         current = current->next) {
-        if (current == alias) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static struct ash_alias_table* ash_alias_table_create(void) {
     struct ash_alias_table* table = calloc(1u, sizeof(*table));
     if (table == NULL) {

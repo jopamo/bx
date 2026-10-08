@@ -123,7 +123,7 @@ struct ash_shell {
      */
     struct ash_execution_frame* execution_frames;
     struct ash_source_location execution_location;
-    /* Caller-owned storage bound until end_parse releases its resources. */
+    /* Caller-owned storage; end_parse releases the bound parser's resources. */
     struct ash_parser* active_parser;
     struct ash_history_state* history;
     struct ash_completion_state* completion;
@@ -156,7 +156,7 @@ bool ash_shell_context_init(
 );
 bool ash_shell_context_invariants(const struct ash_shell* shell);
 void ash_shell_context_assert_invariants(const struct ash_shell* shell);
-/* Parser storage must be unowned and remain at this address until end_parse. */
+/* Parser storage must be unowned and remain at this address until destroyed. */
 struct ash_parser* ash_shell_context_begin_parse(
     struct ash_shell* shell,
     struct ash_parser* parser,
@@ -165,6 +165,9 @@ struct ash_parser* ash_shell_context_begin_parse(
     size_t length
 );
 void ash_shell_context_end_parse(struct ash_shell* shell);
+/* Unbound storage remains caller-owned and must precede source/context teardown. */
+struct ash_parser* ash_shell_context_suspend_parse(struct ash_shell* shell);
+bool ash_shell_context_resume_parse(struct ash_shell* shell, struct ash_parser* parser);
 /*
  * A fork child keeps language state but must withdraw inherited parent-only
  * child records and redirection backups before executing shell semantics.

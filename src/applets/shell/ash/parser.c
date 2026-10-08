@@ -1628,10 +1628,12 @@ void ash_parser_init(
 void ash_parser_destroy(struct ash_parser* parser) {
     ash_parser_here_document_state_destroy(parser);
     ash_parser_alias_state_destroy(parser);
+    parser->complete_command_boundary = false;
 }
 
 enum ash_parser_result ash_parser_parse_complete_command(struct ash_parser* parser, struct ash_ast** command) {
     *command = NULL;
+    parser->complete_command_boundary = false;
     ash_parser_skip_newlines(parser);
     if (!ash_parser_prepare_command_alias(
             parser,
@@ -1644,6 +1646,7 @@ enum ash_parser_result ash_parser_parse_complete_command(struct ash_parser* pars
         return parser->result;
     }
     if (first->kind == ASH_TOKEN_EOF) {
+        parser->complete_command_boundary = true;
         return ASH_PARSER_COMPLETE;
     }
 
@@ -1669,6 +1672,7 @@ enum ash_parser_result ash_parser_parse_complete_command(struct ash_parser* pars
     }
 
     *command = node;
+    parser->complete_command_boundary = true;
     return ASH_PARSER_COMPLETE;
 }
 
