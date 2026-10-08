@@ -302,13 +302,13 @@ static bool ash_parser_take_trailing_redirections(
             return false;
         }
         if (ash_ast_take_trailing_redirection(node, &redirection) != 0) {
-            ash_redirection_destroy(&redirection);
             ash_parser_fail(
                 parser,
                 ASH_PARSER_ERROR,
-                token->location,
+                redirection.location,
                 "out of memory"
             );
+            ash_redirection_destroy(&redirection);
             return false;
         }
     }
@@ -381,13 +381,13 @@ static struct ash_ast* ash_parse_simple(
                 return NULL;
             }
             if (ash_ast_simple_take_redirection(node, &redirection) != 0) {
-                ash_redirection_destroy(&redirection);
                 ash_parser_fail(
                     parser,
                     ASH_PARSER_ERROR,
-                    token->location,
+                    redirection.location,
                     "out of memory"
                 );
+                ash_redirection_destroy(&redirection);
                 ash_ast_destroy(node);
                 return NULL;
             }
@@ -409,13 +409,13 @@ static struct ash_ast* ash_parse_simple(
                 &word_token.word,
                 assignment
             ) != 0) {
-            ash_token_destroy(&word_token);
             ash_parser_fail(
                 parser,
                 ASH_PARSER_ERROR,
-                token->location,
+                word_token.location,
                 "out of memory"
             );
+            ash_token_destroy(&word_token);
             ash_ast_destroy(node);
             return NULL;
         }
@@ -1397,15 +1397,15 @@ static struct ash_ast* ash_parse_and_or(
     struct ash_ast* pipeline = ash_parse_pipeline(parser, stop);
     if (pipeline == NULL ||
         ash_ast_and_or_take(node, &pipeline, ASH_AND_IF) != 0) {
-        ash_ast_destroy(pipeline);
         if (parser->result == ASH_PARSER_COMPLETE) {
             ash_parser_fail(
                 parser,
                 ASH_PARSER_ERROR,
-                token->location,
+                node->location,
                 "out of memory"
             );
         }
+        ash_ast_destroy(pipeline);
         ash_ast_destroy(node);
         return NULL;
     }
@@ -1487,13 +1487,13 @@ static struct ash_ast* ash_parse_list(
             return NULL;
         }
         if (ash_ast_list_take(node, &command) != 0) {
-            ash_ast_destroy(command);
             ash_parser_fail(
                 parser,
                 ASH_PARSER_ERROR,
-                token->location,
+                command->location,
                 "out of memory"
             );
+            ash_ast_destroy(command);
             ash_ast_destroy(node);
             return NULL;
         }
