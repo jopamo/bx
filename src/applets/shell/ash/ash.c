@@ -88,6 +88,42 @@ static int ash_finish_execution(struct ash_shell* shell, int status) {
     return status;
 }
 
+static int ash_dispatch_signal_traps(struct ash_shell* shell, int status) {
+    if (shell->should_exit || ash_control_pending(shell))
+        return status;
+    for (;;) {
+        char* action = NULL;
+        if (!ash_trap_signal_prepare(shell, &action)) {
+            if (errno == ENOMEM)
+                ash_diag_oom(shell);
+            else
+                ash_exec_error(shell, "trap dispatch", errno);
+            shell->should_exit = true;
+            shell->requested_exit_status = 1;
+            return ash_finish_execution(shell, 1);
+        }
+        if (action == NULL)
+            return status;
+        bool suppressed = shell->errexit_suppressed;
+        bool diagnostics_suppressed = shell->errexit_diagnostics_suppressed;
+        shell->last_status = status;
+        shell->errexit_suppressed = false;
+        shell->errexit_diagnostics_suppressed = false;
+        shell->exit_trap_defer_depth++;
+        (void)ash_input_execute_string(shell, ASH_INPUT_TRAP, NULL, action, strlen(action));
+        shell->exit_trap_defer_depth--;
+        free(action);
+        ash_trap_signal_finish(shell);
+        shell->errexit_suppressed = suppressed;
+        shell->errexit_diagnostics_suppressed = diagnostics_suppressed;
+        shell->last_status = status;
+        if (shell->should_exit)
+            return ash_finish_execution(shell, shell->requested_exit_status);
+        if (ash_control_pending(shell))
+            return shell->control.status;
+    }
+}
+
 static void ash_print_exported_variable(
     const struct ash_var* var,
     void* user_data
@@ -1789,6 +1825,7 @@ static int ash_command_build_status(
 }
 
 static int ash_errexit_status(struct ash_shell* shell, int status) {
+    status = ash_dispatch_signal_traps(shell, status);
     if (status != 0 && (shell->options & ASH_SHELL_OPTION_ERREXIT) != 0u && !shell->errexit_suppressed && !shell->should_exit && !ash_control_pending(shell)) {
         shell->should_exit = true;
         shell->requested_exit_status = status;
@@ -2423,6 +2460,7 @@ static int ash_execute_ast_function(
 
 int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     ash_shell_context_assert_invariants(shell);
+    (void)ash_dispatch_signal_traps(shell, shell->last_status);
     if (ash_control_unit_discarded(shell)) {
         return shell->control.status;
     }
@@ -2482,6 +2520,7 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
             break;
     }
     ash_execution_location_leave(shell, &location_guard);
+    status = ash_dispatch_signal_traps(shell, status);
     ash_shell_context_assert_invariants(shell);
     return shell->should_exit ? shell->requested_exit_status :
         ash_control_unit_discarded(shell) ? shell->control.status : status;
