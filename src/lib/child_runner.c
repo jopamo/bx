@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -319,19 +320,120 @@ int bx_child_exec_file_argv_in_path(
         executable, argv, environ, path, mode, true);
 }
 
-pid_t bx_child_fork_callback_start(bx_child_fork_callback callback,
-                                   void *user) {
-    if (!callback) {
+static int bx_child_internal_fd_pair(int pair[2]) {
+    for (int i = 0; i < 2; i++) {
+        if (pair[i] > STDERR_FILENO)
+            continue;
+        int fd = bx_fd_dup_cloexec_min(pair[i], 3);
+        if (fd < 0) {
+            int error = errno;
+            close(pair[0]);
+            close(pair[1]);
+            errno = error;
+            return -1;
+        }
+        close(pair[i]);
+        pair[i] = fd;
+    }
+    return 0;
+}
+
+static int bx_child_setup_message(int fd, int* message, bool sending) {
+    unsigned char* bytes = (unsigned char*)message;
+    size_t remaining = sizeof(*message);
+    while (remaining != 0) {
+        ssize_t count = sending ? send(fd, bytes, remaining, MSG_NOSIGNAL) : recv(fd, bytes, remaining, 0);
+        if (count < 0) {
+            if (errno == EINTR)
+                continue;
+            return errno != 0 ? errno : EIO;
+        }
+        if (count == 0)
+            return EPIPE;
+        bytes += count;
+        remaining -= (size_t)count;
+    }
+    return 0;
+}
+
+static void bx_child_setup_abort(int fd, pid_t pid, int error) {
+    close(fd);
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {
+    }
+    errno = error;
+}
+
+pid_t bx_child_fork_callback_start(bx_child_fork_callback callback, void* user, enum bx_child_callback_signals signals) {
+    if (!callback || (signals != BX_CHILD_SIGNALS_INHERIT && signals != BX_CHILD_SIGNALS_RESET_CAUGHT)) {
         errno = EINVAL;
         return -1;
     }
 
+    int setup[2] = {-1, -1};
+    sigset_t original_mask;
+    if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+        if (bx_fd_socketpair_cloexec(AF_UNIX, SOCK_STREAM, 0, setup) < 0)
+            return -1;
+        if (bx_child_internal_fd_pair(setup) < 0)
+            return -1;
+        sigset_t blocked;
+        sigfillset(&blocked);
+        if (sigprocmask(SIG_BLOCK, &blocked, &original_mask) < 0) {
+            int error = errno;
+            close(setup[0]);
+            close(setup[1]);
+            errno = error;
+            return -1;
+        }
+    }
+
     pid_t pid = fork();
-    if (pid < 0)
+    if (pid < 0) {
+        int error = errno;
+        if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+            (void)sigprocmask(SIG_SETMASK, &original_mask, NULL);
+            close(setup[0]);
+            close(setup[1]);
+        }
+        errno = error;
         return -1;
+    }
     if (pid == 0) {
+        if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+            close(setup[0]);
+            int error = bx_child_reset_caught_signal_handlers();
+            if (!error && sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0)
+                error = errno != 0 ? errno : EIO;
+            int commit = 0;
+            if (bx_child_setup_message(setup[1], &error, true) != 0 || error != 0 || bx_child_setup_message(setup[1], &commit, false) != 0 || commit != 1)
+                _exit(255);
+            close(setup[1]);
+        }
         int status = callback(user);
         _exit(status >= 0 && status <= 255 ? status : 255);
+    }
+    if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+        close(setup[1]);
+        if (sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0) {
+            int error = errno;
+            (void)sigprocmask(SIG_SETMASK, &original_mask, NULL);
+            bx_child_setup_abort(setup[0], pid, error);
+            return -1;
+        }
+        int error = 0;
+        int transport_error = bx_child_setup_message(setup[0], &error, false);
+        if (transport_error != 0 || error != 0) {
+            bx_child_setup_abort(setup[0], pid, transport_error ? transport_error : error);
+            return -1;
+        }
+        /* Do not enter the callback until parent mask restoration succeeds. */
+        int commit = 1;
+        error = bx_child_setup_message(setup[0], &commit, true);
+        if (error != 0) {
+            bx_child_setup_abort(setup[0], pid, error);
+            return -1;
+        }
+        close(setup[0]);
     }
     return pid;
 }
@@ -345,10 +447,8 @@ pid_t bx_child_fork_session_leader(void) {
     return 0;
 }
 
-int bx_child_fork_callback_wait(bx_child_fork_callback callback,
-                                void *user,
-                                int *status_out) {
-    pid_t pid = bx_child_fork_callback_start(callback, user);
+int bx_child_fork_callback_wait(bx_child_fork_callback callback, void* user, enum bx_child_callback_signals signals, int* status_out) {
+    pid_t pid = bx_child_fork_callback_start(callback, user, signals);
     if (pid < 0)
         return -1;
 
@@ -423,21 +523,7 @@ done:
 static int bx_child_error_pipe(int pipefd[2]) {
     if (bx_fd_pipe_cloexec(pipefd) != 0)
         return -1;
-    for (int i = 0; i < 2; i++) {
-        if (pipefd[i] > STDERR_FILENO)
-            continue;
-        int fd = bx_fd_dup_cloexec_min(pipefd[i], 3);
-        if (fd < 0) {
-            int error = errno;
-            close(pipefd[0]);
-            close(pipefd[1]);
-            errno = error;
-            return -1;
-        }
-        close(pipefd[i]);
-        pipefd[i] = fd;
-    }
-    return 0;
+    return bx_child_internal_fd_pair(pipefd);
 }
 
 static void bx_child_reset_common_signal_handlers(void) {

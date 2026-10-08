@@ -400,7 +400,7 @@ int ash_job_start_process(
     if (ash_job_add_process(job, role, process_index) != 0) {
         return -1;
     }
-    pid_t pid = bx_child_fork_callback_start(callback, user_data);
+    pid_t pid = bx_child_fork_callback_start(callback, user_data, BX_CHILD_SIGNALS_RESET_CAUGHT);
     if (pid < 0) {
         ash_job_remove_last_process(job);
         assert(ash_jobs_invariants(job->owner));

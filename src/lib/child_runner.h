@@ -166,11 +166,17 @@ int bx_child_exec_file_argv_in_path(
     char *const *argv,
     const char *path,
     enum bx_child_path_search_mode mode);
-int bx_child_fork_callback_wait(bx_child_fork_callback callback,
-                                void *user,
-                                int *status_out);
-pid_t bx_child_fork_callback_start(bx_child_fork_callback callback,
-                                   void *user);
+enum bx_child_callback_signals {
+    BX_CHILD_SIGNALS_INHERIT,
+    BX_CHILD_SIGNALS_RESET_CAUGHT,
+};
+/*
+ * RESET_CAUGHT blocks delivery across fork and resets caught dispositions
+ * before callback entry. Ignored dispositions and the caller's mask survive.
+ * Setup failure returns -1 with errno and reaps the child without entry.
+ */
+int bx_child_fork_callback_wait(bx_child_fork_callback callback, void* user, enum bx_child_callback_signals signals, int* status_out);
+pid_t bx_child_fork_callback_start(bx_child_fork_callback callback, void* user, enum bx_child_callback_signals signals);
 /*
  * Fork a daemon/session child without imposing callback or wait policy.
  * Returns the child pid in the parent, zero in the new session leader, and
