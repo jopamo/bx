@@ -2699,22 +2699,6 @@ static int ash_report_invocation_error(
     return 2;
 }
 
-static bool ash_initialize_personality_variables(struct ash_shell* shell) {
-    const char* bash_version = ash_shell_policy_bash_version(&shell->policy);
-    if (bash_version == NULL) {
-        return true;
-    }
-
-    /*
-     * BASH_VERSION is shell-owned, not inherited process state. Recreate it
-     * after environment import; the canonical assignment path applies
-     * allexport when requested. The variable model will add readonly
-     * attributes in its dedicated compatibility phase.
-     */
-    ash_var_unset(shell, "BASH_VERSION");
-    return ash_var_set(shell, "BASH_VERSION", bash_version, false);
-}
-
 int bx_ash_main(int argc, char** argv) {
     struct ash_invocation invocation;
     struct ash_invocation_error invocation_error;
@@ -2837,11 +2821,6 @@ int bx_ash_main(int argc, char** argv) {
         ash_shell_context_release_owned(&shell);
         return 1;
     }
-    if (!ash_initialize_personality_variables(&shell)) {
-        ash_shell_context_release_owned(&shell);
-        return 1;
-    }
-
     if (ash_shell_policy_has(
             &shell.policy,
             ASH_SHELL_POLICY_INTERACTIVE

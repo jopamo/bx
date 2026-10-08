@@ -5,8 +5,6 @@
 
 #include "applets/shell/ash/shell_policy.h"
 
-static const char ash_bash_baseline_version[] = "5.3.15(1)-release";
-
 static bool ash_bash_compat_valid(enum ash_bash_compat_level compatibility) {
     switch (compatibility) {
         case ASH_BASH_COMPAT_31:
@@ -127,16 +125,6 @@ bool ash_shell_policy_reads_bash_env(const struct ash_shell_policy* policy) {
 bool ash_shell_policy_reads_env(const struct ash_shell_policy* policy) {
     return ash_shell_policy_allows_startup(policy) && ash_shell_policy_has(policy, ASH_SHELL_POLICY_POSIX) &&
            ash_shell_policy_has(policy, ASH_SHELL_POLICY_INTERACTIVE) && !ash_shell_policy_has(policy, ASH_SHELL_POLICY_PRIVILEGED);
-}
-
-const char* ash_shell_policy_bash_version(
-    const struct ash_shell_policy* policy
-) {
-    if (!ash_shell_policy_valid(policy) ||
-        !ash_shell_policy_is_bash(policy)) {
-        return NULL;
-    }
-    return ash_bash_baseline_version;
 }
 
 bool ash_shell_policy_noninteractive_posix(const struct ash_shell_policy* policy) {
