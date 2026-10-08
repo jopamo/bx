@@ -12,6 +12,23 @@
 #include "lib/output_alloc_counter.h"
 #include "lib/output_quote.h"
 
+bool bx_output_quote_write_single(FILE* stream, const char* text) {
+    if (fputc('\'', stream) == EOF) {
+        return false;
+    }
+    for (const unsigned char* cursor = (const unsigned char*)text; *cursor != '\0'; cursor++) {
+        if (*cursor == '\'') {
+            if (fputs("'\\''", stream) == EOF) {
+                return false;
+            }
+        }
+        else if (fputc(*cursor, stream) == EOF) {
+            return false;
+        }
+    }
+    return fputc('\'', stream) != EOF;
+}
+
 bool bx_output_quote_terminal_should_hide_control(int fd) {
     return isatty(fd) == 1;
 }

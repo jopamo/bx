@@ -24,6 +24,7 @@ static bool ash_diag_location_active(
 static bool ash_diag_synthetic_source(enum ash_input_kind kind) {
     switch (kind) {
         case ASH_INPUT_EVAL:
+        case ASH_INPUT_TRAP:
         case ASH_INPUT_COMMAND_SUBSTITUTION:
         case ASH_INPUT_PROMPT_COMMAND:
         case ASH_INPUT_COMPLETION_HOOK:
@@ -65,6 +66,7 @@ static const char* ash_diag_source_name(
         case ASH_INPUT_COMMAND_STRING:
         case ASH_INPUT_STDIN:
         case ASH_INPUT_EVAL:
+        case ASH_INPUT_TRAP:
         case ASH_INPUT_COMMAND_SUBSTITUTION:
         case ASH_INPUT_PROMPT_COMMAND:
         case ASH_INPUT_COMPLETION_HOOK:
@@ -132,6 +134,7 @@ static void ash_diag_prefix(
             break;
         case ASH_INPUT_INVALID:
         case ASH_INPUT_STDIN:
+        case ASH_INPUT_TRAP:
         case ASH_INPUT_SCRIPT_FILE:
         case ASH_INPUT_SOURCED_FILE:
         case ASH_INPUT_INTERACTIVE:

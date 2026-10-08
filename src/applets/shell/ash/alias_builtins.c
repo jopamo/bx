@@ -10,23 +10,7 @@
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/shell_policy.h"
-
-static bool ash_alias_write_quoted(const char* value) {
-    if (fputc('\'', stdout) == EOF) {
-        return false;
-    }
-    for (const char* cursor = value; *cursor != '\0'; cursor++) {
-        if (*cursor == '\'') {
-            if (fputs("'\\''", stdout) == EOF) {
-                return false;
-            }
-        }
-        else if (fputc((unsigned char)*cursor, stdout) == EOF) {
-            return false;
-        }
-    }
-    return fputc('\'', stdout) != EOF;
-}
+#include "lib/output_quote.h"
 
 static bool ash_alias_print(
     const struct ash_alias* alias,
@@ -35,7 +19,7 @@ static bool ash_alias_print(
     return (!prefix || fputs("alias ", stdout) != EOF) &&
         fputs(ash_alias_name(alias), stdout) != EOF &&
         fputc('=', stdout) != EOF &&
-        ash_alias_write_quoted(ash_alias_value(alias)) &&
+        bx_output_quote_write_single(stdout, ash_alias_value(alias)) &&
         fputc('\n', stdout) != EOF;
 }
 

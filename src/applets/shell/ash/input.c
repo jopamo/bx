@@ -87,6 +87,8 @@ static const char* ash_input_default_name(enum ash_input_kind kind) {
             return "<source>";
         case ASH_INPUT_EVAL:
             return "eval";
+        case ASH_INPUT_TRAP:
+            return "<trap>";
         case ASH_INPUT_COMMAND_SUBSTITUTION:
             return "<command substitution>";
         case ASH_INPUT_PROMPT_COMMAND:

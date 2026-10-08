@@ -19,6 +19,7 @@ enum ash_input_kind {
     ASH_INPUT_PROMPT_COMMAND,
     ASH_INPUT_COMPLETION_HOOK,
     ASH_INPUT_INTERACTIVE,
+    ASH_INPUT_TRAP,
 };
 
 enum ash_execution_frame_kind {
