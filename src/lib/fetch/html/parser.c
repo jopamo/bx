@@ -698,7 +698,9 @@ int bx_fetch_html_extract_links(const char* html_data, size_t len,
 
 char* bx_fetch_html_convert_links(const char* html_data, size_t len,
                                   BxFetchLinkRewriteCallback cb, void* userdata,
-                                  BxFetchHtmlBaseCallback base_cb) {
+                                  BxFetchHtmlBaseCallback base_cb, size_t* output_len) {
+    if (output_len)
+        *output_len = 0;
     if (!cb) errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
         return NULL;
@@ -728,5 +730,7 @@ char* bx_fetch_html_convert_links(const char* html_data, size_t len,
     }
     if (!output.data)
         output.data = strdup("");
+    if (output.data && output_len)
+        *output_len = output.length;
     return output.data;
 }

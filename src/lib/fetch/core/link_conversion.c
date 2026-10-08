@@ -167,7 +167,8 @@ int bx_fetch_document_convert_download(const struct bx_fetch_config* cfg,
         .directory = directory,
     };
     errno = 0;
-    char* converted = bx_fetch_html_convert_links((const char*)original, original_length, rewrite_published_link, &rewrite, conversion_html_base);
+    size_t converted_length = 0;
+    char* converted = bx_fetch_html_convert_links((const char*)original, original_length, rewrite_published_link, &rewrite, conversion_html_base, &converted_length);
     int rewrite_error = errno;
     bx_fetch_prepared_url_free(rewrite.document_base);
     free(directory);
@@ -182,7 +183,6 @@ int bx_fetch_document_convert_download(const struct bx_fetch_config* cfg,
         return conversion_fail(outcome, BX_FETCH_LINK_CONVERSION_FAILURE_REWRITE, rewrite.error_number);
     }
 
-    size_t converted_length = strnlen(converted, BX_FETCH_DOCUMENT_MAX_BYTES + 1u);
     if (converted_length > BX_FETCH_DOCUMENT_MAX_BYTES) {
         free(converted);
         free(original);

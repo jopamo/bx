@@ -55,9 +55,10 @@ typedef char* (*BxFetchLinkRewriteCallback)(void* userdata, const char* url);
  * contents. Recovery does not add or reorder events. Distinguish navigation
  * links from embedded requisites; callers own URL resolution. */
 int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb);
-/* Returned document is heap-allocated and must be freed by the caller. */
+/* Returned document is heap-allocated and must be freed by the caller.
+ * Optional output_len receives its byte length, or zero on failure. */
 /* With base_cb, base hrefs become "./" after resolving their original value. */
-char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb);
+char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata, BxFetchHtmlBaseCallback base_cb, size_t* output_len);
 /* Converts one complete HTML document to bounded UTF-8 Markdown.
  * absolute_links resolves links/images against base_url and the first HTML
  * base href. Explicit schemes and unresolvable references remain unchanged. */
