@@ -11,6 +11,7 @@
 #include "applets/shell/ash/process.h"
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_context.h"
+#include "applets/shell/ash/traps.h"
 #include "lib/fd_transaction.h"
 
 static bool ash_parser_state_invariants(const struct ash_shell* shell) {
@@ -194,7 +195,7 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
         ) &&
         ash_shell_policy_valid(&shell->policy) &&
         ash_aliases_invariants(shell->aliases) &&
-        shell->traps == NULL &&
+        ash_traps_invariants(shell) &&
         shell->command_cache == NULL &&
         shell->history == NULL &&
         shell->completion == NULL &&
@@ -232,6 +233,7 @@ static bool ash_shell_context_empty(const struct ash_shell* shell) {
         shell->aliases == NULL &&
         shell->functions == NULL &&
         shell->traps == NULL &&
+        shell->exit_trap_defer_depth == 0u &&
         shell->jobs == NULL &&
         shell->command_cache == NULL &&
         shell->input_stack == NULL &&
@@ -384,6 +386,8 @@ void ash_shell_context_detach_after_fork(struct ash_shell* shell) {
     }
     assert(ash_shell_context_invariants(shell));
     ash_jobs_detach_after_fork(shell);
+    ash_traps_detach_after_fork(shell);
+    shell->exit_trap_defer_depth = 0u;
     bx_fd_transaction_stack_discard(&shell->redirections);
     shell->forked_execution = true;
     assert(ash_shell_context_invariants(shell));
@@ -418,6 +422,7 @@ void ash_shell_context_release_owned(struct ash_shell* shell) {
     ash_input_release_all(shell);
     ash_aliases_destroy(&shell->aliases);
     ash_functions_destroy(shell);
+    ash_traps_destroy(shell);
     ash_jobs_destroy(shell);
     bx_fd_transaction_stack_discard(&shell->redirections);
     ash_input_source_registry_destroy(shell);

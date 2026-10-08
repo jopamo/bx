@@ -19,6 +19,7 @@ bool ash_input_kind_valid(enum ash_input_kind kind) {
         case ASH_INPUT_PROMPT_COMMAND:
         case ASH_INPUT_COMPLETION_HOOK:
         case ASH_INPUT_INTERACTIVE:
+        case ASH_INPUT_TRAP:
             return true;
     }
     return false;

@@ -2,6 +2,7 @@
 #define BX_COMMON_OUTPUT_QUOTE_H
 
 #include <stdbool.h>
+#include <stdio.h>
 
 enum bx_output_quote_style {
     BX_OUTPUT_QUOTE_LITERAL = 0,
@@ -29,6 +30,7 @@ struct bx_output_control_quote_options {
 };
 
 char* bx_output_quote_dup(const char* text, enum bx_output_quote_style style);
+bool bx_output_quote_write_single(FILE* stream, const char* text);
 char* bx_output_quote_control_dup(const char* text, const struct bx_output_control_quote_options* options);
 char* bx_output_quote_shell_reusable_dup(const char* text);
 char* bx_output_quote_shell_reusable_try_dup(const char* text);

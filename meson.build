@@ -609,6 +609,8 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/alias_builtins.c',
   'src/applets/shell/ash/aliases.c',
   'src/applets/shell/ash/ash.c',
+  'src/applets/shell/ash/traps.c',
+  'src/applets/shell/ash/trap_builtin.c',
   'src/applets/shell/ash/applet_command.c',
   'src/applets/shell/ash/ast.c',
   'src/applets/shell/ash/command_resolution.c',

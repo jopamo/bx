@@ -12,6 +12,7 @@
 #include "applets/shell/ash/input_execution.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/shell_context.h"
+#include "applets/shell/ash/traps.h"
 #include "applets/shell/ash/variables.h"
 #include "lib/text_buffer.h"
 
@@ -115,6 +116,9 @@ static struct ash_input_unit_result ash_input_execute_buffer(
         if (ash_shell_policy_noninteractive_posix(&shell->policy)) {
             shell->should_exit = true;
             shell->requested_exit_status = 2;
+            if (ash_input_source_kind(shell) != ASH_INPUT_TRAP) {
+                ash_trap_exit_override_status(shell);
+            }
         }
         return (struct ash_input_unit_result){
             .state = ASH_INPUT_UNIT_PARSE_ERROR,
@@ -185,6 +189,7 @@ static bool ash_input_onecmd_boundary(const struct ash_shell* shell) {
         case ASH_INPUT_COMMAND_STRING:
         case ASH_INPUT_SOURCED_FILE:
         case ASH_INPUT_EVAL:
+        case ASH_INPUT_TRAP:
         case ASH_INPUT_COMMAND_SUBSTITUTION:
         case ASH_INPUT_PROMPT_COMMAND:
         case ASH_INPUT_COMPLETION_HOOK:
@@ -347,8 +352,11 @@ int ash_input_execute_string(
         ash_diag_oom(shell);
         return 2;
     }
+    bool sourced = kind == ASH_INPUT_SOURCED_FILE;
+    shell->exit_trap_defer_depth += sourced ? 1u : 0u;
     int status = ash_input_execute_current(shell, false);
     ash_input_pop(shell);
+    shell->exit_trap_defer_depth -= sourced ? 1u : 0u;
     return status;
 }
 
@@ -388,8 +396,11 @@ int ash_input_execute_stream(
         ash_diag_oom(shell);
         return 2;
     }
+    bool sourced = kind == ASH_INPUT_SOURCED_FILE;
+    shell->exit_trap_defer_depth += sourced ? 1u : 0u;
     int status = ash_input_execute_current(shell, prompt);
     ash_input_pop(shell);
+    shell->exit_trap_defer_depth -= sourced ? 1u : 0u;
     return status;
 }
 

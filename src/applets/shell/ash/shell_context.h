@@ -88,7 +88,7 @@ struct ash_shell_context_config {
  * shell-language state; subsystems may not publish parallel global authority.
  * Invocation strings and positional arrays are borrowed for the context
  * lifetime. Subsystem root pointers are context-owned when non-NULL. Deferred
- * trap/cache/history/completion roots remain NULL until their subsystems
+ * cache/history/completion roots remain NULL until their subsystems
  * provide validation and teardown. Every stable execution boundary satisfies
  * ash_shell_context_invariants(); a
  * subsystem may violate only its own invariant while a private transition is
@@ -113,6 +113,8 @@ struct ash_shell {
     struct ash_alias_table* aliases;
     struct ash_function* functions;
     struct ash_trap_table* traps;
+    /* Source frames and temporary builtin/compound fds unwind before EXIT. */
+    unsigned int exit_trap_defer_depth;
     /* The jobs root is authoritative for all child lifecycle records. */
     struct ash_job* jobs;
     unsigned long next_job_id;

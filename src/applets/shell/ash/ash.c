@@ -37,11 +37,56 @@
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/shopt_builtin.h"
 #include "applets/shell/ash/startup.h"
+#include "applets/shell/ash/trap_builtin.h"
+#include "applets/shell/ash/traps.h"
 #include "applets/shell/ash/variables.h"
 #include "bx/self_exec.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/text_buffer.h"
+
+static int ash_finish_execution(struct ash_shell* shell, int status) {
+    if (shell->should_exit) {
+        status = shell->requested_exit_status;
+    }
+    if (shell->exit_trap_defer_depth != 0u) {
+        return status;
+    }
+    char* action = NULL;
+    if (!ash_trap_exit_prepare(shell, &action)) {
+        ash_diag_oom(shell);
+        status = 1;
+    }
+    else if (action != NULL) {
+        struct ash_control_state control = shell->control;
+        bool suppressed = shell->errexit_suppressed;
+        bool diagnostics_suppressed = shell->errexit_diagnostics_suppressed;
+        shell->control.pending = ASH_CONTROL_NONE;
+        shell->control.remaining_levels = 0u;
+        shell->control.status = 0;
+        shell->should_exit = false;
+        shell->requested_exit_status = 0;
+        shell->last_status = status;
+        shell->errexit_suppressed = false;
+        shell->errexit_diagnostics_suppressed = false;
+        (void)ash_input_execute_string(shell, ASH_INPUT_TRAP, NULL, action, strlen(action));
+        free(action);
+        bool override = ash_trap_exit_finish(shell);
+        if (override && shell->should_exit) {
+            status = shell->requested_exit_status;
+        }
+        else if (shell->control.pending == ASH_CONTROL_RETURN) {
+            status = shell->control.status;
+        }
+        shell->control = control;
+        shell->errexit_suppressed = suppressed;
+        shell->errexit_diagnostics_suppressed = diagnostics_suppressed;
+        shell->last_status = status;
+    }
+    shell->should_exit = true;
+    shell->requested_exit_status = status;
+    return status;
+}
 
 static void ash_print_exported_variable(
     const struct ash_var* var,
@@ -516,26 +561,28 @@ done:
     return status;
 }
 
-static int ash_builtin_exit(struct ash_shell* shell, const struct ash_command* command, bool in_child) {
+static int ash_builtin_exit(struct ash_shell* shell, const struct ash_command* command) {
     if (command->word_count > 2u) {
         ash_diag(shell, "exit: too many arguments");
         return 1;
     }
 
     int status = shell->last_status;
+    bool valid = true;
     if (command->word_count == 2u) {
         if (ash_parse_status_code(command->words[1], &status) != 0) {
             ash_diag(shell, "exit: numeric argument required");
             status = 2;
+            valid = false;
         }
     }
 
-    if (!in_child) {
-        shell->should_exit = true;
-        shell->requested_exit_status = status;
+    shell->should_exit = true;
+    shell->requested_exit_status = status;
+    if (valid || ash_shell_policy_noninteractive_posix(&shell->policy)) {
+        ash_trap_exit_override_status(shell);
     }
-
-    return status;
+    return ash_finish_execution(shell, status);
 }
 
 static int ash_builtin_export(struct ash_shell* shell, const struct ash_command* command) {
@@ -953,7 +1000,7 @@ static int ash_run_input_builtin(struct ash_shell* shell, enum ash_builtin_kind 
     return status;
 }
 
-static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
+static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command) {
     switch (builtin) {
         case ASH_BUILTIN_ALIAS:
             return ash_alias_builtin(shell, command);
@@ -966,7 +1013,9 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
         case ASH_BUILTIN_EVAL:
             return ash_run_input_builtin(shell, builtin, command);
         case ASH_BUILTIN_EXIT:
-            return ash_builtin_exit(shell, command, in_child);
+            return ash_builtin_exit(shell, command);
+        case ASH_BUILTIN_TRAP:
+            return ash_trap_builtin(shell, command);
         case ASH_BUILTIN_EXPORT:
             return ash_builtin_export(shell, command);
         case ASH_BUILTIN_UNSET:
@@ -1120,6 +1169,8 @@ static int ash_execute_function(
     return status;
 }
 
+static int ash_execute_builtin_current(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution);
+
 static int ash_execute_in_child(
     struct ash_shell* shell,
     const struct ash_command* command,
@@ -1141,6 +1192,9 @@ static int ash_execute_in_child(
             command
         );
     }
+    if (ash_command_resolution_is_builtin(resolution)) {
+        return ash_execute_builtin_current(shell, command, resolution);
+    }
     if (ash_redirections_apply_permanently(shell, command) != 0) {
         return 1;
     }
@@ -1150,18 +1204,6 @@ static int ash_execute_in_child(
             return 1;
         }
         return 0;
-    }
-
-    if (ash_command_resolution_is_builtin(resolution)) {
-        if (ash_apply_command_assignments_shell(shell, command, true) != 0) {
-            return 1;
-        }
-        return ash_run_builtin(
-            shell,
-            resolution->target.builtin,
-            command,
-            true
-        );
     }
 
     if (ash_apply_command_assignments_env(shell, command) != 0) {
@@ -1184,7 +1226,7 @@ static int ash_execute_in_child(
     );
 }
 
-static int ash_execute_single_command_parent(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution) {
+static int ash_execute_builtin_current(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution) {
     bool temporary_scope = command->assignment_count != 0u && (resolution->kind == ASH_COMMAND_REGULAR_BUILTIN || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX));
     if (temporary_scope ? !ash_apply_command_assignments_temporary(shell, command) : ash_apply_command_assignments_shell(shell, command, true) != 0) {
         return 1;
@@ -1205,18 +1247,23 @@ static int ash_execute_single_command_parent(struct ash_shell* shell, const stru
         return 1;
     }
 
-    int status = ash_run_builtin(shell, resolution->target.builtin, command, false);
+    shell->exit_trap_defer_depth++;
+    int status = ash_run_builtin(shell, resolution->target.builtin, command);
 
     bool permanent_redirections = status == 0 &&
         resolution->target.builtin == ASH_BUILTIN_EXEC &&
         command->word_count == 1u;
-    if (!shell->should_exit && !permanent_redirections) {
+    if (!permanent_redirections) {
         if (ash_redirection_transaction_rollback(shell, &saved) != 0) {
             status = 1;
         }
     }
     else if (ash_redirection_transaction_commit(shell, &saved) != 0) {
         status = 1;
+    }
+    shell->exit_trap_defer_depth--;
+    if (shell->should_exit) {
+        status = ash_finish_execution(shell, status);
     }
     if (temporary_scope && ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT) != ASH_SCOPE_POP_OK) {
         status = 2;
@@ -1235,12 +1282,8 @@ struct ash_command_child_context {
 static int ash_command_child_main(void* user_data) {
     struct ash_command_child_context* context = user_data;
     ash_shell_context_detach_after_fork(context->shell);
-    return ash_execute_in_child(
-        context->shell,
-        context->command,
-        &context->resolution,
-        &context->applet_plan
-    );
+    int status = ash_execute_in_child(context->shell, context->command, &context->resolution, &context->applet_plan);
+    return ash_finish_execution(context->shell, status);
 }
 
 static int ash_run_foreground_child(
@@ -1350,7 +1393,7 @@ static int ash_execute_command(
     switch (resolution.kind) {
         case ASH_COMMAND_SPECIAL_BUILTIN:
         case ASH_COMMAND_REGULAR_BUILTIN:
-            return ash_execute_single_command_parent(
+            return ash_execute_builtin_current(
                 shell,
                 command,
                 &resolution
@@ -1404,13 +1447,8 @@ static int ash_substitution_child_main(void* user_data) {
     }
     child->should_exit = false;
     child->requested_exit_status = 0;
-    return ash_input_execute_string(
-        child,
-        ASH_INPUT_COMMAND_SUBSTITUTION,
-        NULL,
-        context->command,
-        context->length
-    );
+    int status = ash_input_execute_string(child, ASH_INPUT_COMMAND_SUBSTITUTION, NULL, context->command, context->length);
+    return ash_finish_execution(child, status);
 }
 
 static bool ash_command_substitute(
@@ -1754,6 +1792,8 @@ static int ash_errexit_status(struct ash_shell* shell, int status) {
     if (status != 0 && (shell->options & ASH_SHELL_OPTION_ERREXIT) != 0u && !shell->errexit_suppressed && !shell->should_exit && !ash_control_pending(shell)) {
         shell->should_exit = true;
         shell->requested_exit_status = status;
+        ash_trap_exit_override_status(shell);
+        status = ash_finish_execution(shell, status);
     }
     return status;
 }
@@ -1817,10 +1857,8 @@ static int ash_subshell_child_main(void* user_data) {
         context->shell,
         context->node->value.group.body
     );
-    return ash_redirection_transaction_commit(
-        context->shell,
-        &saved
-    ) == 0 ? status : 1;
+    status = ash_redirection_transaction_commit(context->shell, &saved) == 0 ? status : 1;
+    return ash_finish_execution(context->shell, status);
 }
 
 static int ash_execute_ast_group(
@@ -1863,9 +1901,11 @@ static int ash_execute_ast_group(
         return ash_errexit_status(shell, 1);
     }
     ash_command_destroy(&redirections);
+    shell->exit_trap_defer_depth++;
     int status = ash_execute_ast(shell, node->value.group.body);
-    return ash_redirection_transaction_rollback(shell, &saved) == 0 ?
-        status : ash_errexit_status(shell, 1);
+    status = ash_redirection_transaction_rollback(shell, &saved) == 0 ? status : ash_errexit_status(shell, 1);
+    shell->exit_trap_defer_depth--;
+    return shell->should_exit ? ash_finish_execution(shell, status) : status;
 }
 
 struct ash_pipeline_child_context {
@@ -1907,7 +1947,8 @@ static int ash_pipeline_child_main(void* user_data) {
     }
     context->shell->should_exit = false;
     context->shell->control = (struct ash_control_state){0};
-    return ash_execute_ast(context->shell, context->command);
+    int status = ash_execute_ast(context->shell, context->command);
+    return ash_finish_execution(context->shell, status);
 }
 
 static int ash_execute_ast_pipeline_forked(
@@ -2073,7 +2114,8 @@ static int ash_async_child_main(void* user_data) {
         }
     }
     context->shell->should_exit = false;
-    return ash_execute_ast(context->shell, context->command);
+    int status = ash_execute_ast(context->shell, context->command);
+    return ash_finish_execution(context->shell, status);
 }
 
 static int ash_execute_ast_async(
@@ -2360,9 +2402,11 @@ static int ash_execute_ast_case(
         return ash_errexit_status(shell, 1);
     }
     ash_command_destroy(&redirections);
+    shell->exit_trap_defer_depth++;
     int status = ash_execute_ast_case_body(shell, node);
-    return ash_redirection_transaction_rollback(shell, &saved) == 0 ?
-        status : ash_errexit_status(shell, 1);
+    status = ash_redirection_transaction_rollback(shell, &saved) == 0 ? status : ash_errexit_status(shell, 1);
+    shell->exit_trap_defer_depth--;
+    return shell->should_exit ? ash_finish_execution(shell, status) : status;
 }
 
 static int ash_execute_ast_function(
@@ -2765,8 +2809,9 @@ int bx_ash_main(int argc, char** argv) {
         &invocation.startup
     );
     if (startup == ASH_STARTUP_FATAL) {
+        int status = ash_finish_execution(&shell, 2);
         ash_shell_context_release_owned(&shell);
-        return 2;
+        return status;
     }
 
     int status = 0;
@@ -2785,8 +2830,9 @@ int bx_ash_main(int argc, char** argv) {
         FILE* script = fopen(invocation.script_path, "r");
         if (script == NULL) {
             ash_exec_error(&shell, invocation.script_path, errno);
+            status = ash_finish_execution(&shell, 1);
             ash_shell_context_release_owned(&shell);
-            return 1;
+            return status;
         }
 
         bool prompt = ash_interactive_state_should_prompt(
@@ -2819,9 +2865,7 @@ int bx_ash_main(int argc, char** argv) {
         );
     }
 
-    if (shell.should_exit) {
-        status = shell.requested_exit_status;
-    }
+    status = ash_finish_execution(&shell, status);
 
     ash_shell_context_release_owned(&shell);
     return status;

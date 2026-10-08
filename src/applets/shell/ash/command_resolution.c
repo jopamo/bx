@@ -26,6 +26,7 @@ static const struct ash_builtin_definition ash_builtins[] = {
     {"shopt", ASH_BUILTIN_SHOPT},
     {"shift", ASH_BUILTIN_SHIFT},
     {"source", ASH_BUILTIN_SOURCE},
+    {"trap", ASH_BUILTIN_TRAP},
     {"unset", ASH_BUILTIN_UNSET},
     {"unalias", ASH_BUILTIN_UNALIAS},
     {"cd", ASH_BUILTIN_CD},
@@ -51,6 +52,7 @@ static enum ash_command_resolution_kind ash_builtin_resolution_kind(
         case ASH_BUILTIN_RETURN:
         case ASH_BUILTIN_SHIFT:
         case ASH_BUILTIN_SOURCE:
+        case ASH_BUILTIN_TRAP:
             return ASH_COMMAND_SPECIAL_BUILTIN;
         case ASH_BUILTIN_ALIAS:
         case ASH_BUILTIN_CD:
