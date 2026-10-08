@@ -13,9 +13,11 @@ struct ash_operator {
     const char* text;
     size_t length;
     enum ash_token_kind kind;
+    uint32_t required_flags;
 };
 
-#define ASH_OPERATOR(text, kind) {text, sizeof(text) - 1u, kind}
+#define ASH_OPERATOR_FLAGS(text, kind, flags) {text, sizeof(text) - 1u, kind, flags}
+#define ASH_OPERATOR(text, kind) ASH_OPERATOR_FLAGS(text, kind, 0u)
 static const struct ash_operator ash_operators[] = {
     ASH_OPERATOR("\n", ASH_TOKEN_NEWLINE),
     ASH_OPERATOR("&&", ASH_TOKEN_AND_IF),
@@ -23,8 +25,8 @@ static const struct ash_operator ash_operators[] = {
     ASH_OPERATOR("|", ASH_TOKEN_PIPE),
     ASH_OPERATOR("|&", ASH_TOKEN_PIPE_AND),
     ASH_OPERATOR("&", ASH_TOKEN_AMP),
-    ASH_OPERATOR("&>", ASH_TOKEN_AND_GREAT),
-    ASH_OPERATOR("&>>", ASH_TOKEN_AND_DGREAT),
+    ASH_OPERATOR_FLAGS("&>", ASH_TOKEN_AND_GREAT, ASH_LEXER_COMBINED_REDIRECTION),
+    ASH_OPERATOR_FLAGS("&>>", ASH_TOKEN_AND_DGREAT, ASH_LEXER_COMBINED_REDIRECTION),
     ASH_OPERATOR(";", ASH_TOKEN_SEMI),
     ASH_OPERATOR(";;", ASH_TOKEN_DSEMI),
     ASH_OPERATOR(";&", ASH_TOKEN_SEMI_AND),
@@ -43,6 +45,7 @@ static const struct ash_operator ash_operators[] = {
     ASH_OPERATOR(">|", ASH_TOKEN_CLOBBER),
 };
 #undef ASH_OPERATOR
+#undef ASH_OPERATOR_FLAGS
 
 struct ash_source_location ash_lexer_current_location(
     const struct ash_lexer* lexer
@@ -338,6 +341,9 @@ static const struct ash_operator* ash_lexer_operator(const struct ash_lexer* lex
          i < sizeof(ash_operators) / sizeof(ash_operators[0]);
          i++) {
         const struct ash_operator* candidate = &ash_operators[i];
+        if ((lexer->options.flags & candidate->required_flags) != candidate->required_flags) {
+            continue;
+        }
         if (longest != NULL && candidate->length <= longest->length) {
             continue;
         }
