@@ -315,6 +315,10 @@ static bool ash_expand_part(
     struct bx_text_buffer* output,
     int* substitution_status
 ) {
+    if (part->kind == ASH_WORD_PROCESS_SUBSTITUTION) {
+        ash_diag(shell, "process substitution is unavailable");
+        return false;
+    }
     if (part->kind == ASH_WORD_PARAMETER) {
         return ash_expand_parameter(shell, part->text, output);
     }

@@ -775,6 +775,9 @@ static bool ash_lexer_process_substitution_at(
     const struct ash_lexer* lexer,
     size_t position
 ) {
+    if ((lexer->options.flags & ASH_LEXER_PROCESS_SUBSTITUTION) == 0u) {
+        return false;
+    }
     char direction = ash_lexer_peek_logical_at(lexer, &position);
     if (direction != '<' && direction != '>') {
         return false;
