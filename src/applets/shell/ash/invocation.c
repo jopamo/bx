@@ -293,7 +293,7 @@ bool ash_invocation_parse(
     struct ash_invocation candidate = {
         .invoked = invoked,
         .progname = ash_invocation_effective_name(invoked),
-        .argv0 = invoked,
+        .argv0 = raw_argv0,
         .action = ASH_INVOCATION_RUN,
         .input = ASH_STARTUP_STANDARD_INPUT,
         .login_shell = invoked[0] == '-',
