@@ -87,6 +87,7 @@ struct ash_lexer {
     bool ended_with_line_continuation;
     bool discarded_comment;
     bool ended_in_comment;
+    bool position_overflow;
     struct ash_source_location error_location;
     const char* error;
 };
@@ -122,7 +123,7 @@ bool ash_lexer_ended_with_line_continuation(
 bool ash_lexer_ended_in_comment(const struct ash_lexer* lexer);
 bool ash_lexer_discarded_comment(const struct ash_lexer* lexer);
 bool ash_lexer_discard_comment_tail(struct ash_lexer* lexer);
-void ash_lexer_discard_remaining(struct ash_lexer* lexer);
+bool ash_lexer_discard_remaining(struct ash_lexer* lexer);
 enum ash_lexer_fragment_result ash_lexer_classify_fragment(
     const char* input,
     size_t length

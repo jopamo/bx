@@ -199,7 +199,17 @@ static char ash_lexer_advance(struct ash_lexer* lexer) {
         return '\0';
     }
 
-    char ch = lexer->input[lexer->offset++];
+    char ch = lexer->input[lexer->offset];
+    if ((ch == '\n' ? lexer->line : lexer->column) == SIZE_MAX) {
+        lexer->error_location = ash_lexer_current_location(lexer);
+        lexer->error = "source position overflow";
+        errno = EOVERFLOW;
+        lexer->position_overflow = true;
+        /* Stop inner scans; the latched error forbids token/EOF publication. */
+        lexer->offset = lexer->length;
+        return '\0';
+    }
+    lexer->offset++;
     if (ch == '\n') {
         lexer->line++;
         lexer->column = 1u;
@@ -303,13 +313,19 @@ bool ash_lexer_discard_comment_tail(struct ash_lexer* lexer) {
     return ash_lexer_at_end(lexer);
 }
 
-void ash_lexer_discard_remaining(struct ash_lexer* lexer) {
+bool ash_lexer_discard_remaining(struct ash_lexer* lexer) {
     if (lexer == NULL) {
-        return;
+        errno = EINVAL;
+        return false;
     }
     while (!ash_lexer_at_end(lexer)) {
         (void)ash_lexer_advance(lexer);
     }
+    if (lexer->position_overflow) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    return true;
 }
 
 static enum ash_lexer_result ash_lexer_fail(
@@ -318,6 +334,11 @@ static enum ash_lexer_result ash_lexer_fail(
     struct ash_source_location location,
     const char* message
 ) {
+    if (lexer->position_overflow) {
+        lexer->error = "source position overflow";
+        errno = EOVERFLOW;
+        return ASH_LEXER_ERROR;
+    }
     lexer->error_location = location;
     lexer->error = message;
     return result;
@@ -2054,7 +2075,8 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
 
 enum ash_lexer_result ash_lexer_scan_expansion_string(struct ash_lexer* lexer, struct ash_word* word) {
     ash_word_init(word, ash_lexer_current_location(lexer));
-    return ash_lexer_scan_double_quote(lexer, word, ASH_QUOTE_DOUBLE, false);
+    enum ash_lexer_result result = ash_lexer_scan_double_quote(lexer, word, ASH_QUOTE_DOUBLE, false);
+    return lexer->position_overflow ? ash_lexer_fail(lexer, ASH_LEXER_ERROR, lexer->error_location, "source position overflow") : result;
 }
 
 static enum ash_lexer_result ash_lexer_scan_backslash(
@@ -2446,18 +2468,17 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
     }
 
     token->location = ash_lexer_current_location(lexer);
+    enum ash_lexer_result result;
     if (ash_lexer_at_end(lexer)) {
         token->kind = ASH_TOKEN_EOF;
-        return ASH_LEXER_END;
+        result = ASH_LEXER_END;
+        goto done;
     }
 
     struct ash_io_redirect_match io_redirect;
     if (ash_lexer_match_io_redirect(lexer, &io_redirect)) {
-        return ash_lexer_scan_io_redirect(
-            lexer,
-            token,
-            &io_redirect
-        );
+        result = ash_lexer_scan_io_redirect(lexer, token, &io_redirect);
+        goto done;
     }
 
     const struct ash_operator* operator =
@@ -2469,10 +2490,17 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
         for (size_t i = 0u; i < operator->length; i++) {
             (void)ash_lexer_advance_logical(lexer);
         }
-        return ASH_LEXER_TOKEN;
+        result = ASH_LEXER_TOKEN;
+        goto done;
     }
 
-    return ash_lexer_scan_word(lexer, token);
+    result = ash_lexer_scan_word(lexer, token);
+done:
+    if (lexer->position_overflow) {
+        ash_token_destroy(token);
+        return ash_lexer_fail(lexer, ASH_LEXER_ERROR, lexer->error_location, "source position overflow");
+    }
+    return result;
 }
 
 enum ash_lexer_fragment_result ash_lexer_classify_fragment_with_options(
