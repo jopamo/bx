@@ -207,6 +207,7 @@ enum ash_condition_binary_operator {
 struct ash_condition {
     enum ash_condition_kind kind;
     struct ash_source_location location;
+    struct ash_condition* destroy_next;
     union {
         struct ash_ast_word word;
         struct {
@@ -238,6 +239,7 @@ struct ash_ast {
      */
     enum ash_ast_kind kind;
     struct ash_source_location location;
+    struct ash_ast* destroy_next;
     struct ash_redirection* trailing_redirections;
     size_t trailing_redirection_count;
     size_t trailing_redirection_capacity;
