@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "applets/shell/ash/here_document.h"
 #include "applets/shell/ash/parser_internal.h"
 #include "applets/shell/ash/quote.h"
 #include "lib/text_buffer.h"
@@ -123,24 +124,6 @@ bool ash_parser_register_here_document(
     return true;
 }
 
-static bool ash_here_document_line_continues(
-    const char* line,
-    size_t start,
-    size_t end
-) {
-    /*
-     * In an unquoted here-document, only an unescaped trailing backslash
-     * joins the next physical line. Counting the run avoids treating the
-     * second byte of a doubled backslash as a continuation.
-     */
-    size_t backslashes = 0u;
-    while (end > start && line[end - 1u] == '\\') {
-        backslashes++;
-        end--;
-    }
-    return (backslashes % 2u) != 0u;
-}
-
 static bool ash_parser_complete_here_document(
     struct ash_parser* parser,
     struct ash_here_document* document
@@ -216,54 +199,19 @@ static bool ash_parser_complete_here_document(
             return false;
         }
 
-        bool has_newline =
-            physical_line.length != 0u &&
-            physical_line.data[physical_line.length - 1u] == '\n';
-        size_t line_end = physical_line.length - (has_newline ? 1u : 0u);
-        size_t line_start = 0u;
-        if (logical_line.length == 0u && document->strip_tabs) {
-            while (line_start < line_end &&
-                   physical_line.data[line_start] == '\t') {
-                line_start++;
-            }
-        }
-        if (!bx_text_buffer_append_span(
-                &logical_line,
-                physical_line.data + line_start,
-                line_end - line_start
-            )) {
-            ash_parser_fail(
-                parser,
-                ASH_PARSER_ERROR,
-                line_location,
-                "out of memory"
-            );
+        enum ash_here_document_line_result match =
+            ash_here_document_match_line(&logical_line, physical_line.data, physical_line.length, document->delimiter, document->delimiter_length, document->delimiter_quoted, document->strip_tabs);
+        if (match == ASH_HERE_DOCUMENT_LINE_ERROR) {
+            ash_parser_fail(parser, ASH_PARSER_ERROR, line_location, "out of memory");
             bx_text_buffer_destroy(&physical_line);
             bx_text_buffer_destroy(&logical_line);
             bx_text_buffer_destroy(&body);
             return false;
         }
-
-        bool continuation = !document->delimiter_quoted &&
-            has_newline &&
-            ash_here_document_line_continues(
-                physical_line.data,
-                line_start,
-                line_end
-            );
-        if (continuation) {
-            logical_line.data[--logical_line.length] = '\0';
+        if (match == ASH_HERE_DOCUMENT_LINE_CONTINUED) {
             continue;
         }
-
-        bool delimiter = logical_line.length ==
-                document->delimiter_length &&
-            (logical_line.length == 0u ||
-             memcmp(
-                 logical_line.data,
-                 document->delimiter,
-                 logical_line.length
-             ) == 0);
+        bool delimiter = match == ASH_HERE_DOCUMENT_LINE_DELIMITER;
         if (delimiter) {
             body.length = candidate_start;
             body.data[body.length] = '\0';
@@ -295,7 +243,6 @@ static bool ash_parser_complete_here_document(
             body_location = candidate_location;
             body_started = true;
         }
-        bx_text_buffer_clear(&logical_line);
         candidate_active = false;
     }
 }
