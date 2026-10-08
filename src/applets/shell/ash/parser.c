@@ -812,102 +812,68 @@ static struct ash_ast* ash_parse_if_after_keyword(
     struct ash_parser* parser,
     struct ash_source_location location
 ) {
-    struct ash_ast* condition = ash_parse_list(
-        parser,
-        &(struct ash_parse_stop){
-            .words = {ASH_RESERVED_THEN},
-            .require_separator = true,
+    struct ash_ast* root = NULL;
+    struct ash_ast** branch = &root;
+    while (true) {
+        struct ash_ast* node = ash_ast_create(ASH_AST_IF, location);
+        if (node == NULL) {
+            ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+            goto fail;
         }
-    );
-    if (condition == NULL ||
-        !ash_parser_consume_reserved(
-            parser,
-            ASH_RESERVED_THEN,
-            "'then' expected"
-        )) {
-        ash_ast_destroy(condition);
-        return NULL;
-    }
-
-    struct ash_ast* then_branch = ash_parse_list(
-        parser,
-        &(struct ash_parse_stop){
-            .words = {
-                ASH_RESERVED_ELIF,
-                ASH_RESERVED_ELSE,
-                ASH_RESERVED_FI,
-            },
-            .require_separator = true,
+        *branch = node;
+        node->value.conditional.condition = ash_parse_list(parser, &(struct ash_parse_stop){
+                                                                       .words = {ASH_RESERVED_THEN},
+                                                                       .require_separator = true,
+                                                                   });
+        if (node->value.conditional.condition == NULL || !ash_parser_consume_reserved(parser, ASH_RESERVED_THEN, "'then' expected")) {
+            goto fail;
         }
-    );
-    if (then_branch == NULL) {
-        ash_ast_destroy(condition);
-        return NULL;
-    }
-
-    struct ash_ast* else_branch = NULL;
-    struct ash_token* ending = ash_parser_peek(parser);
-    if (ending == NULL) {
-        ash_ast_destroy(condition);
-        ash_ast_destroy(then_branch);
-        return NULL;
-    }
-    enum ash_reserved_word ending_word =
-        ash_parser_reserved_word(ending);
-    if (ending_word == ASH_RESERVED_ELIF) {
-        struct ash_source_location elif_location = ending->location;
-        struct ash_token keyword;
-        (void)ash_parser_take(parser, &keyword);
-        ash_token_destroy(&keyword);
-        else_branch = ash_parse_if_after_keyword(parser, elif_location);
-        if (else_branch == NULL) {
-            ash_ast_destroy(condition);
-            ash_ast_destroy(then_branch);
-            return NULL;
+        node->value.conditional.then_branch = ash_parse_list(parser, &(struct ash_parse_stop){
+                                                                         .words =
+                                                                             {
+                                                                                 ASH_RESERVED_ELIF,
+                                                                                 ASH_RESERVED_ELSE,
+                                                                                 ASH_RESERVED_FI,
+                                                                             },
+                                                                         .require_separator = true,
+                                                                     });
+        if (node->value.conditional.then_branch == NULL) {
+            goto fail;
         }
-    }
-    else {
+        struct ash_token* ending = ash_parser_peek(parser);
+        if (ending == NULL) {
+            goto fail;
+        }
+        enum ash_reserved_word ending_word = ash_parser_reserved_word(ending);
+        if (ending_word == ASH_RESERVED_ELIF) {
+            location = ending->location;
+            struct ash_token keyword;
+            (void)ash_parser_take(parser, &keyword);
+            ash_token_destroy(&keyword);
+            branch = &node->value.conditional.else_branch;
+            continue;
+        }
         if (ending_word == ASH_RESERVED_ELSE) {
             struct ash_token keyword;
             (void)ash_parser_take(parser, &keyword);
             ash_token_destroy(&keyword);
-            else_branch = ash_parse_list(
-                parser,
-                &(struct ash_parse_stop){
-                    .words = {ASH_RESERVED_FI},
-                    .require_separator = true,
-                }
-            );
-            if (else_branch == NULL) {
-                ash_ast_destroy(condition);
-                ash_ast_destroy(then_branch);
-                return NULL;
+            node->value.conditional.else_branch = ash_parse_list(parser, &(struct ash_parse_stop){
+                                                                             .words = {ASH_RESERVED_FI},
+                                                                             .require_separator = true,
+                                                                         });
+            if (node->value.conditional.else_branch == NULL) {
+                goto fail;
             }
         }
-        if (!ash_parser_consume_reserved(
-                parser,
-                ASH_RESERVED_FI,
-                "'fi' expected"
-            )) {
-            ash_ast_destroy(condition);
-            ash_ast_destroy(then_branch);
-            ash_ast_destroy(else_branch);
-            return NULL;
+        if (!ash_parser_consume_reserved(parser, ASH_RESERVED_FI, "'fi' expected")) {
+            goto fail;
         }
+        return root;
     }
 
-    struct ash_ast* node = ash_ast_create(ASH_AST_IF, location);
-    if (node == NULL) {
-        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
-        ash_ast_destroy(condition);
-        ash_ast_destroy(then_branch);
-        ash_ast_destroy(else_branch);
-        return NULL;
-    }
-    node->value.conditional.condition = condition;
-    node->value.conditional.then_branch = then_branch;
-    node->value.conditional.else_branch = else_branch;
-    return node;
+fail:
+    ash_ast_destroy(root);
+    return NULL;
 }
 
 static struct ash_ast* ash_parse_loop_after_keyword(
