@@ -1735,9 +1735,21 @@ static enum ash_command_build_result ash_ast_simple_to_command(
     struct ash_command* command
 ) {
     ash_command_init(command);
+    bool declaration_utility = false;
     for (size_t i = 0u; i < node->value.simple.count; i++) {
         const struct ash_simple_item* item = &node->value.simple.items[i];
         if (item->kind != ASH_SIMPLE_WORD) {
+            continue;
+        }
+        if (declaration_utility && ash_word_is_assignment(&item->value.word.syntax)) {
+            char* text = NULL;
+            bool expanded = ash_expand(shell, &item->value.word.syntax, ASH_EXPANSION_ASSIGNMENT, &text, &command->substitution_status);
+            bool added = expanded && ash_command_push_word(shell, command, text);
+            free(text);
+            if (!added) {
+                ash_command_destroy(command);
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
+            }
             continue;
         }
         struct ash_expanded_fields fields;
@@ -1749,6 +1761,9 @@ static enum ash_command_build_result ash_ast_simple_to_command(
             )) {
             ash_command_destroy(command);
             return ASH_COMMAND_BUILD_SHELL_ERROR;
+        }
+        if (command->word_count == 0u && fields.count != 0u) {
+            declaration_utility = ash_command_is_declaration_utility(shell, fields.values[0]);
         }
         for (size_t j = 0u; j < fields.count; j++) {
             if (!ash_command_push_word(

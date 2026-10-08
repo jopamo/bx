@@ -291,3 +291,12 @@ bool ash_command_resolution_is_builtin(
     return ash_command_resolution_valid(resolution) &&
         (resolution->kind == ASH_COMMAND_SPECIAL_BUILTIN || resolution->kind == ASH_COMMAND_REGULAR_BUILTIN);
 }
+
+bool ash_command_is_declaration_utility(const struct ash_shell* shell, const char* name) {
+    const struct ash_builtin_definition* definition = ash_builtin_find(name);
+    if (definition == NULL || definition->builtin != ASH_BUILTIN_EXPORT) {
+        return false;
+    }
+    struct ash_command_resolution resolution = ash_command_resolve(shell, name);
+    return ash_command_resolution_is_builtin(&resolution) && resolution.target.builtin == ASH_BUILTIN_EXPORT;
+}

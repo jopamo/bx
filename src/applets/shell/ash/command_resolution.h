@@ -82,6 +82,8 @@ struct ash_command_resolution ash_command_resolve(
     const struct ash_shell* shell,
     const char* name
 );
+/* Recognize supported declaration utilities under the active namespace policy. */
+bool ash_command_is_declaration_utility(const struct ash_shell* shell, const char* name);
 /* Resolve an operand that must cross an external-command exec boundary. */
 struct ash_command_resolution ash_command_resolve_external(const char* name);
 
