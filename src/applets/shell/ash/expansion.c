@@ -434,9 +434,34 @@ static bool ash_append_pattern_component(
     );
 }
 
+static const char* ash_leading_home(const struct ash_shell* shell, const struct ash_word* word) {
+    if (word->count == 0u) {
+        return NULL;
+    }
+    const struct ash_word_part* part = &word->parts[0];
+    if (part->kind != ASH_WORD_TEXT || ash_word_part_is_quoted(part) || part->length == 0u || part->text[0] != '~') {
+        return NULL;
+    }
+    if ((part->length == 1u && word->count == 1u) || (part->length > 1u && part->text[1] == '/')) {
+        return ash_var_get(shell, "HOME");
+    }
+    return NULL;
+}
+
 static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, int* substitution_status) {
+    const char* home = ash_leading_home(shell, word);
+    if (home != NULL && ((value != NULL && !ash_expansion_append_text(shell, value, home)) || (pattern != NULL && !ash_append_pattern_span(shell, pattern, home, strlen(home), true)))) {
+        return false;
+    }
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
+        struct ash_word_part adjusted;
+        if (i == 0u && home != NULL) {
+            adjusted = *part;
+            adjusted.text++;
+            adjusted.length--;
+            part = &adjusted;
+        }
         struct bx_text_buffer component;
         bx_text_buffer_init(&component);
         if (!ash_expand_part(shell, part, &component, substitution_status)) {
@@ -896,8 +921,22 @@ bool ash_expand_argument(
     const struct ash_positional_frame* positionals =
         ash_scope_positionals(shell);
 
+    const char* home = ash_leading_home(shell, word);
+    if (home != NULL) {
+        if (!ash_expanded_fields_add_component(shell, fields, active_patterns, home, true, false)) {
+            goto fail;
+        }
+        field_present = true;
+    }
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
+        struct ash_word_part adjusted;
+        if (i == 0u && home != NULL) {
+            adjusted = *part;
+            adjusted.text++;
+            adjusted.length--;
+            part = &adjusted;
+        }
         if (ash_parameter_is(part, '@')) {
             if (positionals == NULL || positionals->count == 0u) {
                 continue;
