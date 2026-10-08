@@ -27,6 +27,36 @@ static void ash_condition_cleanup_push(struct ash_ast_cleanup* cleanup, struct a
     }
 }
 
+enum ash_clone_kind {
+    ASH_CLONE_AST,
+    ASH_CLONE_CONDITION,
+};
+
+struct ash_clone_job {
+    enum ash_clone_kind kind;
+    union {
+        struct {
+            const struct ash_ast* source;
+            struct ash_ast* copy;
+        } node;
+        struct {
+            const struct ash_condition* source;
+            struct ash_condition* copy;
+        } condition;
+    } value;
+};
+
+struct ash_clone_work {
+    /* Jobs borrow source nodes and point into the unpublished owned copy. */
+    struct ash_clone_job* jobs;
+    size_t count;
+    size_t capacity;
+};
+
+static struct ash_ast* ash_ast_clone_pending(struct ash_clone_work* work, const struct ash_ast* source);
+static struct ash_condition* ash_condition_clone_pending(struct ash_clone_work* work, const struct ash_condition* source);
+static bool ash_clone_drain(struct ash_clone_work* work);
+
 static int ash_ast_grow(
     void** items,
     size_t* capacity,
@@ -57,6 +87,48 @@ static int ash_ast_grow(
     *items = replacement;
     *capacity = grown;
     return 0;
+}
+
+static bool ash_clone_push(struct ash_clone_work* work, struct ash_clone_job job) {
+    if (work->count == SIZE_MAX) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    if (ash_ast_grow((void**)&work->jobs, &work->capacity, work->count + 1u, sizeof(*work->jobs)) != 0) {
+        return false;
+    }
+    work->jobs[work->count++] = job;
+    return true;
+}
+
+static struct ash_ast* ash_ast_clone_pending(struct ash_clone_work* work, const struct ash_ast* source) {
+    if (source == NULL) {
+        return NULL;
+    }
+    struct ash_ast* copy = ash_ast_create(source->kind, source->location);
+    if (copy != NULL && !ash_clone_push(work, (struct ash_clone_job){
+                                                  .kind = ASH_CLONE_AST,
+                                                  .value.node = {.source = source, .copy = copy},
+                                              })) {
+        free(copy);
+        return NULL;
+    }
+    return copy;
+}
+
+static struct ash_condition* ash_condition_clone_pending(struct ash_clone_work* work, const struct ash_condition* source) {
+    if (source == NULL) {
+        return NULL;
+    }
+    struct ash_condition* copy = ash_condition_create(source->kind, source->location);
+    if (copy != NULL && !ash_clone_push(work, (struct ash_clone_job){
+                                                  .kind = ASH_CLONE_CONDITION,
+                                                  .value.condition = {.source = source, .copy = copy},
+                                              })) {
+        free(copy);
+        return NULL;
+    }
+    return copy;
 }
 
 struct ash_ast* ash_ast_create(
@@ -103,10 +175,7 @@ void ash_ast_word_destroy(struct ash_ast_word* word) {
     ash_ast_cleanup_drain(&cleanup);
 }
 
-int ash_ast_word_clone(
-    struct ash_ast_word* destination,
-    const struct ash_ast_word* source
-) {
+static int ash_ast_word_clone_pending(struct ash_clone_work* work, struct ash_ast_word* destination, const struct ash_ast_word* source) {
     if (!source->has_syntax) {
         *destination = (struct ash_ast_word){0};
         return 0;
@@ -118,9 +187,7 @@ int ash_ast_word_clone(
     for (size_t i = 0u; i < source->process_substitution_count; i++) {
         const struct ash_process_substitution* source_substitution =
             &source->process_substitutions[i];
-        struct ash_ast* command = ash_ast_clone(
-            source_substitution->command
-        );
+        struct ash_ast* command = ash_ast_clone_pending(work, source_substitution->command);
         if (command == NULL ||
             ash_ast_word_take_process_substitution(
                 destination,
@@ -132,6 +199,19 @@ int ash_ast_word_clone(
             ash_ast_word_destroy(destination);
             return -1;
         }
+    }
+    return 0;
+}
+
+int ash_ast_word_clone(struct ash_ast_word* destination, const struct ash_ast_word* source) {
+    struct ash_clone_work work = {0};
+    bool success = ash_ast_word_clone_pending(&work, destination, source) == 0 && ash_clone_drain(&work);
+    int saved_errno = errno;
+    free(work.jobs);
+    if (!success) {
+        ash_ast_word_destroy(destination);
+        errno = saved_errno;
+        return -1;
     }
     return 0;
 }
@@ -296,47 +376,23 @@ void ash_condition_destroy(struct ash_condition* condition) {
     ash_ast_cleanup_drain(&cleanup);
 }
 
-struct ash_condition* ash_condition_clone(
-    const struct ash_condition* source
-) {
-    if (source == NULL) {
-        return NULL;
-    }
-    struct ash_condition* copy = ash_condition_create(
-        source->kind,
-        source->location
-    );
-    if (copy == NULL) {
-        return NULL;
-    }
+static bool ash_condition_clone_fill(struct ash_clone_work* work, struct ash_condition* copy, const struct ash_condition* source) {
     switch (source->kind) {
         case ASH_CONDITION_WORD:
-            if (ash_ast_word_clone(
-                    &copy->value.word,
-                    &source->value.word
-                ) != 0) {
+            if (ash_ast_word_clone_pending(work, &copy->value.word, &source->value.word) != 0) {
                 goto fail;
             }
             break;
         case ASH_CONDITION_UNARY:
             copy->value.unary.operator = source->value.unary.operator;
-            if (ash_ast_word_clone(
-                    &copy->value.unary.operand,
-                    &source->value.unary.operand
-                ) != 0) {
+            if (ash_ast_word_clone_pending(work, &copy->value.unary.operand, &source->value.unary.operand) != 0) {
                 goto fail;
             }
             break;
         case ASH_CONDITION_BINARY:
             copy->value.binary.operator = source->value.binary.operator;
-            if (ash_ast_word_clone(
-                    &copy->value.binary.left,
-                    &source->value.binary.left
-                ) != 0 ||
-                ash_ast_word_clone(
-                    &copy->value.binary.right,
-                    &source->value.binary.right
-                ) != 0) {
+            if (ash_ast_word_clone_pending(work, &copy->value.binary.left, &source->value.binary.left) != 0 ||
+                ash_ast_word_clone_pending(work, &copy->value.binary.right, &source->value.binary.right) != 0) {
                 goto fail;
             }
             break;
@@ -344,12 +400,8 @@ struct ash_condition* ash_condition_clone(
         case ASH_CONDITION_AND:
         case ASH_CONDITION_OR:
         case ASH_CONDITION_GROUP:
-            copy->value.branches.left = ash_condition_clone(
-                source->value.branches.left
-            );
-            copy->value.branches.right = ash_condition_clone(
-                source->value.branches.right
-            );
+            copy->value.branches.left = ash_condition_clone_pending(work, source->value.branches.left);
+            copy->value.branches.right = ash_condition_clone_pending(work, source->value.branches.right);
             if ((source->value.branches.left != NULL &&
                  copy->value.branches.left == NULL) ||
                 (source->value.branches.right != NULL &&
@@ -358,11 +410,24 @@ struct ash_condition* ash_condition_clone(
             }
             break;
     }
-    return copy;
+    return true;
 
 fail:
-    ash_condition_destroy(copy);
-    return NULL;
+    return false;
+}
+
+struct ash_condition* ash_condition_clone(const struct ash_condition* source) {
+    struct ash_clone_work work = {0};
+    struct ash_condition* copy = ash_condition_clone_pending(&work, source);
+    bool success = copy != NULL && ash_clone_drain(&work);
+    int saved_errno = errno;
+    free(work.jobs);
+    if (!success) {
+        ash_condition_destroy(copy);
+        errno = saved_errno;
+        return NULL;
+    }
+    return copy;
 }
 
 int ash_condition_take_word(
@@ -518,10 +583,7 @@ static struct ash_here_document* ash_here_document_clone(
     return document;
 }
 
-static int ash_redirection_clone(
-    struct ash_redirection* destination,
-    const struct ash_redirection* source
-) {
+static int ash_redirection_clone(struct ash_clone_work* work, struct ash_redirection* destination, const struct ash_redirection* source) {
     *destination = (struct ash_redirection){0};
     bool here_document_operator =
         source->operator == ASH_TOKEN_DLESS ||
@@ -543,10 +605,7 @@ static int ash_redirection_clone(
             return -1;
         }
     }
-    if (ash_ast_word_clone(
-            &destination->target,
-            &source->target
-        ) != 0) {
+    if (ash_ast_word_clone_pending(work, &destination->target, &source->target) != 0) {
         free(destination->prefix.text);
         *destination = (struct ash_redirection){0};
         return -1;
@@ -563,20 +622,10 @@ static int ash_redirection_clone(
     return 0;
 }
 
-static bool ash_ast_clone_trailing(
-    struct ash_ast* destination,
-    const struct ash_ast* source
-) {
+static bool ash_ast_clone_trailing(struct ash_clone_work* work, struct ash_ast* destination, const struct ash_ast* source) {
     for (size_t i = 0u; i < source->trailing_redirection_count; i++) {
         struct ash_redirection redirection;
-        if (ash_redirection_clone(
-                &redirection,
-                &source->trailing_redirections[i]
-            ) != 0 ||
-            ash_ast_take_trailing_redirection(
-                destination,
-                &redirection
-            ) != 0) {
+        if (ash_redirection_clone(work, &redirection, &source->trailing_redirections[i]) != 0 || ash_ast_take_trailing_redirection(destination, &redirection) != 0) {
             ash_redirection_destroy(&redirection);
             return false;
         }
@@ -633,20 +682,16 @@ static int ash_case_clause_take_ast_word(
     return 0;
 }
 
-struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
-    if (source == NULL) {
-        return NULL;
-    }
-    struct ash_ast* copy = ash_ast_create(source->kind, source->location);
-    if (copy == NULL || !ash_ast_clone_trailing(copy, source)) {
-        ash_ast_destroy(copy);
-        return NULL;
+static bool ash_ast_clone_fill(struct ash_clone_work* work, struct ash_ast* copy, const struct ash_ast* source) {
+    if (!ash_ast_clone_trailing(work, copy, source)) {
+        return false;
     }
 
-#define CLONE_CHILD(destination, child) \
-    do { \
-        (destination) = ash_ast_clone(child); \
-        if ((child) != NULL && (destination) == NULL) goto fail; \
+#define CLONE_CHILD(destination, child)                     \
+    do {                                                    \
+        (destination) = ash_ast_clone_pending(work, child); \
+        if ((child) != NULL && (destination) == NULL)       \
+            goto fail;                                      \
     } while (0)
 
     switch (source->kind) {
@@ -656,29 +701,14 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
                     &source->value.simple.items[i];
                 if (item->kind == ASH_SIMPLE_REDIRECTION) {
                     struct ash_redirection redirection;
-                    if (ash_redirection_clone(
-                            &redirection,
-                            &item->value.redirection
-                        ) != 0 ||
-                        ash_ast_simple_take_redirection(
-                            copy,
-                            &redirection
-                        ) != 0) {
+                    if (ash_redirection_clone(work, &redirection, &item->value.redirection) != 0 || ash_ast_simple_take_redirection(copy, &redirection) != 0) {
                         ash_redirection_destroy(&redirection);
                         goto fail;
                     }
                 }
                 else {
                     struct ash_ast_word word;
-                    if (ash_ast_word_clone(
-                            &word,
-                            &item->value.word
-                        ) != 0 ||
-                        ash_ast_simple_take_ast_word(
-                            copy,
-                            &word,
-                            item->kind == ASH_SIMPLE_ASSIGNMENT
-                        ) != 0) {
+                    if (ash_ast_word_clone_pending(work, &word, &item->value.word) != 0 || ash_ast_simple_take_ast_word(copy, &word, item->kind == ASH_SIMPLE_ASSIGNMENT) != 0) {
                         ash_ast_word_destroy(&word);
                         goto fail;
                     }
@@ -687,9 +717,7 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
             break;
         case ASH_AST_LIST:
             for (size_t i = 0u; i < source->value.list.count; i++) {
-                struct ash_ast* child = ash_ast_clone(
-                    source->value.list.entries[i].command
-                );
+                struct ash_ast* child = ash_ast_clone_pending(work, source->value.list.entries[i].command);
                 if (child == NULL || ash_ast_list_take(copy, &child) != 0) {
                     ash_ast_destroy(child);
                     goto fail;
@@ -700,9 +728,7 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
             break;
         case ASH_AST_AND_OR:
             for (size_t i = 0u; i < source->value.and_or.count; i++) {
-                struct ash_ast* child = ash_ast_clone(
-                    source->value.and_or.pipelines[i]
-                );
+                struct ash_ast* child = ash_ast_clone_pending(work, source->value.and_or.pipelines[i]);
                 enum ash_and_or_operator operator_before = i == 0u ?
                     ASH_AND_IF : source->value.and_or.operators[i - 1u];
                 if (child == NULL ||
@@ -715,9 +741,7 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
         case ASH_AST_PIPELINE:
             copy->value.pipeline.negated = source->value.pipeline.negated;
             for (size_t i = 0u; i < source->value.pipeline.count; i++) {
-                struct ash_ast* child = ash_ast_clone(
-                    source->value.pipeline.commands[i]
-                );
+                struct ash_ast* child = ash_ast_clone_pending(work, source->value.pipeline.commands[i]);
                 enum ash_pipe_operator operator_before = i == 0u ?
                     ASH_PIPE_STDOUT :
                     source->value.pipeline.operators[i - 1u];
@@ -765,27 +789,12 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
                 source->value.for_loop.explicit_words;
             for (size_t i = 0u; i < source->value.for_loop.word_count; i++) {
                 struct ash_ast_word word;
-                if (ash_ast_word_clone(
-                        &word,
-                        &source->value.for_loop.words[i]
-                    ) != 0) {
+                if (ash_ast_word_clone_pending(work, &word, &source->value.for_loop.words[i]) != 0) {
                     goto fail;
                 }
-                if (copy->value.for_loop.word_count ==
-                    copy->value.for_loop.word_capacity) {
-                    size_t capacity =
-                        copy->value.for_loop.word_capacity == 0u ?
-                            4u : copy->value.for_loop.word_capacity * 2u;
-                    struct ash_ast_word* words = realloc(
-                        copy->value.for_loop.words,
-                        capacity * sizeof(*words)
-                    );
-                    if (words == NULL) {
-                        ash_ast_word_destroy(&word);
-                        goto fail;
-                    }
-                    copy->value.for_loop.words = words;
-                    copy->value.for_loop.word_capacity = capacity;
+                if (ash_ast_grow((void**)&copy->value.for_loop.words, &copy->value.for_loop.word_capacity, copy->value.for_loop.word_count + 1u, sizeof(*copy->value.for_loop.words)) != 0) {
+                    ash_ast_word_destroy(&word);
+                    goto fail;
                 }
                 copy->value.for_loop.words[
                     copy->value.for_loop.word_count++
@@ -797,10 +806,7 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
             );
             break;
         case ASH_AST_CASE:
-            if (ash_ast_word_clone(
-                    &copy->value.case_command.subject,
-                    &source->value.case_command.subject
-                ) != 0) {
+            if (ash_ast_word_clone_pending(work, &copy->value.case_command.subject, &source->value.case_command.subject) != 0) {
                 goto fail;
             }
             for (size_t i = 0u;
@@ -815,20 +821,13 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
                      j < source_clause->pattern_count;
                      j++) {
                     struct ash_ast_word pattern;
-                    if (ash_ast_word_clone(
-                            &pattern,
-                            &source_clause->patterns[j]
-                        ) != 0 ||
-                        ash_case_clause_take_ast_word(
-                            &clause,
-                            &pattern
-                        ) != 0) {
+                    if (ash_ast_word_clone_pending(work, &pattern, &source_clause->patterns[j]) != 0 || ash_case_clause_take_ast_word(&clause, &pattern) != 0) {
                         ash_ast_word_destroy(&pattern);
                         ash_case_clause_destroy(&clause);
                         goto fail;
                     }
                 }
-                clause.body = ash_ast_clone(source_clause->body);
+                clause.body = ash_ast_clone_pending(work, source_clause->body);
                 if (clause.body == NULL ||
                     ash_ast_case_take_clause(copy, &clause) != 0) {
                     ash_case_clause_destroy(&clause);
@@ -860,9 +859,7 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
             }
             break;
         case ASH_AST_CONDITIONAL_COMMAND:
-            copy->value.conditional_command.root = ash_condition_clone(
-                source->value.conditional_command.root
-            );
+            copy->value.conditional_command.root = ash_condition_clone_pending(work, source->value.conditional_command.root);
             if (source->value.conditional_command.root != NULL &&
                 copy->value.conditional_command.root == NULL) {
                 goto fail;
@@ -912,12 +909,38 @@ struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
             break;
     }
 #undef CLONE_CHILD
-    return copy;
+    return true;
 
 fail:
 #undef CLONE_CHILD
-    ash_ast_destroy(copy);
-    return NULL;
+    return false;
+}
+
+static bool ash_clone_drain(struct ash_clone_work* work) {
+    while (work->count != 0u) {
+        struct ash_clone_job job = work->jobs[--work->count];
+        bool success =
+            job.kind == ASH_CLONE_AST ? ash_ast_clone_fill(work, job.value.node.copy, job.value.node.source) : ash_condition_clone_fill(work, job.value.condition.copy, job.value.condition.source);
+        if (!success) {
+            /* Failed payload construction may have freed queued children. */
+            return false;
+        }
+    }
+    return true;
+}
+
+struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
+    struct ash_clone_work work = {0};
+    struct ash_ast* copy = ash_ast_clone_pending(&work, source);
+    bool success = copy != NULL && ash_clone_drain(&work);
+    int saved_errno = errno;
+    free(work.jobs);
+    if (!success) {
+        ash_ast_destroy(copy);
+        errno = saved_errno;
+        return NULL;
+    }
+    return copy;
 }
 
 static void ash_redirection_cleanup(struct ash_ast_cleanup* cleanup, struct ash_redirection* redirection) {
