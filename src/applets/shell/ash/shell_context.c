@@ -352,7 +352,7 @@ struct ash_parser* ash_shell_context_begin_parse(
                 shell->aliases :
                 NULL,
         .lexer = {
-            .flags = (ash_shell_policy_is_bash(&shell->policy) ? ASH_LEXER_COMBINED_REDIRECTION : 0u) |
+            .flags = (ash_shell_policy_is_bash(&shell->policy) ? ASH_LEXER_COMBINED_REDIRECTION | ASH_LEXER_STDERR_PIPE : 0u) |
                 (ash_shopt_enabled(&shell->shopt, ASH_SHOPT_EXTGLOB) ? ASH_LEXER_EXTGLOB : 0u),
         },
     };
