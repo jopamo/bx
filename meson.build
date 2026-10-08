@@ -388,6 +388,7 @@ bx_lib_sources = [
   'src/lib/same_file.c',
   'src/lib/sandbox_explain.c',
   'src/lib/signal_names.c',
+  'src/lib/signal_pending.c',
   'src/lib/size_parse.c',
   'src/lib/sockaddr_format.c',
   'src/lib/text_buffer.c',
