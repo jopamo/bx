@@ -488,8 +488,7 @@ static void bx_init_reload(struct bx_init_runtime *runtime) {
             (void)kill(action->pid, SIGTERM);
     }
 #if BX_INIT_FEATURE_KILL_DELAY
-    (void)bx_child_fork_callback_start(
-        bx_init_kill_removed_after_delay, runtime);
+    (void)bx_child_fork_callback_start(bx_init_kill_removed_after_delay, runtime, BX_CHILD_SIGNALS_INHERIT);
 #endif
 #endif
 
@@ -543,8 +542,7 @@ static int bx_init_reboot_child(void *user) {
 
 static void bx_init_low_level_reboot(unsigned command) {
     sleep(1);
-    (void)bx_child_fork_callback_wait(
-        bx_init_reboot_child, &command, NULL);
+    (void)bx_child_fork_callback_wait(bx_init_reboot_child, &command, BX_CHILD_SIGNALS_INHERIT, NULL);
     sleep(1);
     _exit(0);
 }
