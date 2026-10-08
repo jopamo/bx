@@ -1781,12 +1781,7 @@ static enum ash_command_build_result ash_ast_simple_to_command(
 
         if (item->kind == ASH_SIMPLE_ASSIGNMENT) {
             char* text = NULL;
-            if (!ash_expand_word(
-                    shell,
-                    &item->value.word.syntax,
-                    &text,
-                    &command->substitution_status
-                )) {
+            if (!ash_expand(shell, &item->value.word.syntax, ASH_EXPANSION_ASSIGNMENT, &text, &command->substitution_status)) {
                 ash_command_destroy(command);
                 return ASH_COMMAND_BUILD_SHELL_ERROR;
             }
