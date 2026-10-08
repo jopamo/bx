@@ -13,6 +13,7 @@ struct ash_parse_stop {
     enum ash_token_kind token;
     enum ash_reserved_word words[4];
     bool require_separator;
+    bool case_clause;
 };
 
 /*
@@ -64,6 +65,10 @@ static bool ash_parser_token_is_reserved(
     return ash_parser_reserved_word(token) != ASH_RESERVED_NONE;
 }
 
+static bool ash_parser_token_is_case_terminator(const struct ash_token* token) {
+    return token->kind == ASH_TOKEN_DSEMI || token->kind == ASH_TOKEN_SEMI_AND;
+}
+
 static bool ash_parser_at_stop(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
@@ -88,7 +93,7 @@ static bool ash_parser_at_stop(
             }
         }
     }
-    return stop->token != ASH_TOKEN_EOF && token->kind == stop->token;
+    return (stop->token != ASH_TOKEN_EOF && token->kind == stop->token) || (stop->case_clause && ash_parser_token_is_case_terminator(token));
 }
 
 static bool ash_parser_at_end(struct ash_parser* parser) {
@@ -701,17 +706,12 @@ static struct ash_ast* ash_parse_case_after_keyword(
             ash_ast_destroy(node);
             return NULL;
         }
-        bool empty = token->kind == ASH_TOKEN_DSEMI ||
-            ash_parser_reserved_word(token) == ASH_RESERVED_ESAC;
-        clause.body = empty ?
-            ash_parser_empty_list(parser, body_location) :
-            ash_parse_list(
-                parser,
-                &(struct ash_parse_stop){
-                    .token = ASH_TOKEN_DSEMI,
-                    .words = {ASH_RESERVED_ESAC},
-                }
-            );
+        bool empty = ash_parser_token_is_case_terminator(token) || ash_parser_reserved_word(token) == ASH_RESERVED_ESAC;
+        clause.body = empty ? ash_parser_empty_list(parser, body_location)
+                            : ash_parse_list(parser, &(struct ash_parse_stop){
+                                                         .words = {ASH_RESERVED_ESAC},
+                                                         .case_clause = true,
+                                                     });
         if (clause.body == NULL) {
             ash_case_clause_destroy(&clause);
             ash_ast_destroy(node);
@@ -724,7 +724,8 @@ static struct ash_ast* ash_parse_case_after_keyword(
             ash_ast_destroy(node);
             return NULL;
         }
-        if (token->kind == ASH_TOKEN_DSEMI) {
+        if (ash_parser_token_is_case_terminator(token)) {
+            clause.terminator = token->kind == ASH_TOKEN_SEMI_AND ? ASH_CASE_FALL_THROUGH : ASH_CASE_TERMINATE;
             struct ash_token terminator;
             (void)ash_parser_take(parser, &terminator);
             ash_token_destroy(&terminator);
