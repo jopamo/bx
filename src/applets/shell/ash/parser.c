@@ -1038,6 +1038,15 @@ static struct ash_ast* ash_parse_for_after_keyword(
         ash_ast_destroy(node);
         return NULL;
     }
+    bool header_linebreak = token->kind == ASH_TOKEN_NEWLINE;
+    if (header_linebreak) {
+        ash_parser_skip_newlines(parser);
+        token = ash_parser_peek(parser);
+        if (token == NULL) {
+            ash_ast_destroy(node);
+            return NULL;
+        }
+    }
     if (ash_parser_reserved_word(token) == ASH_RESERVED_IN) {
         struct ash_token keyword;
         (void)ash_parser_take(parser, &keyword);
@@ -1055,12 +1064,7 @@ static struct ash_ast* ash_parse_for_after_keyword(
                 break;
             }
             if (token->kind != ASH_TOKEN_WORD) {
-                ash_parser_fail(
-                    parser,
-                    ASH_PARSER_ERROR,
-                    token->location,
-                    "word or separator expected in for list"
-                );
+                ash_parser_fail(parser, token->kind == ASH_TOKEN_EOF ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR, token->location, "word or separator expected in for list");
                 ash_ast_destroy(node);
                 return NULL;
             }
@@ -1086,8 +1090,8 @@ static struct ash_ast* ash_parse_for_after_keyword(
         ash_ast_destroy(node);
         return NULL;
     }
-    if (token->kind != ASH_TOKEN_SEMI &&
-        token->kind != ASH_TOKEN_NEWLINE) {
+    bool separated = !explicit_words && header_linebreak;
+    if (!separated && token->kind != ASH_TOKEN_SEMI && token->kind != ASH_TOKEN_NEWLINE && (explicit_words || ash_parser_reserved_word(token) != ASH_RESERVED_DO)) {
         ash_parser_fail(
             parser,
             ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
@@ -1097,14 +1101,12 @@ static struct ash_ast* ash_parse_for_after_keyword(
         ash_ast_destroy(node);
         return NULL;
     }
-    do {
+    if (!separated && token->kind == ASH_TOKEN_SEMI) {
         struct ash_token separator;
         (void)ash_parser_take(parser, &separator);
         ash_token_destroy(&separator);
-        token = ash_parser_peek(parser);
-    } while (token != NULL &&
-             (token->kind == ASH_TOKEN_SEMI ||
-              token->kind == ASH_TOKEN_NEWLINE));
+    }
+    ash_parser_skip_newlines(parser);
 
     if (!ash_parser_consume_reserved(
             parser,
