@@ -417,10 +417,12 @@ typedef struct {
     BxFetchHtmlBaseCallback callback;
     void* userdata;
     bool seen;
+    int error;
 } HtmlBaseContext;
 
 #include <liblexa/html.h>
 #include <liblexa/serialize.h>
+#include <liblexa/html_source.h>
 
 typedef struct {
     char* data;
@@ -559,25 +561,38 @@ static int native_base_visit(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
 typedef struct {
     BxFetchHtmlLinkCallback cb;
     void* userdata;
-} NativeExtract;
+} SourceExtract;
 
-static int native_extract_visit(lxa_dom_nodes_t* nodes, lxa_dom_ref_t element,
-                                lxa_dom_ref_t attribute, bool base, const char* url, void* context) {
-    if (base)
-        return 0;
-    NativeExtract* state = context;
-    lxa_span_t name, key, value;
-    lxa_status_t status = lxa_dom_nodes_element_name(nodes, element, &name);
-    if (status != LXA_OK)
-        return native_status_error(status);
-    bool anchor = native_name_equals(name, "a");
-    status = lxa_dom_nodes_attribute_read(nodes, attribute, &key, &value);
-    if (status != LXA_OK)
-        return native_status_error(status);
+static lxa_status_t source_base(void* context, const lxa_html_source_attribute_t* event) {
+    HtmlBaseContext* state = context;
+    if (state->seen)
+        return LXA_OK;
+    char* url = strndup(event->value.data ? (const char*)event->value.data : "",
+                       event->value.length);
+    if (!url)
+        return LXA_ERROR_NO_MEMORY;
+    state->seen = true;
+    int result = state->callback(state->userdata, url);
+    free(url);
+    if (!result)
+        return LXA_OK;
+    state->error = ECANCELED;
+    return LXA_ERROR_ARGUMENT;
+}
+
+static lxa_status_t source_link(void* context, const lxa_html_source_attribute_t* event) {
+    if (native_name_equals(event->tag, "base"))
+        return LXA_OK;
+    SourceExtract* state = context;
+    char* url = strndup(event->value.data ? (const char*)event->value.data : "",
+                       event->value.length);
+    if (!url)
+        return LXA_ERROR_NO_MEMORY;
     state->cb(state->userdata, url,
-              anchor && native_name_equals(key, "href")
+              native_name_equals(event->tag, "a") && native_name_equals(event->name, "href")
                   ? BX_FETCH_HTML_LINK_NAVIGATION : BX_FETCH_HTML_LINK_REQUISITE);
-    return 0;
+    free(url);
+    return LXA_OK;
 }
 
 typedef struct {
@@ -649,15 +664,36 @@ int bx_fetch_html_extract_links(const char* html_data, size_t len,
     if (!cb) errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
         return -1;
-    lxa_html_document_t* document = NULL;
-    if (native_parse(html_data, len, &document))
-        return -1;
+    lxa_allocator_t allocator = lxa_allocator_default();
+    lxa_limits_t limits = lxa_limits_default();
+    limits.max_input_bytes = BX_FETCH_DOCUMENT_PARSE_MAX_BYTES;
+    limits.max_nodes = 0;
+    lxa_span_t input = {(const uint8_t*)html_data, len};
+    lxa_html_result_t result;
+    lxa_status_t status;
     HtmlBaseContext base = {.callback = base_cb, .userdata = userdata};
-    NativeExtract state = {.cb = cb, .userdata = userdata};
-    int result = base_cb && native_walk(document, native_base_visit, &base, true)
-        ? -1 : native_walk(document, native_extract_visit, &state, false);
-    lxa_html_document_destroy(document);
-    return result;
+    if (base_cb) {
+        lxa_html_source_target_t target = {
+            {(const uint8_t*)"base", 4}, {(const uint8_t*)"href", 4}
+        };
+        status = lxa_html_extract_attributes(&allocator, &limits, input, NULL,
+            &target, 1, source_base, &base, &result, NULL);
+        if (status != LXA_OK) {
+            if (result == LXA_HTML_CALLBACK_FAILURE && base.error) {
+                errno = base.error;
+                return -1;
+            }
+            return native_status_error(status);
+        }
+    }
+    lxa_html_source_target_t targets[] = {
+        {{NULL, 0}, {(const uint8_t*)"href", 4}},
+        {{NULL, 0}, {(const uint8_t*)"src", 3}}
+    };
+    SourceExtract state = {.cb = cb, .userdata = userdata};
+    status = lxa_html_extract_attributes(&allocator, &limits, input, NULL,
+        targets, 2, source_link, &state, &result, NULL);
+    return status == LXA_OK ? 0 : native_status_error(status);
 }
 
 char* bx_fetch_html_convert_links(const char* html_data, size_t len,
