@@ -2375,13 +2375,14 @@ static int ash_execute_ast_case_body(
     }
 
     int status = 0;
+    bool falling_through = false;
     for (size_t i = 0u;
          i < node->value.case_command.clause_count;
          i++) {
         const struct ash_case_clause* clause =
             &node->value.case_command.clauses[i];
-        bool clause_matched = false;
-        for (size_t j = 0u; j < clause->pattern_count; j++) {
+        bool clause_matched = falling_through;
+        for (size_t j = 0u; !falling_through && j < clause->pattern_count; j++) {
             struct ash_pattern pattern = {0};
             const struct ash_pattern_options pattern_options = {
                 .purpose = ASH_PATTERN_CASE,
@@ -2417,7 +2418,13 @@ static int ash_execute_ast_case_body(
         if (clause->body->value.list.count != 0u) {
             status = ash_execute_ast(shell, clause->body);
         }
-        break;
+        if (shell->should_exit || ash_control_pending(shell)) {
+            break;
+        }
+        falling_through = clause->terminator == ASH_CASE_FALL_THROUGH;
+        if (!falling_through) {
+            break;
+        }
     }
     free(subject);
     return status;
