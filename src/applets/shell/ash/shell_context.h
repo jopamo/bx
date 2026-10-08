@@ -46,11 +46,6 @@ struct ash_cwd_state {
     char* old_logical;
 };
 
-struct ash_parser_state {
-    struct ash_parser parser;
-    bool active;
-};
-
 struct ash_shell_context_config {
     const char* progname;
     const char* argv0;
@@ -128,7 +123,8 @@ struct ash_shell {
      */
     struct ash_execution_frame* execution_frames;
     struct ash_source_location execution_location;
-    struct ash_parser_state parser_state;
+    /* Caller-owned storage bound until end_parse releases its resources. */
+    struct ash_parser* active_parser;
     struct ash_history_state* history;
     struct ash_completion_state* completion;
     struct ash_cwd_state cwd;
@@ -160,8 +156,10 @@ bool ash_shell_context_init(
 );
 bool ash_shell_context_invariants(const struct ash_shell* shell);
 void ash_shell_context_assert_invariants(const struct ash_shell* shell);
+/* Parser storage must be unowned and remain at this address until end_parse. */
 struct ash_parser* ash_shell_context_begin_parse(
     struct ash_shell* shell,
+    struct ash_parser* parser,
     struct ash_source_location origin,
     const char* input,
     size_t length

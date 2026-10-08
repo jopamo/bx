@@ -56,8 +56,10 @@ static struct ash_input_unit_result ash_input_execute_buffer(
     size_t length,
     enum ash_input_boundary boundary
 ) {
+    struct ash_parser storage;
     struct ash_parser* parser = ash_shell_context_begin_parse(
         shell,
+        &storage,
         origin,
         input,
         length
