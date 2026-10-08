@@ -38,6 +38,7 @@ struct ash_here_document;
 struct ash_parser_config {
     const struct ash_alias_table* aliases;
     struct ash_lexer_options lexer;
+    bool extended_pipeline_negation;
 };
 
 struct ash_parser {
@@ -49,6 +50,7 @@ struct ash_parser {
     struct ash_source_location error_location;
     const char* error;
     const struct ash_alias_table* aliases;
+    bool extended_pipeline_negation;
     struct ash_parser_alias_frame* alias_frames;
     size_t alias_frame_count;
     size_t alias_frame_capacity;
