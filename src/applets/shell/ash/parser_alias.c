@@ -286,9 +286,13 @@ static bool ash_parser_reserve_alias_frame(
     return true;
 }
 
+static bool ash_parser_unbound_boundary(const struct ash_parser* parser) {
+    return parser != NULL && parser->complete_command_boundary && parser->result == ASH_PARSER_COMPLETE && parser->aliases == NULL && parser->alias_frames != NULL &&
+           parser->pending_here_document_count == 0u && (!parser->has_lookahead || parser->lookahead.kind == ASH_TOKEN_EOF);
+}
+
 bool ash_parser_clone_boundary(struct ash_parser* output, const struct ash_parser* source) {
-    if (output == NULL || source == NULL || output == source || !source->complete_command_boundary || source->result != ASH_PARSER_COMPLETE || source->aliases != NULL ||
-        source->alias_frames == NULL || source->pending_here_document_count != 0u || (source->has_lookahead && source->lookahead.kind != ASH_TOKEN_EOF)) {
+    if (output == NULL || output == source || !ash_parser_unbound_boundary(source)) {
         errno = EINVAL;
         return false;
     }
@@ -344,6 +348,77 @@ fail:
         errno = error;
         return false;
     }
+}
+
+bool ash_parser_extend_input(struct ash_parser* parser, const char* input, size_t length) {
+    if (!ash_parser_unbound_boundary(parser) || input == NULL || length < parser->lexer.length) {
+        errno = EINVAL;
+        return false;
+    }
+    struct ash_lexer base = parser->lexer;
+    if (base.source_offset > SIZE_MAX - length) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    size_t added = length - base.length;
+    if ((added != 0u && base.length != 0u && base.input[base.length - 1u] != '\n') || memcmp(base.input, input, base.length) != 0) {
+        errno = EINVAL;
+        return false;
+    }
+    struct ash_parser_alias_frame* bridge = NULL;
+    for (size_t i = parser->alias_frame_count; i != 0u; i--) {
+        if (parser->alias_frames[i - 1u].owned_input != NULL) {
+            bridge = &parser->alias_frames[i - 1u];
+            break;
+        }
+    }
+    char* replacement = NULL;
+    size_t bridge_length = 0u;
+    base.input = input;
+    base.length = length;
+    if (bridge != NULL && added != 0u) {
+        if (base.offset != parser->lexer.length) {
+            errno = EINVAL;
+            return false;
+        }
+        if (added >= SIZE_MAX - bridge->lexer.length || bridge->lexer.source_offset > SIZE_MAX - (bridge->lexer.length + added)) {
+            errno = EOVERFLOW;
+            return false;
+        }
+        bridge_length = bridge->lexer.length + added;
+        while (base.offset < base.length) {
+            char ch = input[base.offset++];
+            size_t* position = ch == '\n' ? &base.line : &base.column;
+            if (*position == SIZE_MAX) {
+                errno = EOVERFLOW;
+                return false;
+            }
+            (*position)++;
+            if (ch == '\n') {
+                base.column = 1u;
+            }
+        }
+        replacement = malloc(bridge_length + 1u);
+        if (replacement == NULL) {
+            return false;
+        }
+        memcpy(replacement, bridge->owned_input, bridge->lexer.length);
+        memcpy(replacement + bridge->lexer.length, input + parser->lexer.length, added);
+        replacement[bridge_length] = '\0';
+    }
+    if (replacement != NULL) {
+        free(bridge->owned_input);
+        bridge->owned_input = replacement;
+        bridge->lexer.input = replacement;
+        bridge->lexer.length = bridge_length;
+    }
+    parser->lexer = base;
+    if (added != 0u && parser->has_lookahead) {
+        ash_token_destroy(&parser->lookahead);
+        parser->has_lookahead = false;
+        parser->lookahead_alias_checked = false;
+    }
+    return true;
 }
 
 static bool ash_parser_push_alias(struct ash_parser* parser, struct ash_alias* alias, struct ash_source_location location) {
