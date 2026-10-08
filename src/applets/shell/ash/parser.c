@@ -1267,7 +1267,9 @@ static struct ash_ast* ash_parse_pipeline(
         (void)ash_parser_take(parser, &bang);
         ash_token_destroy(&bang);
         negated = !negated;
-        ash_parser_skip_newlines(parser);
+        if (parser->extended_pipeline_negation) {
+            ash_parser_skip_newlines(parser);
+        }
         if (!ash_parser_prepare_command_alias(
                 parser,
                 ash_parser_token_is_reserved
@@ -1277,6 +1279,9 @@ static struct ash_ast* ash_parse_pipeline(
         token = ash_parser_peek(parser);
         if (token == NULL) {
             return NULL;
+        }
+        if (!parser->extended_pipeline_negation) {
+            break;
         }
     }
 
@@ -1549,6 +1554,7 @@ void ash_parser_init_at_with_config(
     assert(ash_lexer_options_valid(&config->lexer));
     *parser = (struct ash_parser){
         .result = ASH_PARSER_COMPLETE,
+        .extended_pipeline_negation = config->extended_pipeline_negation,
     };
     ash_parser_alias_state_init(parser, config->aliases);
     ash_lexer_init_at_with_options(

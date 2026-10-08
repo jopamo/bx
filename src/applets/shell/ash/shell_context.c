@@ -347,6 +347,7 @@ struct ash_parser* ash_shell_context_begin_parse(
     }
     assert(ash_shell_context_invariants(shell));
     const struct ash_parser_config parser_config = {
+        .extended_pipeline_negation = ash_shell_policy_is_bash(&shell->policy),
         .aliases =
             ash_shell_policy_expands_aliases(&shell->policy) ?
                 shell->aliases :
