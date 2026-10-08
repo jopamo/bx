@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -255,6 +256,7 @@ static bool ash_parser_reserve_alias_frame(
     if (parser->alias_frame_capacity > SIZE_MAX / 2u ||
         parser->alias_frame_capacity * 2u >
             SIZE_MAX / sizeof(parser->alias_frames[0])) {
+        errno = EOVERFLOW;
         return false;
     }
 
@@ -282,6 +284,66 @@ static bool ash_parser_reserve_alias_frame(
     parser->alias_frames = frames;
     parser->alias_frame_capacity = capacity;
     return true;
+}
+
+bool ash_parser_clone_boundary(struct ash_parser* output, const struct ash_parser* source) {
+    if (output == NULL || source == NULL || output == source || !source->complete_command_boundary || source->result != ASH_PARSER_COMPLETE || source->aliases != NULL ||
+        source->alias_frames == NULL || source->pending_here_document_count != 0u || (source->has_lookahead && source->lookahead.kind != ASH_TOKEN_EOF)) {
+        errno = EINVAL;
+        return false;
+    }
+    struct ash_parser candidate = *source;
+    candidate.alias_frame_count = 0u;
+    ash_parser_alias_state_init(&candidate, NULL);
+    candidate.pending_here_documents = NULL;
+    candidate.pending_here_document_capacity = 0u;
+    for (size_t i = 0u; i < source->alias_frame_count; i++) {
+        const struct ash_parser_alias_frame* original = &source->alias_frames[i];
+        if (!ash_parser_reserve_alias_frame(&candidate) || !ash_alias_retain(original->alias)) {
+            goto fail;
+        }
+        struct ash_parser_alias_frame* frame = &candidate.alias_frames[candidate.alias_frame_count++];
+        *frame = *original;
+        frame->owned_input = NULL;
+        frame->releases = NULL;
+        if (original->owned_input != NULL) {
+            if (original->lexer.length == SIZE_MAX) {
+                errno = EOVERFLOW;
+                goto fail;
+            }
+            frame->owned_input = malloc(original->lexer.length + 1u);
+            if (frame->owned_input == NULL) {
+                goto fail;
+            }
+            memcpy(frame->owned_input, original->owned_input, original->lexer.length + 1u);
+            frame->lexer.input = frame->owned_input;
+        }
+        if (original->release_count != 0u) {
+            if (original->release_count > SIZE_MAX / sizeof(frame->releases[0])) {
+                errno = EOVERFLOW;
+                goto fail;
+            }
+            size_t size = original->release_count * sizeof(frame->releases[0]);
+            frame->releases = malloc(size);
+            if (frame->releases == NULL) {
+                goto fail;
+            }
+            memcpy(frame->releases, original->releases, size);
+        }
+    }
+    bool inline_frames = candidate.alias_frames == candidate.inline_alias_frames;
+    *output = candidate;
+    if (inline_frames) {
+        output->alias_frames = output->inline_alias_frames;
+    }
+    return true;
+fail:
+    {
+        int error = errno;
+        ash_parser_destroy(&candidate);
+        errno = error;
+        return false;
+    }
 }
 
 static bool ash_parser_push_alias(struct ash_parser* parser, struct ash_alias* alias, struct ash_source_location location) {

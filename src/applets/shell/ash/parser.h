@@ -90,6 +90,8 @@ void ash_parser_init_at_with_config(
 void ash_parser_destroy(struct ash_parser* parser);
 /* Publish one complete command without reading the next; NULL denotes EOF. */
 enum ash_parser_result ash_parser_parse_complete_command(struct ash_parser* parser, struct ash_ast** command);
+/* Clone an unbound boundary into unowned storage; input and source identity remain borrowed. */
+bool ash_parser_clone_boundary(struct ash_parser* output, const struct ash_parser* source);
 enum ash_parser_result ash_parser_parse_program(
     struct ash_parser* parser,
     struct ash_ast** program
