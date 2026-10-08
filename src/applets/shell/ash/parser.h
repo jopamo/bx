@@ -92,6 +92,8 @@ void ash_parser_destroy(struct ash_parser* parser);
 enum ash_parser_result ash_parser_parse_complete_command(struct ash_parser* parser, struct ash_ast** command);
 /* Clone an unbound boundary into unowned storage; input and source identity remain borrowed. */
 bool ash_parser_clone_boundary(struct ash_parser* output, const struct ash_parser* source);
+/* Keep the old input alive on failure; growth must preserve its newline-terminated prefix. */
+bool ash_parser_extend_input(struct ash_parser* parser, const char* input, size_t length);
 enum ash_parser_result ash_parser_parse_program(
     struct ash_parser* parser,
     struct ash_ast** program
