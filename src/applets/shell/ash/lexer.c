@@ -30,7 +30,7 @@ static const struct ash_operator ash_operators[] = {
     ASH_OPERATOR(";", ASH_TOKEN_SEMI),
     ASH_OPERATOR(";;", ASH_TOKEN_DSEMI),
     ASH_OPERATOR(";&", ASH_TOKEN_SEMI_AND),
-    ASH_OPERATOR(";;&", ASH_TOKEN_DSEMI_AND),
+    ASH_OPERATOR_FLAGS(";;&", ASH_TOKEN_DSEMI_AND, ASH_LEXER_CASE_TEST_NEXT),
     ASH_OPERATOR("(", ASH_TOKEN_LPAREN),
     ASH_OPERATOR(")", ASH_TOKEN_RPAREN),
     ASH_OPERATOR("<", ASH_TOKEN_LESS),
@@ -361,7 +361,7 @@ static const struct ash_operator* ash_lexer_operator(const struct ash_lexer* lex
     return longest;
 }
 
-static bool ash_operator_kind_can_extend(enum ash_token_kind kind) {
+static bool ash_operator_kind_can_extend(enum ash_token_kind kind, const struct ash_lexer_options* options) {
     const struct ash_operator* token_operator = NULL;
     for (size_t i = 0u;
          i < sizeof(ash_operators) / sizeof(ash_operators[0]);
@@ -378,12 +378,8 @@ static bool ash_operator_kind_can_extend(enum ash_token_kind kind) {
          i < sizeof(ash_operators) / sizeof(ash_operators[0]);
          i++) {
         const struct ash_operator* candidate = &ash_operators[i];
-        if (candidate->length > token_operator->length &&
-            memcmp(
-                candidate->text,
-                token_operator->text,
-                token_operator->length
-            ) == 0) {
+        if ((options->flags & candidate->required_flags) == candidate->required_flags && candidate->length > token_operator->length &&
+            memcmp(candidate->text, token_operator->text, token_operator->length) == 0) {
             return true;
         }
     }
@@ -2508,9 +2504,7 @@ enum ash_lexer_fragment_result ash_lexer_classify_fragment_with_options(
             &token
         );
         if (result == ASH_LEXER_TOKEN) {
-            terminal_operator_can_extend =
-                lexer.offset == lexer.length &&
-                ash_operator_kind_can_extend(token.kind);
+            terminal_operator_can_extend = lexer.offset == lexer.length && ash_operator_kind_can_extend(token.kind, options);
         }
         ash_token_destroy(&token);
         if (result == ASH_LEXER_ERROR) {
