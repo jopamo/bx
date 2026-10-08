@@ -1271,10 +1271,9 @@ static struct ash_ast* ash_parse_pipeline(
         if (parser->extended_pipeline_negation) {
             ash_parser_skip_newlines(parser);
         }
-        if (!ash_parser_prepare_command_alias(
-                parser,
-                ash_parser_token_is_reserved
-            )) {
+        bool prepared =
+            parser->extended_pipeline_negation ? ash_parser_prepare_command_alias(parser, ash_parser_token_is_reserved) : ash_parser_prepare_alias(parser, true, true, ash_parser_token_is_reserved);
+        if (!prepared) {
             return NULL;
         }
         token = ash_parser_peek(parser);
@@ -1282,6 +1281,10 @@ static struct ash_ast* ash_parse_pipeline(
             return NULL;
         }
         if (!parser->extended_pipeline_negation) {
+            if (token->kind == ASH_TOKEN_NEWLINE) {
+                ash_parser_fail(parser, ASH_PARSER_ERROR, token->location, "syntax error near unexpected token");
+                return NULL;
+            }
             break;
         }
     }
