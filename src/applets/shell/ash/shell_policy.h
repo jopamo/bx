@@ -71,8 +71,5 @@ bool ash_shell_policy_noninteractive_posix(
 bool ash_shell_policy_globs_redirections(
     const struct ash_shell_policy* policy
 );
-const char* ash_shell_policy_bash_version(
-    const struct ash_shell_policy* policy
-);
 
 #endif /* BX_APPLETS_SHELL_ASH_SHELL_POLICY_H */
