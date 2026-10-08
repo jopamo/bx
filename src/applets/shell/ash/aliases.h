@@ -18,10 +18,6 @@ bool ash_alias_define(
 /* Lookups borrow handles; retained immutable entries survive table mutation. */
 struct ash_alias* ash_alias_find(const struct ash_alias_table* table, const char* name);
 struct ash_alias* ash_alias_find_word(const struct ash_alias_table* table, const struct ash_word* word);
-bool ash_alias_table_contains(
-    const struct ash_alias_table* table,
-    const struct ash_alias* alias
-);
 bool ash_alias_unset(
     struct ash_alias_table** table,
     const char* name

@@ -47,6 +47,7 @@ struct ash_parser {
     bool has_lookahead;
     bool lookahead_alias_checked;
     enum ash_parser_result result;
+    bool complete_command_boundary;
     struct ash_source_location error_location;
     const char* error;
     const struct ash_alias_table* aliases;
