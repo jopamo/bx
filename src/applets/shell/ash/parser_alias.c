@@ -113,7 +113,11 @@ static enum ash_parser_result ash_parser_fill(struct ash_parser* parser) {
         ash_parser_pop_alias(parser, !comment_continues);
         while (comment_continues) {
             lexer = ash_parser_active_lexer(parser);
-            if (!ash_lexer_discard_comment_tail(lexer)) {
+            bool ended = ash_lexer_discard_comment_tail(lexer);
+            if (lexer->position_overflow) {
+                return ash_parser_fail(parser, ASH_PARSER_ERROR, lexer->error_location, lexer->error);
+            }
+            if (!ended) {
                 comment_continues = false;
             }
             else if (parser->alias_frame_count != 0u) {
@@ -642,14 +646,6 @@ static bool ash_parser_push_alias(struct ash_parser* parser, struct ash_alias* a
         .releases = releases,
         .release_count = release_count,
     };
-    if (bridge_tail) {
-        for (size_t i = 0u; i + 1u < parser->alias_frame_count; i++) {
-            ash_lexer_discard_remaining(
-                &parser->alias_frames[i].lexer
-            );
-        }
-        ash_lexer_discard_remaining(&parser->lexer);
-    }
     ash_lexer_init_at_with_options(
         &frame->lexer,
         location,
@@ -657,6 +653,19 @@ static bool ash_parser_push_alias(struct ash_parser* parser, struct ash_alias* a
         length,
         &parser->lexer.options
     );
+    if (bridge_tail) {
+        for (size_t i = 0u; i + 1u < parser->alias_frame_count; i++) {
+            struct ash_lexer* lexer = &parser->alias_frames[i].lexer;
+            if (!ash_lexer_discard_remaining(lexer)) {
+                ash_parser_fail(parser, ASH_PARSER_ERROR, lexer->error_location, lexer->error);
+                return false;
+            }
+        }
+        if (!ash_lexer_discard_remaining(&parser->lexer)) {
+            ash_parser_fail(parser, ASH_PARSER_ERROR, parser->lexer.error_location, parser->lexer.error);
+            return false;
+        }
+    }
     return true;
 }
 
