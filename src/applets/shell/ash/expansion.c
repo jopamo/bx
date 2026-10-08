@@ -9,6 +9,7 @@
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/pathname_expansion.h"
+#include "applets/shell/ash/quote.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/syntax.h"
 #include "applets/shell/ash/variables.h"
@@ -308,198 +309,6 @@ static bool ash_expand_parameter(
     return ash_append_parameter_value(shell, output, value, input + start, position - start);
 }
 
-static int ash_hex_value(unsigned char character) {
-    if (character >= '0' && character <= '9') {
-        return (int)(character - '0');
-    }
-    if (character >= 'a' && character <= 'f') {
-        return (int)(character - 'a') + 10;
-    }
-    if (character >= 'A' && character <= 'F') {
-        return (int)(character - 'A') + 10;
-    }
-    return -1;
-}
-
-static bool ash_append_ansi_codepoint(
-    struct ash_shell* shell,
-    struct bx_text_buffer* output,
-    uint32_t value
-) {
-    size_t length;
-    unsigned char lead;
-    if (value <= 0x7fu) {
-        return ash_expansion_append_char(shell, output, (char)value);
-    }
-    if (value <= 0x7ffu) {
-        length = 2u;
-        lead = 0xc0u;
-    }
-    else if (value <= 0xffffu) {
-        length = 3u;
-        lead = 0xe0u;
-    }
-    else if (value <= 0x1fffffu) {
-        length = 4u;
-        lead = 0xf0u;
-    }
-    else if (value <= 0x3ffffffu) {
-        length = 5u;
-        lead = 0xf8u;
-    }
-    else if (value <= 0x7fffffffu) {
-        length = 6u;
-        lead = 0xfcu;
-    }
-    else {
-        return ash_expansion_append_char(shell, output, '\0');
-    }
-
-    char encoded[6];
-    uint32_t remaining = value;
-    for (size_t i = length - 1u; i != 0u; i--) {
-        encoded[i] = (char)(0x80u | (remaining & 0x3fu));
-        remaining >>= 6u;
-    }
-    encoded[0] = (char)(lead | remaining);
-    return ash_expansion_append_span(
-        shell,
-        output,
-        encoded,
-        length
-    );
-}
-
-static bool ash_append_dollar_single(
-    struct ash_shell* shell,
-    struct bx_text_buffer* output,
-    const char* text,
-    size_t length
-) {
-    for (size_t i = 0u; i < length; i++) {
-        unsigned char character = (unsigned char)text[i];
-        if (character != '\\' || i + 1u == length) {
-            if (!ash_expansion_append_char(shell, output, (char)character)) {
-                return false;
-            }
-            continue;
-        }
-
-        unsigned char escaped = (unsigned char)text[++i];
-        char decoded;
-        switch (escaped) {
-            case 'a': decoded = '\a'; break;
-            case 'b': decoded = '\b'; break;
-            case 'e':
-            case 'E': decoded = 0x1b; break;
-            case 'f': decoded = '\f'; break;
-            case 'n': decoded = '\n'; break;
-            case 'r': decoded = '\r'; break;
-            case 't': decoded = '\t'; break;
-            case 'v': decoded = '\v'; break;
-            case '\\': decoded = '\\'; break;
-            case '\'': decoded = '\''; break;
-            case '"': decoded = '"'; break;
-            case '?': decoded = '?'; break;
-            case '\n':
-                if (!ash_expansion_append_char(shell, output, '\\')) {
-                    return false;
-                }
-                decoded = '\n';
-                break;
-            case 'c':
-                if (i + 1u == length) {
-                    if (!ash_expansion_append_char(shell, output, '\\')) {
-                        return false;
-                    }
-                    decoded = 'c';
-                }
-                else {
-                    unsigned char controlled =
-                        (unsigned char)text[++i];
-                    decoded = controlled == '?' ?
-                        0x7f :
-                        (char)(controlled & 0x1fu);
-                }
-                break;
-            case 'x': {
-                int value = 0;
-                size_t digits = 0u;
-                while (digits < 2u && i + 1u < length) {
-                    int digit = ash_hex_value((unsigned char)text[i + 1u]);
-                    if (digit < 0) {
-                        break;
-                    }
-                    value = value * 16 + digit;
-                    i++;
-                    digits++;
-                }
-                if (digits == 0u) {
-                    if (!ash_expansion_append_char(shell, output, '\\')) {
-                        return false;
-                    }
-                    decoded = 'x';
-                }
-                else {
-                    decoded = (char)(unsigned char)value;
-                }
-                break;
-            }
-            case 'u':
-            case 'U': {
-                size_t maximum = escaped == 'u' ? 4u : 8u;
-                size_t digits = 0u;
-                uint32_t value = 0u;
-                while (digits < maximum && i + 1u < length) {
-                    int digit = ash_hex_value(
-                        (unsigned char)text[i + 1u]
-                    );
-                    if (digit < 0) {
-                        break;
-                    }
-                    value = value * 16u + (uint32_t)digit;
-                    i++;
-                    digits++;
-                }
-                if (digits == 0u) {
-                    if (!ash_expansion_append_char(shell, output, '\\')) {
-                        return false;
-                    }
-                    decoded = (char)escaped;
-                    break;
-                }
-                if (!ash_append_ansi_codepoint(shell, output, value)) {
-                    return false;
-                }
-                continue;
-            }
-            default:
-                if (escaped >= '0' && escaped <= '7') {
-                    unsigned int value = (unsigned int)(escaped - '0');
-                    size_t digits = 1u;
-                    while (digits < 3u && i + 1u < length &&
-                           text[i + 1u] >= '0' && text[i + 1u] <= '7') {
-                        value = value * 8u +
-                            (unsigned int)(text[++i] - '0');
-                        digits++;
-                    }
-                    decoded = (char)(unsigned char)value;
-                }
-                else {
-                    if (!ash_expansion_append_char(shell, output, '\\')) {
-                        return false;
-                    }
-                    decoded = (char)escaped;
-                }
-                break;
-        }
-        if (!ash_expansion_append_char(shell, output, decoded)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool ash_expand_part(
     struct ash_shell* shell,
     const struct ash_word_part* part,
@@ -544,12 +353,7 @@ static bool ash_expand_part(
     }
     if (part->kind == ASH_WORD_TEXT &&
         part->quote == ASH_QUOTE_DOLLAR_SINGLE) {
-        return ash_append_dollar_single(
-            shell,
-            output,
-            part->text,
-            part->length
-        );
+        return ash_quote_append_dollar_single(output, part->text, part->length) || ash_expansion_oom(shell);
     }
     return ash_expansion_append_span(
         shell,
