@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "applets/shell/ash/parser_internal.h"
+#include "applets/shell/ash/quote.h"
 #include "lib/text_buffer.h"
 
 static bool ash_parser_reserve_here_documents(
@@ -43,53 +44,39 @@ static struct ash_here_document* ash_parser_create_here_document(
     const struct ash_redirection* redirection
 ) {
     const struct ash_word* target = &redirection->target.syntax;
-    size_t delimiter_length = 0u;
+    struct bx_text_buffer delimiter;
+    bx_text_buffer_init(&delimiter);
     bool delimiter_quoted = false;
     for (size_t i = 0u; i < target->count; i++) {
         const struct ash_word_part* part = &target->parts[i];
-        if (part->length > SIZE_MAX - delimiter_length) {
-            errno = ENOMEM;
+        bool appended = part->kind == ASH_WORD_TEXT && part->quote == ASH_QUOTE_DOLLAR_SINGLE ? ash_quote_append_dollar_single(&delimiter, part->text, part->length)
+                                                                                              : bx_text_buffer_append_span(&delimiter, part->text, part->length);
+        if (!appended) {
+            bx_text_buffer_destroy(&delimiter);
             return NULL;
         }
-        delimiter_length += part->length;
         delimiter_quoted |= ash_word_part_is_quoted(part);
-    }
-    if (delimiter_length == SIZE_MAX) {
-        errno = ENOMEM;
-        return NULL;
     }
 
     struct ash_here_document* document = calloc(
         1u,
         sizeof(*document)
     );
-    char* delimiter = malloc(delimiter_length + 1u);
-    if (document == NULL || delimiter == NULL) {
+    size_t delimiter_length = delimiter.length;
+    char* spelling = bx_text_buffer_take(&delimiter);
+    if (document == NULL || spelling == NULL) {
         free(document);
-        free(delimiter);
+        free(spelling);
+        bx_text_buffer_destroy(&delimiter);
         return NULL;
     }
-    size_t offset = 0u;
-    /*
-     * Lexer parts already retain their post-quote-removal bytes. Concatenate
-     * every spelling literally: here-document delimiters are never expanded.
-     */
-    for (size_t i = 0u; i < target->count; i++) {
-        const struct ash_word_part* part = &target->parts[i];
-        if (part->length != 0u) {
-            memcpy(delimiter + offset, part->text, part->length);
-        }
-        offset += part->length;
-    }
-    delimiter[offset] = '\0';
     *document = (struct ash_here_document){
         .state = ASH_HERE_DOCUMENT_PENDING,
-        .delimiter = delimiter,
+        .delimiter = spelling,
         .delimiter_length = delimiter_length,
         .operator_location = redirection->location,
         .delimiter_quoted = delimiter_quoted,
-        .strip_tabs =
-            redirection->operator == ASH_TOKEN_DLESS_DASH,
+        .strip_tabs = redirection->operator == ASH_TOKEN_DLESS_DASH,
     };
     return document;
 }
