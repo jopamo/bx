@@ -38,10 +38,7 @@ const char* ash_alias_name(const struct ash_alias* alias);
 const char* ash_alias_value(const struct ash_alias* alias);
 size_t ash_alias_value_length(const struct ash_alias* alias);
 bool ash_alias_value_ends_blank(const struct ash_alias* alias);
-bool ash_alias_requires_tail(
-    const struct ash_alias* alias,
-    const struct ash_lexer_options* options
-);
+bool ash_alias_requires_tail(const struct ash_alias* alias, const struct ash_lexer_options* options, bool* requires_tail);
 
 /*
  * Returns a caller-owned, name-sorted array borrowing immutable entries from
