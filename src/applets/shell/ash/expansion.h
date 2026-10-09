@@ -6,6 +6,8 @@
 
 struct ash_shell;
 struct ash_word;
+struct ash_source_location;
+struct bx_text_buffer;
 
 enum ash_expansion_context {
     ASH_EXPANSION_WORD = 0,
@@ -58,6 +60,16 @@ bool ash_expand_word(
     struct ash_shell* shell,
     const struct ash_word* word,
     char** output,
+    int* substitution_status
+);
+/* Initialize an owned byte buffer; destroy it on success or failure. */
+bool ash_expand_here_document(
+    struct ash_shell* shell,
+    const char* body,
+    size_t length,
+    const struct ash_source_location* location,
+    bool strip_tabs,
+    struct bx_text_buffer* output,
     int* substitution_status
 );
 /*

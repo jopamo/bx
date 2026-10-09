@@ -55,6 +55,11 @@ int bx_fd_transaction_begin(
     size_t reference_count
 );
 /*
+ * Declare a descriptor discovered during ordered evaluation. Relocate private
+ * backups before exposing that number; failure leaves the old state usable.
+ */
+int bx_fd_transaction_add_reference(struct bx_fd_transaction* transaction, int fd);
+/*
  * Save records a target's state once per transaction. It does not change the
  * target. Every target must have been declared as a descriptor reference.
  */

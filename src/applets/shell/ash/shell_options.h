@@ -58,6 +58,7 @@ enum ash_shell_option_result ash_shell_option_apply_name(
     enum ash_shell_personality personality,
     enum ash_shell_option_use use
 );
+bool ash_shell_options_visit_set_names(uint32_t options, enum ash_shell_personality personality, bool (*visit)(const char* name, bool enabled, void* context), void* context);
 void ash_shell_options_format_letters(
     uint32_t options,
     bool interactive,

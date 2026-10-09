@@ -11,6 +11,7 @@ struct ash_shell;
 
 struct ash_redirection_transaction {
     struct bx_fd_transaction descriptors;
+    int substitution_status;
 };
 
 void ash_redirection_transaction_init(

@@ -17,12 +17,15 @@ struct ash_positional_frame {
     const char* argv0;
     char** values;
     size_t count;
+    /* Keep the allocation base and full count when shift advances values. */
+    char** owned_values;
+    size_t owned_count;
 };
 
 /*
  * The scope stack is the sole authority for variable and positional lookup.
- * Frames own their variable nodes. Positional strings and arrays are borrowed
- * for the lifetime of the frame.
+ * Frames own their variable nodes. Initial positional strings and arrays are
+ * borrowed; replacements own their copies until replacement or frame release.
  */
 struct ash_scope {
     enum ash_scope_kind kind;
@@ -100,6 +103,10 @@ const struct ash_positional_frame* ash_scope_positionals(
 struct ash_positional_frame* ash_scope_positionals_mut(
     struct ash_shell* shell
 );
+/* Initialize a fresh frame with owned copies of the visible values. */
+bool ash_positional_frame_copy(struct ash_positional_frame* output, const struct ash_positional_frame* source);
+void ash_positional_frame_destroy(struct ash_positional_frame* frame);
+bool ash_scope_set_positionals(struct ash_shell* shell, char** values, size_t count);
 
 enum ash_scope_lookup_status ash_scope_lookup(
     const struct ash_shell* shell,

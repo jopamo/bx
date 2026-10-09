@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "applets/shell/ash/variable_value.h"
+#include "applets/shell/ash/syntax.h"
 
 struct ash_shell;
 
@@ -31,19 +32,10 @@ struct ash_var {
     struct ash_var* next;
 };
 
-typedef void (*ash_var_visitor_fn)(
-    const struct ash_var* variable,
-    void* user_data
-);
+typedef void (*ash_var_visitor_fn)(const struct ash_var* variable, void* user_data);
 
-bool ash_is_name_start(unsigned char ch);
-bool ash_is_name_char(unsigned char ch);
 bool ash_is_valid_name_span(const char* text, size_t length);
-bool ash_parse_assignment(
-    const char* text,
-    size_t* name_length,
-    const char** value
-);
+bool ash_parse_assignment(const char* text, size_t* name_length, const char** value);
 
 const char* ash_var_get_len(
     const struct ash_shell* shell,
@@ -61,12 +53,14 @@ bool ash_var_has_attribute(
     const char* name,
     enum ash_var_attribute attribute
 );
+bool ash_var_has_attribute_len(const struct ash_shell* shell, const char* name, size_t name_length, enum ash_var_attribute attribute);
 bool ash_var_update_attributes(
     struct ash_shell* shell,
     const char* name,
     uint32_t set,
     uint32_t clear
 );
+bool ash_var_assignment_allowed(struct ash_shell* shell, const char* name, size_t name_length);
 /*
  * force_export adds the export attribute independently of shell options.
  * Every assignment setter also honors the canonical allexport option.
@@ -113,6 +107,7 @@ bool ash_var_export(
     const char* name,
     size_t name_length
 );
+bool ash_var_readonly(struct ash_shell* shell, const char* name, size_t name_length);
 void ash_vars_visit_visible(
     const struct ash_shell* shell,
     ash_var_visitor_fn visitor,
@@ -123,7 +118,7 @@ bool ash_var_publish_visible(
     const char* name,
     size_t name_length
 );
-void ash_var_unset(struct ash_shell* shell, const char* name);
+bool ash_var_unset(struct ash_shell* shell, const char* name);
 void ash_var_list_destroy(struct ash_var** variables);
 bool ash_import_environment(struct ash_shell* shell);
 

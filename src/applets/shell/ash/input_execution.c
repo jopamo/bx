@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -8,8 +9,10 @@
 #include "applets/shell/ash/control.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/executor.h"
+#include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/input_execution.h"
+#include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/traps.h"
@@ -181,19 +184,38 @@ const char* ash_input_default_prompt(void) {
     return geteuid() == 0 ? "# " : "$ ";
 }
 
-static void ash_input_print_prompt(
-    struct ash_shell* shell,
-    bool continuation
-) {
-    const char* prompt = ash_var_get(
-        shell,
-        continuation ? "PS2" : "PS1"
-    );
+static bool ash_input_print_prompt(struct ash_shell* shell, bool continuation) {
+    const char* name = continuation ? "PS2" : "PS1";
+    const char* prompt = ash_var_get(shell, name);
     if (prompt == NULL) {
         prompt = continuation ? "> " : ash_input_default_prompt();
     }
+    char* expanded = NULL;
+    if (strpbrk(prompt, "$`\\") != NULL) {
+        struct ash_lexer lexer;
+        ash_lexer_init(&lexer, name, prompt, strlen(prompt));
+        struct ash_word word;
+        enum ash_lexer_result result = ash_lexer_scan_expansion_string(&lexer, &word, ASH_QUOTE_NONE);
+        bool valid = result == ASH_LEXER_TOKEN && ash_expand_word(shell, &word, &expanded, NULL);
+        if (result != ASH_LEXER_TOKEN) {
+            if (lexer.error != NULL && strcmp(lexer.error, "out of memory") == 0) {
+                ash_diag_oom(shell);
+            }
+            else {
+                ash_diag(shell, "%s: %s", name, lexer.error != NULL ? lexer.error : "invalid expansion");
+            }
+        }
+        ash_word_destroy(&word);
+        if (!valid) {
+            free(expanded);
+            return false;
+        }
+        prompt = expanded;
+    }
     fputs(prompt, stderr);
     fflush(stderr);
+    free(expanded);
+    return true;
 }
 
 static void ash_input_print_verbose(
@@ -245,8 +267,13 @@ static int ash_input_execute_current(
                 }
             }
         }
-        if (prompt) {
-            ash_input_print_prompt(shell, awaiting_more_input);
+        if (prompt && !ash_input_print_prompt(shell, awaiting_more_input)) {
+            status = 1;
+            (void)ash_control_consume_unit_discard(shell, &status);
+            ash_control_publish_status(shell, status);
+            if (shell->should_exit || ash_control_pending(shell)) {
+                break;
+            }
         }
 
         struct ash_source_location line_origin =

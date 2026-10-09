@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <limits.h>
+#include <locale.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -98,7 +99,7 @@ int ash_applet_command_run_child(
 
     if (ash_applet_command_direct_eligible(argc, argv, resolution)) {
         int signal_error = bx_child_reset_caught_signal_handlers();
-        if (signal_error == 0) {
+        if (signal_error == 0 && uselocale(LC_GLOBAL_LOCALE) != (locale_t)0 && setlocale(LC_ALL, "C") != NULL) {
             int status = bx_status_run_applet(
                 resolution->target.bx_applet.applet->main,
                 (int)argc,
@@ -116,7 +117,7 @@ int ash_applet_command_run_child(
     }
 
     /*
-     * Failure to reproduce exec signal semantics revokes direct eligibility;
+     * Failure to reproduce exec signal/locale state revokes direct eligibility;
      * the already resolved executable remains the semantic fallback.
      */
     return ash_external_command_exec_fd_exact(

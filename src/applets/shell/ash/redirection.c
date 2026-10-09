@@ -10,15 +10,19 @@
 
 #include "applets/shell/ash/command.h"
 #include "applets/shell/ash/diagnostic.h"
+#include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
 #include "lib/fd_ops.h"
+#include "lib/xreadwrite.h"
+#include "lib/text_buffer.h"
 
 void ash_redirection_transaction_init(
     struct ash_redirection_transaction* transaction
 ) {
     if (transaction != NULL) {
         bx_fd_transaction_init(&transaction->descriptors);
+        transaction->substitution_status = 0;
     }
 }
 
@@ -122,13 +126,32 @@ static int ash_open_redirection(
     const struct ash_shell* shell,
     const struct ash_redir* redirection
 ) {
-    if (redirection->kind == ASH_REDIR_OUT &&
-        (shell->options & ASH_SHELL_OPTION_NOCLOBBER) != 0u) {
-        int fd = bx_fd_open_cloexec(
-            redirection->target,
-            O_WRONLY | O_CREAT | O_EXCL,
-            0666
-        );
+    if (redirection->kind == ASH_REDIR_HERE_DOCUMENT) {
+        int directory = bx_fd_open_cloexec("/tmp", O_RDONLY | O_DIRECTORY, 0);
+        if (directory < 0) {
+            return -1;
+        }
+        int fd = bx_fd_open_anonymous_file_at(directory);
+        int error = errno;
+        if (close(directory) != 0 && fd >= 0) {
+            error = errno;
+            close(fd);
+            fd = -1;
+        }
+        if (fd < 0) {
+            errno = error;
+            return -1;
+        }
+        if (!bx_xwrite_all(fd, redirection->target, redirection->target_length) || bx_fd_lseek(fd, 0, SEEK_SET) < 0) {
+            error = errno;
+            close(fd);
+            errno = error;
+            return -1;
+        }
+        return fd;
+    }
+    if (redirection->kind == ASH_REDIR_OUT && (shell->options & ASH_SHELL_OPTION_NOCLOBBER) != 0u) {
+        int fd = bx_fd_open_cloexec(redirection->target, O_WRONLY | O_CREAT | O_EXCL, 0666);
         if (fd >= 0 || errno != EEXIST) {
             return fd;
         }
@@ -197,7 +220,7 @@ static bool ash_redirection_collect_descriptor_references(
     for (size_t i = 0u; i < command->redir_count; i++) {
         const struct ash_redir* redirection = &command->redirs[i];
         references[reference_count++] = redirection->fd;
-        if (redirection->kind == ASH_REDIR_DUP &&
+        if (redirection->kind == ASH_REDIR_DUP && redirection->target_word == NULL &&
             strcmp(redirection->target, "-") != 0) {
             int source_fd;
             if (ash_redirection_fd_value(
@@ -262,52 +285,73 @@ int ash_redirection_transaction_apply(
         );
     }
 
+    transaction->substitution_status = command->substitution_status;
     int status = 0;
     for (size_t i = 0u; i < command->redir_count; i++) {
-        const struct ash_redir* redirection = &command->redirs[i];
-        if (bx_fd_transaction_save(
-                &transaction->descriptors,
-                redirection->fd
-            ) != 0) {
-            status = ash_redirection_transaction_error(
-                shell,
-                "dup",
-                errno
-            );
+        struct ash_redir expanded = command->redirs[i];
+        const struct ash_redir* redirection = &expanded;
+        if (bx_fd_transaction_save(&transaction->descriptors, redirection->fd) != 0) {
+            status = ash_redirection_transaction_error(shell, "dup", errno);
             break;
         }
 
+        char* target = NULL;
+        if (redirection->target_word != NULL) {
+            if (ash_expand_redirection(shell, redirection->target_word, &target, &transaction->substitution_status) != ASH_REDIRECTION_EXPANSION_OK) {
+                free(target);
+                status = 1;
+                break;
+            }
+            expanded.target = target;
+            expanded.target_length = strlen(target);
+        }
         if (redirection->kind == ASH_REDIR_DUP) {
             if (strcmp(redirection->target, "-") == 0) {
                 if (close(redirection->fd) != 0 && errno != EBADF) {
                     ash_exec_error(shell, "close", errno);
+                    free(target);
                     status = 1;
                     break;
                 }
+                free(target);
                 continue;
             }
             int source_fd;
-            if (!ash_redirection_parse_fd(
-                    shell,
-                    redirection->target,
-                    &source_fd
-                ) ||
+            if (!ash_redirection_parse_fd(shell, redirection->target, &source_fd) || bx_fd_transaction_add_reference(&transaction->descriptors, source_fd) != 0 ||
                 bx_fd_dup2_exact(source_fd, redirection->fd) < 0) {
                 if (errno != 0) {
                     ash_exec_error(shell, redirection->target, errno);
                 }
+                free(target);
                 status = 1;
                 break;
             }
+            free(target);
             continue;
         }
 
-        int fd = ash_open_redirection(shell, redirection);
+        struct bx_text_buffer body = {0};
+        if (redirection->kind == ASH_REDIR_HERE_DOCUMENT && redirection->expand_here_document) {
+            if (!ash_expand_here_document(shell, redirection->target, redirection->target_length, &redirection->body_location, redirection->strip_here_document_tabs, &body,
+                                          &transaction->substitution_status)) {
+                bx_text_buffer_destroy(&body);
+                free(target);
+                status = 1;
+                break;
+            }
+            expanded.target = body.data;
+            expanded.target_length = body.length;
+        }
+        int fd = ash_open_redirection(shell, &expanded);
+        int open_error = errno;
+        bx_text_buffer_destroy(&body);
         if (fd < 0) {
-            ash_exec_error(shell, redirection->target, errno);
+            ash_exec_error(shell, redirection->kind == ASH_REDIR_HERE_DOCUMENT ? "here-document" : redirection->target, open_error);
+            free(target);
             status = 1;
             break;
         }
+        free(target);
         if (fd == redirection->fd) {
             if (bx_fd_set_cloexec(fd, false) != 0) {
                 int error = errno;

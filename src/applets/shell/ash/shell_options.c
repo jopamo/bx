@@ -224,13 +224,28 @@ bool ash_shell_options_valid_for_personality(
     return true;
 }
 
-static enum ash_shell_option_result ash_shell_option_apply(
-    uint32_t* options,
-    const struct ash_shell_option_descriptor* descriptor,
-    bool enabled,
-    enum ash_shell_personality personality,
-    enum ash_shell_option_use use
-) {
+static bool ash_shell_option_available(const struct ash_shell_option_descriptor* descriptor, enum ash_shell_personality personality, enum ash_shell_option_use use) {
+    return (descriptor->uses & (uint32_t)use) != 0u && (descriptor->personalities & ash_shell_option_personality_mask(personality)) != 0u;
+}
+
+bool ash_shell_options_visit_set_names(uint32_t options, enum ash_shell_personality personality, bool (*visit)(const char* name, bool enabled, void* context), void* context) {
+    if (visit == NULL || !ash_shell_options_valid_for_personality(options, personality)) {
+        return false;
+    }
+    for (size_t i = 0u; i < sizeof(ash_shell_options) / sizeof(ash_shell_options[0]); i++) {
+        const struct ash_shell_option_descriptor* descriptor = &ash_shell_options[i];
+        if (descriptor->name != NULL && ash_shell_option_available(descriptor, personality, ASH_SHELL_OPTION_USE_SET_NAME) && !visit(descriptor->name, (options & descriptor->option) != 0u, context)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static enum ash_shell_option_result ash_shell_option_apply(uint32_t* options,
+                                                           const struct ash_shell_option_descriptor* descriptor,
+                                                           bool enabled,
+                                                           enum ash_shell_personality personality,
+                                                           enum ash_shell_option_use use) {
     if (options == NULL || descriptor == NULL ||
         !ash_shell_options_valid_for_personality(
             *options,
@@ -239,9 +254,7 @@ static enum ash_shell_option_result ash_shell_option_apply(
         !ash_shell_option_use_valid(use)) {
         return ASH_SHELL_OPTION_UNKNOWN;
     }
-    if ((descriptor->uses & (uint32_t)use) == 0u ||
-        (descriptor->personalities &
-         ash_shell_option_personality_mask(personality)) == 0u) {
+    if (!ash_shell_option_available(descriptor, personality, use)) {
         return ASH_SHELL_OPTION_UNAVAILABLE;
     }
     if (enabled) {
