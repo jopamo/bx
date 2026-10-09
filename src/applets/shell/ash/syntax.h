@@ -6,6 +6,15 @@
 
 struct ash_source_identity;
 
+/* Shell names use portable characters, independently of LC_CTYPE. */
+static inline bool ash_is_name_start(unsigned char ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_';
+}
+
+static inline bool ash_is_name_char(unsigned char ch) {
+    return ash_is_name_start(ch) || (ch >= '0' && ch <= '9');
+}
+
 struct ash_source_location {
     /*
      * Borrowed source-invocation identity. Persistent location owners retain
@@ -74,10 +83,16 @@ struct ash_word_part {
     char* text;
     size_t length;
     size_t capacity;
+    /* Owned original spelling when normalization removes bytes. */
+    char* raw_source;
+    size_t raw_length;
+    /* Retain body-reading policy when re-lexing nested operands. */
+    bool here_document_source;
+    bool here_document_strip_tabs;
 };
 
 struct ash_word {
-    /* Owns the part array and every part's text. */
+    /* Owns the part array and every part's text and raw_source. */
     struct ash_word_part* parts;
     size_t count;
     size_t capacity;

@@ -7,6 +7,7 @@
 
 #include "applets/shell/ash/aliases.h"
 #include "applets/shell/ash/input.h"
+#include "applets/shell/ash/locale_state.h"
 #include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/process.h"
 #include "applets/shell/ash/scope.h"
@@ -161,44 +162,16 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
             &shell->policy,
             ASH_SHELL_POLICY_INTERACTIVE
         );
-    return shell != NULL &&
-        shell->progname != NULL &&
-        standalone_applets == shell->owns_self_executable_fd &&
-        (shell->owns_self_executable_fd ?
-            shell->self_executable_fd >= 0 :
-            shell->self_executable_fd == -1) &&
-        shell->shell_pid > 0 &&
-        shell->last_async_pid >= -1 &&
-        shell->command_substitution != NULL &&
-        ash_shell_options_valid_for_personality(
-            shell->options,
-            shell->policy.personality
-        ) &&
-        ash_shopt_state_valid_for_personality(
-            &shell->shopt,
-            shell->policy.personality
-        ) &&
-        ash_shell_policy_valid(&shell->policy) &&
-        ash_aliases_invariants(shell->aliases) &&
-        ash_traps_invariants(shell) &&
-        shell->command_cache == NULL &&
-        shell->history == NULL &&
-        shell->completion == NULL &&
-        ash_interactive_state_valid(&shell->interactive) &&
-        interactive ==
-            ash_interactive_state_enabled(&shell->interactive) &&
-        ash_scope_stack_invariants(shell) &&
-        ash_functions_invariants(shell) &&
-        ash_input_stack_invariants(shell) &&
-        ash_execution_trace_invariants(shell) &&
-        ash_parser_state_invariants(shell) &&
-        bx_fd_transaction_stack_invariants(&shell->redirections) &&
-        ash_jobs_invariants(shell) &&
-        ash_control_invariants(shell) &&
-        ash_function_scope_count(shell) ==
-            shell->control.function_depth &&
-        ash_execution_function_count(shell) ==
-            shell->control.function_depth;
+    return shell != NULL && shell->progname != NULL &&
+           (shell->locale_scope == NULL || (shell->locale_scope->active != (locale_t)0 && shell->locale_scope->previous != (locale_t)0 && shell->locale_scope->requests[ASH_LOCALE_CTYPE] != NULL &&
+                                            shell->locale_scope->requests[ASH_LOCALE_COLLATE] != NULL)) &&
+           standalone_applets == shell->owns_self_executable_fd && (shell->owns_self_executable_fd ? shell->self_executable_fd >= 0 : shell->self_executable_fd == -1) && shell->shell_pid > 0 &&
+           shell->last_async_pid >= -1 && shell->command_substitution != NULL && ash_shell_options_valid_for_personality(shell->options, shell->policy.personality) &&
+           ash_shopt_state_valid_for_personality(&shell->shopt, shell->policy.personality) && ash_shell_policy_valid(&shell->policy) && ash_aliases_invariants(shell->aliases) &&
+           ash_traps_invariants(shell) && shell->command_cache == NULL && shell->history == NULL && shell->completion == NULL && ash_interactive_state_valid(&shell->interactive) &&
+           interactive == ash_interactive_state_enabled(&shell->interactive) && ash_scope_stack_invariants(shell) && ash_functions_invariants(shell) && ash_input_stack_invariants(shell) &&
+           ash_execution_trace_invariants(shell) && ash_parser_state_invariants(shell) && bx_fd_transaction_stack_invariants(&shell->redirections) && ash_jobs_invariants(shell) &&
+           ash_control_invariants(shell) && ash_function_scope_count(shell) == shell->control.function_depth && ash_execution_function_count(shell) == shell->control.function_depth;
 }
 
 void ash_shell_context_assert_invariants(const struct ash_shell* shell) {
@@ -208,40 +181,14 @@ void ash_shell_context_assert_invariants(const struct ash_shell* shell) {
 
 #ifndef NDEBUG
 static bool ash_shell_context_empty(const struct ash_shell* shell) {
-    return shell->progname == NULL &&
-        shell->scopes == NULL &&
-        shell->interactive.input == ASH_STARTUP_COMMAND_STRING &&
-        shell->interactive.mode == ASH_INTERACTIVE_DISABLED &&
-        shell->interactive.terminal_attachments ==
-            ASH_TERMINAL_DETACHED &&
-        shell->shopt.enabled == 0u &&
-        shell->aliases == NULL &&
-        shell->functions == NULL &&
-        shell->traps == NULL &&
-        shell->exit_trap_defer_depth == 0u &&
-        shell->jobs == NULL &&
-        shell->command_cache == NULL &&
-        shell->input_stack == NULL &&
-        shell->source_names == NULL &&
-        shell->source_identities == NULL &&
-        shell->execution_frames == NULL &&
-        ash_source_location_is_none(&shell->execution_location) &&
-        shell->active_parser == NULL &&
-        shell->history == NULL &&
-        shell->completion == NULL &&
-        shell->cwd.physical == NULL &&
-        shell->cwd.logical == NULL &&
-        shell->cwd.old_logical == NULL &&
-        shell->redirections.active == NULL &&
-        shell->redirections.entries == NULL &&
-        shell->redirections.entry_count == 0u &&
-        shell->redirections.entry_capacity == 0u &&
-        !shell->owns_self_executable_fd &&
-        shell->shell_pid == 0 &&
-        !shell->forked_execution &&
-        !shell->errexit_suppressed &&
-        !shell->errexit_diagnostics_suppressed &&
-        shell->command_substitution == NULL;
+    return shell->progname == NULL && shell->locale_scope == NULL && shell->scopes == NULL && shell->interactive.input == ASH_STARTUP_COMMAND_STRING &&
+           shell->interactive.mode == ASH_INTERACTIVE_DISABLED && shell->interactive.terminal_attachments == ASH_TERMINAL_DETACHED && shell->shopt.enabled == 0u && shell->aliases == NULL &&
+           shell->functions == NULL && shell->traps == NULL && shell->exit_trap_defer_depth == 0u && shell->jobs == NULL && shell->command_cache == NULL && shell->input_stack == NULL &&
+           shell->source_names == NULL && shell->source_identities == NULL && shell->execution_frames == NULL && ash_source_location_is_none(&shell->execution_location) &&
+           shell->active_parser == NULL && shell->history == NULL && shell->completion == NULL && shell->cwd.physical == NULL && shell->cwd.logical == NULL && shell->cwd.old_logical == NULL &&
+           shell->redirections.active == NULL && shell->redirections.entries == NULL && shell->redirections.entry_count == 0u && shell->redirections.entry_capacity == 0u &&
+           !shell->owns_self_executable_fd && shell->shell_pid == 0 && !shell->forked_execution && !shell->errexit_suppressed && !shell->errexit_diagnostics_suppressed &&
+           shell->command_substitution == NULL;
 }
 #endif
 

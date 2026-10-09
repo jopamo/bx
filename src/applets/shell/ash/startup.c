@@ -216,7 +216,7 @@ static enum ash_startup_outcome ash_startup_execute_env_file(struct ash_shell* s
     ash_lexer_init(&lexer, name, requested, strlen(requested));
     struct ash_word word;
     errno = 0;
-    enum ash_lexer_result lexed = ash_lexer_scan_expansion_string(&lexer, &word);
+    enum ash_lexer_result lexed = ash_lexer_scan_expansion_string(&lexer, &word, ASH_QUOTE_NONE);
     char* path = NULL;
     bool expanded = lexed == ASH_LEXER_TOKEN && ash_expand_word(shell, &word, &path, NULL);
     int error = errno;

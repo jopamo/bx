@@ -7,10 +7,14 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "applets/shell/ash/arithmetic.h"
 #include "applets/shell/ash/control.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
+#include "applets/shell/ash/lexer.h"
+#include "applets/shell/ash/locale_state.h"
 #include "applets/shell/ash/pathname_expansion.h"
+#include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/quote.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/syntax.h"
@@ -94,6 +98,19 @@ static bool ash_expansion_append_char(
         ash_expansion_oom(shell);
 }
 
+static size_t ash_character_width(const char* value, size_t remaining, mbstate_t* state) {
+    if (MB_CUR_MAX == 1u) {
+        return 1u;
+    }
+    size_t width = mbrlen(value, remaining, state);
+    if (width == 0u || width == (size_t)-1 || width == (size_t)-2) {
+        /* Undefined malformed input consumes one byte and resets conversion. */
+        *state = (mbstate_t){0};
+        return 1u;
+    }
+    return width;
+}
+
 static size_t ash_parameter_character_count(const char* value) {
     size_t remaining = strlen(value);
     if (MB_CUR_MAX == 1u) {
@@ -102,12 +119,7 @@ static size_t ash_parameter_character_count(const char* value) {
     size_t count = 0u;
     mbstate_t state = {0};
     while (remaining != 0u) {
-        size_t width = mbrlen(value, remaining, &state);
-        if (width == 0u || width == (size_t)-1 || width == (size_t)-2) {
-            /* Undefined malformed input counts one byte and resets conversion. */
-            width = 1u;
-            state = (mbstate_t){0};
-        }
+        size_t width = ash_character_width(value, remaining, &state);
         value += width;
         remaining -= width;
         count++;
@@ -147,28 +159,36 @@ static const char* ash_positional(
     return positionals->values[index - 1];
 }
 
+static bool ash_parameter_index(const char* digits, size_t length, uintmax_t* index) {
+    *index = 0u;
+    for (size_t i = 0u; i < length; i++) {
+        unsigned int digit = (unsigned int)(digits[i] - '0');
+        if (*index > ((uintmax_t)INTMAX_MAX - digit) / 10u) {
+            return false;
+        }
+        *index = *index * 10u + digit;
+    }
+    return true;
+}
+
 static bool ash_append_numbered_parameter(struct ash_shell* shell, struct bx_text_buffer* output, const char* digits, size_t length, bool braced, bool measure) {
     const char* name = braced ? digits : digits - 1;
     size_t name_length = length + (braced ? 0u : 1u);
-    uintmax_t index = 0u;
-    for (size_t i = 0u; i < length; i++) {
-        unsigned int digit = (unsigned int)(digits[i] - '0');
-        if (index > ((uintmax_t)INTMAX_MAX - digit) / 10u) {
-            /* Bash retries an overflowing braced index as a dollar digit. */
-            const char* value = NULL;
-            if (ash_shell_policy_valid(&shell->policy) && ash_shell_policy_is_bash(&shell->policy)) {
-                value = ash_positional(shell, (unsigned int)(digits[0] - '0'));
-                if (value == NULL && (shell->options & ASH_SHELL_OPTION_NOUNSET) != 0u) {
-                    char fallback[] = {'$', digits[0]};
-                    ash_diag_unbound_parameter(shell, fallback, sizeof(fallback));
-                    if (ash_expansion_errexit(shell)) {
-                        return ash_expansion_fail(shell, true);
-                    }
+    uintmax_t index;
+    if (!ash_parameter_index(digits, length, &index)) {
+        /* Bash retries an overflowing braced index as a dollar digit. */
+        const char* value = NULL;
+        if (ash_shell_policy_valid(&shell->policy) && ash_shell_policy_is_bash(&shell->policy)) {
+            value = ash_positional(shell, (unsigned int)(digits[0] - '0'));
+            if (value == NULL && (shell->options & ASH_SHELL_OPTION_NOUNSET) != 0u) {
+                char fallback[] = {'$', digits[0]};
+                ash_diag_unbound_parameter(shell, fallback, sizeof(fallback));
+                if (ash_expansion_errexit(shell)) {
+                    return ash_expansion_fail(shell, true);
                 }
             }
-            return ash_append_parameter_value(shell, output, value, name, name_length, measure);
         }
-        index = index * 10u + digit;
+        return ash_append_parameter_value(shell, output, value, name, name_length, measure);
     }
     return ash_append_parameter_value(shell, output, ash_positional(shell, index), name, name_length, measure);
 }
@@ -191,7 +211,11 @@ static bool ash_append_positionals_joined(
         return true;
     }
     const char* ifs = ash_ifs_joiner(shell);
-    size_t separator_length = ifs[0] == '\0' ? 0u : 1u;
+    size_t separator_length = 0u;
+    if (positionals->count > 1u && ifs[0] != '\0') {
+        mbstate_t state = {0};
+        separator_length = ash_character_width(ifs, strnlen(ifs, MB_CUR_MAX), &state);
+    }
     for (size_t i = 0u; i < positionals->count; i++) {
         if (i != 0 &&
             !ash_expansion_append_span(
@@ -257,11 +281,60 @@ static bool ash_append_special(struct ash_shell* shell, char parameter, struct b
     }
 }
 
-static bool ash_expand_parameter(
-    struct ash_shell* shell,
-    const char* input,
-    struct bx_text_buffer* output
-) {
+struct ash_parameter_reference {
+    size_t start;
+    size_t end;
+    bool numbered;
+    bool special;
+    bool measure;
+};
+
+static bool ash_parameter_reference_parse(const char* input, struct ash_parameter_reference* reference) {
+    if (input[0] != '$' || input[1] != '{') {
+        return false;
+    }
+    size_t position = 2u;
+    bool count_operator = input[position] == '#' && (input[position + 1u] == ':' ||
+                                                     (input[position + 1u] != '\0' && strchr("-+?=", input[position + 1u]) != NULL && input[position + 2u] != '\0' && input[position + 2u] != '}'));
+    reference->measure = input[position] == '#' && input[position + 1u] != '}' && !count_operator;
+    position += reference->measure ? 1u : 0u;
+    reference->start = position;
+    reference->numbered = isdigit((unsigned char)input[position]) != 0;
+    reference->special = input[position] != '\0' && strchr("?$#-!@*", input[position]) != NULL;
+    if (reference->numbered) {
+        while (isdigit((unsigned char)input[position])) {
+            position++;
+        }
+    }
+    else if (reference->special) {
+        position++;
+    }
+    else {
+        if (!ash_is_name_start((unsigned char)input[position])) {
+            return false;
+        }
+        while (ash_is_name_char((unsigned char)input[position])) {
+            position++;
+        }
+    }
+    reference->end = position;
+    return true;
+}
+
+static bool ash_append_parameter_reference(struct ash_shell* shell, const char* input, const struct ash_parameter_reference* reference, struct bx_text_buffer* output) {
+    const char* name = input + reference->start;
+    size_t length = reference->end - reference->start;
+    if (reference->numbered) {
+        return ash_append_numbered_parameter(shell, output, name, length, true, reference->measure);
+    }
+    if (reference->special) {
+        return ash_append_special(shell, name[0], output, true, reference->measure);
+    }
+    return ash_append_parameter_value(shell, output, ash_var_get_len(shell, name, length), name, length, reference->measure);
+}
+
+static bool ash_expand_parameter(struct ash_shell* shell, const struct ash_word_part* part, struct bx_text_buffer* output) {
+    const char* input = part->text;
     size_t position = 1u;
     char character = input[position];
     if (character == '\0') {
@@ -273,43 +346,15 @@ static bool ash_expand_parameter(
     }
 
     if (character == '{') {
-        position++;
-        bool measure = input[position] == '#' && input[position + 1u] != '}';
-        if (measure) {
-            position++;
-        }
-        if (isdigit((unsigned char)input[position])) {
-            size_t start = position;
-            while (isdigit((unsigned char)input[position])) {
-                position++;
-            }
-            if (input[position] != '}' || input[position + 1u] != '\0') {
-                return ash_expansion_bad_substitution(shell, input);
-            }
-            return ash_append_numbered_parameter(shell, output, input + start, position - start, true, measure);
-        }
-        if (input[position] != '\0' && strchr("?$#-!@*", input[position]) != NULL) {
-            char special = input[position++];
-            if (input[position] != '}' || input[position + 1u] != '\0' || (measure && (special == '@' || special == '*'))) {
-                return ash_expansion_bad_substitution(shell, input);
-            }
-            return ash_append_special(shell, special, output, true, measure);
-        }
-
-        size_t start = position;
-        while (ash_is_name_char((unsigned char)input[position])) {
-            position++;
-        }
-        if (position == start || input[position] != '}' ||
-            input[position + 1u] != '\0') {
+        struct ash_parameter_reference reference;
+        if (!ash_parameter_reference_parse(input, &reference)) {
             return ash_expansion_bad_substitution(shell, input);
         }
-        const char* value = ash_var_get_len(
-            shell,
-            input + start,
-            position - start
-        );
-        return ash_append_parameter_value(shell, output, value, input + start, position - start, measure);
+        position = reference.end;
+        if (input[position] != '}' || input[position + 1u] != '\0' || (reference.special && reference.measure && strchr("@*", input[reference.start]) != NULL)) {
+            return ash_expansion_bad_substitution(shell, input);
+        }
+        return ash_append_parameter_reference(shell, input, &reference, output);
     }
 
     if (isdigit((unsigned char)character)) {
@@ -348,11 +393,7 @@ static bool ash_expand_part(
         return false;
     }
     if (part->kind == ASH_WORD_PARAMETER) {
-        return ash_expand_parameter(shell, part->text, output);
-    }
-    if (part->kind == ASH_WORD_ARITHMETIC) {
-        ash_diag_expansion(shell, "arithmetic expansion is unavailable");
-        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        return ash_expand_parameter(shell, part, output);
     }
     if (part->kind == ASH_WORD_COMMAND_SUBSTITUTION ||
         part->kind == ASH_WORD_BACKQUOTE) {
@@ -536,59 +577,598 @@ static bool ash_expand_assignment_text(struct ash_shell* shell, const struct ash
     return true;
 }
 
-static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, bool assignment, int* substitution_status) {
-    struct ash_tilde_prefix prefix = {0};
-    if (!assignment && !ash_leading_tilde(shell, word, &prefix)) {
+enum ash_parameter_selection_kind {
+    ASH_PARAMETER_UNMODIFIED,
+    ASH_PARAMETER_SELECTED_VALUE,
+    ASH_PARAMETER_SELECTED_WORD,
+    ASH_PARAMETER_SELECTED_EMPTY,
+};
+
+enum ash_operand_action {
+    ASH_OPERAND_SUBSTITUTE,
+    ASH_OPERAND_ASSIGN,
+    ASH_OPERAND_ERROR,
+    ASH_OPERAND_ARITHMETIC,
+    ASH_OPERAND_REMOVE_PREFIX,
+    ASH_OPERAND_REMOVE_SUFFIX,
+};
+
+struct ash_parameter_selection {
+    enum ash_parameter_selection_kind kind;
+    struct bx_text_buffer value;
+    struct ash_word word;
+    const char* target_name;
+    size_t target_length;
+    enum ash_operand_action action;
+    const char* error_default;
+    bool longest;
+    bool result_quoted;
+};
+
+static void ash_parameter_selection_destroy(struct ash_parameter_selection* selection) {
+    bx_text_buffer_destroy(&selection->value);
+    ash_word_destroy(&selection->word);
+}
+
+static bool ash_parameter_operand_word(struct ash_shell* shell, const struct ash_word_part* part, size_t operand_position, bool double_quoted, struct ash_word* word);
+
+static bool ash_parameter_reference_state(const struct ash_shell* shell, const char* input, const struct ash_parameter_reference* reference, bool* null) {
+    const char* name = input + reference->start;
+    const char* value;
+    if (reference->numbered) {
+        uintmax_t index;
+        if (ash_parameter_index(name, reference->end - reference->start, &index)) {
+            value = ash_positional(shell, index);
+        }
+        else {
+            value = ash_shell_policy_valid(&shell->policy) && ash_shell_policy_is_bash(&shell->policy) ? ash_positional(shell, (unsigned int)(name[0] - '0')) : NULL;
+        }
+    }
+    else if (reference->special) {
+        *null = false;
+        if (name[0] == '!') {
+            return shell->last_async_pid > 0;
+        }
+        if (name[0] == '-') {
+            char letters[16];
+            ash_shell_option_letters(shell, letters, sizeof(letters));
+            *null = letters[0] == '\0';
+        }
+        return true;
+    }
+    else {
+        value = ash_var_get_len(shell, name, reference->end - reference->start);
+    }
+    *null = value != NULL && value[0] == '\0';
+    return value != NULL;
+}
+
+static bool ash_select_parameter_operand(struct ash_shell* shell, const struct ash_word_part* part, struct ash_parameter_selection* selection) {
+    *selection = (struct ash_parameter_selection){0};
+    struct ash_parameter_reference reference;
+    if (part->kind != ASH_WORD_PARAMETER || !ash_parameter_reference_parse(part->text, &reference) || reference.measure) {
+        return true;
+    }
+    size_t position = reference.end;
+    char removal = part->text[position];
+    if (removal == '#' || removal == '%') {
+        if (part->length == 0u || part->text[part->length - 1u] != '}' || (reference.special && strchr("#@*", part->text[reference.start]) != NULL)) {
+            return ash_expansion_bad_substitution(shell, part->text);
+        }
+        selection->kind = ASH_PARAMETER_SELECTED_WORD;
+        selection->action = removal == '#' ? ASH_OPERAND_REMOVE_PREFIX : ASH_OPERAND_REMOVE_SUFFIX;
+        selection->longest = part->text[position + 1u] == removal;
+        selection->result_quoted = ash_word_part_is_quoted(part);
+        if (!ash_append_parameter_reference(shell, part->text, &reference, &selection->value) ||
+            !ash_parameter_operand_word(shell, part, position + (selection->longest ? 2u : 1u), false, &selection->word)) {
+            ash_parameter_selection_destroy(selection);
+            return false;
+        }
+        return true;
+    }
+    bool colon = part->text[position] == ':';
+    position += colon ? 1u : 0u;
+    char operator = part->text[position];
+    if (operator != '-' && operator != '+' && operator != '=' && operator != '?') {
+        return true;
+    }
+    if (part->length == 0u || part->text[part->length - 1u] != '}' || (reference.special && strchr("@*", part->text[reference.start]) != NULL)) {
+        return ash_expansion_bad_substitution(shell, part->text);
+    }
+    if (operator == '=' && (reference.numbered || reference.special)) {
+        return ash_expansion_bad_substitution(shell, part->text);
+    }
+    bool null;
+    bool set = ash_parameter_reference_state(shell, part->text, &reference, &null);
+    bool missing = !set || (colon && null);
+    bool use_word = operator == '+' ? !missing : missing;
+    if (use_word) {
+        selection->kind = ASH_PARAMETER_SELECTED_WORD;
+        if (!ash_parameter_operand_word(shell, part, position + 1u, ash_word_part_is_quoted(part), &selection->word)) {
+            ash_parameter_selection_destroy(selection);
+            return false;
+        }
+        if (operator == '=' || operator == '?') {
+            selection->action = operator == '=' ? ASH_OPERAND_ASSIGN : ASH_OPERAND_ERROR;
+            if (operator == '?' && position + 1u == part->length - 1u) {
+                selection->error_default = colon ? "parameter is unset or null" : "parameter is unset";
+            }
+            selection->target_name = part->text + reference.start;
+            selection->target_length = reference.end - reference.start;
+        }
+        return true;
+    }
+    if (operator == '+') {
+        selection->kind = ASH_PARAMETER_SELECTED_EMPTY;
+        return true;
+    }
+    selection->kind = ASH_PARAMETER_SELECTED_VALUE;
+    if (!ash_append_parameter_reference(shell, part->text, &reference, &selection->value)) {
+        ash_parameter_selection_destroy(selection);
         return false;
     }
-    bool prefix_appended = prefix.value == NULL || ((value == NULL || ash_expansion_append_text(shell, value, prefix.value)) &&
-                                                    (pattern == NULL || ash_append_pattern_span(shell, pattern, prefix.value, strlen(prefix.value), true)));
-    free(prefix.owned);
-    if (!prefix_appended) {
-        return false;
+    return true;
+}
+
+struct ash_operand_frame {
+    const struct ash_word* borrowed;
+    struct ash_word owned;
+    size_t index;
+    size_t tilde_length;
+    bool entered;
+    bool assignment;
+    bool value_started;
+    bool tilde_position;
+    bool operand;
+    /* Computed and error operands capture without emitting outer fields. */
+    bool capture_only;
+    bool result_quoted;
+    /* Targets borrow the suspended parent word's spelling. */
+    const char* target_name;
+    size_t target_length;
+    enum ash_operand_action action;
+    const char* error_default;
+    size_t capture_index;
+    /* Assignment captures plain data while its enclosing removal keeps quotes. */
+    size_t pattern_index;
+    struct bx_text_buffer capture;
+    struct bx_text_buffer snapshot;
+    bool longest;
+};
+
+struct ash_operand_frames {
+    struct ash_operand_frame* values;
+    size_t count;
+    size_t capacity;
+    struct ash_operand_frame inline_values[8];
+};
+
+static void ash_operand_frames_init(struct ash_operand_frames* frames, const struct ash_word* word, bool assignment) {
+    *frames = (struct ash_operand_frames){.values = frames->inline_values, .count = 1u, .capacity = sizeof(frames->inline_values) / sizeof(frames->inline_values[0])};
+    frames->values[0] = (struct ash_operand_frame){.borrowed = word, .assignment = assignment, .capture_index = SIZE_MAX, .pattern_index = SIZE_MAX};
+}
+
+static void ash_operand_frames_pop(struct ash_operand_frames* frames) {
+    struct ash_operand_frame* frame = &frames->values[--frames->count];
+    ash_word_destroy(&frame->owned);
+    bx_text_buffer_destroy(&frame->capture);
+    bx_text_buffer_destroy(&frame->snapshot);
+}
+
+static void ash_operand_frames_destroy(struct ash_operand_frames* frames) {
+    while (frames->count != 0u) {
+        ash_operand_frames_pop(frames);
     }
-    bool value_started = false;
-    bool tilde_position = false;
-    for (size_t i = 0u; i < word->count; i++) {
-        const struct ash_word_part* part = &word->parts[i];
-        if (assignment && part->kind == ASH_WORD_TEXT && !ash_word_part_is_quoted(part)) {
-            if (!ash_expand_assignment_text(shell, part, i + 1u == word->count, &value_started, &tilde_position, value)) {
+    if (frames->values != frames->inline_values) {
+        free(frames->values);
+    }
+    *frames = (struct ash_operand_frames){0};
+}
+
+static bool ash_operand_frames_push(struct ash_shell* shell, struct ash_operand_frames* frames, struct ash_parameter_selection* selection) {
+    if (frames->count == frames->capacity) {
+        size_t capacity = frames->capacity * 2u;
+        if (capacity < frames->capacity || capacity > SIZE_MAX / sizeof(*frames->values)) {
+            return ash_expansion_oom(shell);
+        }
+        struct ash_operand_frame* grown;
+        if (frames->values == frames->inline_values) {
+            grown = malloc(capacity * sizeof(*grown));
+            if (grown != NULL) {
+                memcpy(grown, frames->values, frames->count * sizeof(*grown));
+            }
+        }
+        else {
+            grown = realloc(frames->values, capacity * sizeof(*grown));
+        }
+        if (grown == NULL) {
+            return ash_expansion_oom(shell);
+        }
+        frames->values = grown;
+        frames->capacity = capacity;
+    }
+    bool removal = selection->action == ASH_OPERAND_REMOVE_PREFIX || selection->action == ASH_OPERAND_REMOVE_SUFFIX;
+    bool computed = removal || selection->action == ASH_OPERAND_ARITHMETIC;
+    size_t capture_index = selection->target_name != NULL || computed ? frames->count : frames->values[frames->count - 1u].capture_index;
+    size_t pattern_index =
+        removal ? frames->count : (selection->action == ASH_OPERAND_ARITHMETIC || selection->action == ASH_OPERAND_ERROR ? SIZE_MAX : frames->values[frames->count - 1u].pattern_index);
+    bool capture_only = selection->action == ASH_OPERAND_ERROR || computed || frames->values[frames->count - 1u].capture_only;
+    frames->values[frames->count++] = (struct ash_operand_frame){
+        .owned = selection->word,
+        .operand = true,
+        .target_name = selection->target_name,
+        .target_length = selection->target_length,
+        .action = selection->action,
+        .error_default = selection->error_default,
+        .capture_only = capture_only,
+        .capture_index = capture_index,
+        .pattern_index = pattern_index,
+        .snapshot = selection->value,
+        .longest = selection->longest,
+        .result_quoted = selection->result_quoted,
+    };
+    selection->word = (struct ash_word){0};
+    selection->value = (struct bx_text_buffer){0};
+    return true;
+}
+
+static bool ash_operand_frames_push_arithmetic(struct ash_shell* shell, struct ash_operand_frames* frames, const struct ash_word_part* part) {
+    if (part->length < 5u || memcmp(part->text, "$((", 3u) != 0 || memcmp(part->text + part->length - 2u, "))", 2u) != 0) {
+        ash_diag_expansion(shell, "arithmetic: invalid expansion");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    const char* source = part->raw_source != NULL ? part->raw_source : part->text;
+    size_t length = part->raw_source != NULL ? part->raw_length : part->length;
+    size_t position = 0u;
+    for (size_t i = 0u; i < 3u; i++) {
+        while (length - position >= 2u && source[position] == '\\' && source[position + 1u] == '\n') {
+            position += 2u;
+        }
+        if (position == length || source[position++] != "$(("[i]) {
+            ash_diag_expansion(shell, "arithmetic: invalid expansion");
+            return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        }
+    }
+    size_t end = length;
+    for (size_t i = 0u; i < 2u; i++) {
+        while (end >= 2u && source[end - 2u] == '\\' && source[end - 1u] == '\n') {
+            end -= 2u;
+        }
+        if (end == 0u || source[--end] != ')') {
+            ash_diag_expansion(shell, "arithmetic: invalid expansion");
+            return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        }
+    }
+    if (end < position) {
+        ash_diag_expansion(shell, "arithmetic: invalid expansion");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    struct ash_source_location origin = part->location;
+    if (ash_source_location_is_none(&origin)) {
+        origin = (struct ash_source_location){.source = "<arithmetic>", .line = 1u, .column = 1u};
+    }
+    if (!ash_source_location_valid(&origin) || length > SIZE_MAX - origin.offset) {
+        ash_diag_expansion(shell, "arithmetic operand source position overflow");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    struct ash_lexer lexer;
+    ash_lexer_init_at(&lexer, origin, source, position);
+    lexer.here_document_source = part->here_document_source;
+    lexer.here_document_strip_tabs = part->here_document_strip_tabs;
+    if (!ash_lexer_discard_remaining(&lexer)) {
+        ash_diag_expansion(shell, "arithmetic operand source position overflow");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    lexer.length = end;
+    struct ash_parameter_selection selection = {.action = ASH_OPERAND_ARITHMETIC};
+    bool expanded = ash_lexer_scan_expansion_string(&lexer, &selection.word, ASH_QUOTE_DOUBLE) == ASH_LEXER_TOKEN;
+    if (!expanded) {
+        if (lexer.error != NULL && strcmp(lexer.error, "out of memory") == 0) {
+            (void)ash_expansion_oom(shell);
+        }
+        else {
+            ash_diag_parse(shell, lexer.error_location, "%s", lexer.error != NULL ? lexer.error : "invalid arithmetic operand");
+            (void)ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        }
+    }
+    else {
+        expanded = ash_operand_frames_push(shell, frames, &selection);
+        if (expanded) {
+            frames->values[frames->count - 1u].result_quoted = ash_word_part_is_quoted(part);
+        }
+    }
+    ash_parameter_selection_destroy(&selection);
+    return expanded;
+}
+
+static bool ash_operand_capture(struct ash_shell* shell, struct ash_operand_frames* frames, const char* text, size_t length, bool quoted) {
+    size_t index = frames->values[frames->count - 1u].capture_index;
+    size_t pattern = frames->values[frames->count - 1u].pattern_index;
+    return (index == SIZE_MAX || index == pattern || length == 0u || ash_expansion_append_span(shell, &frames->values[index].capture, text, length)) &&
+           (pattern == SIZE_MAX || ash_append_pattern_span(shell, &frames->values[pattern].capture, text, length, quoted));
+}
+
+struct ash_operand_completion {
+    char number[sizeof(long) * CHAR_BIT + 2u];
+    const char* text;
+    size_t length;
+    struct bx_text_buffer owned;
+    bool produced;
+    bool quoted;
+};
+
+static bool ash_parameter_remove_match(struct ash_shell* shell, struct ash_operand_frame* frame, struct ash_operand_completion* completion);
+
+static bool ash_operand_frames_complete(struct ash_shell* shell, struct ash_operand_frames* frames, struct ash_operand_completion* completion) {
+    *completion = (struct ash_operand_completion){0};
+    struct ash_operand_frame* frame = &frames->values[frames->count - 1u];
+    if (frame->action == ASH_OPERAND_ARITHMETIC) {
+        struct ash_arithmetic_error error;
+        long number;
+        const char* expression = frame->capture.data != NULL ? frame->capture.data : "";
+        if (!ash_arithmetic_evaluate(shell, expression, frame->capture.length, &number, &error)) {
+            if (error.reported) {
                 return false;
+            }
+            if (error.name != NULL) {
+                ash_diag_parameter_error(shell, error.name, error.name_length, error.message);
+            }
+            else {
+                ash_diag_expansion(shell, "arithmetic: %s", error.message);
+            }
+            return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        }
+        snprintf(completion->number, sizeof(completion->number), "%ld", number);
+        completion->text = completion->number;
+        completion->length = strlen(completion->text);
+        completion->produced = true;
+        completion->quoted = frame->result_quoted;
+        ash_operand_frames_pop(frames);
+        return ash_operand_capture(shell, frames, completion->text, completion->length, completion->quoted);
+    }
+    if (frame->action == ASH_OPERAND_REMOVE_PREFIX || frame->action == ASH_OPERAND_REMOVE_SUFFIX) {
+        if (!ash_parameter_remove_match(shell, frame, completion)) {
+            return false;
+        }
+        ash_operand_frames_pop(frames);
+        return ash_operand_capture(shell, frames, completion->text, completion->length, completion->quoted);
+    }
+    if (frame->action == ASH_OPERAND_ERROR) {
+        const char* message = frame->error_default != NULL ? frame->error_default : (frame->capture.data != NULL ? frame->capture.data : "");
+        ash_diag_parameter_error(shell, frame->target_name, frame->target_length, message);
+        return ash_expansion_fail(shell, !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE));
+    }
+    if (frame->action == ASH_OPERAND_ASSIGN) {
+        const char* value = frame->capture.data != NULL ? frame->capture.data : "";
+        if (!ash_var_set_with_export(shell, frame->target_name, frame->target_length, value, false)) {
+            return false;
+        }
+        size_t parent = frames->values[frames->count - 2u].capture_index;
+        if (parent != SIZE_MAX && parent != frames->values[frames->count - 2u].pattern_index && frame->capture.length != 0u &&
+            !ash_expansion_append_span(shell, &frames->values[parent].capture, frame->capture.data, frame->capture.length)) {
+            return false;
+        }
+    }
+    ash_operand_frames_pop(frames);
+    return true;
+}
+
+static const struct ash_word* ash_operand_frame_word(const struct ash_operand_frame* frame) {
+    return frame->borrowed != NULL ? frame->borrowed : &frame->owned;
+}
+
+static bool ash_expansion_refresh_locale(struct ash_shell* shell) {
+    int error = ash_locale_refresh(shell);
+    if (error != 0) {
+        ash_exec_error(shell, "locale", error);
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    return true;
+}
+
+static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, bool assignment, int* substitution_status) {
+    if (!ash_expansion_refresh_locale(shell)) {
+        return false;
+    }
+    struct ash_operand_frames frames;
+    ash_operand_frames_init(&frames, word, assignment);
+    while (frames.count != 0u) {
+        struct ash_operand_frame* frame = &frames.values[frames.count - 1u];
+        const struct ash_word* active_word = ash_operand_frame_word(frame);
+        struct bx_text_buffer* result_value = frame->capture_only ? NULL : value;
+        struct bx_text_buffer* result_pattern = frame->capture_only ? NULL : pattern;
+        if (!frame->entered) {
+            struct ash_tilde_prefix prefix = {0};
+            if (!frame->assignment && !ash_leading_tilde(shell, active_word, &prefix)) {
+                goto fail;
+            }
+            bool prefix_appended = prefix.value == NULL || ((result_value == NULL || ash_expansion_append_text(shell, result_value, prefix.value)) &&
+                                                            (result_pattern == NULL || ash_append_pattern_span(shell, result_pattern, prefix.value, strlen(prefix.value), true)) &&
+                                                            ash_operand_capture(shell, &frames, prefix.value, strlen(prefix.value), true));
+            free(prefix.owned);
+            if (!prefix_appended) {
+                goto fail;
+            }
+            frame->tilde_length = prefix.length;
+            frame->entered = true;
+        }
+        if (frame->index == active_word->count) {
+            struct ash_operand_completion completion;
+            bool appended = ash_operand_frames_complete(shell, &frames, &completion);
+            if (appended && completion.produced && !frames.values[frames.count - 1u].capture_only) {
+                appended = (value == NULL || ash_expansion_append_span(shell, value, completion.text, completion.length)) &&
+                           (pattern == NULL || ash_append_pattern_span(shell, pattern, completion.text, completion.length, completion.quoted));
+            }
+            bx_text_buffer_destroy(&completion.owned);
+            if (!appended) {
+                goto fail;
             }
             continue;
         }
-        tilde_position = false;
+        size_t index = frame->index++;
+        const struct ash_word_part* part = &active_word->parts[index];
+        if (frame->assignment && part->kind == ASH_WORD_TEXT && !ash_word_part_is_quoted(part)) {
+            if (!ash_expand_assignment_text(shell, part, frame->index == active_word->count, &frame->value_started, &frame->tilde_position, value)) {
+                goto fail;
+            }
+            continue;
+        }
+        frame->tilde_position = false;
         struct ash_word_part adjusted;
-        if (i == 0u && prefix.length != 0u) {
+        if (index == 0u && frame->tilde_length != 0u) {
             adjusted = *part;
-            adjusted.text += prefix.length;
-            adjusted.length -= prefix.length;
+            adjusted.text += frame->tilde_length;
+            adjusted.length -= frame->tilde_length;
             part = &adjusted;
+        }
+        if (part->kind == ASH_WORD_ARITHMETIC) {
+            if (!ash_operand_frames_push_arithmetic(shell, &frames, part)) {
+                goto fail;
+            }
+            continue;
+        }
+        struct ash_parameter_selection selection;
+        if (!ash_select_parameter_operand(shell, part, &selection)) {
+            goto fail;
+        }
+        if (selection.kind != ASH_PARAMETER_UNMODIFIED) {
+            bool appended = selection.kind == ASH_PARAMETER_SELECTED_WORD
+                                ? ash_operand_frames_push(shell, &frames, &selection)
+                                : ((result_value == NULL || ash_expansion_append_span(shell, result_value, selection.value.data, selection.value.length)) &&
+                                   (result_pattern == NULL || ash_append_pattern_component(shell, result_pattern, &selection.value, ash_word_part_is_quoted(part))) &&
+                                   ash_operand_capture(shell, &frames, selection.value.data, selection.value.length, ash_word_part_is_quoted(part)));
+            ash_parameter_selection_destroy(&selection);
+            if (!appended) {
+                goto fail;
+            }
+            continue;
         }
         struct bx_text_buffer component;
         bx_text_buffer_init(&component);
         if (!ash_expand_part(shell, part, &component, substitution_status)) {
             bx_text_buffer_destroy(&component);
-            return false;
+            goto fail;
         }
 
-        bool appended = (value == NULL || ash_expansion_append_span(shell, value, component.data, component.length)) &&
-                        (pattern == NULL || ash_append_pattern_component(shell, pattern, &component, ash_word_part_is_quoted(part)));
+        bool appended = (result_value == NULL || ash_expansion_append_span(shell, result_value, component.data, component.length)) &&
+                        (result_pattern == NULL || ash_append_pattern_component(shell, result_pattern, &component, ash_word_part_is_quoted(part))) &&
+                        ash_operand_capture(shell, &frames, component.data, component.length, ash_word_part_is_quoted(part));
         bx_text_buffer_destroy(&component);
         if (!appended) {
-            return false;
+            goto fail;
         }
+    }
+    ash_operand_frames_destroy(&frames);
+    return true;
+fail:
+    ash_operand_frames_destroy(&frames);
+    return false;
+}
+
+static bool ash_parameter_operand_word(struct ash_shell* shell, const struct ash_word_part* part, size_t operand_position, bool double_quoted, struct ash_word* word) {
+    const char* source = part->raw_source != NULL ? part->raw_source : part->text;
+    size_t length = part->raw_source != NULL ? part->raw_length : part->length;
+    if (length == 0u || source[length - 1u] != '}') {
+        return ash_expansion_bad_substitution(shell, part->text);
+    }
+    size_t position = 0u;
+    for (size_t logical = 0u; logical < operand_position;) {
+        if (position >= length - 1u) {
+            return ash_expansion_bad_substitution(shell, part->text);
+        }
+        if (source[position] == '\\' && source[position + 1u] == '\n') {
+            position += 2u;
+        }
+        else {
+            position++;
+            logical++;
+        }
+    }
+    struct ash_source_location origin = part->location;
+    if (ash_source_location_is_none(&origin)) {
+        origin = (struct ash_source_location){.source = "<parameter>", .line = 1u, .column = 1u};
+    }
+    if (!ash_source_location_valid(&origin) || length > SIZE_MAX - origin.offset) {
+        ash_diag_expansion(shell, "parameter operand source position overflow");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    struct ash_lexer lexer;
+    ash_lexer_init_at(&lexer, origin, source, position);
+    lexer.here_document_source = part->here_document_source;
+    lexer.here_document_strip_tabs = part->here_document_strip_tabs;
+    if (!ash_lexer_discard_remaining(&lexer)) {
+        ash_diag_expansion(shell, "parameter operand source position overflow");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    lexer.length = length - 1u;
+    if (ash_lexer_scan_parameter_operand(&lexer, word, double_quoted) != ASH_LEXER_TOKEN) {
+        if (lexer.error != NULL && strcmp(lexer.error, "out of memory") == 0) {
+            return ash_expansion_oom(shell);
+        }
+        ash_diag_parse(shell, lexer.error_location, "%s", lexer.error != NULL ? lexer.error : "invalid parameter operand");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
     }
     return true;
 }
 
-bool ash_expand(
-    struct ash_shell* shell,
-    const struct ash_word* word,
-    enum ash_expansion_context context,
-    char** output_word,
-    int* substitution_status
-) {
+static bool ash_parameter_remove_match(struct ash_shell* shell, struct ash_operand_frame* frame, struct ash_operand_completion* completion) {
+    struct ash_pattern pattern = {0};
+    bool prefix = frame->action == ASH_OPERAND_REMOVE_PREFIX;
+    size_t length = frame->snapshot.length;
+    char empty[] = "";
+    char* text = frame->snapshot.data != NULL ? frame->snapshot.data : empty;
+    bool expanded = false;
+    const struct ash_pattern_options options = {.purpose = ASH_PATTERN_PARAMETER_REMOVE, .domain = ASH_PATTERN_STRING};
+    enum ash_pattern_compile_result compiled = ash_pattern_compile(frame->capture.data != NULL ? frame->capture.data : "", frame->capture.length, &options, &pattern);
+    if (compiled != ASH_PATTERN_COMPILE_OK) {
+        if (compiled == ASH_PATTERN_COMPILE_NO_MEMORY) {
+            (void)ash_expansion_oom(shell);
+        }
+        else {
+            ash_diag_expansion(shell, "invalid parameter removal pattern");
+            (void)ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        }
+        goto out;
+    }
+    /* Only this owned snapshot is temporarily terminated for prefix matching. */
+    size_t selected = prefix ? 0u : length;
+    mbstate_t state = {0};
+    for (size_t position = 0u;;) {
+        char saved = text[position];
+        if (prefix) {
+            text[position] = '\0';
+        }
+        enum ash_pattern_match_result match = ash_pattern_match(&pattern, text + (prefix ? 0u : position));
+        text[position] = saved;
+        if (match == ASH_PATTERN_MATCH_ERROR || match == ASH_PATTERN_MATCH_UNSUPPORTED) {
+            ash_diag_expansion(shell, "parameter removal pattern matching failed");
+            (void)ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+            goto out;
+        }
+        if (match == ASH_PATTERN_MATCH) {
+            selected = position;
+            if (prefix != frame->longest) {
+                break;
+            }
+        }
+        if (position == length) {
+            break;
+        }
+        position += ash_character_width(text + position, length - position, &state);
+    }
+    completion->owned = frame->snapshot;
+    frame->snapshot = (struct bx_text_buffer){0};
+    completion->text = completion->owned.data != NULL ? completion->owned.data + (prefix ? selected : 0u) : "";
+    completion->length = prefix ? length - selected : selected;
+    completion->produced = true;
+    completion->quoted = frame->result_quoted;
+    expanded = true;
+out:
+    ash_pattern_destroy(&pattern);
+    return expanded;
+}
+
+bool ash_expand(struct ash_shell* shell, const struct ash_word* word, enum ash_expansion_context context, char** output_word, int* substitution_status) {
     *output_word = NULL;
     struct bx_text_buffer output;
     bx_text_buffer_init(&output);
@@ -618,6 +1198,42 @@ bool ash_expand_word(
 
 void ash_expanded_fields_init(struct ash_expanded_fields* fields) {
     *fields = (struct ash_expanded_fields){0};
+}
+
+bool ash_expand_here_document(struct ash_shell* shell,
+                              const char* body,
+                              size_t length,
+                              const struct ash_source_location* location,
+                              bool strip_tabs,
+                              struct bx_text_buffer* output,
+                              int* substitution_status) {
+    bx_text_buffer_init(output);
+    if (!ash_source_location_valid(location) || length > SIZE_MAX - location->offset) {
+        ash_diag_expansion(shell, "here-document source position overflow");
+        return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+    }
+    struct ash_lexer lexer;
+    ash_lexer_init_at(&lexer, *location, body, length);
+    struct ash_word word;
+    enum ash_lexer_result result = ash_lexer_scan_here_document(&lexer, &word, strip_tabs);
+    bool expanded = false;
+    if (result != ASH_LEXER_TOKEN) {
+        if (lexer.error != NULL && strcmp(lexer.error, "out of memory") == 0) {
+            (void)ash_expansion_oom(shell);
+        }
+        else {
+            ash_diag_expansion(shell, "here-document: %s", lexer.error != NULL ? lexer.error : "invalid expansion");
+            (void)ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+        }
+    }
+    else {
+        expanded = ash_expand_buffers(shell, &word, output, NULL, false, substitution_status);
+    }
+    ash_word_destroy(&word);
+    if (!expanded) {
+        bx_text_buffer_destroy(output);
+    }
+    return expanded;
 }
 
 void ash_expanded_fields_destroy(struct ash_expanded_fields* fields) {
@@ -652,13 +1268,23 @@ static bool ash_expanded_fields_reserve_one(
     return true;
 }
 
-static bool ash_ifs_contains(const char* ifs, unsigned char character) {
-    return strchr(ifs, (int)character) != NULL;
+static size_t ash_ifs_delimiter_length(const char* ifs, size_t ifs_length, const char* text, size_t remaining) {
+    if (MB_CUR_MAX == 1u) {
+        return strchr(ifs, (unsigned char)text[0]) != NULL ? 1u : 0u;
+    }
+    mbstate_t state = {0};
+    for (size_t position = 0u; position < ifs_length;) {
+        size_t width = ash_character_width(ifs + position, ifs_length - position, &state);
+        if (width <= remaining && memcmp(ifs + position, text, width) == 0) {
+            return width;
+        }
+        position += width;
+    }
+    return 0u;
 }
 
 static bool ash_ifs_whitespace(const char* ifs, unsigned char character) {
-    return (character == ' ' || character == '\t' || character == '\n') &&
-        ash_ifs_contains(ifs, character);
+    return (character == ' ' || character == '\t' || character == '\n') && strchr(ifs, (int)character) != NULL;
 }
 
 static bool ash_expanded_fields_push_span(
@@ -698,134 +1324,131 @@ static bool ash_expanded_fields_push(
     );
 }
 
-static bool ash_split_expansion(
-    struct ash_shell* shell,
-    const char* text,
-    struct ash_expanded_fields* split
-) {
-    ash_expanded_fields_init(split);
+struct ash_expansion_component {
+    struct bx_text_buffer text;
+    bool split;
+    bool quoted;
+    bool new_field;
+};
+
+struct ash_expansion_components {
+    struct ash_expansion_component* values;
+    size_t count;
+    size_t capacity;
+};
+
+static void ash_expansion_components_destroy(struct ash_expansion_components* components) {
+    for (size_t i = 0u; i < components->count; i++) {
+        bx_text_buffer_destroy(&components->values[i].text);
+    }
+    free(components->values);
+}
+
+static bool ash_expansion_components_push(struct ash_shell* shell, struct ash_expansion_components* components, struct bx_text_buffer* text, bool split, bool quoted, bool new_field) {
+    if (components->count == components->capacity) {
+        size_t capacity = components->capacity == 0u ? 4u : components->capacity * 2u;
+        if (capacity < components->capacity || capacity > SIZE_MAX / sizeof(*components->values)) {
+            return ash_expansion_oom(shell);
+        }
+        struct ash_expansion_component* grown = realloc(components->values, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return ash_expansion_oom(shell);
+        }
+        components->values = grown;
+        components->capacity = capacity;
+    }
+    /* Retain the existing per-segment C-string policy for decoded NULs. */
+    text->length = strnlen(text->data != NULL ? text->data : "", text->length);
+    components->values[components->count++] = (struct ash_expansion_component){*text, split, quoted, new_field};
+    *text = (struct bx_text_buffer){0};
+    return true;
+}
+
+struct ash_split_candidate {
+    struct bx_text_buffer value;
+    struct bx_text_buffer pattern;
+    bool present;
+    bool whitespace;
+};
+
+static bool ash_split_candidate_emit(struct ash_shell* shell, struct ash_split_candidate* candidate, struct ash_expanded_fields* fields, struct ash_expanded_fields* patterns, bool force) {
+    if (candidate->present || force) {
+        if (!ash_expanded_fields_push_span(shell, fields, candidate->value.data != NULL ? candidate->value.data : "", candidate->value.length) ||
+            (patterns != NULL && !ash_expanded_fields_push_span(shell, patterns, candidate->pattern.data != NULL ? candidate->pattern.data : "", candidate->pattern.length))) {
+            return false;
+        }
+    }
+    bx_text_buffer_clear(&candidate->value);
+    bx_text_buffer_clear(&candidate->pattern);
+    candidate->present = false;
+    candidate->whitespace = false;
+    return true;
+}
+
+static bool ash_split_candidate_append(struct ash_shell* shell, struct ash_split_candidate* candidate, bool pattern, const char* text, size_t length, bool quoted) {
+    if (!ash_expansion_append_span(shell, &candidate->value, text, length) || (pattern && !ash_append_pattern_span(shell, &candidate->pattern, text, length, quoted))) {
+        return false;
+    }
+    candidate->present = true;
+    return true;
+}
+
+static bool ash_split_components(struct ash_shell* shell, const struct ash_expansion_components* components, struct ash_expanded_fields* fields, struct ash_expanded_fields* patterns) {
     const char* ifs = ash_var_get(shell, "IFS");
     if (ifs == NULL) {
         ifs = " \t\n";
     }
-    if (text[0] == '\0') {
-        return true;
-    }
-    if (ifs[0] == '\0') {
-        return ash_expanded_fields_push(shell, split, text);
-    }
-
-    size_t position = 0u;
-    size_t length = strlen(text);
-    while (position < length &&
-           ash_ifs_whitespace(ifs, (unsigned char)text[position])) {
-        position++;
-    }
-    while (position < length) {
-        size_t start = position;
-        while (position < length &&
-               !ash_ifs_contains(ifs, (unsigned char)text[position])) {
-            position++;
-        }
-        if (!ash_expanded_fields_push_span(
-                shell,
-                split,
-                text + start,
-                position - start
-            )) {
-            ash_expanded_fields_destroy(split);
-            return false;
-        }
-        if (position == length) {
+    size_t ifs_length = strlen(ifs);
+    struct ash_split_candidate candidate = {0};
+    bool ok = true;
+    for (size_t i = 0u; ok && i < components->count; i++) {
+        const struct ash_expansion_component* component = &components->values[i];
+        if (component->new_field && !ash_split_candidate_emit(shell, &candidate, fields, patterns, false)) {
+            ok = false;
             break;
         }
-
-        unsigned char delimiter = (unsigned char)text[position++];
-        if (ash_ifs_whitespace(ifs, delimiter)) {
-            while (position < length &&
-                   ash_ifs_whitespace(
-                       ifs,
-                       (unsigned char)text[position]
-                   )) {
+        const char* text = component->text.data != NULL ? component->text.data : "";
+        size_t length = component->text.length;
+        if (!component->split) {
+            if (length == 0u && !component->quoted) {
+                continue;
+            }
+            if (candidate.whitespace && !ash_split_candidate_emit(shell, &candidate, fields, patterns, false)) {
+                ok = false;
+                break;
+            }
+            ok = ash_split_candidate_append(shell, &candidate, patterns != NULL, text, length, component->quoted);
+            continue;
+        }
+        for (size_t position = 0u; ok && position < length;) {
+            size_t delimiter = ash_ifs_delimiter_length(ifs, ifs_length, text + position, length - position);
+            if (delimiter != 0u) {
+                if (ash_ifs_whitespace(ifs, (unsigned char)text[position])) {
+                    candidate.whitespace = true;
+                }
+                else {
+                    ok = ash_split_candidate_emit(shell, &candidate, fields, patterns, true);
+                }
+                position += delimiter;
+                continue;
+            }
+            if (candidate.whitespace && !ash_split_candidate_emit(shell, &candidate, fields, patterns, false)) {
+                ok = false;
+                break;
+            }
+            size_t start = position++;
+            while (position < length && ash_ifs_delimiter_length(ifs, ifs_length, text + position, length - position) == 0u) {
                 position++;
             }
-            if (position < length &&
-                ash_ifs_contains(ifs, (unsigned char)text[position]) &&
-                !ash_ifs_whitespace(
-                    ifs,
-                    (unsigned char)text[position]
-                )) {
-                position++;
-            }
-        }
-        while (position < length &&
-               ash_ifs_whitespace(ifs, (unsigned char)text[position])) {
-            position++;
+            ok = ash_split_candidate_append(shell, &candidate, patterns != NULL, text + start, position - start, false);
         }
     }
-    return true;
-}
-
-static bool ash_expanded_fields_append(
-    struct ash_shell* shell,
-    struct ash_expanded_fields* fields,
-    const char* value
-) {
-    if (fields->count == 0u &&
-        !ash_expanded_fields_push(shell, fields, "")) {
-        return false;
+    if (ok) {
+        ok = ash_split_candidate_emit(shell, &candidate, fields, patterns, false);
     }
-    size_t index = fields->count - 1u;
-    size_t old_length = strlen(fields->values[index]);
-    size_t added = strlen(value);
-    if (added > SIZE_MAX - old_length - 1u) {
-        return ash_expansion_oom(shell);
-    }
-    char* replacement = realloc(
-        fields->values[index],
-        old_length + added + 1u
-    );
-    if (replacement == NULL) {
-        return ash_expansion_oom(shell);
-    }
-    memcpy(replacement + old_length, value, added + 1u);
-    fields->values[index] = replacement;
-    return true;
-}
-
-static bool ash_expanded_fields_add_component(
-    struct ash_shell* shell,
-    struct ash_expanded_fields* fields,
-    struct ash_expanded_fields* patterns,
-    const char* value,
-    bool quoted,
-    bool new_field
-) {
-    bool added = new_field ?
-        ash_expanded_fields_push(shell, fields, value) :
-        ash_expanded_fields_append(shell, fields, value);
-    if (!added || patterns == NULL) {
-        return added;
-    }
-
-    struct bx_text_buffer encoded;
-    bx_text_buffer_init(&encoded);
-    if (!ash_append_pattern_span(
-            shell,
-            &encoded,
-            value,
-            strlen(value),
-            quoted
-        )) {
-        bx_text_buffer_destroy(&encoded);
-        return false;
-    }
-    const char* pattern = encoded.data != NULL ? encoded.data : "";
-    added = new_field ?
-        ash_expanded_fields_push(shell, patterns, pattern) :
-        ash_expanded_fields_append(shell, patterns, pattern);
-    bx_text_buffer_destroy(&encoded);
-    return added;
+    bx_text_buffer_destroy(&candidate.value);
+    bx_text_buffer_destroy(&candidate.pattern);
+    return ok;
 }
 
 static bool ash_expansion_pathname_failure(
@@ -997,169 +1620,124 @@ static bool ash_part_requires_splitting(const struct ash_word_part* part) {
         ash_word_part_is_expansion(part);
 }
 
-bool ash_expand_argument(
-    struct ash_shell* shell,
-    const struct ash_word* word,
-    struct ash_expanded_fields* fields,
-    int* substitution_status
-) {
-    ash_expanded_fields_init(fields);
-    bool pathname_expansion =
-        ash_pathname_expansion_enabled(shell) &&
-        ash_word_may_expand_pathname(word);
-    struct ash_expanded_fields patterns;
-    ash_expanded_fields_init(&patterns);
-    struct ash_expanded_fields* active_patterns =
-        pathname_expansion ? &patterns : NULL;
-    bool field_present = false;
-    const struct ash_positional_frame* positionals =
-        ash_scope_positionals(shell);
-
-    struct ash_tilde_prefix prefix;
-    if (!ash_leading_tilde(shell, word, &prefix)) {
-        goto fail;
-    }
-    if (prefix.value != NULL) {
-        bool added = ash_expanded_fields_add_component(shell, fields, active_patterns, prefix.value, true, false);
-        free(prefix.owned);
-        if (!added) {
-            goto fail;
+static bool ash_collect_components(struct ash_shell* shell, const struct ash_word* word, struct ash_expansion_components* components, int* substitution_status) {
+    struct bx_text_buffer component = {0};
+    struct ash_operand_frames frames;
+    ash_operand_frames_init(&frames, word, false);
+    while (frames.count != 0u) {
+        struct ash_operand_frame* frame = &frames.values[frames.count - 1u];
+        const struct ash_word* active_word = ash_operand_frame_word(frame);
+        if (!frame->entered) {
+            struct ash_tilde_prefix prefix;
+            if (!ash_leading_tilde(shell, active_word, &prefix)) {
+                goto fail;
+            }
+            if (prefix.value != NULL) {
+                bool added = ash_expansion_append_text(shell, &component, prefix.value) && ash_operand_capture(shell, &frames, prefix.value, strlen(prefix.value), true);
+                free(prefix.owned);
+                if (!added || (!frame->capture_only && !ash_expansion_components_push(shell, components, &component, false, true, false))) {
+                    goto fail;
+                }
+            }
+            bx_text_buffer_destroy(&component);
+            frame->tilde_length = prefix.length;
+            frame->entered = true;
         }
-        field_present = true;
-    }
-    for (size_t i = 0u; i < word->count; i++) {
-        const struct ash_word_part* part = &word->parts[i];
+        if (frame->index == active_word->count) {
+            struct ash_operand_completion completion;
+            bool collected = ash_operand_frames_complete(shell, &frames, &completion);
+            if (collected && completion.produced && !frames.values[frames.count - 1u].capture_only) {
+                collected = ash_expansion_append_span(shell, &component, completion.text, completion.length) &&
+                            ash_expansion_components_push(shell, components, &component, !completion.quoted, completion.quoted, false);
+            }
+            bx_text_buffer_destroy(&completion.owned);
+            if (!collected) {
+                goto fail;
+            }
+            bx_text_buffer_destroy(&component);
+            continue;
+        }
+        size_t index = frame->index++;
+        const struct ash_word_part* part = &active_word->parts[index];
         struct ash_word_part adjusted;
-        if (i == 0u && prefix.length != 0u) {
+        if (index == 0u && frame->tilde_length != 0u) {
             adjusted = *part;
-            adjusted.text += prefix.length;
-            adjusted.length -= prefix.length;
+            adjusted.text += frame->tilde_length;
+            adjusted.length -= frame->tilde_length;
             part = &adjusted;
         }
-        if (ash_parameter_is(part, '@')) {
-            if (positionals == NULL || positionals->count == 0u) {
-                continue;
-            }
-            bool first = true;
-            for (size_t j = 0u; j < positionals->count; j++) {
-                struct ash_expanded_fields split;
-                if (!ash_word_part_is_quoted(part)) {
-                    if (!ash_split_expansion(
-                            shell,
-                            positionals->values[j],
-                            &split
-                        )) {
-                        goto fail;
-                    }
-                }
-                else {
-                    ash_expanded_fields_init(&split);
-                    if (!ash_expanded_fields_push(
-                            shell,
-                            &split,
-                            positionals->values[j]
-                        )) {
-                        goto fail;
-                    }
-                }
-                for (size_t k = 0u; k < split.count; k++) {
-                    bool added = ash_expanded_fields_add_component(
-                        shell,
-                        fields,
-                        active_patterns,
-                        split.values[k],
-                        ash_word_part_is_quoted(part),
-                        !first
-                    );
-                    if (!added) {
-                        ash_expanded_fields_destroy(&split);
-                        goto fail;
-                    }
-                    first = false;
-                    field_present = true;
-                }
-                ash_expanded_fields_destroy(&split);
+        if (part->kind == ASH_WORD_ARITHMETIC) {
+            if (!ash_operand_frames_push_arithmetic(shell, &frames, part)) {
+                goto fail;
             }
             continue;
         }
-
-        struct bx_text_buffer component;
-        bx_text_buffer_init(&component);
-        if (!ash_expand_part(shell, part, &component, substitution_status)) {
-            bx_text_buffer_destroy(&component);
+        bool quoted = ash_word_part_is_quoted(part);
+        struct ash_parameter_selection selection;
+        if (!ash_select_parameter_operand(shell, part, &selection)) {
             goto fail;
         }
-
-        const char* component_text =
-            component.data != NULL ? component.data : "";
-        if (ash_part_requires_splitting(part)) {
-            struct ash_expanded_fields split;
-            if (!ash_split_expansion(shell, component_text, &split)) {
+        if (selection.kind != ASH_PARAMETER_UNMODIFIED) {
+            bool collected;
+            if (selection.kind == ASH_PARAMETER_SELECTED_WORD) {
+                collected = ash_operand_frames_push(shell, &frames, &selection);
+            }
+            else {
+                component = selection.value;
+                selection.value = (struct bx_text_buffer){0};
+                collected = ash_operand_capture(shell, &frames, component.data, component.length, ash_word_part_is_quoted(part)) &&
+                            (frame->capture_only || ash_expansion_components_push(shell, components, &component, !quoted, quoted, false));
                 bx_text_buffer_destroy(&component);
+            }
+            ash_parameter_selection_destroy(&selection);
+            if (!collected) {
                 goto fail;
             }
-            if (split.count != 0u) {
-                if (!ash_expanded_fields_add_component(
-                        shell,
-                        fields,
-                        active_patterns,
-                        split.values[0],
-                        false,
-                        false
-                    )) {
-                    ash_expanded_fields_destroy(&split);
-                    bx_text_buffer_destroy(&component);
+            continue;
+        }
+        if (frame->capture_index == SIZE_MAX && (ash_parameter_is(part, '@') || (ash_parameter_is(part, '*') && !quoted))) {
+            const struct ash_positional_frame* positionals = ash_scope_positionals(shell);
+            for (size_t j = 0u; positionals != NULL && j < positionals->count; j++) {
+                if (!ash_expansion_append_text(shell, &component, positionals->values[j]) || !ash_expansion_components_push(shell, components, &component, !quoted, quoted, j != 0u)) {
                     goto fail;
                 }
-                for (size_t j = 1u; j < split.count; j++) {
-                    if (!ash_expanded_fields_add_component(
-                            shell,
-                            fields,
-                            active_patterns,
-                            split.values[j],
-                            false,
-                            true
-                        )) {
-                        ash_expanded_fields_destroy(&split);
-                        bx_text_buffer_destroy(&component);
-                        goto fail;
-                    }
-                }
-                field_present = true;
             }
-            ash_expanded_fields_destroy(&split);
+            continue;
         }
-        else {
-            if (!ash_expanded_fields_add_component(
-                    shell,
-                    fields,
-                    active_patterns,
-                    component_text,
-                    ash_word_part_is_quoted(part),
-                    false
-                )) {
-                bx_text_buffer_destroy(&component);
-                goto fail;
-            }
-            if (component.length != 0u ||
-                ash_word_part_is_quoted(part)) {
-                field_present = true;
-            }
+        bool split = ash_part_requires_splitting(part) || (frame->operand && !quoted && part->kind == ASH_WORD_TEXT);
+        if (!ash_expand_part(shell, part, &component, substitution_status) || !ash_operand_capture(shell, &frames, component.data, component.length, ash_word_part_is_quoted(part)) ||
+            (!frame->capture_only && !ash_expansion_components_push(shell, components, &component, split, quoted, false))) {
+            goto fail;
         }
         bx_text_buffer_destroy(&component);
     }
+    ash_operand_frames_destroy(&frames);
+    return true;
+fail:
+    bx_text_buffer_destroy(&component);
+    ash_operand_frames_destroy(&frames);
+    return false;
+}
 
-    if (!field_present) {
-        ash_expanded_fields_destroy(fields);
+bool ash_expand_argument(struct ash_shell* shell, const struct ash_word* word, struct ash_expanded_fields* fields, int* substitution_status) {
+    ash_expanded_fields_init(fields);
+    if (!ash_expansion_refresh_locale(shell)) {
+        return false;
     }
-    else if (pathname_expansion &&
-        !ash_expand_pathnames(shell, fields, &patterns)) {
+    bool pathname_expansion = ash_pathname_expansion_enabled(shell) && ash_word_may_expand_pathname(word);
+    struct ash_expanded_fields patterns = {0};
+    struct ash_expanded_fields* active_patterns = pathname_expansion ? &patterns : NULL;
+    struct ash_expansion_components components = {0};
+    if (!ash_collect_components(shell, word, &components, substitution_status) || !ash_split_components(shell, &components, fields, active_patterns) ||
+        (pathname_expansion && !ash_expand_pathnames(shell, fields, &patterns))) {
         goto fail;
     }
+    ash_expansion_components_destroy(&components);
     ash_expanded_fields_destroy(&patterns);
     return true;
 
 fail:
+    ash_expansion_components_destroy(&components);
     ash_expanded_fields_destroy(&patterns);
     ash_expanded_fields_destroy(fields);
     return false;

@@ -23,6 +23,7 @@ struct ash_function;
 struct ash_history_state;
 struct ash_input_source;
 struct ash_job;
+struct ash_locale_scope;
 struct ash_source_name;
 struct ash_trap_table;
 struct ash_shell;
@@ -96,6 +97,8 @@ struct ash_shell {
      * parameters. Its bottom frame is always the global scope.
      */
     struct ash_scope* scopes;
+    /* Borrow the invocation owner; forked shell contexts inherit its copy. */
+    struct ash_locale_scope* locale_scope;
     uint32_t options;
     struct ash_shopt_state shopt;
     struct ash_shell_policy policy;

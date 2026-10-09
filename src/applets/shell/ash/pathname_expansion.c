@@ -446,13 +446,20 @@ static int ash_pathname_expand_active_component(
         return ash_pathname_resource_error(errno) ? -1 : 0;
     }
 
+    size_t first_match = next->count;
+    bool discard_matches = false;
     int result = 0;
     while (result == 0) {
         errno = 0;
         struct dirent* entry = readdir(stream);
         if (entry == NULL) {
             if (errno != 0) {
-                result = -1;
+                if (ash_pathname_resource_error(errno)) {
+                    result = -1;
+                }
+                else {
+                    discard_matches = true;
+                }
             }
             break;
         }
@@ -495,6 +502,11 @@ static int ash_pathname_expand_active_component(
     }
     if (result != 0) {
         errno = read_error != 0 ? read_error : EIO;
+    }
+    else if (discard_matches) {
+        while (next->count > first_match) {
+            free(next->values[--next->count]);
+        }
     }
     return result;
 }
@@ -593,7 +605,8 @@ static int ash_pathname_compare(
 ) {
     const char* const* left_path = left;
     const char* const* right_path = right;
-    return strcoll(*left_path, *right_path);
+    int order = strcoll(*left_path, *right_path);
+    return order != 0 ? order : strcmp(*left_path, *right_path);
 }
 
 enum ash_pathname_expansion_result ash_pathname_expand(

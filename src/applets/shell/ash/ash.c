@@ -23,12 +23,14 @@
 #include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/external_command.h"
 #include "applets/shell/ash/functions.h"
+#include "applets/shell/ash/here_document.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/input_builtins.h"
 #include "applets/shell/ash/input_execution.h"
 #include "applets/shell/ash/interactive.h"
 #include "applets/shell/ash/invocation.h"
 #include "applets/shell/ash/lexer.h"
+#include "applets/shell/ash/locale_state.h"
 #include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/process.h"
@@ -42,6 +44,7 @@
 #include "applets/shell/ash/variables.h"
 #include "bx/self_exec.h"
 #include "lib/fd_ops.h"
+#include "lib/output_quote.h"
 #include "lib/path_ops.h"
 #include "lib/text_buffer.h"
 
@@ -240,13 +243,13 @@ static bool ash_command_push_word(const struct ash_shell* shell, struct ash_comm
     return true;
 }
 
-static bool ash_command_push_assignment(const struct ash_shell* shell, struct ash_command* command, const char* text) {
+static bool ash_command_push_assignment(const struct ash_shell* shell, struct ash_command* command, const struct ash_word* word) {
     if (command->assignment_count == command->assignment_cap) {
         size_t new_cap = (command->assignment_cap == 0) ? 4u : command->assignment_cap * 2u;
         if (command->assignment_cap != 0u && command->assignment_cap > SIZE_MAX / 2u) {
             return ash_diag_oom(shell);
         }
-        char** grown = ash_realloc_array(shell, command->assignments, new_cap, sizeof(*command->assignments));
+        const struct ash_word** grown = ash_realloc_array(shell, command->assignments, new_cap, sizeof(*command->assignments));
         if (grown == NULL) {
             return false;
         }
@@ -254,15 +257,14 @@ static bool ash_command_push_assignment(const struct ash_shell* shell, struct as
         command->assignment_cap = new_cap;
     }
 
-    char* assignment = ash_strdup_text(shell, text);
-    if (assignment == NULL) {
-        return false;
-    }
-    command->assignments[command->assignment_count++] = assignment;
+    command->assignments[command->assignment_count++] = word;
     return true;
 }
 
-static bool ash_command_push_redir(struct ash_shell* shell, struct ash_command* command, int fd, enum ash_redir_kind kind, const char* target) {
+static bool ash_command_push_redir(struct ash_shell* shell, struct ash_command* command, int fd, enum ash_redir_kind kind, const char* target, size_t target_length) {
+    if (target_length == SIZE_MAX) {
+        return ash_diag_oom(shell);
+    }
     if (command->redir_count == command->redir_cap) {
         size_t new_cap = (command->redir_cap == 0) ? 4u : command->redir_cap * 2u;
         if (command->redir_cap != 0u && command->redir_cap > SIZE_MAX / 2u) {
@@ -277,13 +279,14 @@ static bool ash_command_push_redir(struct ash_shell* shell, struct ash_command* 
     }
 
     struct ash_redir* redir = &command->redirs[command->redir_count++];
-    redir->fd = fd;
-    redir->kind = kind;
-    redir->target = ash_strdup_text(shell, target);
+    *redir = (struct ash_redir){.fd = fd, .kind = kind, .target_length = target_length};
+    redir->target = malloc(target_length + 1u);
     if (redir->target == NULL) {
         command->redir_count--;
-        return false;
+        return ash_diag_oom(shell);
     }
+    memcpy(redir->target, target, target_length);
+    redir->target[target_length] = '\0';
     return true;
 }
 
@@ -293,9 +296,6 @@ static void ash_command_destroy(struct ash_command* command) {
     }
     free(command->words);
 
-    for (size_t i = 0; i < command->assignment_count; i++) {
-        free(command->assignments[i]);
-    }
     free(command->assignments);
 
     for (size_t i = 0; i < command->redir_count; i++) {
@@ -377,16 +377,23 @@ static char* ash_physical_directory_dup(const char* path) {
     return bx_text_buffer_take(&doubled);
 }
 
-static int ash_apply_command_assignments_shell(struct ash_shell* shell, const struct ash_command* command, bool force_export) {
+static int ash_apply_command_assignments_shell(struct ash_shell* shell, const struct ash_command* command, bool force_export, int* substitution_status) {
     for (size_t i = 0; i < command->assignment_count; i++) {
+        char* text = NULL;
+        if (!ash_expand(shell, command->assignments[i], ASH_EXPANSION_ASSIGNMENT, &text, substitution_status)) {
+            return 1;
+        }
         size_t name_len = 0;
         const char* value = NULL;
-        if (!ash_parse_assignment(command->assignments[i], &name_len, &value)) {
-            ash_diag(shell, "invalid assignment '%s'", command->assignments[i]);
+        if (!ash_parse_assignment(text, &name_len, &value)) {
+            ash_diag(shell, "invalid assignment '%s'", text);
+            free(text);
             return 1;
         }
 
-        if (!ash_var_set_with_export(shell, command->assignments[i], name_len, value, force_export)) {
+        bool assigned = ash_var_set_with_export(shell, text, name_len, value, force_export);
+        free(text);
+        if (!assigned) {
             return 1;
         }
     }
@@ -394,34 +401,87 @@ static int ash_apply_command_assignments_shell(struct ash_shell* shell, const st
     return 0;
 }
 
-static bool ash_apply_command_assignments_temporary(struct ash_shell* shell, const struct ash_command* command) {
+static void ash_assignment_values_destroy(char** values, size_t count) {
+    for (size_t i = 0u; i < count; i++) {
+        free(values[i]);
+    }
+    free(values);
+}
+
+static bool ash_expand_command_assignments(struct ash_shell* shell, const struct ash_command* command, int* substitution_status, char*** values_out) {
+    *values_out = NULL;
     if (command->assignment_count == 0u) {
         return true;
     }
-    if (!ash_scope_push_temporary(shell)) {
-        return ash_diag_oom(shell);
+    char** values = ash_realloc_array(shell, NULL, command->assignment_count, sizeof(*values));
+    if (values == NULL) {
+        return false;
     }
-    for (size_t i = 0u; i < command->assignment_count; i++) {
-        size_t name_length = 0u;
-        const char* value = NULL;
-        if (!ash_parse_assignment(command->assignments[i], &name_length, &value) || !ash_var_set_temporary(shell, command->assignments[i], name_length, value, true)) {
-            (void)ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT);
+    size_t count = 0u;
+    for (; count < command->assignment_count; count++) {
+        char* text = NULL;
+        if (!ash_expand(shell, command->assignments[count], ASH_EXPANSION_ASSIGNMENT, &text, substitution_status)) {
+            ash_assignment_values_destroy(values, count);
             return false;
         }
+        size_t name_length;
+        const char* value;
+        if (!ash_parse_assignment(text, &name_length, &value) || !ash_var_assignment_allowed(shell, text, name_length)) {
+            free(text);
+            ash_assignment_values_destroy(values, count);
+            return false;
+        }
+        values[count] = text;
     }
+    *values_out = values;
     return true;
 }
 
-static int ash_apply_command_assignments_env(struct ash_shell* shell, const struct ash_command* command) {
-    (void)shell;
+static bool ash_apply_command_assignments_temporary(struct ash_shell* shell, const struct ash_command* command, bool sequential) {
+    if (command->assignment_count == 0u) {
+        return true;
+    }
+    char** values = NULL;
+    size_t value_count = sequential ? 0u : command->assignment_count;
+    int substitution_status = command->substitution_status;
+    if (!sequential && !ash_expand_command_assignments(shell, command, &substitution_status, &values)) {
+        return false;
+    }
+    if (!ash_scope_push_temporary(shell)) {
+        ash_assignment_values_destroy(values, value_count);
+        return ash_diag_oom(shell);
+    }
+    for (size_t i = 0u; i < command->assignment_count; i++) {
+        char* text = sequential ? NULL : values[i];
+        if (sequential && !ash_expand(shell, command->assignments[i], ASH_EXPANSION_ASSIGNMENT, &text, &substitution_status)) {
+            (void)ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT);
+            return false;
+        }
+        size_t name_length = 0u;
+        const char* value = NULL;
+        bool assigned = ash_parse_assignment(text, &name_length, &value) && ash_var_set_temporary(shell, text, name_length, value, true);
+        if (sequential) {
+            free(text);
+        }
+        if (!assigned) {
+            (void)ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT);
+            ash_assignment_values_destroy(values, value_count);
+            return false;
+        }
+    }
+    ash_assignment_values_destroy(values, value_count);
+    return true;
+}
+
+static int ash_apply_command_assignments_env(struct ash_shell* shell, const struct ash_command* command, char* const* assignments) {
     for (size_t i = 0; i < command->assignment_count; i++) {
         size_t name_len = 0;
         const char* value = NULL;
-        if (!ash_parse_assignment(command->assignments[i], &name_len, &value)) {
+        if (!ash_parse_assignment(assignments[i], &name_len, &value) || !ash_var_assignment_allowed(shell, assignments[i], name_len)) {
             return 1;
         }
 
-        char* name = ash_slice_dup(shell, command->assignments[i], name_len);
+        char* name = ash_slice_dup(shell, assignments[i], name_len);
         if (name == NULL) {
             return 1;
         }
@@ -503,6 +563,9 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
         }
     }
 
+    if (!ash_var_assignment_allowed(shell, "PWD", 3u) || !ash_var_assignment_allowed(shell, "OLDPWD", 6u)) {
+        return 1;
+    }
     const char* visible_pwd = ash_var_get(shell, "PWD");
     char* oldpwd = visible_pwd != NULL ? ash_strdup_text(shell, visible_pwd) : NULL;
     if (visible_pwd != NULL && oldpwd == NULL) {
@@ -657,6 +720,77 @@ static int ash_builtin_export(struct ash_shell* shell, const struct ash_command*
     return status;
 }
 
+static void ash_print_readonly_variable(const struct ash_var* var, void* user_data) {
+    bool* success = user_data;
+    if (!*success || (var->attributes & ASH_VAR_ATTR_READONLY) == 0u) {
+        return;
+    }
+    const char* value = ash_value_get_scalar(&var->value);
+    *success = fputs("readonly ", stdout) != EOF && fputs(var->name, stdout) != EOF && (value == NULL || (fputc('=', stdout) != EOF && bx_output_quote_write_single(stdout, value))) &&
+               fputc('\n', stdout) != EOF;
+}
+
+static int ash_special_builtin_error_status(struct ash_shell* shell, int status) {
+    if (shell->forked_execution || ash_shell_policy_noninteractive_posix(&shell->policy)) {
+        shell->should_exit = true;
+        shell->requested_exit_status = status;
+    }
+    return status;
+}
+
+static int ash_builtin_readonly(struct ash_shell* shell, const struct ash_command* command) {
+    size_t operand = 1u;
+    bool print = false;
+    while (operand < command->word_count && command->words[operand][0] == '-' && command->words[operand][1] != '\0') {
+        const char* option = command->words[operand++];
+        if (strcmp(option, "--") == 0) {
+            break;
+        }
+        for (size_t i = 1u; option[i] != '\0'; i++) {
+            if (option[i] != 'p') {
+                ash_diag(shell, "readonly: -%c: invalid option", option[i]);
+                return ash_special_builtin_error_status(shell, 2);
+            }
+            print = true;
+        }
+    }
+    if (print && operand != command->word_count) {
+        ash_diag(shell, "readonly: -p does not accept operands");
+        return ash_special_builtin_error_status(shell, 2);
+    }
+    if (print || operand == command->word_count) {
+        bool success = true;
+        ash_vars_visit_visible(shell, ash_print_readonly_variable, &success);
+        if (!success || fflush(stdout) == EOF) {
+            ash_exec_error(shell, "readonly", errno != 0 ? errno : EIO);
+            clearerr(stdout);
+            return ash_special_builtin_error_status(shell, 1);
+        }
+        return 0;
+    }
+    for (; operand < command->word_count; operand++) {
+        const char* argument = command->words[operand];
+        size_t length;
+        const char* value;
+        if (ash_parse_assignment(argument, &length, &value)) {
+            if (!ash_var_set_with_export(shell, argument, length, value, false)) {
+                return ash_special_builtin_error_status(shell, 1);
+            }
+        }
+        else {
+            length = strlen(argument);
+            if (!ash_is_valid_name_span(argument, length)) {
+                ash_diag(shell, "readonly: invalid name '%s'", argument);
+                return ash_special_builtin_error_status(shell, 1);
+            }
+        }
+        if (!ash_var_readonly(shell, argument, length)) {
+            return ash_special_builtin_error_status(shell, 1);
+        }
+    }
+    return 0;
+}
+
 static int ash_builtin_unset(struct ash_shell* shell, const struct ash_command* command) {
     int status = 0;
     bool unset_functions = false;
@@ -696,7 +830,13 @@ static int ash_builtin_unset(struct ash_shell* shell, const struct ash_command* 
             ash_function_unset(shell, name);
         }
         else {
-            ash_var_unset(shell, name);
+            if (!ash_var_unset(shell, name)) {
+                status = 1;
+                if (ash_shell_policy_noninteractive_posix(&shell->policy)) {
+                    shell->should_exit = true;
+                    shell->requested_exit_status = 1;
+                }
+            }
         }
     }
 
@@ -834,6 +974,22 @@ static int ash_builtin_exec(struct ash_shell* shell, const struct ash_command* c
     return status;
 }
 
+struct ash_option_output {
+    bool reinput;
+    int error;
+};
+
+static bool ash_print_shell_option(const char* name, bool enabled, void* context) {
+    struct ash_option_output* output = context;
+    errno = 0;
+    int written = output->reinput ? printf("set %co %s\n", enabled ? '-' : '+', name) : printf("%s\t%s\n", name, enabled ? "on" : "off");
+    if (written < 0) {
+        output->error = errno != 0 ? errno : EIO;
+        return false;
+    }
+    return true;
+}
+
 static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* command) {
     if (command->word_count == 1u) {
         ash_vars_visit_visible(shell, ash_print_scalar_variable, NULL);
@@ -841,20 +997,30 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
     }
 
     int status = 0;
+    size_t i = 1u;
+    bool replace_positionals = false;
+    bool list_options = false;
+    bool reinput_options = false;
 
-    for (size_t i = 1; i < command->word_count; i++) {
+    for (; i < command->word_count; i++) {
         const char* arg = command->words[i];
         if (strcmp(arg, "--") == 0) {
-            continue;
+            i++;
+            replace_positionals = true;
+            break;
         }
-        if ((arg[0] == '-' || arg[0] == '+') &&
-            arg[1] != '\0') {
+        if ((arg[0] == '-' || arg[0] == '+') && arg[1] != '\0') {
             bool enabled = arg[0] == '-';
             for (const char* option = arg + 1;
                  *option != '\0';
                  option++) {
                 enum ash_shell_option_result result;
-                if (*option == 'o' && i + 1u < command->word_count) {
+                if (*option == 'o') {
+                    if (i + 1u == command->word_count) {
+                        list_options = true;
+                        reinput_options = !enabled;
+                        continue;
+                    }
                     const char* option_name = command->words[++i];
                     result = ash_shell_option_apply_name(
                         &shell->options,
@@ -889,16 +1055,26 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
             continue;
         }
 
-        size_t name_len = 0;
-        const char* value = NULL;
-        if (!ash_parse_assignment(arg, &name_len, &value)) {
-            ash_diag(shell, "set: unsupported operand '%s'", arg);
-            status = 1;
-            continue;
+        replace_positionals = true;
+        break;
+    }
+    if (status == 0 && replace_positionals && !ash_scope_set_positionals(shell, command->words + i, command->word_count - i)) {
+        ash_diag_oom(shell);
+        status = 1;
+    }
+    if (status == 0 && list_options) {
+        struct ash_option_output output = {.reinput = reinput_options, .error = EIO};
+        bool printed = ash_shell_options_visit_set_names(shell->options, shell->policy.personality, ash_print_shell_option, &output);
+        if (fflush(stdout) == EOF) {
+            if (printed) {
+                output.error = errno != 0 ? errno : EIO;
+            }
+            printed = false;
         }
-
-        if (!ash_var_set_with_export(shell, arg, name_len, value, false)) {
-            status = 1;
+        if (!printed) {
+            ash_exec_error(shell, "set: option output", output.error);
+            clearerr(stdout);
+            status = ash_special_builtin_error_status(shell, 1);
         }
     }
 
@@ -991,7 +1167,7 @@ static int ash_builtin_shift(
     if (count != 0u) {
         positionals->values += count;
     }
-    positionals->count -= (int)count;
+    positionals->count -= (size_t)count;
     return 0;
 }
 
@@ -1063,6 +1239,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_trap_builtin(shell, command);
         case ASH_BUILTIN_EXPORT:
             return ash_builtin_export(shell, command);
+        case ASH_BUILTIN_READONLY:
+            return ash_builtin_readonly(shell, command);
         case ASH_BUILTIN_UNSET:
             return ash_builtin_unset(shell, command);
         case ASH_BUILTIN_UNALIAS:
@@ -1120,29 +1298,19 @@ static int ash_execute_function(
     }
 
     bool temporary_scope = command->assignment_count != 0u;
-    if (!ash_apply_command_assignments_temporary(shell, command)) {
+    struct ash_redirection_transaction saved_fds;
+    ash_redirection_transaction_init(&saved_fds);
+    if (ash_redirection_transaction_apply(shell, command, &saved_fds) != 0) {
+        ash_ast_destroy(invocation_body);
+        return 1;
+    }
+    if (!ash_apply_command_assignments_temporary(shell, command, true)) {
+        (void)ash_redirection_transaction_rollback(shell, &saved_fds);
         ash_ast_destroy(invocation_body);
         return 2;
     }
 
-    struct ash_redirection_transaction saved_fds;
-    ash_redirection_transaction_init(&saved_fds);
-    if (ash_redirection_transaction_apply(shell, command, &saved_fds) != 0) {
-        if (temporary_scope) {
-            (void)ash_scope_pop(
-                shell,
-                ASH_SCOPE_TEMPORARY_ASSIGNMENT
-            );
-        }
-        ash_ast_destroy(invocation_body);
-        return 1;
-    }
-
-    if (!ash_scope_push_function(
-            shell,
-            command->word_count > 1u ? &command->words[1] : NULL,
-            command->word_count > 1u ? command->word_count - 1u : 0u
-        )) {
+    if (!ash_scope_push_function(shell, command->word_count > 1u ? &command->words[1] : NULL, command->word_count > 1u ? command->word_count - 1u : 0u)) {
         ash_diag_oom(shell);
         (void)ash_redirection_transaction_rollback(shell, &saved_fds);
         if (temporary_scope) {
@@ -1216,12 +1384,11 @@ static int ash_execute_function(
 
 static int ash_execute_builtin_current(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution);
 
-static int ash_execute_in_child(
-    struct ash_shell* shell,
-    const struct ash_command* command,
-    const struct ash_command_resolution* resolution,
-    struct ash_applet_child_plan* applet_plan
-) {
+static int ash_execute_in_child(struct ash_shell* shell,
+                                const struct ash_command* command,
+                                const struct ash_command_resolution* resolution,
+                                struct ash_applet_child_plan* applet_plan,
+                                char* const* assignment_values) {
     if (!ash_command_resolution_valid(resolution)) {
         ash_exec_error(
             shell,
@@ -1244,14 +1411,7 @@ static int ash_execute_in_child(
         return 1;
     }
 
-    if (command->word_count == 0u) {
-        if (ash_apply_command_assignments_shell(shell, command, false) != 0) {
-            return 1;
-        }
-        return 0;
-    }
-
-    if (ash_apply_command_assignments_env(shell, command) != 0) {
+    if (ash_apply_command_assignments_env(shell, command, assignment_values) != 0) {
         return 1;
     }
 
@@ -1273,31 +1433,29 @@ static int ash_execute_in_child(
 
 static int ash_execute_builtin_current(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution) {
     bool temporary_scope = command->assignment_count != 0u && (resolution->kind == ASH_COMMAND_REGULAR_BUILTIN || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX));
-    if (temporary_scope ? !ash_apply_command_assignments_temporary(shell, command) : ash_apply_command_assignments_shell(shell, command, true) != 0) {
-        return 1;
-    }
-
     struct ash_redirection_transaction saved;
     ash_redirection_transaction_init(&saved);
 
+    int substitution_status = command->substitution_status;
+    if (!temporary_scope && ash_apply_command_assignments_shell(shell, command, true, &substitution_status) != 0) {
+        return 1;
+    }
     if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
-        if (temporary_scope) {
-            (void)ash_scope_pop(shell, ASH_SCOPE_TEMPORARY_ASSIGNMENT);
-        }
-        if (resolution->kind == ASH_COMMAND_SPECIAL_BUILTIN &&
-            ash_shell_policy_noninteractive_posix(&shell->policy)) {
+        if (resolution->kind == ASH_COMMAND_SPECIAL_BUILTIN && ash_shell_policy_noninteractive_posix(&shell->policy) && !shell->should_exit) {
             shell->should_exit = true;
             shell->requested_exit_status = 1;
         }
+        return 1;
+    }
+    if (temporary_scope && !ash_apply_command_assignments_temporary(shell, command, false)) {
+        (void)ash_redirection_transaction_rollback(shell, &saved);
         return 1;
     }
 
     shell->exit_trap_defer_depth++;
     int status = ash_run_builtin(shell, resolution->target.builtin, command);
 
-    bool permanent_redirections = status == 0 &&
-        resolution->target.builtin == ASH_BUILTIN_EXEC &&
-        command->word_count == 1u;
+    bool permanent_redirections = status == 0 && resolution->target.builtin == ASH_BUILTIN_EXEC && command->word_count == 1u;
     if (!permanent_redirections) {
         if (ash_redirection_transaction_rollback(shell, &saved) != 0) {
             status = 1;
@@ -1322,41 +1480,45 @@ struct ash_command_child_context {
     const struct ash_command* command;
     struct ash_command_resolution resolution;
     struct ash_applet_child_plan applet_plan;
+    char** assignment_values;
 };
 
 static int ash_command_child_main(void* user_data) {
     struct ash_command_child_context* context = user_data;
     ash_shell_context_detach_after_fork(context->shell);
-    int status = ash_execute_in_child(context->shell, context->command, &context->resolution, &context->applet_plan);
+    int status = ash_execute_in_child(context->shell, context->command, &context->resolution, &context->applet_plan, context->assignment_values);
     return ash_finish_execution(context->shell, status);
 }
 
-static int ash_run_foreground_child(
-    struct ash_shell* shell,
-    enum ash_job_kind job_kind,
-    enum ash_process_role process_role,
-    ash_child_callback callback,
-    void* user_data
-) {
+static int ash_run_foreground_child(struct ash_shell* shell,
+                                    enum ash_job_kind job_kind,
+                                    enum ash_process_role process_role,
+                                    ash_child_callback callback,
+                                    void* user_data,
+                                    struct ash_redirection_transaction* inherited_redirections) {
     struct ash_job* job = ash_job_create(shell, job_kind, true);
     if (job == NULL) {
+        if (inherited_redirections != NULL) {
+            (void)ash_redirection_transaction_rollback(shell, inherited_redirections);
+        }
         ash_diag_oom(shell);
         return 1;
     }
     size_t process_index;
-    if (ash_job_start_process(
-            job,
-            process_role,
-            callback,
-            user_data,
-            &process_index
-        ) != 0) {
+    if (ash_job_start_process(job, process_role, callback, user_data, &process_index) != 0) {
         int error = errno;
         ash_job_abort(job);
+        if (inherited_redirections != NULL) {
+            (void)ash_redirection_transaction_rollback(shell, inherited_redirections);
+        }
         ash_exec_error(shell, "fork", error);
         return 1;
     }
     (void)process_index;
+    if (inherited_redirections != NULL && ash_redirection_transaction_rollback(shell, inherited_redirections) != 0) {
+        ash_job_abort(job);
+        return 1;
+    }
     if (!ash_job_commit(job, ASH_JOB_PRIVATE)) {
         ash_job_abort(job);
         ash_exec_error(shell, "child registration", EINVAL);
@@ -1399,13 +1561,49 @@ static int ash_execute_single_command_forked(
         job_kind = ASH_JOB_APPLET_CHILD;
         process_role = ASH_PROCESS_APPLET_CHILD;
     }
-    return ash_run_foreground_child(
-        shell,
-        job_kind,
-        process_role,
-        ash_command_child_main,
-        &context
-    );
+    struct ash_redirection_transaction saved;
+    ash_redirection_transaction_init(&saved);
+    struct ash_command prepared = *command;
+    bool prepare_redirections = command->redir_count != 0u;
+    if (prepare_redirections) {
+        if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
+            return 1;
+        }
+        /* The child inherits installed descriptors, not deferred expansions. */
+        prepared.redirs = NULL;
+        prepared.redir_count = prepared.redir_cap = 0u;
+        prepared.substitution_status = saved.substitution_status;
+        context.command = &prepared;
+    }
+    if (!ash_expand_command_assignments(shell, command, &prepared.substitution_status, &context.assignment_values)) {
+        if (prepare_redirections) {
+            (void)ash_redirection_transaction_rollback(shell, &saved);
+        }
+        return 1;
+    }
+    int status = ash_run_foreground_child(shell, job_kind, process_role, ash_command_child_main, &context, prepare_redirections ? &saved : NULL);
+    ash_assignment_values_destroy(context.assignment_values, command->assignment_count);
+    return status;
+}
+
+struct ash_commandless_child_context {
+    struct ash_shell* shell;
+    const struct ash_command* command;
+};
+
+static int ash_commandless_child_main(void* user_data) {
+    struct ash_commandless_child_context* context = user_data;
+    ash_shell_context_detach_after_fork(context->shell);
+    struct ash_redirection_transaction saved;
+    ash_redirection_transaction_init(&saved);
+    if (ash_redirection_transaction_apply(context->shell, context->command, &saved) != 0) {
+        return ash_finish_execution(context->shell, 1);
+    }
+    int status = saved.substitution_status;
+    if (ash_redirection_transaction_commit(context->shell, &saved) != 0) {
+        status = 1;
+    }
+    return ash_finish_execution(context->shell, status);
 }
 
 static int ash_execute_command(
@@ -1413,24 +1611,19 @@ static int ash_execute_command(
     const struct ash_command* command
 ) {
     if (command->word_count == 0u) {
-        if (ash_apply_command_assignments_shell(shell, command, false) != 0) {
+        struct ash_command prepared = *command;
+        if (ash_apply_command_assignments_shell(shell, command, false, &prepared.substitution_status) != 0) {
             return 1;
         }
         if (command->redir_count == 0u) {
-            return command->substitution_status;
+            return prepared.substitution_status;
         }
 
-        struct ash_redirection_transaction saved;
-        ash_redirection_transaction_init(&saved);
-        if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
-            return 1;
-        }
-        int status = ash_redirection_transaction_rollback(shell, &saved);
-        return status != 0 ? status : command->substitution_status;
+        struct ash_commandless_child_context context = {.shell = shell, .command = &prepared};
+        return ash_run_foreground_child(shell, ASH_JOB_FOREGROUND_COMMAND, ASH_PROCESS_SUBSHELL, ash_commandless_child_main, &context, NULL);
     }
 
-    struct ash_command_resolution resolution =
-        ash_command_resolve(shell, command->words[0]);
+    struct ash_command_resolution resolution = ash_command_resolve(shell, command->words[0]);
     if (!ash_command_resolution_valid(&resolution)) {
         ash_exec_error(shell, command->words[0], EINVAL);
         return 126;
@@ -1559,10 +1752,17 @@ static bool ash_command_substitute(
     while (true) {
         ssize_t count = read(pipe_fds[0], chunk, sizeof(chunk));
         if (count > 0) {
+            size_t text_length = 0u;
+            /* SC-unspecified NUL output is discarded before string expansion. */
+            for (size_t i = 0u; i < (size_t)count; i++) {
+                if (chunk[i] != '\0') {
+                    chunk[text_length++] = chunk[i];
+                }
+            }
             if (!bx_text_buffer_append_span(
                     &captured,
                     chunk,
-                    (size_t)count
+                    text_length
                 )) {
                 ash_diag_oom(shell);
                 read_ok = false;
@@ -1613,7 +1813,6 @@ static bool ash_command_substitute(
 
 enum ash_command_build_result {
     ASH_COMMAND_BUILD_OK = 0,
-    ASH_COMMAND_BUILD_COMMAND_ERROR,
     ASH_COMMAND_BUILD_SHELL_ERROR,
 };
 
@@ -1625,9 +1824,10 @@ static enum ash_command_build_result ash_ast_add_redirection(
     int fd;
     switch (redirection->prefix.kind) {
         case ASH_REDIRECTION_PREFIX_DEFAULT:
-            fd = (redirection->operator == ASH_TOKEN_LESS ||
-                  redirection->operator == ASH_TOKEN_LESS_AND ||
-                  redirection->operator == ASH_TOKEN_LESS_GREAT) ? 0 : 1;
+            fd = (redirection->operator == ASH_TOKEN_LESS || redirection->operator == ASH_TOKEN_LESS_AND || redirection->operator == ASH_TOKEN_LESS_GREAT || redirection->operator == ASH_TOKEN_DLESS ||
+                  redirection->operator == ASH_TOKEN_DLESS_DASH)
+                     ? 0
+                     : 1;
             break;
         case ASH_REDIRECTION_PREFIX_NUMBER:
             if (!ash_redirection_parse_fd(
@@ -1653,6 +1853,29 @@ static enum ash_command_build_result ash_ast_add_redirection(
     enum ash_redir_kind kind;
     bool redirect_stderr = false;
     switch (redirection->operator) {
+        case ASH_TOKEN_DLESS:
+        case ASH_TOKEN_DLESS_DASH: {
+            if (redirection->here_document == NULL || redirection->here_document->state != ASH_HERE_DOCUMENT_COMPLETE) {
+                ash_diag(shell, "incomplete here-document");
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
+            }
+            if (redirection->here_document->body == NULL && redirection->here_document->body_length != 0u) {
+                ash_diag(shell, "invalid here-document body");
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
+            }
+            if (!ash_command_push_redir(shell, command, fd, ASH_REDIR_HERE_DOCUMENT, redirection->here_document->body != NULL ? redirection->here_document->body : "",
+                                        redirection->here_document->body_length)) {
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
+            }
+            command->redirs[command->redir_count - 1u].expand_here_document = !redirection->here_document->delimiter_quoted;
+            command->redirs[command->redir_count - 1u].strip_here_document_tabs = redirection->here_document->strip_tabs;
+            command->redirs[command->redir_count - 1u].body_location = redirection->here_document->body_location;
+            if (redirection->here_document->delimiter_quoted && redirection->here_document->strip_tabs) {
+                struct ash_redir* lowered = &command->redirs[command->redir_count - 1u];
+                lowered->target_length = ash_here_document_normalize_span(lowered->target, lowered->target_length, true, true, true);
+            }
+            return ASH_COMMAND_BUILD_OK;
+        }
         case ASH_TOKEN_LESS:
             kind = ASH_REDIR_IN;
             break;
@@ -1689,27 +1912,10 @@ static enum ash_command_build_result ash_ast_add_redirection(
             return ASH_COMMAND_BUILD_SHELL_ERROR;
     }
 
-    char* target = NULL;
-    enum ash_redirection_expansion_result expansion =
-        ash_expand_redirection(
-            shell,
-            &redirection->target.syntax,
-            &target,
-            &command->substitution_status
-        );
-    if (expansion == ASH_REDIRECTION_EXPANSION_AMBIGUOUS) {
-        return ASH_COMMAND_BUILD_COMMAND_ERROR;
+    bool added = ash_command_push_redir(shell, command, fd, kind, "", 0u);
+    if (added) {
+        command->redirs[command->redir_count - 1u].target_word = &redirection->target.syntax;
     }
-    if (expansion != ASH_REDIRECTION_EXPANSION_OK) {
-        return ASH_COMMAND_BUILD_SHELL_ERROR;
-    }
-    bool added = ash_command_push_redir(
-        shell,
-        command,
-        fd,
-        kind,
-        target
-    );
     if (added && redirect_stderr) {
         /*
          * Bash defines &> and &>> as an ordered stdout redirection followed
@@ -1721,19 +1927,15 @@ static enum ash_command_build_result ash_ast_add_redirection(
             command,
             2,
             ASH_REDIR_DUP,
-            "1"
+            "1",
+            1u
         );
     }
-    free(target);
     return added ?
         ASH_COMMAND_BUILD_OK : ASH_COMMAND_BUILD_SHELL_ERROR;
 }
 
-static enum ash_command_build_result ash_ast_simple_to_command(
-    struct ash_shell* shell,
-    const struct ash_ast* node,
-    struct ash_command* command
-) {
+static enum ash_command_build_result ash_ast_simple_to_command(struct ash_shell* shell, const struct ash_ast* node, struct ash_command* command) {
     ash_command_init(command);
     bool declaration_utility = false;
     for (size_t i = 0u; i < node->value.simple.count; i++) {
@@ -1795,17 +1997,11 @@ static enum ash_command_build_result ash_ast_simple_to_command(
         }
 
         if (item->kind == ASH_SIMPLE_ASSIGNMENT) {
-            char* text = NULL;
-            if (!ash_expand(shell, &item->value.word.syntax, ASH_EXPANSION_ASSIGNMENT, &text, &command->substitution_status)) {
-                ash_command_destroy(command);
-                return ASH_COMMAND_BUILD_SHELL_ERROR;
-            }
             bool added = ash_command_push_assignment(
                 shell,
                 command,
-                text
+                &item->value.word.syntax
             );
-            free(text);
             if (!added) {
                 ash_command_destroy(command);
                 return ASH_COMMAND_BUILD_SHELL_ERROR;
@@ -1840,7 +2036,7 @@ ash_ast_trailing_redirections_to_command(
 static int ash_command_build_status(
     enum ash_command_build_result result
 ) {
-    return result == ASH_COMMAND_BUILD_COMMAND_ERROR ? 1 : 2;
+    return result == ASH_COMMAND_BUILD_OK ? 0 : 2;
 }
 
 static int ash_errexit_status(struct ash_shell* shell, int status) {
@@ -1927,22 +2123,11 @@ static int ash_execute_ast_group(
             .shell = shell,
             .node = node,
         };
-        return ash_run_foreground_child(
-            shell,
-            ASH_JOB_FOREGROUND_COMMAND,
-            ASH_PROCESS_SUBSHELL,
-            ash_subshell_child_main,
-            &context
-        );
+        return ash_run_foreground_child(shell, ASH_JOB_FOREGROUND_COMMAND, ASH_PROCESS_SUBSHELL, ash_subshell_child_main, &context, NULL);
     }
 
     struct ash_command redirections;
-    enum ash_command_build_result build =
-        ash_ast_trailing_redirections_to_command(
-            shell,
-            node,
-            &redirections
-        );
+    enum ash_command_build_result build = ash_ast_trailing_redirections_to_command(shell, node, &redirections);
     if (build != ASH_COMMAND_BUILD_OK) {
         return ash_errexit_status(shell, ash_command_build_status(build));
     }
@@ -2339,20 +2524,14 @@ static int ash_execute_ast_for(
         }
     }
     else {
-        const struct ash_positional_frame* positionals =
-            ash_scope_positionals(shell);
-        size_t positional_count = positionals != NULL ?
-            positionals->count : 0u;
-        for (size_t i = 0u;
-             i < positional_count && !shell->should_exit &&
-                 !ash_execution_suppressed(shell);
-             i++) {
-            if (!ash_var_set(
-                    shell,
-                    node->value.for_loop.name,
-                    positionals->values[i],
-                    false
-                )) {
+        struct ash_positional_frame positionals;
+        if (!ash_positional_frame_copy(&positionals, ash_scope_positionals(shell))) {
+            ash_diag_oom(shell);
+            ash_control_leave_loop(shell);
+            return 2;
+        }
+        for (size_t i = 0u; i < positionals.count && !shell->should_exit && !ash_execution_suppressed(shell); i++) {
+            if (!ash_var_set(shell, node->value.for_loop.name, positionals.values[i], false)) {
                 status = 2;
                 break;
             }
@@ -2365,6 +2544,7 @@ static int ash_execute_ast_for(
                 }
             }
         }
+        ash_positional_frame_destroy(&positionals);
     }
     ash_control_leave_loop(shell);
     return status;
@@ -2716,6 +2896,176 @@ static int ash_report_invocation_error(
     return 2;
 }
 
+static int ash_run_invocation(const struct ash_invocation* invocation, const struct ash_privilege_plan* privilege, struct ash_locale_scope* locale) {
+    const char* progname = invocation->progname;
+    struct ash_interactive_state interactive;
+    if (!ash_interactive_state_resolve(
+            invocation->input,
+            invocation->force_interactive,
+            ash_terminal_fd_attached(STDIN_FILENO),
+            ash_terminal_fd_attached(STDERR_FILENO),
+            &interactive
+        )) {
+        fprintf(stderr, "%s: invalid interactive startup state\n", progname);
+        return 2;
+    }
+    uint32_t policy_flags = 0u;
+    if (ash_interactive_state_enabled(&interactive)) {
+        policy_flags |= ASH_SHELL_POLICY_INTERACTIVE;
+    }
+    if (invocation->login_shell) {
+        policy_flags |= ASH_SHELL_POLICY_LOGIN;
+    }
+    if (invocation->standalone_applets) {
+        policy_flags |= ASH_SHELL_POLICY_STANDALONE_APPLETS;
+    }
+    if (privilege->privileged) {
+        policy_flags |= ASH_SHELL_POLICY_PRIVILEGED;
+    }
+    if (privilege->suppress_startup) {
+        policy_flags |= ASH_SHELL_POLICY_STARTUP_SUPPRESSED;
+    }
+    struct ash_shell_policy policy;
+    if (!ash_shell_policy_for_invocation(
+            progname,
+            policy_flags,
+            &policy
+        )) {
+        fprintf(stderr, "%s: unsupported shell invocation\n", progname);
+        return 2;
+    }
+
+    int self_executable_fd = -1;
+    if (invocation->standalone_applets) {
+        self_executable_fd = bx_self_exec_fd_dup();
+        if (self_executable_fd < 0) {
+            fprintf(
+                stderr,
+                "%s: standalone applets unavailable: %s\n",
+                progname,
+                strerror(errno != 0 ? errno : ENOENT)
+            );
+            return 2;
+        }
+    }
+
+    struct ash_shell shell;
+    const struct ash_shell_context_config context_config = {
+        .progname = progname,
+        .argv0 = invocation->argv0,
+        .positional_values = invocation->positional_values,
+        .positional_count = invocation->positional_count,
+        .options = invocation->options,
+        .shopt = invocation->shopt,
+        .policy = policy,
+        .interactive = interactive,
+        .take_self_executable_fd = invocation->standalone_applets,
+        .self_executable_fd = self_executable_fd,
+        .shell_pid = getpid(),
+        .command_substitution = ash_command_substitute,
+    };
+    if (!ash_shell_context_init(&shell, &context_config)) {
+        if (self_executable_fd >= 0) {
+            close(self_executable_fd);
+        }
+        fprintf(stderr, "%s: invalid shell context configuration\n", progname);
+        return 2;
+    }
+
+    int signal_error = ash_traps_enter_signals(&shell);
+    if (signal_error != 0) {
+        ash_exec_error(&shell, "signal startup", signal_error);
+        ash_shell_context_release_owned(&shell);
+        return 1;
+    }
+    if (!ash_import_environment(&shell)) {
+        ash_shell_context_release_owned(&shell);
+        return 1;
+    }
+    shell.locale_scope = locale;
+    if (ash_shell_policy_has(
+            &shell.policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        ) &&
+        !ash_var_exists(&shell, "PS1")) {
+        if (!ash_var_set(
+                &shell,
+                "PS1",
+                ash_input_default_prompt(),
+                false
+            )) {
+            ash_shell_context_release_owned(&shell);
+            return 1;
+        }
+    }
+
+    enum ash_startup_outcome startup = ash_startup_execute(
+        &shell,
+        &invocation->startup
+    );
+    if (startup == ASH_STARTUP_FATAL) {
+        int status = ash_finish_execution(&shell, 2);
+        ash_shell_context_release_owned(&shell);
+        return status;
+    }
+
+    int status = 0;
+    if (startup == ASH_STARTUP_CONTINUE &&
+        invocation->input == ASH_STARTUP_COMMAND_STRING) {
+        status = ash_input_execute_string(
+            &shell,
+            ASH_INPUT_COMMAND_STRING,
+            "-c",
+            invocation->command_string,
+            strlen(invocation->command_string)
+        );
+    }
+    else if (startup == ASH_STARTUP_CONTINUE &&
+             invocation->input == ASH_STARTUP_SCRIPT_FILE) {
+        FILE* script = fopen(invocation->script_path, "r");
+        if (script == NULL) {
+            ash_exec_error(&shell, invocation->script_path, errno);
+            status = ash_finish_execution(&shell, 1);
+            ash_shell_context_release_owned(&shell);
+            return status;
+        }
+
+        bool prompt = ash_interactive_state_should_prompt(
+            &shell.interactive,
+            ash_terminal_fd_attached(fileno(script))
+        );
+        status = ash_input_execute_stream(
+            &shell,
+            ASH_INPUT_SCRIPT_FILE,
+            invocation->script_path,
+            script,
+            ASH_INPUT_TAKE_STREAM,
+            prompt
+        );
+    }
+    else if (startup == ASH_STARTUP_CONTINUE) {
+        bool prompt = ash_interactive_state_should_prompt(
+            &shell.interactive,
+            false
+        );
+        status = ash_input_execute_stream(
+            &shell,
+            ash_interactive_state_enabled(&shell.interactive) ?
+                ASH_INPUT_INTERACTIVE :
+                ASH_INPUT_STDIN,
+            "<stdin>",
+            stdin,
+            ASH_INPUT_BORROW_STREAM,
+            prompt
+        );
+    }
+
+    status = ash_finish_execution(&shell, status);
+
+    ash_shell_context_release_owned(&shell);
+    return status;
+}
+
 int bx_ash_main(int argc, char** argv) {
     struct ash_invocation invocation;
     struct ash_invocation_error invocation_error;
@@ -2754,169 +3104,17 @@ int bx_ash_main(int argc, char** argv) {
         return 0;
     }
 
-    struct ash_interactive_state interactive;
-    if (!ash_interactive_state_resolve(
-            invocation.input,
-            invocation.force_interactive,
-            ash_terminal_fd_attached(STDIN_FILENO),
-            ash_terminal_fd_attached(STDERR_FILENO),
-            &interactive
-        )) {
-        fprintf(stderr, "%s: invalid interactive startup state\n", progname);
+    struct ash_locale_scope locale = {0};
+    int error = ash_locale_scope_enter(&locale);
+    if (error != 0) {
+        fprintf(stderr, "%s: locale startup: %s\n", progname, strerror(error));
         return 2;
     }
-    uint32_t policy_flags = 0u;
-    if (ash_interactive_state_enabled(&interactive)) {
-        policy_flags |= ASH_SHELL_POLICY_INTERACTIVE;
-    }
-    if (invocation.login_shell) {
-        policy_flags |= ASH_SHELL_POLICY_LOGIN;
-    }
-    if (invocation.standalone_applets) {
-        policy_flags |= ASH_SHELL_POLICY_STANDALONE_APPLETS;
-    }
-    if (privilege.privileged) {
-        policy_flags |= ASH_SHELL_POLICY_PRIVILEGED;
-    }
-    if (privilege.suppress_startup) {
-        policy_flags |= ASH_SHELL_POLICY_STARTUP_SUPPRESSED;
-    }
-    struct ash_shell_policy policy;
-    if (!ash_shell_policy_for_invocation(
-            progname,
-            policy_flags,
-            &policy
-        )) {
-        fprintf(stderr, "%s: unsupported shell invocation\n", progname);
+    int status = ash_run_invocation(&invocation, &privilege, &locale);
+    error = ash_locale_scope_leave(&locale);
+    if (error != 0) {
+        fprintf(stderr, "%s: locale restoration: %s\n", progname, strerror(error));
         return 2;
     }
-
-    int self_executable_fd = -1;
-    if (invocation.standalone_applets) {
-        self_executable_fd = bx_self_exec_fd_dup();
-        if (self_executable_fd < 0) {
-            fprintf(
-                stderr,
-                "%s: standalone applets unavailable: %s\n",
-                progname,
-                strerror(errno != 0 ? errno : ENOENT)
-            );
-            return 2;
-        }
-    }
-
-    struct ash_shell shell;
-    const struct ash_shell_context_config context_config = {
-        .progname = progname,
-        .argv0 = invocation.argv0,
-        .positional_values = invocation.positional_values,
-        .positional_count = invocation.positional_count,
-        .options = invocation.options,
-        .shopt = invocation.shopt,
-        .policy = policy,
-        .interactive = interactive,
-        .take_self_executable_fd = invocation.standalone_applets,
-        .self_executable_fd = self_executable_fd,
-        .shell_pid = getpid(),
-        .command_substitution = ash_command_substitute,
-    };
-    if (!ash_shell_context_init(&shell, &context_config)) {
-        if (self_executable_fd >= 0) {
-            close(self_executable_fd);
-        }
-        fprintf(stderr, "%s: invalid shell context configuration\n", progname);
-        return 2;
-    }
-
-    int signal_error = ash_traps_enter_signals(&shell);
-    if (signal_error != 0) {
-        ash_exec_error(&shell, "signal startup", signal_error);
-        ash_shell_context_release_owned(&shell);
-        return 1;
-    }
-    if (!ash_import_environment(&shell)) {
-        ash_shell_context_release_owned(&shell);
-        return 1;
-    }
-    if (ash_shell_policy_has(
-            &shell.policy,
-            ASH_SHELL_POLICY_INTERACTIVE
-        ) &&
-        !ash_var_exists(&shell, "PS1")) {
-        if (!ash_var_set(
-                &shell,
-                "PS1",
-                ash_input_default_prompt(),
-                false
-            )) {
-            ash_shell_context_release_owned(&shell);
-            return 1;
-        }
-    }
-
-    enum ash_startup_outcome startup = ash_startup_execute(
-        &shell,
-        &invocation.startup
-    );
-    if (startup == ASH_STARTUP_FATAL) {
-        int status = ash_finish_execution(&shell, 2);
-        ash_shell_context_release_owned(&shell);
-        return status;
-    }
-
-    int status = 0;
-    if (startup == ASH_STARTUP_CONTINUE &&
-        invocation.input == ASH_STARTUP_COMMAND_STRING) {
-        status = ash_input_execute_string(
-            &shell,
-            ASH_INPUT_COMMAND_STRING,
-            "-c",
-            invocation.command_string,
-            strlen(invocation.command_string)
-        );
-    }
-    else if (startup == ASH_STARTUP_CONTINUE &&
-             invocation.input == ASH_STARTUP_SCRIPT_FILE) {
-        FILE* script = fopen(invocation.script_path, "r");
-        if (script == NULL) {
-            ash_exec_error(&shell, invocation.script_path, errno);
-            status = ash_finish_execution(&shell, 1);
-            ash_shell_context_release_owned(&shell);
-            return status;
-        }
-
-        bool prompt = ash_interactive_state_should_prompt(
-            &shell.interactive,
-            ash_terminal_fd_attached(fileno(script))
-        );
-        status = ash_input_execute_stream(
-            &shell,
-            ASH_INPUT_SCRIPT_FILE,
-            invocation.script_path,
-            script,
-            ASH_INPUT_TAKE_STREAM,
-            prompt
-        );
-    }
-    else if (startup == ASH_STARTUP_CONTINUE) {
-        bool prompt = ash_interactive_state_should_prompt(
-            &shell.interactive,
-            false
-        );
-        status = ash_input_execute_stream(
-            &shell,
-            ash_interactive_state_enabled(&shell.interactive) ?
-                ASH_INPUT_INTERACTIVE :
-                ASH_INPUT_STDIN,
-            "<stdin>",
-            stdin,
-            ASH_INPUT_BORROW_STREAM,
-            prompt
-        );
-    }
-
-    status = ash_finish_execution(&shell, status);
-
-    ash_shell_context_release_owned(&shell);
     return status;
 }

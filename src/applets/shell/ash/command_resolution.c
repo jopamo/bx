@@ -21,6 +21,7 @@ static const struct ash_builtin_definition ash_builtins[] = {
     {"exec", ASH_BUILTIN_EXEC},
     {"exit", ASH_BUILTIN_EXIT},
     {"export", ASH_BUILTIN_EXPORT},
+    {"readonly", ASH_BUILTIN_READONLY},
     {"return", ASH_BUILTIN_RETURN},
     {"set", ASH_BUILTIN_SET},
     {"shopt", ASH_BUILTIN_SHOPT},
@@ -44,6 +45,7 @@ static enum ash_command_resolution_kind ash_builtin_resolution_kind(
         case ASH_BUILTIN_EVAL:
         case ASH_BUILTIN_EXIT:
         case ASH_BUILTIN_EXPORT:
+        case ASH_BUILTIN_READONLY:
         case ASH_BUILTIN_UNSET:
         case ASH_BUILTIN_EXEC:
         case ASH_BUILTIN_SET:
@@ -294,9 +296,9 @@ bool ash_command_resolution_is_builtin(
 
 bool ash_command_is_declaration_utility(const struct ash_shell* shell, const char* name) {
     const struct ash_builtin_definition* definition = ash_builtin_find(name);
-    if (definition == NULL || definition->builtin != ASH_BUILTIN_EXPORT) {
+    if (definition == NULL || (definition->builtin != ASH_BUILTIN_EXPORT && definition->builtin != ASH_BUILTIN_READONLY)) {
         return false;
     }
     struct ash_command_resolution resolution = ash_command_resolve(shell, name);
-    return ash_command_resolution_is_builtin(&resolution) && resolution.target.builtin == ASH_BUILTIN_EXPORT;
+    return ash_command_resolution_is_builtin(&resolution) && resolution.target.builtin == definition->builtin;
 }

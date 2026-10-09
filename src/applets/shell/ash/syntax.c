@@ -91,6 +91,7 @@ void ash_word_destroy(struct ash_word* word) {
     }
     for (size_t i = 0u; i < word->count; i++) {
         free(word->parts[i].text);
+        free(word->parts[i].raw_source);
     }
     free(word->parts);
     *word = (struct ash_word){0};
@@ -110,6 +111,24 @@ int ash_word_clone(struct ash_word* destination, const struct ash_word* source) 
             ) != 0) {
             ash_word_destroy(destination);
             return -1;
+        }
+        destination->parts[i].here_document_source = part->here_document_source;
+        destination->parts[i].here_document_strip_tabs = part->here_document_strip_tabs;
+        if (part->raw_source != NULL) {
+            if (part->raw_length == SIZE_MAX) {
+                errno = ENOMEM;
+                ash_word_destroy(destination);
+                return -1;
+            }
+            struct ash_word_part* copy = &destination->parts[i];
+            copy->raw_source = malloc(part->raw_length + 1u);
+            if (copy->raw_source == NULL) {
+                ash_word_destroy(destination);
+                return -1;
+            }
+            memcpy(copy->raw_source, part->raw_source, part->raw_length);
+            copy->raw_source[part->raw_length] = '\0';
+            copy->raw_length = part->raw_length;
         }
     }
     return 0;

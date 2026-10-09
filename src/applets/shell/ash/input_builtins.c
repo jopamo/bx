@@ -170,8 +170,11 @@ int ash_input_builtin_source(
     bool override_positionals = command->word_count > 2u;
     if (override_positionals) {
         saved_positionals = *positionals;
-        positionals->values = command->words + 2u;
-        positionals->count = command->word_count - 2u;
+        *positionals = (struct ash_positional_frame){
+            .argv0 = saved_positionals.argv0,
+            .values = command->words + 2u,
+            .count = command->word_count - 2u,
+        };
     }
 
     int status = ash_input_execute_stream(
@@ -183,6 +186,7 @@ int ash_input_builtin_source(
         false
     );
     if (override_positionals) {
+        ash_positional_frame_destroy(positionals);
         *positionals = saved_positionals;
     }
     free(searched_path);

@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -58,13 +60,19 @@ bool ash_scope_stack_invariants(const struct ash_shell* shell) {
         if (scope->has_positionals) {
             if (scope->positionals.argv0 == NULL ||
                 (scope->positionals.count != 0u &&
-                 scope->positionals.values == NULL)) {
+                 scope->positionals.values == NULL) ||
+                (scope->positionals.owned_values == NULL &&
+                 scope->positionals.owned_count != 0u) ||
+                (scope->positionals.owned_values != NULL &&
+                 scope->positionals.count > scope->positionals.owned_count)) {
                 return false;
             }
         }
         else if (scope->positionals.argv0 != NULL ||
             scope->positionals.values != NULL ||
-            scope->positionals.count != 0u) {
+            scope->positionals.count != 0u ||
+            scope->positionals.owned_values != NULL ||
+            scope->positionals.owned_count != 0u) {
             return false;
         }
     }
@@ -167,6 +175,7 @@ enum ash_scope_pop_result ash_scope_pop(
         }
     }
     ash_var_list_destroy(&removed->variables);
+    ash_positional_frame_destroy(&removed->positionals);
     free(removed);
     assert(ash_scope_stack_invariants(shell));
     return published ? ASH_SCOPE_POP_OK :
@@ -184,6 +193,7 @@ void ash_scope_stack_destroy(struct ash_shell* shell) {
         struct ash_scope* scope = shell->scopes;
         shell->scopes = scope->parent;
         ash_var_list_destroy(&scope->variables);
+        ash_positional_frame_destroy(&scope->positionals);
         free(scope);
     }
     assert(shell->scopes == NULL);
@@ -297,6 +307,73 @@ struct ash_positional_frame* ash_scope_positionals_mut(
         }
     }
     return NULL;
+}
+
+void ash_positional_frame_destroy(struct ash_positional_frame* frame) {
+    for (size_t i = 0u; i < frame->owned_count; i++) {
+        free(frame->owned_values[i]);
+    }
+    free(frame->owned_values);
+    *frame = (struct ash_positional_frame){0};
+}
+
+bool ash_positional_frame_copy(struct ash_positional_frame* output, const struct ash_positional_frame* source) {
+    if (output == NULL || source == NULL || output == source) {
+        errno = EINVAL;
+        return false;
+    }
+    *output = (struct ash_positional_frame){0};
+    if (source->argv0 == NULL || (source->count != 0u && source->values == NULL)) {
+        errno = EINVAL;
+        return false;
+    }
+    if (source->count > SIZE_MAX / sizeof(*output->owned_values)) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    output->argv0 = source->argv0;
+    if (source->count == 0u) {
+        return true;
+    }
+    output->owned_values = malloc(source->count * sizeof(*output->owned_values));
+    if (output->owned_values == NULL) {
+        *output = (struct ash_positional_frame){0};
+        return false;
+    }
+    output->values = output->owned_values;
+    for (size_t i = 0u; i < source->count; i++) {
+        if (source->values[i] == NULL) {
+            errno = EINVAL;
+            ash_positional_frame_destroy(output);
+            return false;
+        }
+        char* value = strdup(source->values[i]);
+        if (value == NULL) {
+            ash_positional_frame_destroy(output);
+            return false;
+        }
+        output->owned_values[output->owned_count++] = value;
+    }
+    output->count = source->count;
+    return true;
+}
+
+bool ash_scope_set_positionals(struct ash_shell* shell, char** values, size_t count) {
+    struct ash_positional_frame* active = ash_scope_positionals_mut(shell);
+    if (active == NULL) {
+        errno = EINVAL;
+        return false;
+    }
+    const struct ash_positional_frame source = {.argv0 = active->argv0, .values = values, .count = count};
+    struct ash_positional_frame replacement;
+    if (!ash_positional_frame_copy(&replacement, &source)) {
+        return false;
+    }
+    struct ash_positional_frame previous = *active;
+    *active = replacement;
+    ash_positional_frame_destroy(&previous);
+    assert(ash_scope_stack_invariants(shell));
+    return true;
 }
 
 static const struct ash_var* ash_scope_find_in_frame(

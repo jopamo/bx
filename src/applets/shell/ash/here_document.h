@@ -6,6 +6,17 @@
 
 struct bx_text_buffer;
 
+struct ash_here_document_read_state {
+    bool line_start;
+    bool escaped;
+};
+
+void ash_here_document_read_advance(struct ash_here_document_read_state* state, char byte, bool quoted);
+
+/* Normalize owned bytes in place; retain a trailing NUL outside the length. */
+size_t ash_here_document_normalize_span(char* body, size_t length, bool quoted, bool strip_tabs, bool line_start);
+bool ash_here_document_needs_normalization(const char* body, size_t length, bool quoted, bool strip_tabs, bool line_start);
+
 enum ash_here_document_line_result {
     ASH_HERE_DOCUMENT_LINE_ERROR,
     ASH_HERE_DOCUMENT_LINE_CONTINUED,

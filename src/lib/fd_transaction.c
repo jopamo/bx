@@ -199,11 +199,13 @@ static int bx_fd_transaction_dup_private(
             return -1;
         }
 
-        struct bx_fd_transaction_ref* collision =
-            bx_fd_transaction_find_ref(transaction, duplicate);
+        bool collision = false;
+        for (const struct bx_fd_transaction* frame = transaction; frame != NULL; frame = frame->parent) {
+            collision |= bx_fd_transaction_find_ref(frame, duplicate) != NULL;
+        }
         if (duplicate == INT_MAX) {
             transaction->next_backup_fd = INT_MAX;
-            if (collision == NULL) {
+            if (!collision) {
                 return duplicate;
             }
             close(duplicate);
@@ -211,7 +213,7 @@ static int bx_fd_transaction_dup_private(
             return -1;
         }
         transaction->next_backup_fd = duplicate + 1;
-        if (collision == NULL) {
+        if (!collision) {
             return duplicate;
         }
 
@@ -387,6 +389,63 @@ int bx_fd_transaction_begin(
     *transaction = candidate;
     stack->active = transaction;
     assert(bx_fd_transaction_stack_invariants(stack));
+    return 0;
+}
+
+int bx_fd_transaction_add_reference(struct bx_fd_transaction* transaction, int fd) {
+    if (transaction == NULL || transaction->stack == NULL || transaction->stack->active != transaction || fd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (bx_fd_transaction_find_ref(transaction, fd) != NULL) {
+        return 0;
+    }
+    if (transaction->reference_count >= SIZE_MAX / sizeof(*transaction->references)) {
+        errno = ENOMEM;
+        return -1;
+    }
+    size_t count = transaction->reference_count + 1u;
+    struct bx_fd_transaction_ref* references = malloc(count * sizeof(*references));
+    if (references == NULL) {
+        return -1;
+    }
+    size_t source = 0u;
+    for (size_t i = 0u; i < count; i++) {
+        if (source < transaction->reference_count && transaction->references[source].fd < fd) {
+            references[i] = transaction->references[source++];
+        }
+        else {
+            references[i] = (struct bx_fd_transaction_ref){.fd = fd};
+            for (size_t j = i + 1u; j < count; j++) {
+                references[j] = transaction->references[source++];
+            }
+            break;
+        }
+    }
+    struct bx_fd_transaction candidate = *transaction;
+    candidate.references = references;
+    candidate.reference_count = count;
+    for (size_t i = 0u; i < transaction->stack->entry_count; i++) {
+        struct bx_fd_transaction_entry* entry = &transaction->stack->entries[i];
+        if (entry->saved_fd != fd) {
+            continue;
+        }
+        int duplicate = bx_fd_transaction_dup_private(fd, &candidate);
+        if (duplicate < 0) {
+            int error = errno;
+            free(references);
+            errno = error;
+            return -1;
+        }
+        close(fd);
+        entry->saved_fd = duplicate;
+        break;
+    }
+    free(transaction->references);
+    transaction->references = references;
+    transaction->reference_count = count;
+    transaction->next_backup_fd = candidate.next_backup_fd;
+    assert(bx_fd_transaction_stack_invariants(transaction->stack));
     return 0;
 }
 

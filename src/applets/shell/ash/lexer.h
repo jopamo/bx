@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "applets/shell/ash/syntax.h"
+#include "applets/shell/ash/here_document.h"
 
 enum ash_token_kind {
     ASH_TOKEN_EOF = 0,
@@ -84,6 +85,9 @@ struct ash_lexer {
     size_t line;
     size_t column;
     struct ash_lexer_options options;
+    bool here_document_source;
+    bool here_document_strip_tabs;
+    struct ash_here_document_read_state here_document_read;
     bool ended_with_line_continuation;
     bool discarded_comment;
     bool ended_in_comment;
@@ -135,13 +139,28 @@ enum ash_lexer_fragment_result ash_lexer_classify_fragment_with_options(
 );
 enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* token);
 /*
- * Initialize an owned word from an expansion-only, double-quoted string.
+ * Initialize an owned word from an expansion-only string.
  * Quotes and whitespace are literal; substitutions and quoted escapes retain
- * their structure. Destroy the word on success or failure.
+ * their structure. quote selects the enclosing expansion context (NONE,
+ * DOUBLE or LOCALE), not literal string parsing. Destroy the word on success
+ * or failure.
  */
-enum ash_lexer_result ash_lexer_scan_expansion_string(
+enum ash_lexer_result ash_lexer_scan_expansion_string(struct ash_lexer* lexer, struct ash_word* word, enum ash_quote_kind quote);
+enum ash_lexer_result ash_lexer_scan_here_document(
     struct ash_lexer* lexer,
-    struct ash_word* word
+    struct ash_word* word,
+    bool strip_tabs
+);
+/*
+ * Scan a bounded parameter-operator operand, preserving internal quotes.
+ * Removal ignores enclosing quotes; other operators pass their inherited
+ * double-quote context. Reject unescaped inner double quotes in that context,
+ * for which SC 2.2.3 leaves behavior unspecified.
+ */
+enum ash_lexer_result ash_lexer_scan_parameter_operand(
+    struct ash_lexer* lexer,
+    struct ash_word* word,
+    bool double_quoted
 );
 void ash_token_destroy(struct ash_token* token);
 const char* ash_token_kind_name(enum ash_token_kind kind);
