@@ -61,7 +61,6 @@ static int remmapseq(char *, int);
 
 char Termcap[TERMCAP_BUFSIZE + 8];	/* new termcap +8:"TERMCAP=" */
 static int Termcaplen;
-static int tcLineLen;
 char Term[MAXSTR + 5];		/* +5: "TERM=" */
 char screenterm[MAXTERMLEN + 1];	/* new $TERM, usually "screen" */
 
@@ -649,7 +648,6 @@ static void AddCap(char *s)
 	if (Termcaplen + n < TERMCAP_BUFSIZE - 1) {
 		strcpy(Termcap + Termcaplen, s);
 		Termcaplen += n;
-		tcLineLen += n;
 	}
 }
 
@@ -702,7 +700,6 @@ char *MakeTermcap(bool aflag)
 	}
 	while (0);		/* Goto free programming... */
 
-	tcLineLen = 100;	/* Force NL */
 	if (strlen(Term) > TERMCAP_BUFSIZE - 40)
 		strcpy(Term, "too_long");
 	sprintf(Termcap, "TERMCAP=SC|%s|VT 100/ANSI X3.64 virtual terminal:", Term + 5);
@@ -714,7 +711,6 @@ char *MakeTermcap(bool aflag)
 			AddCap(cp);
 			*p = ch;
 		}
-		tcLineLen = 100;	/* Force NL */
 	}
 	if (Termcaplen + strlen(TermcapConst) < TERMCAP_BUFSIZE) {
 		strcpy(Termcap + Termcaplen, TermcapConst);
