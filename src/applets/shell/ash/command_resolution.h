@@ -56,6 +56,8 @@ enum ash_command_resolution_kind {
 struct ash_command_resolution {
     enum ash_command_resolution_kind kind;
     const char* command_name;
+    /* Applies only to PATH_SEARCH; never changes the command environment. */
+    bool default_path;
     union {
         enum ash_builtin_kind builtin;
         const struct ash_function* function;
@@ -87,6 +89,8 @@ struct ash_command_prefix {
     size_t index;
     enum ash_command_prefix_state state;
     bool via_command;
+    bool default_path;
+    size_t option_error_index;
 };
 
 void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_prefix* prefix, const char* name, size_t index);

@@ -209,7 +209,7 @@ int bx_child_exec_file_argv(const char *executable, char *const *argv) {
 
     const char *path = getenv("PATH");
     if (!path)
-        path = "/bin:/usr/bin";
+        path = BX_CHILD_DEFAULT_PATH;
     return bx_child_exec_file_argv_search(
         executable, argv, environ, path,
         BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false);
@@ -232,7 +232,7 @@ int bx_child_exec_file_argv_envp(const char *executable,
     if (strchr(executable, '/'))
         return bx_child_exec_file_argv_envp_exact(executable, argv, envp);
     if (!path)
-        path = "/bin:/usr/bin";
+        path = BX_CHILD_DEFAULT_PATH;
     return bx_child_exec_file_argv_search(
         executable, argv, envp, path,
         BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false);

@@ -1227,10 +1227,10 @@ static int ash_run_input_builtin(struct ash_shell* shell, enum ash_builtin_kind 
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command) {
     switch (builtin) {
         case ASH_BUILTIN_COMMAND:
-            if (command->word_count == 1u || (command->word_count == 2u && strcmp(command->words[1], "--") == 0)) {
+            if (command->word_count == 1u) {
                 return 0;
             }
-            ash_diag(shell, "command: unsupported option '%s'", command->words[1]);
+            ash_diag(shell, "command: unsupported option '%s'", command->words[command->word_count - 1u]);
             return 2;
         case ASH_BUILTIN_ALIAS:
             return ash_alias_builtin(shell, command);
@@ -1641,6 +1641,9 @@ static int ash_execute_command(
     prepared.words += prefix.index;
     prepared.word_count -= prefix.index;
     prepared.regular_builtin_semantics = prefix.via_command;
+    if (ash_command_resolution_is_builtin(&prefix.target) && prefix.target.target.builtin == ASH_BUILTIN_COMMAND) {
+        prepared.word_count = prefix.option_error_index != 0u ? prefix.option_error_index - prefix.index + 1u : 1u;
+    }
     command = &prepared;
     struct ash_command_resolution resolution = prefix.target;
     if (!ash_command_resolution_valid(&resolution)) {

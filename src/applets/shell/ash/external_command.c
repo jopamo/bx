@@ -7,18 +7,15 @@
 #include "applets/shell/ash/variables.h"
 #include "lib/child_runner.h"
 
-static int ash_external_path_search(
-    struct ash_shell* shell,
-    char** argv,
-    const char* command
-) {
+static int ash_external_path_search(struct ash_shell* shell, char** argv, const char* command, bool default_path) {
     /*
      * Command assignments have already been applied to the child environment,
      * so that value is the effective PATH for this invocation. Fall back to
      * shell state only for an unexported PATH. Initial defaulting belongs to
      * environment import; an explicitly empty PATH remains an empty segment.
+     * command -p overrides only the search path, not the child environment.
      */
-    const char* path = getenv("PATH");
+    const char* path = default_path ? BX_CHILD_DEFAULT_PATH : getenv("PATH");
     if (path == NULL) {
         path = ash_var_get(shell, "PATH");
     }
@@ -99,11 +96,7 @@ int ash_external_command_exec(
 
     switch (resolution->kind) {
         case ASH_COMMAND_PATH_SEARCH:
-            return ash_external_path_search(
-                shell,
-                argv,
-                resolution->command_name
-            );
+            return ash_external_path_search(shell, argv, resolution->command_name, resolution->default_path);
         case ASH_COMMAND_HASHED_EXTERNAL:
         case ASH_COMMAND_EXPLICIT_PATH:
             return ash_external_command_exec_exact(

@@ -12,6 +12,7 @@
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
+#include "lib/child_runner.h"
 #include "lib/path_ops.h"
 
 extern char** environ;
@@ -649,8 +650,7 @@ bool ash_import_environment(struct ash_shell* shell) {
         free(cwd);
     }
 
-    if (!ash_var_exists(shell, "PATH") &&
-        !ash_var_set(shell, "PATH", "/bin:/usr/bin", true)) {
+    if (!ash_var_exists(shell, "PATH") && !ash_var_set(shell, "PATH", BX_CHILD_DEFAULT_PATH, true)) {
         return false;
     }
     return true;
