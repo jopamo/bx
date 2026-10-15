@@ -31,7 +31,6 @@
 #include "applets/shell/ash/invocation.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/locale_state.h"
-#include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/process.h"
 #include "applets/shell/ash/privilege.h"
@@ -2596,31 +2595,15 @@ static int ash_execute_ast_case_body(
             &node->value.case_command.clauses[i];
         bool clause_matched = falling_through;
         for (size_t j = 0u; !falling_through && j < clause->pattern_count; j++) {
-            struct ash_pattern pattern = {0};
-            const struct ash_pattern_options pattern_options = {
-                .purpose = ASH_PATTERN_CASE,
-                .domain = ASH_PATTERN_STRING,
-            };
-            enum ash_pattern_compile_result compile_result =
-                ash_pattern_compile_word(
+            if (!ash_expand_case_pattern(
                     shell,
                     &clause->patterns[j].syntax,
-                    &pattern_options,
-                    &pattern
-                );
-            if (compile_result != ASH_PATTERN_COMPILE_OK) {
+                    subject,
+                    &clause_matched
+                )) {
                 free(subject);
                 return 2;
             }
-            enum ash_pattern_match_result match_result =
-                ash_pattern_match(&pattern, subject);
-            ash_pattern_destroy(&pattern);
-            if (match_result == ASH_PATTERN_MATCH_ERROR ||
-                match_result == ASH_PATTERN_MATCH_UNSUPPORTED) {
-                free(subject);
-                return 2;
-            }
-            clause_matched = match_result == ASH_PATTERN_MATCH;
             if (clause_matched) {
                 break;
             }

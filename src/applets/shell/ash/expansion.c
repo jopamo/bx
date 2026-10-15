@@ -1196,6 +1196,33 @@ bool ash_expand(struct ash_shell* shell, const struct ash_word* word, enum ash_e
     return true;
 }
 
+bool ash_expand_case_pattern(struct ash_shell* shell, const struct ash_word* word, const char* value, bool* matched) {
+    *matched = false;
+    char* expanded = NULL;
+    if (!ash_expand(shell, word, ASH_EXPANSION_PATTERN, &expanded, NULL)) {
+        return false;
+    }
+    const struct ash_pattern_options options = {.purpose = ASH_PATTERN_CASE, .domain = ASH_PATTERN_STRING};
+    struct ash_pattern pattern = {0};
+    enum ash_pattern_compile_result compiled = ash_pattern_compile(expanded, strlen(expanded), &options, &pattern);
+    free(expanded);
+    if (compiled != ASH_PATTERN_COMPILE_OK) {
+        if (compiled == ASH_PATTERN_COMPILE_NO_MEMORY) {
+            return ash_expansion_oom(shell);
+        }
+        ash_diag_expansion(shell, "invalid case pattern");
+        return ash_expansion_infrastructure_failure(shell);
+    }
+    enum ash_pattern_match_result result = ash_pattern_match(&pattern, value);
+    ash_pattern_destroy(&pattern);
+    if (result != ASH_PATTERN_MATCH && result != ASH_PATTERN_NO_MATCH) {
+        ash_diag_expansion(shell, "case pattern matching failed");
+        return ash_expansion_infrastructure_failure(shell);
+    }
+    *matched = result == ASH_PATTERN_MATCH;
+    return true;
+}
+
 bool ash_expand_word(
     struct ash_shell* shell,
     const struct ash_word* word,

@@ -62,6 +62,13 @@ bool ash_expand_word(
     char** output,
     int* substitution_status
 );
+/* Expand and match one case pattern; failures retain no compiled storage. */
+bool ash_expand_case_pattern(
+    struct ash_shell* shell,
+    const struct ash_word* word,
+    const char* value,
+    bool* matched
+);
 /* Initialize an owned byte buffer; destroy it on success or failure. */
 bool ash_expand_here_document(
     struct ash_shell* shell,

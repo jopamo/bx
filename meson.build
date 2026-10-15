@@ -630,7 +630,6 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/lexer.c',
   'src/applets/shell/ash/locale_state.c',
   'src/applets/shell/ash/pattern.c',
-  'src/applets/shell/ash/pattern_expand.c',
   'src/applets/shell/ash/pathname_expansion.c',
   'src/applets/shell/ash/parser.c',
   'src/applets/shell/ash/parser_alias.c',
