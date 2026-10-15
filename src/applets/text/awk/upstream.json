@@ -1,0 +1,574 @@
+{
+  "schema": 1,
+  "status": "candidate source inventory only; no gawk code is compiled into bx",
+  "upstream": {
+    "repository": "https://github.com/1g4-mirror/gawk",
+    "branch": "gawk-5.4-stable",
+    "commit": "a085c51344a0363da1a9cd5b6aa9ad59c21145c7",
+    "package_version": "5.4.1b",
+    "archive_url": "https://codeload.github.com/1g4-mirror/gawk/tar.gz/a085c51344a0363da1a9cd5b6aa9ad59c21145c7",
+    "archive_sha256": "1d71d2d3bfc80d17fb315c91a660a5e0f2b2e028eceaf66495979302e3f556bf",
+    "submodules": []
+  },
+  "scope": "Linux core, bundled support, POSIX adapter, conditional replacements, generated parsers, and configure inputs; not a whole-repository license inventory.",
+  "local_source_patches": [],
+  "licenses": {
+    "gpl3": {
+      "expression": "GPL-3.0-or-later",
+      "evidence": "Per-file GNU awk/GPL headers and COPYING."
+    },
+    "lgpl21": {
+      "expression": "LGPL-2.1-or-later",
+      "evidence": "Per-file bundled library headers; retain these rather than applying the applet license."
+    },
+    "lgpl2": {
+      "expression": "LGPL-2.0-or-later",
+      "evidence": "missing_d/fnmatch.[ch] library-license version 2 headers and missing_d/COPYING.LIB."
+    },
+    "bsd2": {
+      "expression": "BSD-2-Clause",
+      "evidence": "support/minrx.[ch] and support/charset.[ch] two-clause redistribution notices."
+    },
+    "bsd3": {
+      "expression": "BSD-3-Clause",
+      "evidence": "support/random.c three-clause notice and advertising-clause rescission note."
+    },
+    "bison-output": {
+      "expression": "GPL-3.0-or-later AND (GPL-3.0-or-later WITH Bison-exception-2.2)",
+      "evidence": "Generated Bison 3.8.2 skeleton notice/exception plus GPL-3.0-or-later grammar; preserve both notices."
+    },
+    "agpl3": {
+      "expression": "AGPL-3.0-or-later",
+      "evidence": "support/pma.[ch] and support/agpl-3.0.txt. Persistent allocation is excluded from the bx build profile."
+    },
+    "package-notice-only": {
+      "expression": null,
+      "evidence": "No per-file license declaration; package COPYING is present. Record separately and resolve any selected import with its package provenance rather than inventing a file header."
+    }
+  },
+  "build_inputs": {
+    "base_sources": [
+      "array.c",
+      "awk.h",
+      "awkgram.y",
+      "builtin.c",
+      "cint_array.c",
+      "cmd.h",
+      "command.y",
+      "custom.h",
+      "debug.c",
+      "eval.c",
+      "ext.c",
+      "field.c",
+      "floatcomp.c",
+      "floatmagic.h",
+      "gawkapi.c",
+      "gawkapi.h",
+      "gawkmisc.c",
+      "gettext.h",
+      "int_array.c",
+      "interpret.h",
+      "io.c",
+      "main.c",
+      "mpfr.c",
+      "msg.c",
+      "node.c",
+      "nonposix.h",
+      "printf.c",
+      "profile.c",
+      "re.c",
+      "replace.c",
+      "str_array.c",
+      "symbol.c",
+      "version.c"
+    ],
+    "support_sources": [
+      "attribute.h",
+      "cdefs.h",
+      "dfa.c",
+      "dfa.h",
+      "dynarray.h",
+      "flexmember.h",
+      "getopt.c",
+      "getopt.h",
+      "getopt1.c",
+      "getopt_int.h",
+      "idx.h",
+      "intprops.h",
+      "intprops-internal.h",
+      "libc-config.h",
+      "localeinfo.c",
+      "localeinfo.h",
+      "minrx.c",
+      "minrx.h",
+      "random.c",
+      "random.h",
+      "regex.c",
+      "regex.h",
+      "verify.h",
+      "xalloc.h",
+      "malloc/dynarray.h",
+      "malloc/dynarray_at_failure.c",
+      "malloc/dynarray_emplace_enlarge.c",
+      "malloc/dynarray_finalize.c",
+      "malloc/dynarray_resize.c",
+      "malloc/dynarray_resize_clear.c"
+    ],
+    "conditional_sources": {
+      "USE_PERSISTENT_MALLOC": [
+        "support/pma.c",
+        "support/pma.h"
+      ],
+      "posix_adapter": [
+        "posix/gawkmisc.c"
+      ],
+      "replacement_selection": "replace.c includes missing_d sources conditionally from config.h probes"
+    },
+    "generated_parsers": {
+      "awkgram.c": {
+        "source": "awkgram.y",
+        "generator": "GNU Bison 3.8.2",
+        "provenance": "Checked-in upstream output; not regenerated for this inventory."
+      },
+      "command.c": {
+        "source": "command.y",
+        "generator": "GNU Bison 3.8.2",
+        "provenance": "Checked-in upstream debugger parser; candidate dependency, not an exposed bx feature."
+      }
+    },
+    "configuration": "configure generated from configure.ac/aclocal.m4; config.h from configh.in via out-of-tree configure. Meson must own a private target-qualified configuration; do not copy this host probe as a portable header."
+  },
+  "configuration_probe": {
+    "target": "x86_64-pc-linux-musl",
+    "options": [
+      "--disable-extensions",
+      "--disable-mpfr",
+      "--disable-pma",
+      "--disable-nls",
+      "--without-readline"
+    ],
+    "result": "configure succeeded; no applet compiled or executed",
+    "disabled_macros": [
+      "DYNAMIC",
+      "HAVE_MPFR",
+      "USE_PERSISTENT_MALLOC",
+      "ENABLE_NLS",
+      "HAVE_LIBREADLINE"
+    ],
+    "still_enabled": [
+      "HAVE_SOCKETS"
+    ],
+    "note": "These configure switches do not remove system, command pipes, debugger/profiling process paths, or socket code. This is not yet the shell-free feature profile."
+  },
+  "files": {
+    "array.c": {
+      "sha256": "df6bd12b55f13f13f627b7b3224ad5ff7371e60982bbcfc0a00507c45d43bb1c",
+      "license": "gpl3"
+    },
+    "awk.h": {
+      "sha256": "d67939e57702db7e9b7126ff8f0830da249cf1475b6d144bb164d5b0c10270a2",
+      "license": "gpl3"
+    },
+    "awkgram.c": {
+      "sha256": "36a51a9f02476bea1f09743d9f251953b67ccb24262d3d48395097c194ff9a6f",
+      "license": "bison-output"
+    },
+    "awkgram.y": {
+      "sha256": "b19e830c221aac54bae827963418bad3dc5db70a77401e380c1e8524eec9089a",
+      "license": "gpl3"
+    },
+    "builtin.c": {
+      "sha256": "070b74ebc9a61a4fa4bed24842d1d7b3a51a9bd33ad2591aff58d4886e8ec8ec",
+      "license": "gpl3"
+    },
+    "cint_array.c": {
+      "sha256": "8a51ce65f0e09c3e90397af0980b89c08a594f310c6e5cdcf558d59c3d39cb98",
+      "license": "gpl3"
+    },
+    "cmd.h": {
+      "sha256": "a0eafa8a48803bdc9fd363e63b74884411a4a50f194163c4722306db7f30158b",
+      "license": "gpl3"
+    },
+    "command.c": {
+      "sha256": "dc1135a5578c45595df210536fe74cdfd0249977b69e13a9a41f08c664c26cfd",
+      "license": "bison-output"
+    },
+    "command.y": {
+      "sha256": "80e786973010517e1d879ac1d8b407325da068d50287ab704371fede5da83ae2",
+      "license": "gpl3"
+    },
+    "custom.h": {
+      "sha256": "ec6005b3fd3a8668a80d74d367e3c09d5ab8291c6b2743c4dd0e7ebe9f143049",
+      "license": "gpl3"
+    },
+    "debug.c": {
+      "sha256": "6107d2ae53da7f7223c791aa4c94ba31ca34889b98ae5a4738cb4d81070dc95b",
+      "license": "gpl3"
+    },
+    "eval.c": {
+      "sha256": "ce8cb3dfa021588feaa4d5abfa844dde1b78ee1d6e90ef23d37009e6d8848024",
+      "license": "gpl3"
+    },
+    "ext.c": {
+      "sha256": "29e44b51998b0fe51c7f5b54ca2219fb4517a919afef6e32ffe564a77ba9b384",
+      "license": "gpl3"
+    },
+    "field.c": {
+      "sha256": "272e21b6e3753f75004f9c74410b916251647f468e46d54da4915604feb082d3",
+      "license": "gpl3"
+    },
+    "floatcomp.c": {
+      "sha256": "80f4d72c55888a67734401854d4e661b94958b569c84dc5ee65631ce23dfdc12",
+      "license": "gpl3"
+    },
+    "floatmagic.h": {
+      "sha256": "a551d8d0be7618223f4ad1624e91c4fe00e5353c4b75c3ffa52812864806254c",
+      "license": "gpl3"
+    },
+    "gawkapi.c": {
+      "sha256": "5ed0488131d272e5e5b96db75b11063f66aea96bd4ec87e23ac572e27c72b0c4",
+      "license": "gpl3"
+    },
+    "gawkapi.h": {
+      "sha256": "3480eb870c9b88cca3f4df58e069ba91c944954d7f1610944ef557350c8b0713",
+      "license": "gpl3"
+    },
+    "gawkmisc.c": {
+      "sha256": "0a49ce4946165ddc6ede420e826836723de172ba917dd77e9b407778837bf384",
+      "license": "gpl3"
+    },
+    "gettext.h": {
+      "sha256": "d9d2efcd8865ed25b0976aee699b4f82f88fc9acf2b706886027b4a6f5daadf7",
+      "license": "gpl3"
+    },
+    "int_array.c": {
+      "sha256": "73bb4e0d2bf726007c0f710f0c7498f5b35634e37283940c3cd44f330a2e4c2a",
+      "license": "gpl3"
+    },
+    "interpret.h": {
+      "sha256": "7c9ac312e8776170404983a7ccd2ba7a1edc056eb5ce8ba227179e70c2dad4c8",
+      "license": "gpl3"
+    },
+    "io.c": {
+      "sha256": "c95f823950b82bd6d0dc83f08444282e5b434469fb248b8e3b967ff11aa41e81",
+      "license": "gpl3"
+    },
+    "main.c": {
+      "sha256": "2b0ba92459f65e2c36134a0728205d45122385fa1b9c538a643f24b1470366fc",
+      "license": "gpl3"
+    },
+    "missing_d/fnmatch.c": {
+      "sha256": "f25894ec3a7b4b3a5609dd314234c37b77baa90b2c0582b92213e249e9764006",
+      "license": "lgpl2"
+    },
+    "missing_d/fnmatch.h": {
+      "sha256": "a57bb07a3d04d030329ca19b91c5745a76974ba6ca0ffdb91da05778b7e562cb",
+      "license": "lgpl2"
+    },
+    "missing_d/getaddrinfo.c": {
+      "sha256": "ffc4999d197826a922414dd1b8f2c7fcfc2a94fb9da5cb968f71e3a5cb57158d",
+      "license": "package-notice-only"
+    },
+    "missing_d/getaddrinfo.h": {
+      "sha256": "f2f3ddc4ff30f321356d7c76012df38e93faa266aa45542eff05c3e9086887fe",
+      "license": "package-notice-only"
+    },
+    "missing_d/stdio-consolesafe.c": {
+      "sha256": "304f5ac2249beaf758b37d2dc2d90c797595d6a599d70ad0b408478af2ba35ad",
+      "license": "lgpl21"
+    },
+    "missing_d/strcoll.c": {
+      "sha256": "639c5609ea3909fa64a8dab607719195cef751ef8b689f7260e745c39b7d5f79",
+      "license": "package-notice-only"
+    },
+    "missing_d/strftime.c": {
+      "sha256": "c14c94e67fa24406628b4092f9a67052c6c4d9746013cdd8b13cc6153674b69e",
+      "license": "lgpl21"
+    },
+    "missing_d/strncasecmp.c": {
+      "sha256": "34f04b86b13c922ae23d45ec72709fdbc5da676807c3276dfe1d9578967e599e",
+      "license": "lgpl21"
+    },
+    "missing_d/strptime.c": {
+      "sha256": "07ed1c23aefb6e319a06b4d48ef0a338856dadb2b665bf2b62257ad9b03d1d60",
+      "license": "lgpl21"
+    },
+    "missing_d/strsignal.c": {
+      "sha256": "a4cd4196421b71d4016d1ad5b01efcd61c48bce9875125d1487a4f478b785046",
+      "license": "package-notice-only"
+    },
+    "missing_d/timegm.c": {
+      "sha256": "aaf1cf02228e3a159eb47e56b3b5ac94ee3efe44ea592c16b704dedd3ce27923",
+      "license": "package-notice-only"
+    },
+    "mpfr.c": {
+      "sha256": "d699b3c90e8e5e3b3e6d1ac3c1ca2c0152a8cc03c235c4ad685b581a6ee764ac",
+      "license": "gpl3"
+    },
+    "msg.c": {
+      "sha256": "bea82f279e9b6e5211bed50f9499638c16cfaacf3fc348972bf61e1ea21cc118",
+      "license": "gpl3"
+    },
+    "node.c": {
+      "sha256": "840a030aa0846305e84f71eb7c47daed24a40b9de13bf3820f55185fa4e7623e",
+      "license": "gpl3"
+    },
+    "nonposix.h": {
+      "sha256": "676f226b5012f903a2223aa13a6b01a5a92411f60be1d242d7ac081926624da2",
+      "license": "gpl3"
+    },
+    "posix/gawkmisc.c": {
+      "sha256": "b8ef3d43a31e91b673b193b97783134578a438ccd6264d8bcb9296dfd7b78234",
+      "license": "gpl3"
+    },
+    "printf.c": {
+      "sha256": "198e33b23af6ac89fae7daeab23958907eaf6e38ddca41223e537507a0e0dc3f",
+      "license": "gpl3"
+    },
+    "profile.c": {
+      "sha256": "8bf3bfaf036c35584b8eb6ca2545bb6745d797a13fbdc8c5a0f9f3f57348aba0",
+      "license": "gpl3"
+    },
+    "re.c": {
+      "sha256": "2624531d5b0ff5a70eb94998169d8f203cdabb1b469edb36dcb4047f3dca721b",
+      "license": "gpl3"
+    },
+    "replace.c": {
+      "sha256": "32b05055740121b1f81a3c2982a20d71e1d3561bf12fdb882be945872e671491",
+      "license": "gpl3"
+    },
+    "str_array.c": {
+      "sha256": "6a4d67d28dc422d31d3c3c50c11251ca1fb39f51031e8082fc1a0f7a91a8824e",
+      "license": "gpl3"
+    },
+    "support/attribute.h": {
+      "sha256": "cffd9e52eb49499e1710488018b077d501c61d7a2593cce63fcc3dc61b244888",
+      "license": "gpl3"
+    },
+    "support/cdefs.h": {
+      "sha256": "cc42b86c5d414ff3b487ea1c02e15973c5d1e7b310cbddff06a5cbfd6316a471",
+      "license": "lgpl21"
+    },
+    "support/charset.c": {
+      "sha256": "380f0d45f60d07f2877cfeddd9946fb45fa62dd08e7446fe168bce331778d32c",
+      "license": "bsd2"
+    },
+    "support/charset.h": {
+      "sha256": "78cd7f01450963b26667c824b57424d885b52cfb688ea2c572e871706e2b9ac2",
+      "license": "bsd2"
+    },
+    "support/dfa.c": {
+      "sha256": "0e76bdd24cd228b324591199d27a6d565b30a56dbba76b39ec965f1ccba27bb0",
+      "license": "gpl3"
+    },
+    "support/dfa.h": {
+      "sha256": "cbad862573a65b4e6c8df72b840b4865dd79c49c8d113345fabe8f2844c21518",
+      "license": "gpl3"
+    },
+    "support/dynarray.h": {
+      "sha256": "9e6542a6dbd00d3b1b54042bfd39872a028089efe30a7ec0f82c1e2a192429e1",
+      "license": "lgpl21"
+    },
+    "support/flexmember.h": {
+      "sha256": "a8ded8488adeab40968af801833303c7aa426629190414e5b1b1ce1be9b5a61e",
+      "license": "lgpl21"
+    },
+    "support/getopt.c": {
+      "sha256": "35e24359424452f7754b989f853001d116bac691c5fe5840c76fd67c44bc274d",
+      "license": "lgpl21"
+    },
+    "support/getopt.h": {
+      "sha256": "8b2f23629e87c29e1109309403590324bc653dd58d83f621d4c7eb36c7f22661",
+      "license": "lgpl21"
+    },
+    "support/getopt1.c": {
+      "sha256": "fed53b3ced0a2e4227788a14a39155116ccbcbc9516a03af800346bb7c5ba3b3",
+      "license": "lgpl21"
+    },
+    "support/getopt_int.h": {
+      "sha256": "728c394b52d85467897068420089ed7bb543ccc469c8573dcd753b2ab0ab9320",
+      "license": "lgpl21"
+    },
+    "support/idx.h": {
+      "sha256": "54e9885422dcf95621253fb756081ccda186385e5f4fce97077034be981203d8",
+      "license": "lgpl21"
+    },
+    "support/intprops-internal.h": {
+      "sha256": "5d4cba9f0a3a7996cac4c409b557787c0b34dc30b1a6e74f921f8402f094d1c4",
+      "license": "lgpl21"
+    },
+    "support/intprops.h": {
+      "sha256": "2722c9eb6a43187d6c4d5b3075accf79112b7c214bc0ebcb27a5ba313aed1ef6",
+      "license": "lgpl21"
+    },
+    "support/libc-config.h": {
+      "sha256": "afded288e17a752f7d2723f042d9def7487d980d40ab1afed3b7b1cb7c92eed7",
+      "license": "lgpl21"
+    },
+    "support/localeinfo.c": {
+      "sha256": "688268277d5763f64ec31a146c02dc3e283965724487a891409500599ef1c17e",
+      "license": "lgpl21"
+    },
+    "support/localeinfo.h": {
+      "sha256": "6febb6c50514aaaade5cbc39111bbb157c08e2e4b64a010c3aab69fcfbdcf873",
+      "license": "lgpl21"
+    },
+    "support/malloc/dynarray-skeleton.c": {
+      "sha256": "b8257351f3a4eb46d9c69af125eba1cb6917f0fb31ad83648cc1332d6fcf6b4d",
+      "license": "lgpl21"
+    },
+    "support/malloc/dynarray.h": {
+      "sha256": "395c055e9c682debdc643651d342ef371de4b5461aa0e6ec599962466b247587",
+      "license": "lgpl21"
+    },
+    "support/malloc/dynarray_at_failure.c": {
+      "sha256": "a6fc69bafbf953a961268f3eb90ea7d9ebd927c80ab7aeef51f70b4a597f8390",
+      "license": "lgpl21"
+    },
+    "support/malloc/dynarray_emplace_enlarge.c": {
+      "sha256": "85df1a4babd2828ee9ecee2f8c37a60d7e5ac3ab770a8a332f76357b4ff21997",
+      "license": "lgpl21"
+    },
+    "support/malloc/dynarray_finalize.c": {
+      "sha256": "eb724badd2ad871d0af0d38814fdfd8ecb5b055a3a32d0eb4fbebd6a3f5a5318",
+      "license": "lgpl21"
+    },
+    "support/malloc/dynarray_resize.c": {
+      "sha256": "104d9962dcedbfbeaad6ceac3f73b04d0f22a2b6ba6ed6590f17839e1c9a799e",
+      "license": "lgpl21"
+    },
+    "support/malloc/dynarray_resize_clear.c": {
+      "sha256": "60620888d1e3917ad45442b35b3d81876e4656158e899aff86171d236fc77182",
+      "license": "lgpl21"
+    },
+    "support/minrx.c": {
+      "sha256": "8fe339d940143a9274d1e7746583f654f52f93974ec9b1dadd02c822cec065cf",
+      "license": "bsd2"
+    },
+    "support/minrx.h": {
+      "sha256": "441cc663cef041c3bc87b82b0090a0f8f9e31b79e6c790ad676496e2b7389aa2",
+      "license": "bsd2"
+    },
+    "support/pma.c": {
+      "sha256": "cf4aec6eadf5a9b9c14c36117746d68fe3399f3fdd0f22ec916a896e26cb9b3d",
+      "license": "agpl3"
+    },
+    "support/pma.h": {
+      "sha256": "dfca7b296f6cb298ea37561e01325acf143e65bfa7b900f850abd892e723d704",
+      "license": "agpl3"
+    },
+    "support/random.c": {
+      "sha256": "b307c4aa2b1c0806747e0b2505ccef3258e98a1b4e4e1b1f1b183de7f780f54d",
+      "license": "bsd3"
+    },
+    "support/random.h": {
+      "sha256": "d5cd22b7aab8beb25b81f03c46287da15304859ea7a837a5fd35636c2c8b483b",
+      "license": "gpl3"
+    },
+    "support/regcomp.c": {
+      "sha256": "c681f6934ce5438f21b4453f5383e6cbdaa4feed1ab80d7a9bede1e796ede821",
+      "license": "lgpl21"
+    },
+    "support/regex.c": {
+      "sha256": "5480f6df554fa3a913f02a1eb952f37858a4649f024ff26532a3c8f6082123b8",
+      "license": "lgpl21"
+    },
+    "support/regex.h": {
+      "sha256": "becfa1296f71daa47c2bf0ab1bdf579f62cfebae43fe7429f596829dfe9c237b",
+      "license": "lgpl21"
+    },
+    "support/regex_internal.c": {
+      "sha256": "6455998fafb7c55cd77cd04a5d3e6ed31c6a19b7458db9d89e9804f9be0bb72b",
+      "license": "lgpl21"
+    },
+    "support/regex_internal.h": {
+      "sha256": "232fe29aaefc5f30784cd07ed33e3f435db503cc91b6e6b96d9379185386f9d1",
+      "license": "lgpl21"
+    },
+    "support/regexec.c": {
+      "sha256": "214b1aa9dc8ab3eb637fe2bbc274e9d67dba71a71ec8b9d9350e577966a672d7",
+      "license": "lgpl21"
+    },
+    "support/verify.h": {
+      "sha256": "edbc355c2a4cea62d0e72c1733935ae501dcd81f467692b9e43813fc294c2dad",
+      "license": "lgpl21"
+    },
+    "support/xalloc.h": {
+      "sha256": "0c8a0593dd557a37f25402cd25b2221d4cd2b0d41e6b278a91caa9ce5343cee4",
+      "license": "gpl3"
+    },
+    "symbol.c": {
+      "sha256": "23fd3cf7e3a100d96523c36810447c1282b7ce935a62f57d944f837e905b264d",
+      "license": "gpl3"
+    },
+    "version.c": {
+      "sha256": "6a7cf7af2e18ba2bb63cbff34174673eaf1546ad9077574362c4c22859f13b4f",
+      "license": "package-notice-only"
+    }
+  },
+  "configuration_and_notice_hashes": {
+    "COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "Makefile.am": "df9aec79b86e912376a4d5cc7217c61cba1cb1351960ec0b12bd103bb6fc6d84",
+    "Makefile.in": "e6cbd798090d32fc66d6ff3257792caed1fb444e034e1fbe35f2484f879a92b8",
+    "aclocal.m4": "b4ff592bd9cde4276b239aa06b2bc3ff55e0b9cf9586e08e847ce9a8ed55c586",
+    "configh.in": "249f1e5932e8600860850ccc8154f4559df6bb7cb3f420408d5f08b9fa7e51d0",
+    "configure": "17dd45bde4e066a497698b06095708df44d4cf9b38f7c79882646621ec0f1536",
+    "configure.ac": "b34e6d445720ed6f08141bed87778af5137a1f67e78ab1e6969b4071342c1d63",
+    "m4/arch.m4": "386be7e008f878a86cc2310c09a7add3474ae9140b576b51445211eda88143f9",
+    "m4/ax_check_compile_flag.m4": "629dc6835eb1e2bd586fd842a4db66541bc442bcc2b13d6f24907631c5a688b0",
+    "m4/c-bool.m4": "708cbc1ff7aa2253db7e238e70085611da5895371bb2fb50e43e9df26f1580d5",
+    "m4/codeset.m4": "7415e53efd179f4ee07f64ac8b730cb43f1d1861e6aabf4052072cda7e6dc9cc",
+    "m4/dirfd.m4": "165225ca807fc43d36e3c68449b3b4c4cb9490ce7551a58a3b2a6bd8ae19d5da",
+    "m4/extern-inline.m4": "c8e2e48b384fa101aa33f3e5e01dd4669fe1d7ca7667e25bae21994bdc303456",
+    "m4/fcntl-o.m4": "f3a67e2ee733c0b4c0b3eb8a88d2216fba198457b32a246c4d1d2598184f8dca",
+    "m4/gettext.m4": "6b8ca63d019cf362cfeb9d4b52e7d431b4feb14d5f3f03f97bef824319c0375b",
+    "m4/glibc2.m4": "2cdc1f74727bbee58c1229e9b3343a48fccc94ba54f4f8031316f688c36073e2",
+    "m4/glibc21.m4": "d8a71189f6912c789fdb9263569059a1af670af9d8689af7676d04601a319968",
+    "m4/host-cpu-c-abi.m4": "3a2c00ee66efb28f98119dc836586dd76802c03fa7bcd2345a33a51d58cc1a41",
+    "m4/iconv.m4": "56b1f2de17e73f0e3a65634570b2c9032f912c54df09bfa6d40d1422f02b4d8f",
+    "m4/intdiv0.m4": "872ef0d575609e0168a47fcde9f6516382a75e9edae067f4e2a86adccb0f7237",
+    "m4/intl.m4": "a5079b8454bd3443ac6ce6e70f1a5e15a5c3fde370ac52707ace994953cf08a3",
+    "m4/intldir.m4": "d606538effe2100eb31c02b095d84594f49b43b2a3f02e6a56930639b82ba21a",
+    "m4/intlmacosx.m4": "21b4e06f5f326a1bf178e07a0b47ebdece34418a0ade38469b07fd86bb50e513",
+    "m4/intmax.m4": "2cf110d3e98d25c58b0481ec3ec26db3d4d8d3a68f61d136d62de79d48e40b5e",
+    "m4/intmax_t.m4": "417a6dc95b7ff9ef948c708ca91efc7e7e428541f27b23cd88cf197469dbbb47",
+    "m4/inttypes-pri.m4": "b7f4f7f8ac2164cbf4db48575021c5b09a186d97695b64b5a48428ea5676c999",
+    "m4/inttypes.m4": "75d10ed4eff774c09e289a776e2740921fa6bd9acb258ec5a9d35da13860ea40",
+    "m4/inttypes_h.m4": "1a64e5ef039bb202b30627e7adcb8734249ee6dd40a0f3c2ca4215945fac4137",
+    "m4/lcmessage.m4": "9f8d7956e4fc07da4b9c7181aa3539621e5dca466b8c28c8dcc2692fc1338e91",
+    "m4/lib-ld.m4": "2cfcbcd1232eebcfb93a63324afd8bdc96213814bc423f9367e927ff9ea10510",
+    "m4/lib-link.m4": "7c67c311d0ffe0bb97fb0bbae1a32b93127ff87e2f43cfc50a73f022b1335ff8",
+    "m4/lib-prefix.m4": "4e123a4c3d45374e97b8be4a8bab6b29a8b41052ea6dc568f4ca57790253f134",
+    "m4/libtool.m4": "9d339ec012f506838bcb0013ad2b74b300e6b24543bb59e68b644506bcb1cde7",
+    "m4/lock.m4": "061d8774530bdb7e09978079ccffe414f160ed4b34ba493f04897d84ce599c4e",
+    "m4/longdouble.m4": "f07b97c83dceb831be2dce55638f576e5a0226e8512d33dc6b6fd6643e1de227",
+    "m4/longlong.m4": "d69a64b3f2abc63a974493f6a6131f44a3317e1bd812f54a295e9b81c56c90ff",
+    "m4/ltoptions.m4": "f3d4ed0426501308028dd7690cf343cb280479d637a2ebee6c289ec2e708df3b",
+    "m4/ltsugar.m4": "0896f153a5a40546566028a4272642ae291532f3e65c25fcae950c8812b8c265",
+    "m4/ltversion.m4": "2a6baf40b64f34234e0b76c7ff62b01a1f6bbf60089f4f74506b49f800ffaf9e",
+    "m4/lt~obsolete.m4": "8533006830e1ea9625fc5e4c060e653eedf9d5464a9b2f5f494244ee272e2e2f",
+    "m4/mpfr.m4": "843b610a40c76f7aeb263f55215047281da888158fcd16bfed66d37c0de15abe",
+    "m4/nls.m4": "f727c8ea4af7b3ca541329c08d51b6288a0e2df5fe415ffcac994117638567ba",
+    "m4/noreturn.m4": "bb8e50ae6218efba2d76c57f041257a61830850e836d111516ad067ffeea4190",
+    "m4/pma.m4": "dcb43bac10dae699fbbad813e08d6ce4d0f1fdf3abe8a5a684bdefdf60b73248",
+    "m4/po.m4": "2b0014754884aa7aaa581a9dd848ca83e3420781ad76ed2bef8a733e811ea112",
+    "m4/printf-posix.m4": "914aabd36493c03cccaf5476c72be3e4fada00e7f68f1ae4fe7c2ebf797fe5c7",
+    "m4/progtest.m4": "30d63275d7bee9e04787087dccd49508024cf8ec27263da9adf925a595804183",
+    "m4/readline.m4": "9cf1f6d5093e1943dd548a9c568dfaafdef824d28a3ceac1cea69297e6bff31f",
+    "m4/signed.m4": "0bf99ebe1c1b29656fc9a7c235b20b56dd82503168815df6b02805e687673985",
+    "m4/size_max.m4": "1b8de3a3e7890f797dd9f8f6405ed4df48f32905eeda621b89806035aaa44b1c",
+    "m4/socket.m4": "b215a3430397721378be52851c999789a652b3a067c030f1c420e2bff057e3dc",
+    "m4/stdint_h.m4": "e2501e7b014197e33d38d76931c8cc67873677d2df5b0be721ce284efad6112c",
+    "m4/threadlib.m4": "662e956571a313658e441b30c8563a83290f1e94538873f48c3fb4d5633d8270",
+    "m4/triplet-transformation.m4": "079f590e01ffed797d216995849585a56c4301c01a0e84aa4f5a65445ac9604e",
+    "m4/uintmax_t.m4": "f86dba0ce3c36d90f1011f0f5814a6de1423cc3eb1bdb26fb2853d156d5e8812",
+    "m4/visibility.m4": "afa44e0cb091795caaf92ab89cf75dcc7693a4bf9e720cdf6589df854c5fda6d",
+    "m4/wchar_t.m4": "c22d74abaa99ed2f542f47780a1725d7a72c882d05df1a5fea5b3fc9cfb6e621",
+    "m4/wint_t.m4": "8865ac6c07fb6710f2e292f17ddc3e50b4869626068c24d1da98b3d9c6e1b350",
+    "m4/xsize.m4": "fd8d06ef52c18fa5b55870c8d78b150ec9f2b51dbbd40c68d9dbdfb989ac371c",
+    "missing_d/COPYING.LIB": "9d5d268bbcbdcd395a8b74ed9028ef7b326b915bb06196ea01c78685e3f57bba",
+    "support/Makefile.am": "9963e43e0fe31d890556e8f3903d37dc0fc21226b31f688f4dfa9586e09ecf9b",
+    "support/Makefile.in": "036a353f0188e121ee172d8a3846e941781b2ca982b2b570115bbc2bc097be9b",
+    "support/agpl-3.0.txt": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+  }
+}
