@@ -22,10 +22,6 @@
 #include "lib/path_ops.h"
 #include "lib/text_buffer.h"
 
-static bool ash_expansion_oom(const struct ash_shell* shell) {
-    return ash_diag_oom(shell);
-}
-
 static bool ash_expansion_errexit(const struct ash_shell* shell) {
     return (shell->options & ASH_SHELL_OPTION_ERREXIT) != 0u && !shell->errexit_diagnostics_suppressed;
 }
@@ -40,6 +36,18 @@ static bool ash_expansion_fail(struct ash_shell* shell, bool terminate_context) 
         ash_control_discard_unit(shell, 1);
     }
     return false;
+}
+
+static bool ash_expansion_infrastructure_failure(struct ash_shell* shell) {
+    if (shell->should_exit || ash_control_pending(shell)) {
+        return false;
+    }
+    return ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
+}
+
+static bool ash_expansion_oom(struct ash_shell* shell) {
+    ash_diag_oom(shell);
+    return ash_expansion_infrastructure_failure(shell);
 }
 
 static bool ash_expansion_bad_substitution(struct ash_shell* shell, const char* input) {
@@ -71,7 +79,7 @@ static bool ash_word_may_expand_pathname(
 }
 
 static bool ash_expansion_append_span(
-    const struct ash_shell* shell,
+    struct ash_shell* shell,
     struct bx_text_buffer* output,
     const char* text,
     size_t length
@@ -81,7 +89,7 @@ static bool ash_expansion_append_span(
 }
 
 static bool ash_expansion_append_text(
-    const struct ash_shell* shell,
+    struct ash_shell* shell,
     struct bx_text_buffer* output,
     const char* text
 ) {
@@ -90,7 +98,7 @@ static bool ash_expansion_append_text(
 }
 
 static bool ash_expansion_append_char(
-    const struct ash_shell* shell,
+    struct ash_shell* shell,
     struct bx_text_buffer* output,
     char character
 ) {
@@ -403,7 +411,7 @@ static bool ash_expand_part(
         if (part->length < prefix + suffix ||
             shell->command_substitution == NULL) {
             ash_diag(shell, "command substitution is unavailable");
-            return false;
+            return ash_expansion_infrastructure_failure(shell);
         }
 
         char* substitution = NULL;
@@ -424,6 +432,9 @@ static bool ash_expand_part(
                 output,
                 substitution
             );
+        }
+        else {
+            (void)ash_expansion_infrastructure_failure(shell);
         }
         free(substitution);
         return expanded;
@@ -908,7 +919,7 @@ static bool ash_operand_frames_complete(struct ash_shell* shell, struct ash_oper
         const char* expression = frame->capture.data != NULL ? frame->capture.data : "";
         if (!ash_arithmetic_evaluate(shell, expression, frame->capture.length, &number, &error)) {
             if (error.reported) {
-                return false;
+                return ash_expansion_infrastructure_failure(shell);
             }
             if (error.name != NULL) {
                 ash_diag_parameter_error(shell, error.name, error.name_length, error.message);
@@ -941,7 +952,7 @@ static bool ash_operand_frames_complete(struct ash_shell* shell, struct ash_oper
     if (frame->action == ASH_OPERAND_ASSIGN) {
         const char* value = frame->capture.data != NULL ? frame->capture.data : "";
         if (!ash_var_set_with_export(shell, frame->target_name, frame->target_length, value, false)) {
-            return false;
+            return ash_expansion_infrastructure_failure(shell);
         }
         size_t parent = frames->values[frames->count - 2u].capture_index;
         if (parent != SIZE_MAX && parent != frames->values[frames->count - 2u].pattern_index && frame->capture.length != 0u &&
