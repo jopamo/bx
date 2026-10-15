@@ -1476,7 +1476,7 @@ static bool ash_expansion_pathname_failure(
         subject,
         strerror(error)
     );
-    return false;
+    return ash_expansion_infrastructure_failure(shell);
 }
 
 static bool ash_expand_pathnames(
