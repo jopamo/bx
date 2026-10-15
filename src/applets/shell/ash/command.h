@@ -44,6 +44,8 @@ struct ash_command {
     size_t redir_cap;
     /* Substitution status carried into the next expansion phase. */
     int substitution_status;
+    /* The command utility removes special-builtin invocation properties. */
+    bool regular_builtin_semantics;
 };
 
 #endif /* BX_APPLETS_SHELL_ASH_COMMAND_H */

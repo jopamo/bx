@@ -61,6 +61,8 @@ bool ash_var_update_attributes(
     uint32_t clear
 );
 bool ash_var_assignment_allowed(struct ash_shell* shell, const char* name, size_t name_length);
+/* Diagnose a utility operand error without a language-assignment outcome. */
+bool ash_var_builtin_assignment_allowed(struct ash_shell* shell, const char* name, size_t name_length);
 /*
  * force_export adds the export attribute independently of shell options.
  * Every assignment setter also honors the canonical allexport option.

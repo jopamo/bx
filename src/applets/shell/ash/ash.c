@@ -204,6 +204,7 @@ static char* ash_strdup_text(const struct ash_shell* shell, const char* text) {
 
 static void ash_command_init(struct ash_command* command) {
     command->substitution_status = 0;
+    command->regular_builtin_semantics = false;
     command->words = NULL;
     command->word_count = 0;
     command->word_cap = 0;
@@ -676,6 +677,9 @@ static int ash_builtin_exit(struct ash_shell* shell, const struct ash_command* c
         }
     }
 
+    if (!valid && command->regular_builtin_semantics) {
+        return status;
+    }
     shell->should_exit = true;
     shell->requested_exit_status = status;
     if (valid || ash_shell_policy_noninteractive_posix(&shell->policy)) {
@@ -698,7 +702,7 @@ static int ash_builtin_export(struct ash_shell* shell, const struct ash_command*
         const char* value = NULL;
 
         if (ash_parse_assignment(arg, &name_len, &value)) {
-            if (!ash_var_set_with_export(shell, arg, name_len, value, true) ||
+            if ((command->regular_builtin_semantics && !ash_var_builtin_assignment_allowed(shell, arg, name_len)) || !ash_var_set_with_export(shell, arg, name_len, value, true) ||
                 !ash_var_export(shell, arg, name_len)) {
                 status = 1;
             }
@@ -730,8 +734,8 @@ static void ash_print_readonly_variable(const struct ash_var* var, void* user_da
                fputc('\n', stdout) != EOF;
 }
 
-static int ash_special_builtin_error_status(struct ash_shell* shell, int status) {
-    if (shell->forked_execution || ash_shell_policy_noninteractive_posix(&shell->policy)) {
+static int ash_special_builtin_error_status(struct ash_shell* shell, const struct ash_command* command, int status) {
+    if (!command->regular_builtin_semantics && (shell->forked_execution || ash_shell_policy_noninteractive_posix(&shell->policy))) {
         shell->should_exit = true;
         shell->requested_exit_status = status;
     }
@@ -749,14 +753,14 @@ static int ash_builtin_readonly(struct ash_shell* shell, const struct ash_comman
         for (size_t i = 1u; option[i] != '\0'; i++) {
             if (option[i] != 'p') {
                 ash_diag(shell, "readonly: -%c: invalid option", option[i]);
-                return ash_special_builtin_error_status(shell, 2);
+                return ash_special_builtin_error_status(shell, command, 2);
             }
             print = true;
         }
     }
     if (print && operand != command->word_count) {
         ash_diag(shell, "readonly: -p does not accept operands");
-        return ash_special_builtin_error_status(shell, 2);
+        return ash_special_builtin_error_status(shell, command, 2);
     }
     if (print || operand == command->word_count) {
         bool success = true;
@@ -764,7 +768,7 @@ static int ash_builtin_readonly(struct ash_shell* shell, const struct ash_comman
         if (!success || fflush(stdout) == EOF) {
             ash_exec_error(shell, "readonly", errno != 0 ? errno : EIO);
             clearerr(stdout);
-            return ash_special_builtin_error_status(shell, 1);
+            return ash_special_builtin_error_status(shell, command, 1);
         }
         return 0;
     }
@@ -773,19 +777,19 @@ static int ash_builtin_readonly(struct ash_shell* shell, const struct ash_comman
         size_t length;
         const char* value;
         if (ash_parse_assignment(argument, &length, &value)) {
-            if (!ash_var_set_with_export(shell, argument, length, value, false)) {
-                return ash_special_builtin_error_status(shell, 1);
+            if ((command->regular_builtin_semantics && !ash_var_builtin_assignment_allowed(shell, argument, length)) || !ash_var_set_with_export(shell, argument, length, value, false)) {
+                return ash_special_builtin_error_status(shell, command, 1);
             }
         }
         else {
             length = strlen(argument);
             if (!ash_is_valid_name_span(argument, length)) {
                 ash_diag(shell, "readonly: invalid name '%s'", argument);
-                return ash_special_builtin_error_status(shell, 1);
+                return ash_special_builtin_error_status(shell, command, 1);
             }
         }
         if (!ash_var_readonly(shell, argument, length)) {
-            return ash_special_builtin_error_status(shell, 1);
+            return ash_special_builtin_error_status(shell, command, 1);
         }
     }
     return 0;
@@ -832,7 +836,7 @@ static int ash_builtin_unset(struct ash_shell* shell, const struct ash_command* 
         else {
             if (!ash_var_unset(shell, name)) {
                 status = 1;
-                if (ash_shell_policy_noninteractive_posix(&shell->policy)) {
+                if (!command->regular_builtin_semantics && ash_shell_policy_noninteractive_posix(&shell->policy)) {
                     shell->should_exit = true;
                     shell->requested_exit_status = 1;
                 }
@@ -964,7 +968,7 @@ static int ash_builtin_exec(struct ash_shell* shell, const struct ash_command* c
         argv,
         &resolution
     );
-    if (shell->forked_execution || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE)) {
+    if (!command->regular_builtin_semantics && (shell->forked_execution || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE))) {
         if (resolution.kind == ASH_COMMAND_EXPLICIT_PATH)
             ash_trap_exit_deactivate_for_exec(shell);
         ash_trap_exit_override_status(shell);
@@ -1035,7 +1039,7 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
                             "set: %s: invalid option name",
                             option_name
                         );
-                        status = 2;
+                        return ash_special_builtin_error_status(shell, command, 2);
                     }
                     continue;
                 }
@@ -1048,8 +1052,7 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
                 );
                 if (result != ASH_SHELL_OPTION_APPLIED) {
                     ash_diag(shell, "set: unsupported operand '%s'", arg);
-                    status = 1;
-                    break;
+                    return ash_special_builtin_error_status(shell, command, 1);
                 }
             }
             continue;
@@ -1074,7 +1077,7 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
         if (!printed) {
             ash_exec_error(shell, "set: option output", output.error);
             clearerr(stdout);
-            status = ash_special_builtin_error_status(shell, 1);
+            status = ash_special_builtin_error_status(shell, command, 1);
         }
     }
 
@@ -1223,6 +1226,12 @@ static int ash_run_input_builtin(struct ash_shell* shell, enum ash_builtin_kind 
 
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command) {
     switch (builtin) {
+        case ASH_BUILTIN_COMMAND:
+            if (command->word_count == 1u || (command->word_count == 2u && strcmp(command->words[1], "--") == 0)) {
+                return 0;
+            }
+            ash_diag(shell, "command: unsupported option '%s'", command->words[1]);
+            return 2;
         case ASH_BUILTIN_ALIAS:
             return ash_alias_builtin(shell, command);
         case ASH_BUILTIN_COLON:
@@ -1432,7 +1441,8 @@ static int ash_execute_in_child(struct ash_shell* shell,
 }
 
 static int ash_execute_builtin_current(struct ash_shell* shell, const struct ash_command* command, const struct ash_command_resolution* resolution) {
-    bool temporary_scope = command->assignment_count != 0u && (resolution->kind == ASH_COMMAND_REGULAR_BUILTIN || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX));
+    bool temporary_scope =
+        command->assignment_count != 0u && (command->regular_builtin_semantics || resolution->kind == ASH_COMMAND_REGULAR_BUILTIN || !ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX));
     struct ash_redirection_transaction saved;
     ash_redirection_transaction_init(&saved);
 
@@ -1441,7 +1451,7 @@ static int ash_execute_builtin_current(struct ash_shell* shell, const struct ash
         return 1;
     }
     if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
-        if (resolution->kind == ASH_COMMAND_SPECIAL_BUILTIN && ash_shell_policy_noninteractive_posix(&shell->policy) && !shell->should_exit) {
+        if (!command->regular_builtin_semantics && resolution->kind == ASH_COMMAND_SPECIAL_BUILTIN && ash_shell_policy_noninteractive_posix(&shell->policy) && !shell->should_exit) {
             shell->should_exit = true;
             shell->requested_exit_status = 1;
         }
@@ -1623,7 +1633,16 @@ static int ash_execute_command(
         return ash_run_foreground_child(shell, ASH_JOB_FOREGROUND_COMMAND, ASH_PROCESS_SUBSHELL, ash_commandless_child_main, &context, NULL);
     }
 
-    struct ash_command_resolution resolution = ash_command_resolve(shell, command->words[0]);
+    struct ash_command_prefix prefix = {0};
+    for (size_t i = 0u; i < command->word_count && prefix.state != ASH_COMMAND_PREFIX_COMPLETE; i++) {
+        ash_command_prefix_add(shell, &prefix, command->words[i], i);
+    }
+    struct ash_command prepared = *command;
+    prepared.words += prefix.index;
+    prepared.word_count -= prefix.index;
+    prepared.regular_builtin_semantics = prefix.via_command;
+    command = &prepared;
+    struct ash_command_resolution resolution = prefix.target;
     if (!ash_command_resolution_valid(&resolution)) {
         ash_exec_error(shell, command->words[0], EINVAL);
         return 126;
@@ -1938,6 +1957,7 @@ static enum ash_command_build_result ash_ast_add_redirection(
 static enum ash_command_build_result ash_ast_simple_to_command(struct ash_shell* shell, const struct ash_ast* node, struct ash_command* command) {
     ash_command_init(command);
     bool declaration_utility = false;
+    struct ash_command_prefix prefix = {0};
     for (size_t i = 0u; i < node->value.simple.count; i++) {
         const struct ash_simple_item* item = &node->value.simple.items[i];
         if (item->kind != ASH_SIMPLE_WORD) {
@@ -1964,9 +1984,6 @@ static enum ash_command_build_result ash_ast_simple_to_command(struct ash_shell*
             ash_command_destroy(command);
             return ASH_COMMAND_BUILD_SHELL_ERROR;
         }
-        if (command->word_count == 0u && fields.count != 0u) {
-            declaration_utility = ash_command_is_declaration_utility(shell, fields.values[0]);
-        }
         for (size_t j = 0u; j < fields.count; j++) {
             if (!ash_command_push_word(
                     shell,
@@ -1977,7 +1994,10 @@ static enum ash_command_build_result ash_ast_simple_to_command(struct ash_shell*
                 ash_command_destroy(command);
                 return ASH_COMMAND_BUILD_SHELL_ERROR;
             }
+            size_t index = command->word_count - 1u;
+            ash_command_prefix_add(shell, &prefix, command->words[index], index);
         }
+        declaration_utility = ash_command_resolution_is_declaration_utility(&prefix.target);
         ash_expanded_fields_destroy(&fields);
     }
     for (size_t i = 0u; i < node->value.simple.count; i++) {
