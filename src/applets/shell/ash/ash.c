@@ -1802,6 +1802,11 @@ static bool ash_command_substitute(
         break;
     }
     close(pipe_fds[0]);
+    if (!read_ok) {
+        ash_job_abort(job);
+        bx_text_buffer_destroy(&captured);
+        return false;
+    }
 
     int status;
     if (ash_job_wait(job, &status) != 0) {
@@ -1815,11 +1820,6 @@ static bool ash_command_substitute(
     if (!ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_POSIX)) {
         ash_control_publish_status(shell, status);
     }
-    if (!read_ok) {
-        bx_text_buffer_destroy(&captured);
-        return false;
-    }
-
     while (captured.length != 0u &&
            captured.data[captured.length - 1u] == '\n') {
         captured.data[--captured.length] = '\0';
