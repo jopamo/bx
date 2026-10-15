@@ -9,6 +9,8 @@
 #include "cancel_state.h"
 #include "workqueue_contract.h"
 
+#define BX_CHILD_DEFAULT_PATH "/bin:/usr/bin"
+
 /*
  * Child action queues must follow BX_WORKQUEUE_CONTRACT_CHILD_ACTIONS:
  * an explicit BX_BACKPRESSURE_LIMIT_CHILD_PROCESSES slot bound plus

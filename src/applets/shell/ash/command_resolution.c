@@ -193,7 +193,7 @@ struct ash_command_resolution ash_command_resolve_external(const char* name) {
     return ash_command_resolution_path_search(name);
 }
 
-static struct ash_command_resolution ash_command_resolve_with_functions(const struct ash_shell* shell, const char* name, bool allow_functions) {
+static struct ash_command_resolution ash_command_resolve_namespaces(const struct ash_shell* shell, const char* name, bool allow_functions, bool allow_applets) {
     struct ash_command_resolution external =
         ash_command_resolve_external(name);
     if (external.kind != ASH_COMMAND_PATH_SEARCH) {
@@ -222,13 +222,7 @@ static struct ash_command_resolution ash_command_resolve_with_functions(const st
         return ash_builtin_resolution(name, builtin);
     }
 
-    if (shell != NULL &&
-        ash_shell_policy_valid(&shell->policy) &&
-        ash_shell_policy_has(
-            &shell->policy,
-            ASH_SHELL_POLICY_STANDALONE_APPLETS
-        ) &&
-        shell->owns_self_executable_fd &&
+    if (allow_applets && shell != NULL && ash_shell_policy_valid(&shell->policy) && ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_STANDALONE_APPLETS) && shell->owns_self_executable_fd &&
         shell->self_executable_fd >= 0) {
         const struct bx_applet* applet = bx_applet_find(name);
         if (applet != NULL) {
@@ -243,7 +237,7 @@ static struct ash_command_resolution ash_command_resolve_with_functions(const st
 }
 
 struct ash_command_resolution ash_command_resolve(const struct ash_shell* shell, const char* name) {
-    return ash_command_resolve_with_functions(shell, name, true);
+    return ash_command_resolve_namespaces(shell, name, true, true);
 }
 
 void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_prefix* prefix, const char* name, size_t index) {
@@ -256,20 +250,32 @@ void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_pr
             return;
         }
         if (name[0] == '-' && name[1] != '\0') {
+            if (strspn(name + 1u, "p") == strlen(name + 1u)) {
+                prefix->default_path = true;
+                return;
+            }
+            prefix->option_error_index = index;
             prefix->state = ASH_COMMAND_PREFIX_COMPLETE;
             return;
         }
     }
     prefix->via_command = prefix->state != ASH_COMMAND_PREFIX_NAME;
-    prefix->target = prefix->via_command ? ash_command_resolve_with_functions(shell, name, false) : ash_command_resolve(shell, name);
+    prefix->target = prefix->via_command ? ash_command_resolve_namespaces(shell, name, false, !prefix->default_path) : ash_command_resolve(shell, name);
+    prefix->target.default_path = prefix->default_path && prefix->target.kind == ASH_COMMAND_PATH_SEARCH;
     prefix->index = index;
     prefix->state = ash_command_resolution_is_builtin(&prefix->target) && prefix->target.target.builtin == ASH_BUILTIN_COMMAND ? ASH_COMMAND_PREFIX_OPTIONS : ASH_COMMAND_PREFIX_COMPLETE;
+    if (prefix->state == ASH_COMMAND_PREFIX_OPTIONS) {
+        prefix->default_path = false;
+    }
 }
 
 bool ash_command_resolution_valid(
     const struct ash_command_resolution* resolution
 ) {
     if (resolution == NULL || resolution->command_name == NULL) {
+        return false;
+    }
+    if (resolution->default_path && resolution->kind != ASH_COMMAND_PATH_SEARCH) {
         return false;
     }
     if (resolution->kind != ASH_COMMAND_NOT_FOUND &&
