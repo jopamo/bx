@@ -17,6 +17,7 @@ static const struct ash_builtin_definition ash_builtins[] = {
     {"alias", ASH_BUILTIN_ALIAS},
     {"break", ASH_BUILTIN_BREAK},
     {"continue", ASH_BUILTIN_CONTINUE},
+    {"command", ASH_BUILTIN_COMMAND},
     {"eval", ASH_BUILTIN_EVAL},
     {"exec", ASH_BUILTIN_EXEC},
     {"exit", ASH_BUILTIN_EXIT},
@@ -58,6 +59,7 @@ static enum ash_command_resolution_kind ash_builtin_resolution_kind(
             return ASH_COMMAND_SPECIAL_BUILTIN;
         case ASH_BUILTIN_ALIAS:
         case ASH_BUILTIN_CD:
+        case ASH_BUILTIN_COMMAND:
         case ASH_BUILTIN_UNALIAS:
         case ASH_BUILTIN_UMASK:
         case ASH_BUILTIN_PWD:
@@ -191,10 +193,7 @@ struct ash_command_resolution ash_command_resolve_external(const char* name) {
     return ash_command_resolution_path_search(name);
 }
 
-struct ash_command_resolution ash_command_resolve(
-    const struct ash_shell* shell,
-    const char* name
-) {
+static struct ash_command_resolution ash_command_resolve_with_functions(const struct ash_shell* shell, const char* name, bool allow_functions) {
     struct ash_command_resolution external =
         ash_command_resolve_external(name);
     if (external.kind != ASH_COMMAND_PATH_SEARCH) {
@@ -214,8 +213,7 @@ struct ash_command_resolution ash_command_resolve(
         return ash_builtin_resolution(name, builtin);
     }
 
-    const struct ash_function* function =
-        shell != NULL ? ash_function_find(shell, name) : NULL;
+    const struct ash_function* function = shell != NULL && allow_functions ? ash_function_find(shell, name) : NULL;
     if (function != NULL) {
         return ash_command_resolution_function(name, function);
     }
@@ -242,6 +240,30 @@ struct ash_command_resolution ash_command_resolve(
         }
     }
     return external;
+}
+
+struct ash_command_resolution ash_command_resolve(const struct ash_shell* shell, const char* name) {
+    return ash_command_resolve_with_functions(shell, name, true);
+}
+
+void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_prefix* prefix, const char* name, size_t index) {
+    if (prefix->state == ASH_COMMAND_PREFIX_COMPLETE) {
+        return;
+    }
+    if (prefix->state == ASH_COMMAND_PREFIX_OPTIONS) {
+        if (strcmp(name, "--") == 0) {
+            prefix->state = ASH_COMMAND_PREFIX_OPERAND;
+            return;
+        }
+        if (name[0] == '-' && name[1] != '\0') {
+            prefix->state = ASH_COMMAND_PREFIX_COMPLETE;
+            return;
+        }
+    }
+    prefix->via_command = prefix->state != ASH_COMMAND_PREFIX_NAME;
+    prefix->target = prefix->via_command ? ash_command_resolve_with_functions(shell, name, false) : ash_command_resolve(shell, name);
+    prefix->index = index;
+    prefix->state = ash_command_resolution_is_builtin(&prefix->target) && prefix->target.target.builtin == ASH_BUILTIN_COMMAND ? ASH_COMMAND_PREFIX_OPTIONS : ASH_COMMAND_PREFIX_COMPLETE;
 }
 
 bool ash_command_resolution_valid(
@@ -294,11 +316,6 @@ bool ash_command_resolution_is_builtin(
         (resolution->kind == ASH_COMMAND_SPECIAL_BUILTIN || resolution->kind == ASH_COMMAND_REGULAR_BUILTIN);
 }
 
-bool ash_command_is_declaration_utility(const struct ash_shell* shell, const char* name) {
-    const struct ash_builtin_definition* definition = ash_builtin_find(name);
-    if (definition == NULL || (definition->builtin != ASH_BUILTIN_EXPORT && definition->builtin != ASH_BUILTIN_READONLY)) {
-        return false;
-    }
-    struct ash_command_resolution resolution = ash_command_resolve(shell, name);
-    return ash_command_resolution_is_builtin(&resolution) && resolution.target.builtin == definition->builtin;
+bool ash_command_resolution_is_declaration_utility(const struct ash_command_resolution* resolution) {
+    return ash_command_resolution_is_builtin(resolution) && (resolution->target.builtin == ASH_BUILTIN_EXPORT || resolution->target.builtin == ASH_BUILTIN_READONLY);
 }

@@ -2,6 +2,7 @@
 #define BX_APPLETS_SHELL_ASH_COMMAND_RESOLUTION_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "dispatch/dispatch.h"
 
@@ -13,6 +14,7 @@ enum ash_builtin_kind {
     ASH_BUILTIN_ALIAS,
     ASH_BUILTIN_COLON,
     ASH_BUILTIN_CD,
+    ASH_BUILTIN_COMMAND,
     ASH_BUILTIN_DOT,
     ASH_BUILTIN_EVAL,
     ASH_BUILTIN_EXIT,
@@ -72,6 +74,23 @@ struct ash_command_resolution {
     } target;
 };
 
+enum ash_command_prefix_state {
+    ASH_COMMAND_PREFIX_NAME = 0,
+    ASH_COMMAND_PREFIX_OPTIONS,
+    ASH_COMMAND_PREFIX_OPERAND,
+    ASH_COMMAND_PREFIX_COMPLETE,
+};
+
+/* Zero-initialize, then feed expanded fields in order; names remain borrowed. */
+struct ash_command_prefix {
+    struct ash_command_resolution target;
+    size_t index;
+    enum ash_command_prefix_state state;
+    bool via_command;
+};
+
+void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_prefix* prefix, const char* name, size_t index);
+
 /*
  * POSIX policy resolves special builtins before functions; default Bash
  * resolves functions before all builtins. External lookup follows both
@@ -84,7 +103,7 @@ struct ash_command_resolution ash_command_resolve(
     const char* name
 );
 /* Recognize supported declaration utilities under the active namespace policy. */
-bool ash_command_is_declaration_utility(const struct ash_shell* shell, const char* name);
+bool ash_command_resolution_is_declaration_utility(const struct ash_command_resolution* resolution);
 /* Resolve an operand that must cross an external-command exec boundary. */
 struct ash_command_resolution ash_command_resolve_external(const char* name);
 

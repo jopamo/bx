@@ -276,12 +276,16 @@ static bool ash_var_readonly_error(struct ash_shell* shell, const struct ash_var
     return false;
 }
 
-static bool ash_var_writable(struct ash_shell* shell, const struct ash_var* var) {
-    return var == NULL || (var->attributes & ASH_VAR_ATTR_READONLY) == 0u || ash_var_readonly_error(shell, var, true);
+static bool ash_var_writable(struct ash_shell* shell, const struct ash_var* var, bool assignment_error) {
+    return var == NULL || (var->attributes & ASH_VAR_ATTR_READONLY) == 0u || ash_var_readonly_error(shell, var, assignment_error);
 }
 
 bool ash_var_assignment_allowed(struct ash_shell* shell, const char* name, size_t name_length) {
-    return ash_var_writable(shell, ash_var_find_len_const(shell, name, name_length));
+    return ash_var_writable(shell, ash_var_find_len_const(shell, name, name_length), true);
+}
+
+bool ash_var_builtin_assignment_allowed(struct ash_shell* shell, const char* name, size_t name_length) {
+    return ash_var_writable(shell, ash_var_find_len_const(shell, name, name_length), false);
 }
 
 static bool ash_var_create_in_scope(struct ash_shell* shell, struct ash_scope* scope, const char* name, size_t name_length, const char* value, uint32_t attributes) {
@@ -323,7 +327,7 @@ static bool ash_var_set_in_scope(
         return false;
     }
     struct ash_var* var = ash_var_find_in_scope(scope, name, name_length);
-    if (!ash_var_assignment_allowed(shell, name, name_length) || !ash_var_writable(shell, var)) {
+    if (!ash_var_assignment_allowed(shell, name, name_length) || !ash_var_writable(shell, var, true)) {
         return false;
     }
     /*
