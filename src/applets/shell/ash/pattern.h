@@ -5,9 +5,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct ash_shell;
-struct ash_word;
-
 enum ash_pattern_purpose {
     ASH_PATTERN_CASE,
     ASH_PATTERN_PATHNAME_EXPANSION,
@@ -99,7 +96,6 @@ enum ash_pattern_compile_result {
     ASH_PATTERN_COMPILE_INVALID,
     ASH_PATTERN_COMPILE_LIMIT,
     ASH_PATTERN_COMPILE_NO_MEMORY,
-    ASH_PATTERN_COMPILE_EXPANSION_ERROR,
 };
 
 enum ash_pattern_match_result {
@@ -130,23 +126,13 @@ struct ash_pattern {
 bool ash_pattern_options_valid(const struct ash_pattern_options* options);
 
 /*
- * Cold-path compilers. On success, pattern owns the resulting IR and source
+ * On success, pattern owns the resulting IR and source
  * snapshot until ash_pattern_destroy(). The destination must be zero-
  * initialized or previously destroyed. On failure it is left unchanged.
- *
- * ash_pattern_compile_word() is the shell-policy adapter: it expands the
- * structured word while preserving quoted metacharacters, then delegates to
- * the policy-free compiler.
  */
 enum ash_pattern_compile_result ash_pattern_compile(
     const char* expanded_pattern,
     size_t length,
-    const struct ash_pattern_options* options,
-    struct ash_pattern* pattern
-);
-enum ash_pattern_compile_result ash_pattern_compile_word(
-    struct ash_shell* shell,
-    const struct ash_word* word,
     const struct ash_pattern_options* options,
     struct ash_pattern* pattern
 );
