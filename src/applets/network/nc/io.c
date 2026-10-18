@@ -607,10 +607,16 @@ void fdpass(int nfd) {
     ssize_t r;
     struct pollfd pfd;
     struct bx_poll_deadline deadline;
+    struct sockaddr_storage recipient;
+    socklen_t recipient_len = sizeof(recipient);
 
     /* Avoid obvious stupidity */
     if (isatty(STDOUT_FILENO))
         errx(EXIT_RUNTIME, "Cannot pass file descriptor to tty");
+    if (getsockname(STDOUT_FILENO, (struct sockaddr*)&recipient, &recipient_len) == -1)
+        err(EXIT_RUNTIME, "fdpass stdout");
+    if (recipient.ss_family != AF_UNIX)
+        errx(EXIT_RUNTIME, "fdpass stdout must be a UNIX socket");
 
     memset(&mh, 0, sizeof(mh));
     memset(&cmsgbuf, 0, sizeof(cmsgbuf));

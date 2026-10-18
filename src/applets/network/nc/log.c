@@ -342,7 +342,7 @@ void help(void) {
             "  -z                         Zero-I/O mode (scan)\n"
             "  -N                         Shutdown network socket after EOF on stdin\n"
             "  -d                         Detach from stdin\n"
-            "  -F                         Pass socket fd to stdout and exit\n"
+            "  -F                         Pass socket fd to UNIX socket stdout and exit\n"
             "  -j                         JSON output\n"
             "      --log-file <file>      Append diagnostic output to a log file\n"
             "      --quiet                Suppress non-error informational output\n"
