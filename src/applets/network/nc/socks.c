@@ -183,7 +183,7 @@ static int proxy_read_line(int fd, char* buf, size_t bufsz) {
             errx(EXIT_RUNTIME, "proxy read too long");
         }
         if (proxy_read_full(fd, buf + off, 1) != 1) {
-            close(fd);
+            close_failed_socket(fd);
             err(EXIT_RUNTIME, "proxy read");
         }
         /* Skip CR */
@@ -315,13 +315,13 @@ again:
         wlen = 2 + buf[1];
         cnt = proxy_write_full(proxyfd, buf, wlen);
         if (cnt != wlen) {
-            close(proxyfd);
+            close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/%zu)", cnt, wlen);
         }
 
         cnt = proxy_read_full(proxyfd, buf, 2);
         if (cnt != 2) {
-            close(proxyfd);
+            close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "read failed (%zu/3)", cnt);
         }
 
@@ -358,13 +358,13 @@ again:
             wlen = 3 + ulen + plen;
             cnt = proxy_write_full(proxyfd, buf, wlen);
             if (cnt != wlen) {
-                close(proxyfd);
+                close_failed_socket(proxyfd);
                 err(EXIT_RUNTIME, "write failed (%zu/%zu)", cnt, wlen);
             }
 
             cnt = proxy_read_full(proxyfd, buf, 2);
             if (cnt != 2) {
-                close(proxyfd);
+                close_failed_socket(proxyfd);
                 err(EXIT_RUNTIME, "read failed (%zu/2)", cnt);
             }
             if (buf[0] != 0x01 || buf[1] != 0x00) {
@@ -423,13 +423,13 @@ again:
 
         cnt = proxy_write_full(proxyfd, buf, wlen);
         if (cnt != wlen) {
-            close(proxyfd);
+            close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/%zu)", cnt, wlen);
         }
 
         cnt = proxy_read_full(proxyfd, buf, 4);
         if (cnt != 4) {
-            close(proxyfd);
+            close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "read failed (%zu/4)", cnt);
         }
         if (buf[1] != 0) {
@@ -440,14 +440,14 @@ again:
             case SOCKS_IPV4:
                 cnt = proxy_read_full(proxyfd, buf + 4, 6);
                 if (cnt != 6) {
-                    close(proxyfd);
+                    close_failed_socket(proxyfd);
                     err(EXIT_RUNTIME, "read failed (%zu/6)", cnt);
                 }
                 break;
             case SOCKS_IPV6:
                 cnt = proxy_read_full(proxyfd, buf + 4, 18);
                 if (cnt != 18) {
-                    close(proxyfd);
+                    close_failed_socket(proxyfd);
                     err(EXIT_RUNTIME, "read failed (%zu/18)", cnt);
                 }
                 break;
@@ -480,7 +480,7 @@ again:
 
         cnt = proxy_write_full(proxyfd, buf, r);
         if (cnt != (size_t)r) {
-            close(proxyfd);
+            close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/%d)", cnt, r);
         }
 
@@ -506,7 +506,7 @@ again:
             }
             r = strlen((char*)buf);
             if ((cnt = proxy_write_full(proxyfd, buf, r)) != (size_t)r) {
-                close(proxyfd);
+                close_failed_socket(proxyfd);
                 err(EXIT_RUNTIME, "write failed (%zu/%d)", cnt, r);
             }
             explicit_bzero(http_proxypass, sizeof http_proxypass);
@@ -515,7 +515,7 @@ again:
 
         /* Terminate headers */
         if ((cnt = proxy_write_full(proxyfd, "\r\n", 2)) != 2) {
-            close(proxyfd);
+            close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/2)", cnt);
         }
 
