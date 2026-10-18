@@ -410,8 +410,13 @@ void help(void) {
             "      --hex-dump <file>      Dump relay data as hex\n"
             "                             Truncate per session; - writes to stderr\n"
             "                             Output errors return status 1 at relay cleanup\n"
+#ifdef IPPROTO_MPTCP
             "      --mptcp                Request MPTCP on internet TCP sockets\n"
             "      --mptcp-netlink        Enable MPTCP PM netlink events (-vv)\n"
+#else
+            "      --mptcp                Unavailable in this build\n"
+            "      --mptcp-netlink        Unavailable in this build\n"
+#endif
             "      --tfo                  Enable TCP Fast Open\n"
             "      --mark <mark>          Set SO_MARK\n"
             "      --interface <iface>    Bind socket to device\n"

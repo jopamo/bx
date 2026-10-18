@@ -1307,5 +1307,7 @@ void report_mptcp_info(int s) {
     mptcp_cache.fallback = fallback;
     nc_strlcpy(mptcp_cache.mode, mode, sizeof(mptcp_cache.mode));
     mptcp_cache.initialized = 1;
+#else
+    (void)s;
 #endif /* IPPROTO_MPTCP */
 }

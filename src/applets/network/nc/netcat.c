@@ -524,6 +524,10 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
     if (mptcpflag && (uflag || family == AF_UNIX || family == AF_VSOCK))
         errx(EXIT_USAGE, "must use --mptcp with internet TCP sockets");
+#ifndef IPPROTO_MPTCP
+    if (mptcpflag)
+        errx(EXIT_USAGE, "MPTCP is not supported by this build");
+#endif
     if (pcapfile) {
         if (zflag || Fflag || quic_probe)
             errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");
