@@ -428,6 +428,7 @@ void help(void) {
 #endif
 #ifdef TCP_FASTOPEN_CONNECT
             "                             Clients may defer connect until first write; no -z\n"
+            "                             No direct client PCAP or --send-proxy\n"
 #endif
 #ifdef SO_MARK
             "      --mark <mark>          Set SO_MARK (not UNIX sockets)\n"

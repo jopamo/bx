@@ -550,7 +550,11 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "must use --tfo with internet TCP sockets");
     if (tfoflag && zflag)
         errx(EXIT_USAGE, "cannot use --tfo with -z");
-    if (tfoflag && dflag && !lflag && !Fflag && !send_proxy && !xflag && !fuzz_tcp)
+    if (tfoflag && send_proxy)
+        errx(EXIT_USAGE, "cannot use --tfo with --send-proxy");
+    if (tfoflag && pcapfile && !lflag && !xflag)
+        errx(EXIT_USAGE, "cannot use --tfo with direct client PCAP capture");
+    if (tfoflag && dflag && !lflag && !Fflag && !xflag && !fuzz_tcp)
         errx(EXIT_USAGE, "cannot use --tfo with direct receive-only clients");
 #ifndef TCP_FASTOPEN_CONNECT
     if (tfoflag && !lflag)
