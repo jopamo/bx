@@ -66,12 +66,12 @@ int vsock_listen(unsigned int cid, unsigned int port) {
     set_common_sockopts(s, AF_VSOCK);
 
     if (bind(s, (struct sockaddr*)&svm, sizeof(svm)) == -1) {
-        close(s);
+        close_failed_socket(s);
         return -1;
     }
 
     if (listen(s, 5) == -1) {
-        close(s);
+        close_failed_socket(s);
         return -1;
     }
 
@@ -100,7 +100,7 @@ int vsock_connect(unsigned int cid, unsigned int port) {
     set_common_sockopts(s, AF_VSOCK);
 
     if (connect(s, (struct sockaddr*)&svm, sizeof(svm)) == -1) {
-        close(s);
+        close_failed_socket(s);
         return -1;
     }
 
@@ -211,7 +211,7 @@ int unix_listen(char* path) {
     if ((s = unix_bind(path, 0)) == -1)
         return -1;
     if (listen(s, 5) == -1) {
-        close(s);
+        close_failed_socket(s);
         return -1;
     }
     if (vflag)
