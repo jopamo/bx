@@ -12,7 +12,7 @@
 #include "lib/fd_ops.h"
 #include "lib/sockaddr_format.h"
 
-static void close_failed_socket(int s) {
+void close_failed_socket(int s) {
     int error = errno;
     bx_fd_cleanup(&s);
     errno = error;

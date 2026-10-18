@@ -154,6 +154,7 @@ int unix_connect(char*);
 int unix_listen(char*);
 int vsock_listen(unsigned int, unsigned int);
 int vsock_connect(unsigned int, unsigned int);
+void close_failed_socket(int);
 void set_common_sockopts(int, int);
 int process_tos_opt(char*, int*);
 void report_sock(const char*, const struct sockaddr*, socklen_t, char*);

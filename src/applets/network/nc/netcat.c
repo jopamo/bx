@@ -814,13 +814,13 @@ int main(int argc, char* argv[]) {
                 len = sizeof(z);
                 rv = recvfrom(s, buf, sizeof(buf), MSG_PEEK, (struct sockaddr*)&z, &len);
                 if (rv == -1) {
-                    close(s);
+                    close_failed_socket(s);
                     err(EXIT_RUNTIME, "recvfrom");
                 }
 
                 rv = connect(s, (struct sockaddr*)&z, len);
                 if (rv == -1) {
-                    close(s);
+                    close_failed_socket(s);
                     err(EXIT_RUNTIME, "connect");
                 }
 
@@ -838,7 +838,7 @@ int main(int argc, char* argv[]) {
                 connfd = accept4(s, (struct sockaddr*)&cliaddr, &len, SOCK_NONBLOCK);
                 if (connfd == -1) {
                     /* For now, all errnos are fatal */
-                    close(s);
+                    close_failed_socket(s);
                     err(EXIT_RUNTIME, "accept");
                 }
                 if (proxy_proto && recv_proxy(connfd) == -1) {
