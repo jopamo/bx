@@ -380,7 +380,6 @@ void help(void) {
             "      --transparent          Enable IP_TRANSPARENT\n"
             "      --namespace <path>     Network namespace path\n"
             "      --splice               Use zero-copy splice loop\n"
-            "      --io-uring             Require io_uring backend (fails if unavailable)\n"
             "      --fuzz-tcp             Send random TCP data\n"
             "      --fuzz-udp             Send random UDP data\n"
             "      --quic                 QUIC probe (UDP)\n"

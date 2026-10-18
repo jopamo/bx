@@ -47,9 +47,6 @@
 #include "lib/args_common.h"
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
-#ifdef USE_IO_URING
-#include <liburing.h>
-#endif
 
 /* Command Line Options */
 int dflag;          /* detached, no stdin */
@@ -116,7 +113,6 @@ char* vsock_port;
 int jitter;
 char* profile;
 int quic_mask;
-static int io_uringflag;          /* require io_uring backend */
 static int quietflag;             /* suppress non-error informational output */
 static const char* log_file_path; /* append diagnostic output to this file */
 
@@ -128,29 +124,6 @@ static const char* nc_progname(const char* argv0) {
 
     base = strrchr(argv0, '/');
     return base == NULL ? argv0 : base + 1;
-}
-
-static void enforce_io_backend_policy(void) {
-    if (!io_uringflag)
-        return;
-#ifndef __linux__
-    errx(EXIT_USAGE, "--io-uring is only supported on Linux");
-#else
-#ifndef USE_IO_URING
-    errx(EXIT_USAGE,
-         "--io-uring requested but this build was compiled without liburing; default poll backend remains available");
-#else
-    struct io_uring ring;
-    int rc;
-
-    rc = io_uring_queue_init(2, &ring, 0);
-    if (rc < 0)
-        errx(EXIT_RUNTIME, "--io-uring unavailable on this kernel/runtime: %s", strerror(-rc));
-    io_uring_queue_exit(&ring);
-
-    errx(EXIT_RUNTIME, "--io-uring requested, but this release only ships the poll backend");
-#endif
-#endif
 }
 
 static int parse_hex_tos_value(const char* text, int* value_out) {
@@ -213,7 +186,6 @@ int main(int argc, char* argv[]) {
                                            {"fuzz-tcp", no_argument, NULL, 1011},
                                            {"fuzz-udp", no_argument, NULL, 1012},
                                            {"splice", no_argument, NULL, 1013},
-                                           {"io-uring", no_argument, NULL, 1014},
                                            {"hex-dump", required_argument, NULL, 1015},
                                            {"keep-open", no_argument, NULL, 1017},
                                            {"interface", required_argument, NULL, 1018},
@@ -320,9 +292,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 1013:
                 spliceflag = 1;
-                break;
-            case 1014:
-                io_uringflag = 1;
                 break;
             case 1015:
                 hex_path = optarg;
@@ -612,7 +581,6 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use --splice with UDP, port scanning or FD passing");
     if ((family == AF_UNIX) && Fflag)
         errx(EXIT_USAGE, "cannot use -F and -U");
-    enforce_io_backend_policy();
 
     /* Get name of temporary socket for unix datagram client */
     if ((family == AF_UNIX) && uflag && !lflag) {
