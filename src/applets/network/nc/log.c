@@ -363,7 +363,7 @@ void help(void) {
             "  -P <proxyuser>             Proxy authentication username\n"
             "      --proxy-proto          Require PROXY v1/v2 on stream listeners\n"
             "      --send-proxy           Send PROXY v2 from direct internet stream clients\n"
-            "      --pcap <file>          Capture relay data as PCAP\n"
+            "      --pcap <file>          Capture connected internet TCP/UDP relay data\n"
             "      --pcap-default-path    Capture relay PCAP to an auto-generated path\n"
             "      --pcap-snaplen <bytes> Limit captured bytes per packet (1-65535)\n"
             "      --pcap-filter <dir>    Capture direction: in, out, or both\n"

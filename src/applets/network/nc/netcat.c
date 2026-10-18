@@ -521,8 +521,14 @@ int main(int argc, char* argv[]) {
         if (quic_probe)
             errx(EXIT_USAGE, "cannot use -F with --quic");
     }
-    if (pcapfile && (zflag || Fflag || quic_probe))
-        errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");
+    if (pcapfile) {
+        if (zflag || Fflag || quic_probe)
+            errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");
+        if (family == AF_UNIX || family == AF_VSOCK)
+            errx(EXIT_USAGE, "must use --pcap with an internet TCP/UDP relay");
+        if (lflag && uflag && keepopen)
+            errx(EXIT_USAGE, "cannot use --pcap with unconnected UDP listeners");
+    }
     if (hex_path && (zflag || Fflag || quic_probe))
         errx(EXIT_USAGE, "cannot use --hex-dump with port scanning, FD passing or QUIC probing");
     if (proxy_proto && (!lflag || uflag))
