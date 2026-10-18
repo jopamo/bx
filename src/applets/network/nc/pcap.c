@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -21,11 +22,11 @@
 #include <unistd.h>
 
 #include "lib/fd_ops.h"
+#include "lib/poll_deadline.h"
 
 #define PCAP_MAX_PACKET_SIZE 65535
 #define PCAP_MAX_PAYLOAD_SIZE 65000
 #define PCAP_RING_CAPACITY 128
-#define PCAP_WRITE_POLL_TIMEOUT_MS 50
 
 struct pcap_hdr_s {
     uint32_t magic_number;
@@ -72,6 +73,7 @@ struct pcap_writer_file_state {
 };
 
 static int pcap_file_fd = -1;
+static int pcap_cancel_fd = -1;
 static int pcap_fd = -1;
 static int pcap_family = AF_UNSPEC;
 static int pcap_socktype = SOCK_STREAM;
@@ -96,6 +98,7 @@ static atomic_int pcap_writer_stop;
 
 static void pcap_reset_state(void) {
     pcap_file_fd = -1;
+    pcap_cancel_fd = -1;
     pcap_fd = -1;
     pcap_family = AF_UNSPEC;
     pcap_socktype = SOCK_STREAM;
@@ -115,37 +118,30 @@ static void pcap_reset_state(void) {
     atomic_store(&pcap_writer_stop, 0);
 }
 
-static int pcap_write_all_fd(int fd, const void* data, size_t len, int stop_sensitive) {
+static int pcap_write_all_fd(int fd, const void* data, size_t len, struct bx_poll_deadline* deadline, int stop_sensitive) {
     const unsigned char* p = data;
     size_t off = 0;
 
     while (off < len) {
+        struct pollfd fds[2] = {{.fd = fd, .events = POLLOUT}, {.fd = pcap_cancel_fd, .events = POLLIN}};
+        int ready = bx_poll_deadline_wait(deadline, fds, stop_sensitive ? 2 : 1);
+        if (ready <= 0) {
+            if (ready == 0)
+                errno = ETIMEDOUT;
+            return -1;
+        }
+        /* Drain ready output after shutdown, but do not wait for space. */
+        if (stop_sensitive && fds[1].revents && !fds[0].revents) {
+            errno = atomic_load(&pcap_writer_stop) ? ECANCELED : EIO;
+            return -1;
+        }
         ssize_t n = write(fd, p + off, len - off);
         if (n > 0) {
             off += (size_t)n;
             continue;
         }
-        if (n == -1 && errno == EINTR)
-            continue;
-        if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            struct pollfd pfd;
-            int pr;
-
+        if (n == -1 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
             if (stop_sensitive && atomic_load(&pcap_writer_stop)) {
-                errno = ECANCELED;
-                return -1;
-            }
-
-            pfd.fd = fd;
-            pfd.events = POLLOUT;
-            pfd.revents = 0;
-            pr = poll(&pfd, 1, PCAP_WRITE_POLL_TIMEOUT_MS);
-            if (pr == -1) {
-                if (errno == EINTR)
-                    continue;
-                return -1;
-            }
-            if (pr == 0 && stop_sensitive && atomic_load(&pcap_writer_stop)) {
                 errno = ECANCELED;
                 return -1;
             }
@@ -159,7 +155,7 @@ static int pcap_write_all_fd(int fd, const void* data, size_t len, int stop_sens
     return 0;
 }
 
-static int pcap_write_global_header(int fd) {
+static int pcap_write_global_header(int fd, struct bx_poll_deadline* deadline, int stop_sensitive) {
     struct pcap_hdr_s hdr;
 
     memset(&hdr, 0, sizeof(hdr));
@@ -169,7 +165,7 @@ static int pcap_write_global_header(int fd) {
     hdr.snaplen = pcap_snaplen;
     hdr.network = 101; /* LINKTYPE_RAW (IP) */
 
-    if (pcap_write_all_fd(fd, &hdr, sizeof(hdr), 0) != 0)
+    if (pcap_write_all_fd(fd, &hdr, sizeof(hdr), deadline, stop_sensitive) == -1)
         return -1;
 
     pcap_writer_file.current_file_bytes = sizeof(hdr);
@@ -178,7 +174,7 @@ static int pcap_write_global_header(int fd) {
     return 0;
 }
 
-static int pcap_open_default_file(void) {
+static int pcap_open_default_file(struct bx_poll_deadline* deadline) {
     char tmpl[] = "/tmp/nc-pcap-XXXXXX.pcap";
     int fd, saved_errno;
 
@@ -191,7 +187,7 @@ static int pcap_open_default_file(void) {
     }
     if (bx_fd_set_cloexec(fd, true) == -1 || bx_fd_set_nonblocking(fd, true) == -1)
         goto fail;
-    if (pcap_write_global_header(fd) == -1)
+    if (pcap_write_global_header(fd, deadline, 0) == -1)
         goto fail;
 
     pcap_file_fd = fd;
@@ -228,7 +224,7 @@ static int pcap_build_path(unsigned int index, char* out, size_t outsz) {
     return 0;
 }
 
-static int pcap_open_file_for_index(unsigned int index) {
+static int pcap_open_file_for_index(unsigned int index, struct bx_poll_deadline* deadline, int stop_sensitive) {
     char path[PATH_MAX];
     struct stat sb;
     int flags;
@@ -245,7 +241,7 @@ static int pcap_open_file_for_index(unsigned int index) {
     if (fd == -1)
         return -1;
 
-    if (pcap_write_global_header(fd) == -1) {
+    if (pcap_write_global_header(fd, deadline, stop_sensitive) == -1) {
         int saved_errno = errno;
         close(fd);
         errno = saved_errno;
@@ -256,7 +252,7 @@ static int pcap_open_file_for_index(unsigned int index) {
     return 0;
 }
 
-static int pcap_maybe_rotate(size_t next_record_size, time_t now) {
+static int pcap_maybe_rotate(size_t next_record_size, time_t now, struct bx_poll_deadline* deadline) {
     int rotate = 0;
 
     if (pcap_file_fd == -1) {
@@ -282,7 +278,7 @@ static int pcap_maybe_rotate(size_t next_record_size, time_t now) {
         return -1;
 
     pcap_writer_file.rotation_index++;
-    if (pcap_open_file_for_index(pcap_writer_file.rotation_index) == -1)
+    if (pcap_open_file_for_index(pcap_writer_file.rotation_index, deadline, 1) == -1)
         return -1;
 
     pcap_writer_counter_shard.rotations++;
@@ -346,6 +342,8 @@ static void pcap_disable_capture(void) {
         close(pcap_file_fd);
         pcap_file_fd = -1;
     }
+    if (pcap_cancel_fd != -1)
+        close(pcap_cancel_fd);
     pcap_reset_state();
 }
 
@@ -361,6 +359,7 @@ static void* pcap_writer_main(void* arg) {
 
     for (;;) {
         struct pcap_ring_entry entry;
+        struct bx_poll_deadline deadline;
 
         pthread_mutex_lock(&pcap_ring_lock);
         while (pcap_ring_count == 0 && !atomic_load(&pcap_writer_stop))
@@ -376,8 +375,9 @@ static void* pcap_writer_main(void* arg) {
         pcap_ring_count--;
         pthread_mutex_unlock(&pcap_ring_lock);
 
-        if (pcap_maybe_rotate(sizeof(entry.rec) + entry.incl_len, entry.capture_time) == -1 || pcap_write_all_fd(pcap_file_fd, &entry.rec, sizeof(entry.rec), 1) == -1 ||
-            pcap_write_all_fd(pcap_file_fd, entry.packet, entry.incl_len, 1) == -1) {
+        bx_poll_deadline_init(&deadline, timeout);
+        if (pcap_maybe_rotate(sizeof(entry.rec) + entry.incl_len, entry.capture_time, &deadline) == -1 || pcap_write_all_fd(pcap_file_fd, &entry.rec, sizeof(entry.rec), &deadline, 1) == -1 ||
+            pcap_write_all_fd(pcap_file_fd, entry.packet, entry.incl_len, &deadline, 1) == -1) {
             pcap_writer_error = errno;
             pcap_writer_counter_shard.packets_dropped_io++;
             atomic_store(&pcap_writer_stop, 1);
@@ -398,6 +398,7 @@ static void* pcap_writer_main(void* arg) {
 }
 
 int pcap_open(int fd, const char* path) {
+    struct bx_poll_deadline deadline;
     socklen_t len;
     int error;
 
@@ -428,8 +429,12 @@ int pcap_open(int fd, const char* path) {
         goto fail;
     }
 
+    pcap_cancel_fd = bx_fd_eventfd_cloexec(0, EFD_NONBLOCK);
+    if (pcap_cancel_fd == -1)
+        goto fail;
+    bx_poll_deadline_init(&deadline, timeout);
     if (path[0] == '\0') {
-        if (pcap_open_default_file() == -1)
+        if (pcap_open_default_file(&deadline) == -1)
             goto fail;
     }
     else {
@@ -437,7 +442,7 @@ int pcap_open(int fd, const char* path) {
             errno = ENAMETOOLONG;
             goto fail;
         }
-        if (pcap_open_file_for_index(0) == -1)
+        if (pcap_open_file_for_index(0, &deadline, 0) == -1)
             goto fail;
     }
 
@@ -660,6 +665,12 @@ int pcap_close(void) {
 
     if (pcap_writer_running) {
         atomic_store(&pcap_writer_stop, 1);
+        int notified;
+        do {
+            notified = eventfd_write(pcap_cancel_fd, 1);
+        } while (notified == -1 && errno == EINTR);
+        if (notified == -1)
+            return -1;
         pthread_mutex_lock(&pcap_ring_lock);
         pthread_cond_signal(&pcap_ring_cond);
         pthread_mutex_unlock(&pcap_ring_lock);
@@ -676,6 +687,11 @@ int pcap_close(void) {
         if (close(pcap_file_fd) == -1 && error == 0)
             error = errno;
         pcap_file_fd = -1;
+    }
+    if (pcap_cancel_fd != -1) {
+        if (close(pcap_cancel_fd) == -1 && error == 0)
+            error = errno;
+        pcap_cancel_fd = -1;
     }
 
     pcap_emit_summary();
