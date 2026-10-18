@@ -318,13 +318,13 @@ static void pcap_emit_summary(void) {
     if (jflag) {
         json_event_begin(stderr, "info", "pcap_summary", NULL, uflag ? "udp" : "tcp",
                          "disabled", NULL, NULL, NULL, NULL);
+        fprintf(stderr, ",\"message\":\"PCAP summary\",\"capture_mode\":\"app\",\"path\":");
+        json_print_string_or_null(stderr, pcap_base_path);
         fprintf(stderr,
-                ",\"message\":\"PCAP summary\",\"capture_mode\":\"app\",\"path\":\"%s\","
-                "\"packets_seen\":%llu,\"packets_written\":%llu,\"packets_filtered\":%llu,"
+                ",\"packets_seen\":%llu,\"packets_written\":%llu,\"packets_filtered\":%llu,"
                 "\"packets_truncated\":%llu,\"packets_dropped\":%llu,\"rotations\":%llu,"
                 "\"bytes_captured\":%llu,\"bytes_original\":%llu}\n",
-                pcap_base_path, counters.packets_seen, counters.packets_written, counters.packets_filtered,
-                counters.packets_truncated, pcap_packets_dropped, counters.rotations, counters.bytes_captured,
+                counters.packets_seen, counters.packets_written, counters.packets_filtered, counters.packets_truncated, pcap_packets_dropped, counters.rotations, counters.bytes_captured,
                 counters.bytes_original);
     }
     else if (vflag >= 2) {

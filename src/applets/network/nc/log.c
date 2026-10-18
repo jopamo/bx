@@ -74,11 +74,44 @@ void json_timestamp_now(char* tbuf, size_t tbufsz) {
 #endif
 }
 
-static void json_print_string_or_null(FILE* fp, const char* value) {
-    if (value == NULL)
-        fprintf(fp, "null");
-    else
-        fprintf(fp, "\"%s\"", value);
+void json_print_string_or_null(FILE* fp, const char* value) {
+    if (value == NULL) {
+        fputs("null", fp);
+        return;
+    }
+    fputc('"', fp);
+    for (const unsigned char* p = (const unsigned char*)value; *p; p++) {
+        switch (*p) {
+            case '"':
+                fputs("\\\"", fp);
+                break;
+            case '\\':
+                fputs("\\\\", fp);
+                break;
+            case '\b':
+                fputs("\\b", fp);
+                break;
+            case '\f':
+                fputs("\\f", fp);
+                break;
+            case '\n':
+                fputs("\\n", fp);
+                break;
+            case '\r':
+                fputs("\\r", fp);
+                break;
+            case '\t':
+                fputs("\\t", fp);
+                break;
+            default:
+                if (*p < 0x20)
+                    fprintf(fp, "\\u%04x", (unsigned int)*p);
+                else
+                    fputc(*p, fp);
+                break;
+        }
+    }
+    fputc('"', fp);
 }
 
 void json_event_begin(FILE* fp,
@@ -243,7 +276,9 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
         if (jflag) {
             json_event_begin(stderr, "info", event_name, direction, protocol,
                              "disabled", src_addr, src_port, dst_addr, dst_port);
-            fprintf(stderr, ",\"message\":\"%s\",\"path\":\"%s\"}\n", msg, path);
+            fprintf(stderr, ",\"message\":\"%s\",\"path\":", msg);
+            json_print_string_or_null(stderr, path);
+            fputs("}\n", stderr);
         }
         else {
             fprintf(stderr, "%s on %s\n", msg, path);

@@ -162,6 +162,7 @@ void vsock_report(const char*, const char*, int);
 void report_mptcp_info(int s);
 void usage(int);
 void json_timestamp_now(char* tbuf, size_t tbufsz);
+void json_print_string_or_null(FILE* fp, const char* value);
 void json_event_begin(FILE* fp,
                       const char* level,
                       const char* event,
