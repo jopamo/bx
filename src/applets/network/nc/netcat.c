@@ -511,6 +511,16 @@ int main(int argc, char* argv[]) {
         parse_vsock(vsock_address, lflag, &vsock_cid, &vsock_port);
         family = AF_VSOCK;
     }
+    if (Fflag) {
+        if (lflag)
+            errx(EXIT_USAGE, "cannot use -F and -l");
+        if (family == AF_UNIX)
+            errx(EXIT_USAGE, "cannot use -F and -U");
+        if (family == AF_VSOCK)
+            errx(EXIT_USAGE, "cannot use -F with --vsock");
+        if (quic_probe)
+            errx(EXIT_USAGE, "cannot use -F with --quic");
+    }
     if (proxy_proto && (!lflag || uflag))
         errx(EXIT_USAGE, "must use --proxy-proto with a stream listener");
     if (proxy_proto && send_proxy)
@@ -630,9 +640,6 @@ int main(int argc, char* argv[]) {
          pcap_rotate_seconds != 0) &&
         pcapfile == NULL)
         errx(EXIT_USAGE, "pcap options require --pcap or --pcap-default-path");
-    if ((family == AF_UNIX) && Fflag)
-        errx(EXIT_USAGE, "cannot use -F and -U");
-
     /* Get name of temporary socket for unix datagram client */
     if ((family == AF_UNIX) && uflag && !lflag) {
         if (sflag) {
