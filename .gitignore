@@ -1,5 +1,5 @@
 *.md
-!README.md
+!/README.md
 tests/__*
 __pycache__/
 *.py[cod]
