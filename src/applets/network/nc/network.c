@@ -503,59 +503,65 @@ void connection_info(int s, const char* host, const char* port, const char* prot
     }
 }
 
+static void close_failed_socket(int s) {
+    int error = errno;
+    bx_fd_cleanup(&s);
+    errno = error;
+}
+
 void set_common_sockopts(int s, int af) {
     int x = 1;
 
     if (Dflag) {
         if (setsockopt(s, SOL_SOCKET, SO_DEBUG, &x, sizeof(x)) == -1) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, NULL);
         }
     }
     if (Tflag != -1) {
         if (af == AF_INET && setsockopt(s, IPPROTO_IP, IP_TOS, &Tflag, sizeof(Tflag)) == -1) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set IP ToS");
         }
 
         else if (af == AF_INET6 && setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &Tflag, sizeof(Tflag)) == -1) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set IPv6 traffic class");
         }
     }
     if (Iflag) {
         if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &Iflag, sizeof(Iflag)) == -1) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set TCP receive buffer size");
         }
     }
     if (Oflag) {
         if (setsockopt(s, SOL_SOCKET, SO_SNDBUF, &Oflag, sizeof(Oflag)) == -1) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set TCP send buffer size");
         }
     }
 
     if (ttl != -1) {
         if (af == AF_INET && setsockopt(s, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl))) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set IP TTL");
         }
 
         else if (af == AF_INET6 && setsockopt(s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &ttl, sizeof(ttl))) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set IPv6 unicast hops");
         }
     }
 
     if (minttl != -1) {
         if (af == AF_INET && setsockopt(s, IPPROTO_IP, IP_MINTTL, &minttl, sizeof(minttl))) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set IP min TTL");
         }
 
         else if (af == AF_INET6 && setsockopt(s, IPPROTO_IPV6, IPV6_MINHOPCOUNT, &minttl, sizeof(minttl))) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set IPv6 min hop count");
         }
     }
@@ -563,7 +569,7 @@ void set_common_sockopts(int s, int af) {
 #ifdef SO_MARK
     if (sockmark != -1) {
         if (setsockopt(s, SOL_SOCKET, SO_MARK, &sockmark, sizeof(sockmark)) == -1) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set SO_MARK");
         }
     }
@@ -572,7 +578,7 @@ void set_common_sockopts(int s, int af) {
 #ifdef SO_BINDTODEVICE
     if (iface != NULL) {
         if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, iface, strlen(iface)) == -1) {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "set SO_BINDTODEVICE");
         }
     }
@@ -582,7 +588,7 @@ void set_common_sockopts(int s, int af) {
 #ifdef IP_TRANSPARENT
         if (af == AF_INET || af == AF_INET6) {
             if (setsockopt(s, SOL_IP, IP_TRANSPARENT, &x, sizeof(x)) == -1) {
-                close(s);
+                close_failed_socket(s);
                 err(EXIT_RUNTIME, "set IP_TRANSPARENT");
             }
         }
@@ -593,7 +599,7 @@ void set_common_sockopts(int s, int af) {
 #ifdef TCP_FASTOPEN_CONNECT
         if (!lflag) {
             if (setsockopt(s, IPPROTO_TCP, TCP_FASTOPEN_CONNECT, &x, sizeof(x)) == -1) {
-                close(s);
+                close_failed_socket(s);
                 err(EXIT_RUNTIME, "set TCP_FASTOPEN_CONNECT");
             }
         }
@@ -602,7 +608,7 @@ void set_common_sockopts(int s, int af) {
         if (lflag) {
             int qlen = 5;
             if (setsockopt(s, IPPROTO_TCP, TCP_FASTOPEN, &qlen, sizeof(qlen)) == -1) {
-                close(s);
+                close_failed_socket(s);
                 err(EXIT_RUNTIME, "set TCP_FASTOPEN");
             }
         }
