@@ -4,6 +4,7 @@
 #include <sys/sendfile.h>
 #include <sys/stat.h>
 
+#include "lib/poll_deadline.h"
 #include "lib/time_parse.h"
 
 struct nc_hex_offsets {
@@ -605,6 +606,7 @@ void fdpass(int nfd) {
     char c = '\0';
     ssize_t r;
     struct pollfd pfd;
+    struct bx_poll_deadline deadline;
 
     /* Avoid obvious stupidity */
     if (isatty(STDOUT_FILENO))
@@ -630,14 +632,19 @@ void fdpass(int nfd) {
     memset(&pfd, 0, sizeof(pfd));
     pfd.fd = STDOUT_FILENO;
     pfd.events = POLLOUT;
+    bx_poll_deadline_init(&deadline, timeout);
     for (;;) {
-        r = sendmsg(STDOUT_FILENO, &mh, 0);
+        int ready = bx_poll_deadline_wait(&deadline, &pfd, 1);
+        if (ready == 0) {
+            errno = ETIMEDOUT;
+            err(EXIT_RUNTIME, "fdpass");
+        }
+        if (ready == -1)
+            err(EXIT_RUNTIME, "fdpass wait");
+        r = sendmsg(STDOUT_FILENO, &mh, MSG_DONTWAIT | MSG_NOSIGNAL);
         if (r == -1) {
-            if (errno == EAGAIN || errno == EINTR) {
-                if (poll(&pfd, 1, -1) == -1)
-                    err(EXIT_RUNTIME, "poll");
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
                 continue;
-            }
             err(EXIT_RUNTIME, "sendmsg");
         }
         else if (r != 1)

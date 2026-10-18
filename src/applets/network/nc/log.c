@@ -348,7 +348,7 @@ void help(void) {
             "      --quiet                Suppress non-error informational output\n"
             "  -i <interval>              Delay between read/write polls\n"
             "      --jitter <seconds>     Add Gaussian-distributed random delay to -i\n"
-            "  -w <timeout>               Connect timeout and final net reads\n"
+            "  -w <timeout>               Connect, PROXY header, FD handoff and final-read timeout\n"
             "  -W <recvlimit>             Terminate after receiving N packets\n"
             "  -p <port>                  Specify local source port\n"
             "  -s <addr>                  Source address\n"
