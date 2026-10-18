@@ -482,7 +482,6 @@ void connection_info(int s, const char* host, const char* port, const char* prot
         const char* src_port_p = NULL;
         const char* dst_addr_p = NULL;
         const char* dst_port_p = NULL;
-        const char* tls_state = usetls ? "negotiating" : "disabled";
 
         if (json_socket_tuple_from_fd(s, src_addr, sizeof(src_addr), src_port, sizeof(src_port), dst_addr,
                                       sizeof(dst_addr), dst_port, sizeof(dst_port)) == 0) {
@@ -492,7 +491,7 @@ void connection_info(int s, const char* host, const char* port, const char* prot
             dst_port_p = dst_port;
         }
 
-        json_event_begin(stderr, "info", "connection_succeeded", "out", proto, tls_state, "disabled", src_addr_p,
+        json_event_begin(stderr, "info", "connection_succeeded", "out", proto, "disabled", src_addr_p,
                          src_port_p, dst_addr_p, dst_port_p);
         fprintf(stderr, ",\"host\":\"%s\",\"ip\":\"%s\",\"port\":\"%s\",\"proto\":\"%s\",\"service\":\"%s\"}\n", host,
                 ipaddr, port, proto, service);
@@ -906,7 +905,7 @@ static void emit_mptcp_priority_transition(const struct mptcp_pm_event* event) {
         event_name = "mptcp_path_subflow_promoted";
 
     if (jflag) {
-        json_event_begin(stderr, "info", event_name, "out", "tcp", "disabled", "disabled", NULL, NULL, NULL, NULL);
+        json_event_begin(stderr, "info", event_name, "out", "tcp", "disabled", NULL, NULL, NULL, NULL);
         fprintf(stderr,
                 ",\"role\":\"%s\",\"loc_id\":%s,\"rem_id\":%s,\"if_index\":%s,\"local\":\"%s\",\"remote\":\"%s\"}\n",
                 role, loc_id, rem_id, if_idx, local_s, remote_s);
@@ -1157,17 +1156,17 @@ static void emit_mptcp_transition_json(const char* event,
                                        const char* old_state,
                                        const char* new_state) {
     if (sf != NULL && old_state != NULL && new_state != NULL) {
-        json_event_begin(stderr, "info", event, "out", "tcp", "disabled", "disabled", NULL, NULL, NULL, NULL);
+        json_event_begin(stderr, "info", event, "out", "tcp", "disabled", NULL, NULL, NULL, NULL);
         fprintf(stderr, ",\"id\":%u,\"local\":\"%s\",\"remote\":\"%s\",\"old_state\":\"%s\",\"new_state\":\"%s\"}\n",
                 sf->id, sf->local, sf->remote, old_state, new_state);
     }
     else if (sf != NULL) {
-        json_event_begin(stderr, "info", event, "out", "tcp", "disabled", "disabled", NULL, NULL, NULL, NULL);
+        json_event_begin(stderr, "info", event, "out", "tcp", "disabled", NULL, NULL, NULL, NULL);
         fprintf(stderr, ",\"id\":%u,\"local\":\"%s\",\"remote\":\"%s\",\"state\":\"%s\"}\n", sf->id, sf->local,
                 sf->remote, mptcp_state_name(sf->state));
     }
     else {
-        json_event_begin(stderr, "info", event, "out", "tcp", "disabled", "disabled", NULL, NULL, NULL, NULL);
+        json_event_begin(stderr, "info", event, "out", "tcp", "disabled", NULL, NULL, NULL, NULL);
         fprintf(stderr, "}\n");
     }
 }
@@ -1239,7 +1238,7 @@ void report_mptcp_info(int s) {
     if (mptcp_cache.initialized && vflag >= 2) {
         if (mptcp_cache.fallback != fallback) {
             if (jflag) {
-                json_event_begin(stderr, "info", "mptcp_fallback_changed", "out", "tcp", "disabled", "disabled", NULL,
+                json_event_begin(stderr, "info", "mptcp_fallback_changed", "out", "tcp", "disabled", NULL,
                                  NULL, NULL, NULL);
                 fprintf(stderr, ",\"old_fallback\":%s,\"new_fallback\":%s}\n", mptcp_cache.fallback ? "true" : "false",
                         fallback ? "true" : "false");
@@ -1294,14 +1293,14 @@ void report_mptcp_info(int s) {
 
     if (changed) {
         if (jflag) {
-            json_event_begin(stderr, "info", "mptcp_info", "out", "tcp", "disabled", "disabled", NULL, NULL, NULL,
+            json_event_begin(stderr, "info", "mptcp_info", "out", "tcp", "disabled", NULL, NULL, NULL,
                              NULL);
             fprintf(stderr, ",\"subflows\":%u,\"subflows_max\":%u,\"flags\":%u,\"fallback\":%s,\"mode\":\"%s\"}\n",
                     info.mptcpi_subflows, info.mptcpi_subflows_max, info.mptcpi_flags, fallback ? "true" : "false",
                     mode);
 
             if (vflag >= 2 && subflow_count > 0) {
-                json_event_begin(stderr, "info", "mptcp_subflows", "out", "tcp", "disabled", "disabled", NULL, NULL,
+                json_event_begin(stderr, "info", "mptcp_subflows", "out", "tcp", "disabled", NULL, NULL,
                                  NULL, NULL);
                 fprintf(stderr, ",\"mode\":\"%s\",\"subflows\":[", mode);
                 for (i = 0; i < subflow_count; i++) {

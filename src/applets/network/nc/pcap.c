@@ -306,7 +306,7 @@ static void pcap_emit_summary(void) {
         counters.packets_dropped_queue + counters.packets_dropped_io;
 
     if (jflag) {
-        json_event_begin(stderr, "info", "pcap_summary", NULL, uflag ? "udp" : "tcp", usetls ? "enabled" : "disabled",
+        json_event_begin(stderr, "info", "pcap_summary", NULL, uflag ? "udp" : "tcp",
                          "disabled", NULL, NULL, NULL, NULL);
         fprintf(stderr,
                 ",\"message\":\"PCAP summary\",\"capture_mode\":\"app\",\"path\":\"%s\","

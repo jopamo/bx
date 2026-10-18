@@ -4,7 +4,6 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/un.h>
-#include <sys/wait.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -23,7 +22,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
-#include "tls.h"
 #include <unistd.h>
 
 #include "atomicio.h"
@@ -48,23 +46,15 @@
  * EXIT_OK (0): Success
  * EXIT_RUNTIME (1): Runtime error (connection failed, I/O error, etc.)
  * EXIT_USAGE (2): Usage error (invalid flag, missing argument, conflict)
- * EXIT_EXEC_FAILED (126): Exec failure (not executable, permission denied)
- * EXIT_COMMAND_NOT_FOUND (127): Exec failure (command not found)
  */
 #define EXIT_OK 0
 #define EXIT_RUNTIME 1
 #define EXIT_USAGE 2
-#define EXIT_EXEC_FAILED 126
-#define EXIT_COMMAND_NOT_FOUND 127
-
-#define TLS_NOVERIFY (1 << 1)
-#define TLS_NONAME (1 << 2)
-#define TLS_CCERT (1 << 3)
-#define TLS_MUSTSTAPLE (1 << 4)
-
 #define PCAP_FILTER_IN 0x01
 #define PCAP_FILTER_OUT 0x02
 #define PCAP_FILTER_BOTH (PCAP_FILTER_IN | PCAP_FILTER_OUT)
+
+#define NC_IO_RETRY (-2)
 
 /* Command Line Options */
 extern int dflag;          /* detached, no stdin */
@@ -107,22 +97,6 @@ extern int Iflag;         /* TCP receive buffer size */
 extern int Oflag;         /* TCP send buffer size */
 extern int Tflag;         /* IP Type of Service */
 
-extern int usetls;           /* use TLS */
-extern int dtls;             /* use DTLS */
-extern const char* Cflag;    /* Public cert file */
-extern const char* Kflag;    /* Private key file */
-extern const char* oflag;    /* OCSP stapling file */
-extern const char* Rflag;    /* Root CA file */
-extern int tls_cachanged;    /* Using non-default CA file */
-extern int TLSopt;           /* TLS options */
-extern char* exec_path;      /* program to exec */
-extern char* tls_expectname; /* required name in peer cert */
-extern char* tls_expecthash; /* required hash of peer cert */
-extern char* tls_ciphers;    /* TLS ciphers */
-extern char* tls_protocols;  /* TLS protocols */
-extern char* tls_alpn;       /* TLS ALPN */
-extern FILE* Zflag;          /* file to save peer cert */
-
 extern int recvcount, recvlimit;
 extern int timeout;
 extern int family;
@@ -137,7 +111,6 @@ extern char* vsock_port;
 extern int jitter;
 extern char* profile;
 extern int quic_mask;
-extern pid_t child_pid;
 
 /* RNG hook for testing */
 extern uint32_t (*nc_random)(void);
@@ -158,10 +131,9 @@ int strtoport(char* portstr, int udp);
 void build_ports(char*);
 void help(void) __attribute__((noreturn));
 int local_listen(const char*, const char*, struct addrinfo);
-void readwrite(int, struct tls*);
+void readwrite(int);
 void fdpass(int nfd) __attribute__((noreturn));
 int remote_connect(const char*, const char*, struct addrinfo, char*);
-int timeout_tls(int, struct tls*, int (*)(struct tls*));
 int timeout_connect(int, const struct sockaddr*, socklen_t);
 int socks_connect(const char*,
                   const char*,
@@ -180,15 +152,9 @@ int vsock_listen(const char*, const char*);
 int vsock_connect(const char*, const char*);
 void set_common_sockopts(int, int);
 int process_tos_opt(char*, int*);
-int process_tls_opt(char*, int*);
-void save_peer_cert(struct tls* _tls_ctx, FILE* _fp);
 void report_sock(const char*, const struct sockaddr*, socklen_t, char*);
-void report_tls(struct tls* tls_ctx, char* host, int fd);
 void vsock_report(const char*, const char*, int);
 void report_mptcp_info(int s);
-#ifdef GAPING_SECURITY_HOLE
-void spawn_exec(int);
-#endif
 void usage(int);
 void json_timestamp_now(char* tbuf, size_t tbufsz);
 void json_event_begin(FILE* fp,
@@ -196,7 +162,6 @@ void json_event_begin(FILE* fp,
                       const char* event,
                       const char* direction,
                       const char* protocol,
-                      const char* tls_state,
                       const char* quic_state,
                       const char* src_addr,
                       const char* src_port,
@@ -214,7 +179,5 @@ int json_socket_tuple_from_fd(int fd,
 void hexdump(FILE* fp, const char* prefix, const unsigned char* buf, size_t len, size_t total);
 
 struct nc_hex_offsets;
-ssize_t drainbuf(int, unsigned char*, size_t*, size_t, struct tls*, int, struct nc_hex_offsets*);
-ssize_t fillbuf(int, unsigned char*, size_t*, size_t, struct tls*, int, struct nc_hex_offsets*);
-void tls_setup_client(struct tls*, int, char*);
-struct tls* tls_setup_server(struct tls*, int, char*);
+ssize_t drainbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_offsets*);
+ssize_t fillbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_offsets*);

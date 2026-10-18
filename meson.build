@@ -872,13 +872,10 @@ nc_sources = files(
   'src/applets/network/nc/proxy_proto.c',
   'src/applets/network/nc/quic.c',
   'src/applets/network/nc/socks.c',
-  'src/applets/network/nc/tls.c',
-  'src/applets/network/nc/tls_disabled.c',
   'src/applets/network/nc/utils.c',
 )
 
 nc_c_args = cc.get_supported_arguments([
-  '-DBX_NC_TLS_DISABLED=1',
   '-D_GNU_SOURCE',
   '-D_DEFAULT_SOURCE',
   '-D__FAVOR_BSD',

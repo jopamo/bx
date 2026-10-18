@@ -16,8 +16,8 @@ struct nc_hex_offsets {
 
 ssize_t (*nc_sendfile_fn)(int out_fd, int in_fd, off_t* offset, size_t count) = direct_sendfile;
 
-static size_t io_buffer_capacity(struct tls* tls_ctx) {
-    if (uflag && tls_ctx == NULL)
+static size_t io_buffer_capacity(void) {
+    if (uflag)
         return UDP_IO_BUFSIZE;
     return BUFSIZE;
 }
@@ -31,12 +31,12 @@ static int io_socket_is_stream(int fd) {
     return type == SOCK_STREAM;
 }
 
-static int io_sendfile_eligible(int net_fd, int stdin_fd, struct tls* tls_ctx) {
+static int io_sendfile_eligible(int net_fd, int stdin_fd) {
     struct stat st;
 
     if (stdin_fd < 0)
         return 0;
-    if (tls_ctx != NULL || uflag || dflag || fuzz_tcp || fuzz_udp)
+    if (uflag || dflag || fuzz_tcp || fuzz_udp)
         return 0;
     if (iflag || jitter || profile || quic_mask)
         return 0;
@@ -193,13 +193,13 @@ static void splice_loop(int net_fd) {
  * readwrite()
  * Loop that polls on the network file descriptor and stdin.
  */
-void readwrite(int net_fd, struct tls* tls_ctx) {
+void readwrite(int net_fd) {
     struct pollfd pfd[4];
     int stdin_fd = STDIN_FILENO;
     int stdout_fd = STDOUT_FILENO;
     int sendfile_stdin_fd = -1;
     int sendfile_enabled = 0;
-    size_t iobufsize = io_buffer_capacity(tls_ctx);
+    size_t iobufsize = io_buffer_capacity();
     unsigned char* netinbuf = NULL;
     unsigned char* stdinbuf = NULL;
     size_t netinbufpos = 0;
@@ -216,7 +216,7 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
     if (posix_memalign((void**)&stdinbuf, 4096, iobufsize))
         err(EXIT_RUNTIME, "memalign");
 
-    if (spliceflag && !tls_ctx) {
+    if (spliceflag) {
         free(netinbuf);
         free(stdinbuf);
         splice_loop(net_fd);
@@ -237,7 +237,7 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
     if (dflag || fuzz_tcp || fuzz_udp)
         stdin_fd = -1;
     sendfile_stdin_fd = stdin_fd;
-    sendfile_enabled = io_sendfile_eligible(net_fd, sendfile_stdin_fd, tls_ctx);
+    sendfile_enabled = io_sendfile_eligible(net_fd, sendfile_stdin_fd);
     if (sendfile_enabled)
         stdin_fd = -1;
 
@@ -378,12 +378,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
         /* try to read from stdin */
         if (pfd[POLL_STDIN].revents & POLLIN && stdinbufpos < iobufsize) {
             ret = fillbuf(
-                pfd[POLL_STDIN].fd, stdinbuf, &stdinbufpos, iobufsize, NULL, net_fd, &hex_offsets);
-            if (ret == TLS_WANT_POLLIN)
-                pfd[POLL_STDIN].events = POLLIN;
-            else if (ret == TLS_WANT_POLLOUT)
-                pfd[POLL_STDIN].events = POLLOUT;
-            else if (ret == 0 || ret == -1)
+                pfd[POLL_STDIN].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex_offsets);
+            if (ret == 0 || ret == -1)
                 pfd[POLL_STDIN].fd = -1;
             /* read something - poll net out */
             if (stdinbufpos > 0)
@@ -423,12 +419,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
         /* try to write to network */
         if (!sendfile_enabled && (pfd[POLL_NETOUT].revents & POLLOUT) && stdinbufpos > 0) {
             ret = drainbuf(
-                pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, tls_ctx, net_fd, &hex_offsets);
-            if (ret == TLS_WANT_POLLIN)
-                pfd[POLL_NETOUT].events = POLLIN;
-            else if (ret == TLS_WANT_POLLOUT)
-                pfd[POLL_NETOUT].events = POLLOUT;
-            else if (ret == -1)
+                pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex_offsets);
+            if (ret == -1)
                 pfd[POLL_NETOUT].fd = -1;
             /* buffer empty - remove self from polling */
             if (stdinbufpos == 0)
@@ -440,12 +432,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
         /* try to read from network */
         if (pfd[POLL_NETIN].revents & POLLIN && netinbufpos < iobufsize) {
             ret = fillbuf(
-                pfd[POLL_NETIN].fd, netinbuf, &netinbufpos, iobufsize, tls_ctx, net_fd, &hex_offsets);
-            if (ret == TLS_WANT_POLLIN)
-                pfd[POLL_NETIN].events = POLLIN;
-            else if (ret == TLS_WANT_POLLOUT)
-                pfd[POLL_NETIN].events = POLLOUT;
-            else if (ret == -1)
+                pfd[POLL_NETIN].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex_offsets);
+            if (ret == -1)
                 pfd[POLL_NETIN].fd = -1;
             /* eof on net in - remove from pfd */
             if (ret == 0) {
@@ -468,12 +456,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
         /* try to write to stdout */
         if (pfd[POLL_STDOUT].revents & POLLOUT && netinbufpos > 0) {
             ret = drainbuf(
-                pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, NULL, net_fd, &hex_offsets);
-            if (ret == TLS_WANT_POLLIN)
-                pfd[POLL_STDOUT].events = POLLIN;
-            else if (ret == TLS_WANT_POLLOUT)
-                pfd[POLL_STDOUT].events = POLLOUT;
-            else if (ret == -1)
+                pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex_offsets);
+            if (ret == -1)
                 pfd[POLL_STDOUT].fd = -1;
             /* buffer empty - remove self from polling */
             if (netinbufpos == 0)
@@ -505,7 +489,6 @@ ssize_t drainbuf(int fd,
                  unsigned char* buf,
                  size_t* bufpos,
                  size_t buflen,
-                 struct tls* tls,
                  int net_fd,
                  struct nc_hex_offsets* hex_offsets) {
     ssize_t n;
@@ -527,7 +510,7 @@ ssize_t drainbuf(int fd,
         write_len = 0;
 
         /* Preserve UDP datagram semantics by splitting oversized writes. */
-        if (uflag && !tls && original_len > UDP_MAX_WRITE_PAYLOAD)
+        if (uflag && original_len > UDP_MAX_WRITE_PAYLOAD)
             original_len = UDP_MAX_WRITE_PAYLOAD;
         if (original_len > BUFSIZE)
             original_len = BUFSIZE;
@@ -641,15 +624,7 @@ ssize_t drainbuf(int fd,
         /* Blocking write loop to ensure masked packet is sent intact */
         size_t total_written = 0;
         while (total_written < write_len) {
-            ssize_t res;
-            if (tls) {
-                res = tls_write(tls, write_buf + total_written, write_len - total_written);
-                if (res == -1)
-                    errx(EXIT_RUNTIME, "tls write failed (%s)", tls_error(tls));
-            }
-            else {
-                res = direct_write(fd, write_buf + total_written, write_len - total_written);
-            }
+            ssize_t res = direct_write(fd, write_buf + total_written, write_len - total_written);
 
             if (res == -1) {
                 if (errno == EAGAIN || errno == EINTR) {
@@ -658,11 +633,6 @@ ssize_t drainbuf(int fd,
                     continue;
                 }
                 return -1;
-            }
-            if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT) {
-                if (nc_sleep_milliseconds(1) == -1)
-                    return -1;
-                continue;
             }
             total_written += res;
         }
@@ -680,20 +650,12 @@ ssize_t drainbuf(int fd,
     }
     else {
         write_len = *bufpos;
-        if (uflag && fd == net_fd && !tls && write_len > UDP_MAX_WRITE_PAYLOAD)
+        if (uflag && fd == net_fd && write_len > UDP_MAX_WRITE_PAYLOAD)
             write_len = UDP_MAX_WRITE_PAYLOAD;
 
-        if (tls) {
-            n = tls_write(tls, buf, write_len);
-            if (n == -1)
-                errx(EXIT_RUNTIME, "tls write failed (%s)", tls_error(tls));
-        }
-        else {
-            n = direct_write(fd, buf, write_len);
-            /* don't treat EAGAIN, EINTR as error */
-            if (n == -1 && (errno == EAGAIN || errno == EINTR))
-                n = TLS_WANT_POLLOUT;
-        }
+        n = direct_write(fd, buf, write_len);
+        if (n == -1 && (errno == EAGAIN || errno == EINTR))
+            return NC_IO_RETRY;
         if (n <= 0)
             return n;
 
@@ -718,7 +680,6 @@ ssize_t fillbuf(int fd,
                 unsigned char* buf,
                 size_t* bufpos,
                 size_t buflen,
-                struct tls* tls,
                 int net_fd,
                 struct nc_hex_offsets* hex_offsets) {
     size_t num;
@@ -732,17 +693,9 @@ ssize_t fillbuf(int fd,
     }
     num = buflen - *bufpos;
 
-    if (tls) {
-        n = tls_read(tls, buf + *bufpos, num);
-        if (n == -1)
-            errx(EXIT_RUNTIME, "tls read failed (%s)", tls_error(tls));
-    }
-    else {
-        n = direct_read(fd, buf + *bufpos, num);
-        /* don't treat EAGAIN, EINTR as error */
-        if (n == -1 && (errno == EAGAIN || errno == EINTR))
-            n = TLS_WANT_POLLIN;
-    }
+    n = direct_read(fd, buf + *bufpos, num);
+    if (n == -1 && (errno == EAGAIN || errno == EINTR))
+        return NC_IO_RETRY;
     if (n <= 0)
         return n;
 

@@ -105,22 +105,6 @@ int sockmark = -1; /* SO_MARK */
 
 int sockpriority = -1; /* SO_PRIORITY */
 
-int usetls;           /* use TLS */
-int dtls;             /* use DTLS */
-const char* Cflag;    /* Public cert file */
-const char* Kflag;    /* Private key file */
-const char* oflag;    /* OCSP stapling file */
-const char* Rflag;    /* Root CA file */
-int tls_cachanged;    /* Using non-default CA file */
-int TLSopt;           /* TLS options */
-char* exec_path;      /* program to exec */
-char* tls_expectname; /* required name in peer cert */
-char* tls_expecthash; /* required hash of peer cert */
-char* tls_ciphers;    /* TLS ciphers */
-char* tls_protocols;  /* TLS protocols */
-char* tls_alpn;       /* TLS ALPN */
-FILE* Zflag;          /* file to save peer cert */
-
 int recvcount, recvlimit;
 int timeout = -1;
 int family = AF_UNSPEC;
@@ -136,19 +120,9 @@ int jitter;
 char* profile;
 int quic_mask;
 char* xdp_iface;
-pid_t child_pid = -1;
 static int io_uringflag;          /* require io_uring backend */
 static int quietflag;             /* suppress non-error informational output */
 static const char* log_file_path; /* append diagnostic output to this file */
-
-static void do_readwrite(int nfd, struct tls* tls_ctx) {
-#ifdef GAPING_SECURITY_HOLE
-    if (exec_path) {
-        spawn_exec(nfd);
-    }
-#endif
-    readwrite(nfd, tls_ctx);
-}
 
 static const char* nc_progname(const char* argv0) {
     const char* base;
@@ -221,9 +195,6 @@ int main(int argc, char* argv[]) {
     const char* errstr;
     struct addrinfo proxyhints;
     char unix_dg_tmp_socket_buf[UNIX_DG_TMP_SOCKET_SIZE];
-    struct tls_config* tls_cfg = NULL;
-    struct tls* tls_ctx = NULL;
-    uint32_t protocols;
     int option_index = 0;
     int pcap_path_explicit = 0;
     int pcap_path_default = 0;
@@ -233,7 +204,6 @@ int main(int argc, char* argv[]) {
                                            {"tfo", no_argument, NULL, 1002},
                                            {"mark", required_argument, NULL, 1003},
                                            {"quic", no_argument, NULL, 1004},
-                                           {"dtls", no_argument, NULL, 1005},
                                            {"proxy-proto", no_argument, NULL, 1006},
                                            {"send-proxy", no_argument, NULL, 1007},
                                            {"vsock", required_argument, NULL, 1008},
@@ -262,9 +232,6 @@ int main(int argc, char* argv[]) {
                                            {"mptcp-netlink", no_argument, NULL, 1026},
                                            {"quiet", no_argument, NULL, 1027},
                                            {"log-file", required_argument, NULL, 1028},
-#ifdef GAPING_SECURITY_HOLE
-                                           {"exec", required_argument, NULL, 'e'},
-#endif
                                            {NULL, 0, NULL, 0}};
 
     /* Fast-path for --help and --version to succeed despite malformed flags */
@@ -281,12 +248,10 @@ int main(int argc, char* argv[]) {
     socksv = 5;
     host = NULL;
     uport = NULL;
-    exec_path = NULL;
-    Rflag = tls_default_ca_cert_file();
 
     signal(SIGPIPE, SIG_IGN);
 
-    while ((ch = bx_args_getopt_long(argc, argv, "46C:cDde:FH:hI:i:jK:lM:m:NnO:o:P:p:R:rs:T:UuvW:w:X:x:Z:z", long_options,
+    while ((ch = bx_args_getopt_long(argc, argv, "46DdFhI:i:jlM:m:NnO:P:p:rs:T:UuvW:w:X:x:z", long_options,
                              &option_index)) != -1) {
         switch (ch) {
             case 1001:
@@ -302,11 +267,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 1004:
                 quic_probe = 1;
-                uflag = 1;
-                break;
-            case 1005:
-                dtls = 1;
-                usetls = 1;
                 uflag = 1;
                 break;
             case 1006:
@@ -438,27 +398,11 @@ int main(int argc, char* argv[]) {
                 else
                     errx(EXIT_USAGE, "unsupported proxy protocol");
                 break;
-            case 'C':
-                Cflag = optarg;
-                break;
-            case 'c':
-                usetls = 1;
-                break;
             case 'd':
                 dflag = 1;
                 break;
-            case 'e':
-#ifdef GAPING_SECURITY_HOLE
-                exec_path = optarg;
-#else
-                tls_expectname = optarg;
-#endif
-                break;
             case 'F':
                 Fflag = 1;
-                break;
-            case 'H':
-                tls_expecthash = optarg;
                 break;
             case 'h':
                 help();
@@ -467,9 +411,6 @@ int main(int argc, char* argv[]) {
                 iflag = nc_strtonum(optarg, 0, UINT_MAX, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "interval %s: %s", errstr, optarg);
-                break;
-            case 'K':
-                Kflag = optarg;
                 break;
             case 'l':
                 lflag = 1;
@@ -495,10 +436,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 'p':
                 pflag = optarg;
-                break;
-            case 'R':
-                tls_cachanged = 1;
-                Rflag = optarg;
                 break;
             case 'r':
                 rflag = 1;
@@ -536,12 +473,6 @@ int main(int argc, char* argv[]) {
                     err(EXIT_USAGE, NULL);
                 proxy = proxy_alloc;
                 break;
-            case 'Z':
-                if (strcmp(optarg, "-") == 0)
-                    Zflag = stderr;
-                else if ((Zflag = fopen(optarg, "w")) == NULL)
-                    err(EXIT_USAGE, "can't open %s", optarg);
-                break;
             case 'z':
                 zflag = 1;
                 break;
@@ -558,14 +489,9 @@ int main(int argc, char* argv[]) {
                 if (errstr != NULL)
                     errx(EXIT_USAGE, "TCP send window %s: %s", errstr, optarg);
                 break;
-            case 'o':
-                oflag = optarg;
-                break;
             case 'T':
                 errstr = NULL;
                 errno = 0;
-                if (process_tls_opt(optarg, &TLSopt))
-                    break;
                 if (process_tos_opt(optarg, &Tflag))
                     break;
                 if (strlen(optarg) > 1 && optarg[0] == '0' && optarg[1] == 'x') {
@@ -575,7 +501,7 @@ int main(int argc, char* argv[]) {
                 else
                     Tflag = (int)nc_strtonum(optarg, 0, 255, &errstr);
                 if (Tflag < 0 || Tflag > 255 || errstr || errno) {
-                    fprintf(stderr, "%s: illegal tos/tls value %s\n", progname, optarg);
+                    fprintf(stderr, "%s: illegal tos value %s\n", progname, optarg);
                     exit(EXIT_USAGE);
                 }
                 break;
@@ -672,16 +598,14 @@ int main(int argc, char* argv[]) {
 
     /*
      * Flag precedence and conflict matrix:
-     * - QUIC, DTLS, TLS are mutually exclusive (QUIC uses UDP, DTLS uses UDP,
-     *   TLS uses TCP). QUIC and DTLS automatically enable UDP mode.
-     * - Proxy (SOCKS/HTTP) requires TCP and cannot be used with QUIC, DTLS,
+     * - QUIC probing automatically enables UDP mode.
+     * - Proxy (SOCKS/HTTP) requires TCP and cannot be used with QUIC,
      *   listen mode, UNIX sockets, or local source address.
      * - PCAP capture (-pcap) and JSON output (-j) are orthogonal and can be
      *   combined with any protocol.
-     * - UDP mode (-u) is required for QUIC and DTLS, incompatible with TLS.
+     * - UDP mode (-u) is required for QUIC.
      * - Keep-open requires listen mode.
-     * - Splice cannot be used with TLS, UDP, port scanning, or FD passing.
-     * - TLS options require -c.
+     * - Splice cannot be used with UDP, port scanning, or FD passing.
      */
 
     if (lflag && sflag)
@@ -698,12 +622,8 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use --quic with -U");
     if (quic_probe && family == AF_VSOCK)
         errx(EXIT_USAGE, "cannot use --quic with --vsock");
-    if (quic_probe && usetls)
-        errx(EXIT_USAGE, "cannot use --quic with TLS/DTLS");
     if (xflag && quic_probe)
         errx(EXIT_USAGE, "no proxy support for QUIC");
-    if (xflag && dtls)
-        errx(EXIT_USAGE, "no proxy support for DTLS");
     if (quic_mask && !quic_probe)
         errx(EXIT_USAGE, "must use --quic with --quic-mask");
     if (mptcp_netlink && !mptcpflag)
@@ -714,38 +634,10 @@ int main(int argc, char* argv[]) {
          pcap_rotate_seconds != 0) &&
         pcapfile == NULL)
         errx(EXIT_USAGE, "pcap options require --pcap or --pcap-default-path");
-    if (uflag && usetls && !dtls)
-        errx(EXIT_USAGE, "cannot use -c and -u");
-    if (uflag && dtls && keepopen)
-        errx(EXIT_USAGE, "--dtls cannot be used with --keep-open");
-    if (spliceflag && (usetls || uflag || zflag || Fflag))
-        errx(EXIT_USAGE, "cannot use --splice with TLS, UDP, port scanning or FD passing");
-    if ((family == AF_UNIX) && usetls)
-        errx(EXIT_USAGE, "cannot use -c and -U");
+    if (spliceflag && (uflag || zflag || Fflag))
+        errx(EXIT_USAGE, "cannot use --splice with UDP, port scanning or FD passing");
     if ((family == AF_UNIX) && Fflag)
         errx(EXIT_USAGE, "cannot use -F and -U");
-    if (Fflag && usetls)
-        errx(EXIT_USAGE, "cannot use -c and -F");
-    if (TLSopt && !usetls)
-        errx(EXIT_USAGE, "you must specify -c to use TLS options");
-    if (Cflag && !usetls)
-        errx(EXIT_USAGE, "you must specify -c to use -C");
-    if (Kflag && !usetls)
-        errx(EXIT_USAGE, "you must specify -c to use -K");
-    if (Zflag && !usetls)
-        errx(EXIT_USAGE, "you must specify -c to use -Z");
-    if (oflag && !Cflag)
-        errx(EXIT_USAGE, "you must specify -C to use -o");
-    if (tls_cachanged && !usetls)
-        errx(EXIT_USAGE, "you must specify -c to use -R");
-    if (tls_expecthash && !usetls)
-        errx(EXIT_USAGE, "you must specify -c to use -H");
-    if (tls_expectname && !usetls)
-        errx(EXIT_USAGE, "you must specify -c to use -e");
-#ifdef BX_NC_TLS_DISABLED
-    if (usetls || dtls)
-        errx(EXIT_USAGE, "TLS/DTLS support is disabled in this build");
-#endif
     enforce_io_backend_policy();
 
     /* Get name of temporary socket for unix datagram client */
@@ -818,65 +710,6 @@ int main(int argc, char* argv[]) {
             proxyhints.ai_flags |= AI_NUMERICHOST;
     }
 
-    if (usetls) {
-        if ((tls_cfg = tls_config_new()) == NULL)
-            errx(EXIT_RUNTIME, "unable to allocate TLS config");
-        if (dtls && tls_config_set_dgram(tls_cfg, 1) == -1) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-        }
-        if (Rflag && tls_config_set_ca_file(tls_cfg, Rflag) == -1) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-        }
-        if (Cflag && tls_config_set_cert_file(tls_cfg, Cflag) == -1) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-        }
-        if (Kflag && tls_config_set_key_file(tls_cfg, Kflag) == -1) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-        }
-        if (oflag && tls_config_set_ocsp_staple_file(tls_cfg, oflag) == -1) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-        }
-        if (tls_protocols) {
-            if (tls_config_parse_protocols(&protocols, tls_protocols) == -1) {
-                tls_config_free(tls_cfg);
-                errx(EXIT_USAGE, "invalid TLS protocols `%s'", tls_protocols);
-            }
-            if (tls_config_set_protocols(tls_cfg, protocols) == -1) {
-                tls_config_free(tls_cfg);
-                errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-            }
-        }
-        if (tls_ciphers && tls_config_set_ciphers(tls_cfg, tls_ciphers) == -1) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-        }
-        if (tls_alpn != NULL && tls_config_set_alpn(tls_cfg, tls_alpn) == -1) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_RUNTIME, "%s", tls_config_error(tls_cfg));
-        }
-        if (!lflag && (TLSopt & TLS_CCERT)) {
-            tls_config_free(tls_cfg);
-            errx(EXIT_USAGE, "clientcert is only valid with -l");
-        }
-        if (TLSopt & TLS_NONAME)
-            tls_config_insecure_noverifyname(tls_cfg);
-        if (TLSopt & TLS_NOVERIFY) {
-            if (tls_expecthash != NULL) {
-                tls_config_free(tls_cfg);
-                errx(EXIT_USAGE,
-                     "-H and -T noverify may not be used "
-                     "together");
-            }
-            tls_config_insecure_noverifycert(tls_cfg);
-        }
-        if (TLSopt & TLS_MUSTSTAPLE)
-            tls_config_ocsp_require_stapling(tls_cfg);
-    }
     if (lflag) {
         ret = 0;
 
@@ -900,18 +733,6 @@ int main(int argc, char* argv[]) {
             s = vsock_listen(vsock_cid, vsock_port);
         }
 
-        if (usetls) {
-            tls_config_verify_client_optional(tls_cfg);
-            if ((tls_ctx = tls_server()) == NULL) {
-                tls_config_free(tls_cfg);
-                errx(EXIT_RUNTIME, "tls server creation failed");
-            }
-            if (tls_configure(tls_ctx, tls_cfg) == -1) {
-                tls_free(tls_ctx);
-                tls_config_free(tls_cfg);
-                errx(EXIT_RUNTIME, "tls configuration failed (%s)", tls_error(tls_ctx));
-            }
-        }
         /* Allow only one connection at a time, but stay alive. */
         for (;;) {
             if (family != AF_UNIX && family != AF_VSOCK) {
@@ -921,10 +742,6 @@ int main(int argc, char* argv[]) {
                 if (s != -1 && bpf_prog_path) {
                     if (attach_bpf_prog(s, bpf_prog_path) == -1) {
                         close(s);
-                        if (tls_ctx)
-                            tls_free(tls_ctx);
-                        if (tls_cfg)
-                            tls_config_free(tls_cfg);
                         errx(EXIT_RUNTIME, "bpf attach failed");
                     }
                 }
@@ -939,7 +756,7 @@ int main(int argc, char* argv[]) {
                  * let it receive datagrams from multiple
                  * socket pairs.
                  */
-                do_readwrite(s, NULL);
+                readwrite(s);
             }
             else if (uflag && !keepopen) {
                 /*
@@ -954,20 +771,12 @@ int main(int argc, char* argv[]) {
                 len = sizeof(z);
                 rv = recvfrom(s, buf, sizeof(buf), MSG_PEEK, (struct sockaddr*)&z, &len);
                 if (rv == -1) {
-                    if (usetls) {
-                        tls_free(tls_ctx);
-                        tls_config_free(tls_cfg);
-                    }
                     close(s);
                     err(EXIT_RUNTIME, "recvfrom");
                 }
 
                 rv = direct_connect(s, (struct sockaddr*)&z, len);
                 if (rv == -1) {
-                    if (usetls) {
-                        tls_free(tls_ctx);
-                        tls_config_free(tls_cfg);
-                    }
                     close(s);
                     err(EXIT_RUNTIME, "connect");
                 }
@@ -977,33 +786,15 @@ int main(int argc, char* argv[]) {
                 if (vflag)
                     report_sock("Connection received", (struct sockaddr*)&z, len, family == AF_UNIX ? host : NULL);
 
-                if (usetls) {
-                    struct tls* tls_cctx = NULL;
-                    if ((tls_cctx = tls_setup_server(tls_ctx, s, host)))
-                        do_readwrite(s, tls_cctx);
-                    if (!tls_cctx)
-                        do_readwrite(s, NULL);
-                    if (tls_cctx) {
-                        timeout_tls(s, tls_cctx, tls_close);
-                        tls_free(tls_cctx);
-                    }
-                }
-                else {
-                    do_readwrite(s, NULL);
-                }
+                readwrite(s);
             }
             else {
-                struct tls* tls_cctx = NULL;
                 int connfd;
 
                 len = sizeof(cliaddr);
                 connfd = accept4(s, (struct sockaddr*)&cliaddr, &len, SOCK_NONBLOCK);
                 if (connfd == -1) {
                     /* For now, all errnos are fatal */
-                    if (usetls) {
-                        tls_free(tls_ctx);
-                        tls_config_free(tls_cfg);
-                    }
                     close(s);
                     err(EXIT_RUNTIME, "accept");
                 }
@@ -1012,14 +803,8 @@ int main(int argc, char* argv[]) {
                 if (vflag)
                     report_sock("Connection received", (struct sockaddr*)&cliaddr, len,
                                 family == AF_UNIX ? host : NULL);
-                if ((usetls) && (tls_cctx = tls_setup_server(tls_ctx, connfd, host)))
-                    do_readwrite(connfd, tls_cctx);
-                if (!usetls)
-                    do_readwrite(connfd, NULL);
-                if (tls_cctx)
-                    timeout_tls(s, tls_cctx, tls_close);
+                readwrite(connfd);
                 close(connfd);
-                tls_free(tls_cctx);
             }
 
             if (!keepopen)
@@ -1031,7 +816,7 @@ int main(int argc, char* argv[]) {
 
         if ((s = unix_connect(host)) > 0) {
             if (!zflag)
-                do_readwrite(s, NULL);
+                readwrite(s);
             close(s);
         }
         else {
@@ -1049,7 +834,7 @@ int main(int argc, char* argv[]) {
 
         if ((s = vsock_connect(vsock_cid, vsock_port)) > 0) {
             if (!zflag)
-                do_readwrite(s, NULL);
+                readwrite(s);
             close(s);
         }
         else {
@@ -1069,20 +854,6 @@ int main(int argc, char* argv[]) {
         for (s = -1, i = 0; portlist[i] != NULL; i++) {
             if (s != -1)
                 close(s);
-            tls_free(tls_ctx);
-            tls_ctx = NULL;
-
-            if (usetls) {
-                if ((tls_ctx = tls_client()) == NULL) {
-                    tls_config_free(tls_cfg);
-                    errx(EXIT_RUNTIME, "tls client creation failed");
-                }
-                if (tls_configure(tls_ctx, tls_cfg) == -1) {
-                    tls_free(tls_ctx);
-                    tls_config_free(tls_cfg);
-                    errx(EXIT_RUNTIME, "tls configuration failed (%s)", tls_error(tls_ctx));
-                }
-            }
             if (xflag)
                 s = socks_connect(host, portlist[i], hints, proxy, proxyport, proxyhints, socksv, Pflag);
             else
@@ -1094,10 +865,6 @@ int main(int argc, char* argv[]) {
             if (bpf_prog_path) {
                 if (attach_bpf_prog(s, bpf_prog_path) == -1) {
                     close(s);
-                    if (tls_ctx)
-                        tls_free(tls_ctx);
-                    if (tls_cfg)
-                        tls_config_free(tls_cfg);
                     errx(EXIT_RUNTIME, "bpf attach failed");
                 }
             }
@@ -1140,12 +907,8 @@ int main(int argc, char* argv[]) {
             if (Fflag)
                 fdpass(s);
             else {
-                if (usetls)
-                    tls_setup_client(tls_ctx, s, host);
                 if (!zflag)
-                    do_readwrite(s, tls_ctx);
-                if (tls_ctx)
-                    timeout_tls(s, tls_ctx, tls_close);
+                    readwrite(s);
             }
         }
     }
@@ -1153,19 +916,6 @@ int main(int argc, char* argv[]) {
     if (s != -1)
         close(s);
 
-#ifdef GAPING_SECURITY_HOLE
-    if (child_pid != -1) {
-        int status;
-        waitpid(child_pid, &status, 0);
-        if (WIFEXITED(status))
-            ret = WEXITSTATUS(status);
-        else if (WIFSIGNALED(status))
-            ret = 128 + WTERMSIG(status);
-    }
-#endif
-
-    tls_free(tls_ctx);
-    tls_config_free(tls_cfg);
     free(proxy_alloc);
 
     return ret;

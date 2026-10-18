@@ -95,7 +95,7 @@ int quic_test(int s, char* host, char* port) {
             snprintf(dcid_hex + i * 2, 3, "%02x", buf[6 + i]);
         dcid_hex[16] = '\0';
 
-        json_event_begin(stderr, "info", "quic_initial_sent", "out", "udp", "disabled", "initial_sent", src_addr_p,
+        json_event_begin(stderr, "info", "quic_initial_sent", "out", "udp", "initial_sent", src_addr_p,
                          src_port_p, dst_addr_p, dst_port_p);
         fprintf(stderr,
                 ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\",\"dcid\":\"%s\","
@@ -137,7 +137,7 @@ int quic_test(int s, char* host, char* port) {
             if (jflag) {
                 const char* event = (len >= 21) ? "quic_stateless_reset_detected" : "quic_short_header_received";
                 const char* quic_state = (len >= 21) ? "stateless_reset_detected" : "short_header_received";
-                json_event_begin(stderr, "info", event, "in", "udp", "disabled", quic_state, src_addr_p, src_port_p,
+                json_event_begin(stderr, "info", event, "in", "udp", quic_state, src_addr_p, src_port_p,
                                  dst_addr_p, dst_port_p);
                 fprintf(stderr, ",\"host\":\"%s\",\"port\":\"%s\",\"length\":%zd}\n", host, port, len);
             }
@@ -185,7 +185,7 @@ int quic_test(int s, char* host, char* port) {
                     *p = '\0';
                 }
 
-                json_event_begin(stderr, "info", "quic_version_negotiation_received", "in", "udp", "disabled",
+                json_event_begin(stderr, "info", "quic_version_negotiation_received", "in", "udp",
                                  "version_negotiation", src_addr_p, src_port_p, dst_addr_p, dst_port_p);
                 fprintf(stderr,
                         ",\"host\":\"%s\",\"port\":\"%s\",\"dcid_len\":%zu,\"dcid\":\"%s\","
@@ -235,7 +235,7 @@ int quic_test(int s, char* host, char* port) {
             if (packet_type == 3) { /* Retry */
                 /* Retry packet has token and 16-byte integrity tag */
                 size_t token_len = (recv_len >= off + 16) ? (recv_len - off - 16) : 0;
-                json_event_begin(stderr, "info", "quic_retry_received", "in", "udp", "disabled", "retry_received",
+                json_event_begin(stderr, "info", "quic_retry_received", "in", "udp", "retry_received",
                                  src_addr_p, src_port_p, dst_addr_p, dst_port_p);
                 fprintf(stderr,
                         ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\","
@@ -258,7 +258,7 @@ int quic_test(int s, char* host, char* port) {
                     quic_state = "0rtt_received";
                 else if (packet_type == 2)
                     quic_state = "handshake_received";
-                json_event_begin(stderr, "info", event, "in", "udp", "disabled", quic_state, src_addr_p, src_port_p,
+                json_event_begin(stderr, "info", event, "in", "udp", quic_state, src_addr_p, src_port_p,
                                  dst_addr_p, dst_port_p);
                 fprintf(stderr,
                         ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\","

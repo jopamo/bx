@@ -86,7 +86,6 @@ void json_event_begin(FILE* fp,
                       const char* event,
                       const char* direction,
                       const char* protocol,
-                      const char* tls_state,
                       const char* quic_state,
                       const char* src_addr,
                       const char* src_port,
@@ -99,8 +98,6 @@ void json_event_begin(FILE* fp,
 
     if (level == NULL)
         level = "info";
-    if (tls_state == NULL)
-        tls_state = "disabled";
     if (quic_state == NULL)
         quic_state = "disabled";
 
@@ -113,8 +110,7 @@ void json_event_begin(FILE* fp,
     json_print_string_or_null(fp, direction);
     fprintf(fp, ",\"protocol\":");
     json_print_string_or_null(fp, protocol);
-    fprintf(fp, ",\"tls_state\":");
-    json_print_string_or_null(fp, tls_state);
+    fprintf(fp, ",\"tls_state\":\"disabled\"");
     fprintf(fp, ",\"quic_state\":");
     json_print_string_or_null(fp, quic_state);
     fprintf(fp, ",\"five_tuple\":{\"src_addr\":");
@@ -245,7 +241,7 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
             dst_port = zero_port;
         }
         if (jflag) {
-            json_event_begin(stderr, "info", event_name, direction, protocol, usetls ? "enabled" : "disabled",
+            json_event_begin(stderr, "info", event_name, direction, protocol,
                              "disabled", src_addr, src_port, dst_addr, dst_port);
             fprintf(stderr, ",\"message\":\"%s\",\"path\":\"%s\"}\n", msg, path);
         }
@@ -272,7 +268,7 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
             dst_port = vmport;
         }
         if (jflag) {
-            json_event_begin(stderr, "info", event_name, direction, protocol, usetls ? "enabled" : "disabled",
+            json_event_begin(stderr, "info", event_name, direction, protocol,
                              "disabled", src_addr, src_port, dst_addr, dst_port);
             fprintf(stderr, ",\"message\":\"%s\",\"cid\":%u,\"port\":%u}\n", msg, svm->svm_cid, svm->svm_port);
         }
@@ -302,7 +298,7 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
             dst_addr = host;
             dst_port = port;
         }
-        json_event_begin(stderr, "info", event_name, direction, protocol, usetls ? "enabled" : "disabled", "disabled",
+        json_event_begin(stderr, "info", event_name, direction, protocol, "disabled",
                          src_addr, src_port, dst_addr, dst_port);
         fprintf(stderr, ",\"message\":\"%s\",\"host\":\"%s\",\"port\":\"%s\"}\n", msg, host, port);
     }
@@ -341,14 +337,6 @@ void help(void) {
             "  -l                         Listen mode, for inbound connects\n"
             "      --keep-open            Accept multiple connections in listen mode\n"
             "  -u                         UDP mode\n"
-            "  -c                         Use TLS\n"
-            "  -C <certfile>              Public key file\n"
-            "  -K <keyfile>               Private key file\n"
-            "  -R <CAfile>                CA bundle\n"
-            "  -e <name>                  Required name in peer certificate\n"
-            "  -H <hash>                  Required hash of peer certificate\n"
-            "  -o <file>                  OCSP stapling file\n"
-            "  -Z <file>                  Save peer certificate (use \"-\" for stderr)\n"
             "  -n                         Suppress name/port resolutions\n"
             "  -v                         Verbose\n"
             "  -z                         Zero-I/O mode (scan)\n"
@@ -367,7 +355,7 @@ void help(void) {
             "  -r                         Randomize remote ports\n"
             "  -M <ttl>                   Set IP TTL / IPv6 hops\n"
             "  -m <minttl>                Set IP minimum TTL / hopcount\n"
-            "  -T <keyword|value>         IP TOS/TCLASS or TLS option\n"
+            "  -T <keyword|value>         IP TOS/TCLASS\n"
             "  -I <length>                TCP receive buffer size\n"
             "  -O <length>                TCP send buffer size\n"
             "  -x <addr[:port]>           Proxy address and port\n"
@@ -410,15 +398,14 @@ void help(void) {
 
 void usage(int ret) {
     fprintf(stderr,
-            "usage: nc [-46cDdFhklNnruUvz] [-C certfile] [-e name] "
-            "[-H hash] [-I length]\n"
-            "\t  [-i interval] [--jitter s] [-K keyfile] [-M ttl] [-m minttl] [-O length]\n"
+            "usage: nc [-46DdFhklNnruUvz] [-I length]\n"
+            "\t  [-i interval] [--jitter s] [-M ttl] [-m minttl] [-O length]\n"
             "\t  [--log-file file] [--mptcp-netlink] [--profile type] [--quic-mask] [--quiet]\n"
             "\t  [--pcap file] [--pcap-default-path] [--pcap-snaplen bytes]\n"
             "\t  [--pcap-filter in|out|both] [--pcap-rotate-size bytes]\n"
             "\t  [--pcap-rotate-seconds seconds]\n"
             "\t  [-P proxy_username] [-p source_port]\n"
-            "\t  [-R CAfile] [-s sourceaddr] [-T keyword] [-W recvlimit]\n"
+            "\t  [-s sourceaddr] [-T keyword] [-W recvlimit]\n"
             "\t  [-w timeout] [-X proxy_protocol] [-x proxy_address[:port]]\n"
             "\t  [--bpf-evasion file] [--xdp-stealth iface] [--version]\n"
             "\t  [destination] [port]\n");

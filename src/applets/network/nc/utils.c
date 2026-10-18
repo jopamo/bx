@@ -5,7 +5,6 @@
 #include <sys/timerfd.h>
 #endif
 
-#include "lib/fd_ops.h"
 #include "lib/poll_deadline.h"
 #include "lib/random_bytes.h"
 #include "lib/time_parse.h"
@@ -323,53 +322,3 @@ void build_ports(char* p) {
         }
     }
 }
-
-#ifdef GAPING_SECURITY_HOLE
-void spawn_exec(int net_fd) {
-    int pin[2], pout[2];
-
-    if (bx_fd_pipe_cloexec(pin) == -1)
-        err(EXIT_RUNTIME, "pipe");
-    if (bx_fd_pipe_cloexec(pout) == -1) {
-        int saved_errno = errno;
-        close(pin[0]);
-        close(pin[1]);
-        errno = saved_errno;
-        err(EXIT_RUNTIME, "pipe");
-    }
-
-    switch (child_pid = fork()) {
-        case -1:
-            err(EXIT_RUNTIME, "fork");
-        case 0: /* Child */
-            close(net_fd);
-            if (bx_fd_dup2_exact(pin[0], STDIN_FILENO) == -1)
-                err(EXIT_RUNTIME, "dup2 child stdin");
-            close(pin[0]);
-            close(pin[1]);
-
-            if (bx_fd_dup2_exact(pout[1], STDOUT_FILENO) == -1)
-                err(EXIT_RUNTIME, "dup2 child stdout");
-            if (bx_fd_dup2_exact(pout[1], STDERR_FILENO) == -1)
-                err(EXIT_RUNTIME, "dup2 child stderr");
-            close(pout[0]);
-            close(pout[1]);
-
-            execl("/bin/sh", "sh", "-c", exec_path, (char*)NULL);
-            if (errno == ENOENT)
-                err(EXIT_COMMAND_NOT_FOUND, "execl");
-            else
-                err(EXIT_EXEC_FAILED, "execl");
-        default: /* Parent */
-            if (bx_fd_dup2_exact(pin[1], STDOUT_FILENO) == -1)
-                err(EXIT_RUNTIME, "dup2 parent stdout");
-            close(pin[0]);
-            close(pin[1]);
-
-            if (bx_fd_dup2_exact(pout[0], STDIN_FILENO) == -1)
-                err(EXIT_RUNTIME, "dup2 parent stdin");
-            close(pout[0]);
-            close(pout[1]);
-    }
-}
-#endif
