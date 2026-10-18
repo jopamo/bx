@@ -372,9 +372,6 @@ void help(void) {
             "      --pcap-rotate-seconds <seconds>\n"
             "                             Rotate capture after this many seconds\n"
             "      --hex-dump <file>      Dump session data as hex\n"
-            "      --bpf-prog <file>      Attach BPF program to socket\n"
-            "      --bpf-evasion <file>   Load eBPF program to hide process artifacts\n"
-            "      --xdp-stealth <iface>  Load XDP program for invisible networking\n"
             "      --mptcp                Enable Multipath TCP\n"
             "      --mptcp-netlink        Enable MPTCP PM netlink transition events\n"
             "      --tfo                  Enable TCP Fast Open\n"
@@ -407,7 +404,7 @@ void usage(int ret) {
             "\t  [-P proxy_username] [-p source_port]\n"
             "\t  [-s sourceaddr] [-T keyword] [-W recvlimit]\n"
             "\t  [-w timeout] [-X proxy_protocol] [-x proxy_address[:port]]\n"
-            "\t  [--bpf-evasion file] [--xdp-stealth iface] [--version]\n"
+            "\t  [--version]\n"
             "\t  [destination] [port]\n");
     if (ret)
         exit(EXIT_USAGE);

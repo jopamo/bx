@@ -36,7 +36,6 @@
 #include "pcap.h"
 #include "proxy_proto.h"
 #include "quic.h"
-#include "bpf.h"
 #include "syscalls.h"
 #include "version.h"
 #include "lib/fd_ops.h"
@@ -69,8 +68,6 @@ int send_proxy;         /* PROXY protocol client */
 int quic_probe;         /* QUIC probing */
 FILE* hex_fp;           /* Hex dump file pointer */
 char* hex_path;         /* Hex dump file path */
-char* bpf_prog_path;    /* BPF program path */
-char* bpf_evasion_path; /* BPF evasion program path */
 int Nflag;              /* shutdown() network socket */
 int nflag;              /* Don't do name look up */
 char* Pflag;            /* Proxy username */
@@ -119,7 +116,6 @@ char* vsock_port;
 int jitter;
 char* profile;
 int quic_mask;
-char* xdp_iface;
 static int io_uringflag;          /* require io_uring backend */
 static int quietflag;             /* suppress non-error informational output */
 static const char* log_file_path; /* append diagnostic output to this file */
@@ -219,15 +215,12 @@ int main(int argc, char* argv[]) {
                                            {"splice", no_argument, NULL, 1013},
                                            {"io-uring", no_argument, NULL, 1014},
                                            {"hex-dump", required_argument, NULL, 1015},
-                                           {"bpf-prog", required_argument, NULL, 1016},
                                            {"keep-open", no_argument, NULL, 1017},
                                            {"interface", required_argument, NULL, 1018},
                                            {"transparent", no_argument, NULL, 1019},
-                                           {"bpf-evasion", required_argument, NULL, 1020},
                                            {"jitter", required_argument, NULL, 1021},
                                            {"profile", required_argument, NULL, 1022},
                                            {"quic-mask", no_argument, NULL, 1023},
-                                           {"xdp-stealth", required_argument, NULL, 1024},
                                            {"version", no_argument, NULL, 1025},
                                            {"mptcp-netlink", no_argument, NULL, 1026},
                                            {"quiet", no_argument, NULL, 1027},
@@ -334,9 +327,6 @@ int main(int argc, char* argv[]) {
             case 1015:
                 hex_path = optarg;
                 break;
-            case 1016:
-                bpf_prog_path = optarg;
-                break;
             case 1017:
                 keepopen = 1;
                 break;
@@ -345,11 +335,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 1019:
                 transparent = 1;
-                break;
-            case 1020:
-                bpf_evasion_path = optarg;
-                if (load_bpf_tracepoint(bpf_evasion_path) == -1)
-                    errx(EXIT_USAGE, "bpf evasion load failed");
                 break;
             case 1021:
                 jitter = nc_strtonum(optarg, 0, INT_MAX, &errstr);
@@ -361,9 +346,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 1023:
                 quic_mask = 1;
-                break;
-            case 1024:
-                xdp_iface = optarg;
                 break;
             case 1025:
                 printf("netcat %s (commit %s %s)\n", NC_VERSION, NC_GIT_HASH, NC_GIT_DATE);
@@ -531,14 +513,6 @@ int main(int argc, char* argv[]) {
             close(logfd);
         if (setvbuf(stderr, NULL, _IOLBF, 0) != 0)
             err(EXIT_RUNTIME, "setvbuf stderr");
-    }
-
-    if (xdp_iface) {
-        if (!bpf_prog_path)
-            errx(EXIT_USAGE, "must specify --bpf-prog with --xdp-stealth");
-        if (load_xdp_stealth(bpf_prog_path, xdp_iface) == -1)
-            errx(EXIT_USAGE, "xdp stealth failed");
-        exit(EXIT_OK);
     }
 
     if (netns) {
@@ -739,12 +713,6 @@ int main(int argc, char* argv[]) {
                 if (s != -1)
                     close(s);
                 s = local_listen(host, uport, hints);
-                if (s != -1 && bpf_prog_path) {
-                    if (attach_bpf_prog(s, bpf_prog_path) == -1) {
-                        close(s);
-                        errx(EXIT_RUNTIME, "bpf attach failed");
-                    }
-                }
             }
             if (s == -1)
                 err(EXIT_RUNTIME, NULL);
@@ -861,13 +829,6 @@ int main(int argc, char* argv[]) {
 
             if (s == -1)
                 continue;
-
-            if (bpf_prog_path) {
-                if (attach_bpf_prog(s, bpf_prog_path) == -1) {
-                    close(s);
-                    errx(EXIT_RUNTIME, "bpf attach failed");
-                }
-            }
 
             if (send_proxy)
                 send_proxy_v2(s);

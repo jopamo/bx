@@ -862,7 +862,6 @@ sources += bx_search_sources
 nc_sources = files(
   'src/applets/network/nc/nc.c',
   'src/applets/network/nc/atomicio.c',
-  'src/applets/network/nc/bpf.c',
   'src/applets/network/nc/hexdump.c',
   'src/applets/network/nc/io.c',
   'src/applets/network/nc/log.c',
