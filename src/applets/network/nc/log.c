@@ -383,7 +383,6 @@ void help(void) {
             "      --fuzz-tcp             Send random TCP data\n"
             "      --fuzz-udp             Send random UDP data\n"
             "      --quic                 QUIC probe (UDP)\n"
-            "      --quic-mask            Pad UDP packets to ~1350 bytes\n"
             "      --profile <type>       Malleable profile: html, css, base64-json,\n"
             "                             json-dialect, xor-mask\n"
             "      --version              Show version information\n"
@@ -394,9 +393,9 @@ void help(void) {
 
 void usage(int ret) {
     fprintf(stderr,
-            "usage: nc [-46DdFhklNnruUvz] [-I length]\n"
+            "usage: nc [-46DdFhlNnruUvz] [-I length]\n"
             "\t  [-i interval] [--jitter s] [-M ttl] [-m minttl] [-O length]\n"
-            "\t  [--log-file file] [--mptcp-netlink] [--profile type] [--quic-mask] [--quiet]\n"
+            "\t  [--log-file file] [--mptcp-netlink] [--profile type] [--quiet]\n"
             "\t  [--pcap file] [--pcap-default-path] [--pcap-snaplen bytes]\n"
             "\t  [--pcap-filter in|out|both] [--pcap-rotate-size bytes]\n"
             "\t  [--pcap-rotate-seconds seconds]\n"

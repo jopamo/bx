@@ -97,8 +97,6 @@ char* netns; /* Network namespace path */
 
 int sockmark = -1; /* SO_MARK */
 
-int sockpriority = -1; /* SO_PRIORITY */
-
 int recvcount, recvlimit;
 int timeout = -1;
 int family = AF_UNSPEC;
@@ -112,7 +110,6 @@ char* vsock_port;
 
 int jitter;
 char* profile;
-int quic_mask;
 static int quietflag;             /* suppress non-error informational output */
 static const char* log_file_path; /* append diagnostic output to this file */
 
@@ -192,7 +189,6 @@ int main(int argc, char* argv[]) {
                                            {"transparent", no_argument, NULL, 1019},
                                            {"jitter", required_argument, NULL, 1021},
                                            {"profile", required_argument, NULL, 1022},
-                                           {"quic-mask", no_argument, NULL, 1023},
                                            {"version", no_argument, NULL, 1025},
                                            {"mptcp-netlink", no_argument, NULL, 1026},
                                            {"quiet", no_argument, NULL, 1027},
@@ -312,9 +308,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 1022:
                 profile = optarg;
-                break;
-            case 1023:
-                quic_mask = 1;
                 break;
             case 1025:
                 printf("netcat %s (commit %s %s)\n", NC_VERSION, NC_GIT_HASH, NC_GIT_DATE);
@@ -567,8 +560,6 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use --quic with --vsock");
     if (xflag && quic_probe)
         errx(EXIT_USAGE, "no proxy support for QUIC");
-    if (quic_mask && !quic_probe)
-        errx(EXIT_USAGE, "must use --quic with --quic-mask");
     if (mptcp_netlink && !mptcpflag)
         errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
     if (pcap_path_explicit && pcap_path_default)

@@ -80,7 +80,6 @@ extern int mptcpflag;     /* Multipath TCP */
 extern int mptcp_netlink; /* MPTCP PM netlink diagnostics */
 extern int spliceflag;    /* Zero-copy splice */
 extern int sockmark;      /* SO_MARK */
-extern int sockpriority;  /* SO_PRIORITY */
 extern int nflag;         /* Don't do name look up */
 extern char* Pflag;       /* Proxy username */
 extern char* pflag;       /* Localport flag */
@@ -110,7 +109,6 @@ extern char* vsock_port;
 
 extern int jitter;
 extern char* profile;
-extern int quic_mask;
 
 /* RNG hook for testing */
 extern uint32_t (*nc_random)(void);

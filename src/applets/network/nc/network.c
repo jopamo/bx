@@ -576,15 +576,6 @@ void set_common_sockopts(int s, int af) {
     }
 #endif
 
-#ifdef SO_PRIORITY
-    if (sockpriority != -1) {
-        if (setsockopt(s, SOL_SOCKET, SO_PRIORITY, &sockpriority, sizeof(sockpriority)) == -1) {
-            close(s);
-            err(EXIT_RUNTIME, "set SO_PRIORITY");
-        }
-    }
-#endif
-
 #ifdef SO_BINDTODEVICE
     if (iface != NULL) {
         if (setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, iface, strlen(iface)) == -1) {

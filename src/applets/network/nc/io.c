@@ -38,7 +38,7 @@ static int io_sendfile_eligible(int net_fd, int stdin_fd) {
         return 0;
     if (uflag || dflag || fuzz_tcp || fuzz_udp)
         return 0;
-    if (iflag || jitter || profile || quic_mask)
+    if (iflag || jitter || profile)
         return 0;
     if (pcapfile || hex_path)
         return 0;
@@ -503,7 +503,7 @@ ssize_t drainbuf(int fd,
     }
 
     /* Apply Traffic Masking/Shaping when writing to network */
-    if (fd == net_fd && (profile || quic_mask)) {
+    if (fd == net_fd && profile) {
         unsigned char temp_buf[BUFSIZE * 2];
         unsigned char* write_buf = temp_buf;
         size_t original_len = *bufpos;
@@ -515,110 +515,97 @@ ssize_t drainbuf(int fd,
         if (original_len > BUFSIZE)
             original_len = BUFSIZE;
 
-        /* Malleable Profile */
-        if (profile) {
-            if (strcmp(profile, "html") == 0) {
-                snprintf((char*)temp_buf, sizeof(temp_buf), "<!-- %.*s -->", (int)original_len, buf);
-                write_len = strlen((char*)temp_buf);
-            }
-            else if (strcmp(profile, "css") == 0) {
-                snprintf((char*)temp_buf, sizeof(temp_buf), "/* %.*s */", (int)original_len, buf);
-                write_len = strlen((char*)temp_buf);
-            }
-            else if (strcmp(profile, "base64-json") == 0) {
-                char b64[BUFSIZE * 2];
-                if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
-                    int prefix_len = snprintf((char*)temp_buf,
-                                              sizeof(temp_buf),
-                                              "{\"status\": \"success\", \"session_id\": \"89234\", \"debug_trace\": \"");
-                    if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
-                        memcpy(temp_buf, buf, original_len);
-                        write_len = original_len;
-                    }
-                    else {
-                        size_t used = (size_t)prefix_len;
-                        size_t avail = sizeof(temp_buf) - used;
-                        size_t payload_len = strlen(b64);
-
-                        if (avail <= 3)
-                            payload_len = 0;
-                        else if (payload_len > avail - 3)
-                            payload_len = avail - 3;
-
-                        memcpy(temp_buf + used, b64, payload_len);
-                        used += payload_len;
-                        temp_buf[used++] = '"';
-                        temp_buf[used++] = '}';
-                        temp_buf[used] = '\0';
-                        write_len = used;
-                    }
-                }
-                else {
+        if (strcmp(profile, "html") == 0) {
+            snprintf((char*)temp_buf, sizeof(temp_buf), "<!-- %.*s -->", (int)original_len, buf);
+            write_len = strlen((char*)temp_buf);
+        }
+        else if (strcmp(profile, "css") == 0) {
+            snprintf((char*)temp_buf, sizeof(temp_buf), "/* %.*s */", (int)original_len, buf);
+            write_len = strlen((char*)temp_buf);
+        }
+        else if (strcmp(profile, "base64-json") == 0) {
+            char b64[BUFSIZE * 2];
+            if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
+                int prefix_len = snprintf((char*)temp_buf,
+                                          sizeof(temp_buf),
+                                          "{\"status\": \"success\", \"session_id\": \"89234\", \"debug_trace\": \"");
+                if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
                     memcpy(temp_buf, buf, original_len);
                     write_len = original_len;
                 }
-            }
-            else if (strcmp(profile, "json-dialect") == 0) {
-                char b64[BUFSIZE * 2];
-                if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
-                    /* Dialect: Looks like a telemetry report */
-                    const char* statuses[] = {"active", "idle", "processing", "maintenance"};
-                    const char* regions[] = {"us-east-1", "eu-west-1", "ap-southeast-2", "sa-east-1"};
-                    int prefix_len = snprintf((char*)temp_buf,
-                                              sizeof(temp_buf),
-                                              "{\"metadata\":{\"id\":%u,\"region\":\"%s\",\"status\":\"%s\"},\"payload\":\"",
-                                              nc_random_uniform(10000),
-                                              regions[nc_random_uniform(4)],
-                                              statuses[nc_random_uniform(4)]);
-                    if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
-                        memcpy(temp_buf, buf, original_len);
-                        write_len = original_len;
-                    }
-                    else {
-                        size_t used = (size_t)prefix_len;
-                        size_t avail = sizeof(temp_buf) - used;
-                        size_t payload_len = strlen(b64);
-
-                        if (avail <= 3)
-                            payload_len = 0;
-                        else if (payload_len > avail - 3)
-                            payload_len = avail - 3;
-
-                        memcpy(temp_buf + used, b64, payload_len);
-                        used += payload_len;
-                        temp_buf[used++] = '"';
-                        temp_buf[used++] = '}';
-                        temp_buf[used] = '\0';
-                        write_len = used;
-                    }
-                }
                 else {
-                    memcpy(temp_buf, buf, original_len);
-                    write_len = original_len;
+                    size_t used = (size_t)prefix_len;
+                    size_t avail = sizeof(temp_buf) - used;
+                    size_t payload_len = strlen(b64);
+
+                    if (avail <= 3)
+                        payload_len = 0;
+                    else if (payload_len > avail - 3)
+                        payload_len = avail - 3;
+
+                    memcpy(temp_buf + used, b64, payload_len);
+                    used += payload_len;
+                    temp_buf[used++] = '"';
+                    temp_buf[used++] = '}';
+                    temp_buf[used] = '\0';
+                    write_len = used;
                 }
-            }
-            else if (strcmp(profile, "xor-mask") == 0) {
-                /* 4-byte rolling key: DE AD BE EF */
-                unsigned char key[] = {0xDE, 0xAD, 0xBE, 0xEF};
-                rolling_xor(buf, original_len, temp_buf, key, sizeof(key));
-                write_len = original_len;
-                write_buf = temp_buf;
             }
             else {
-                /* Unknown profile, just copy */
                 memcpy(temp_buf, buf, original_len);
                 write_len = original_len;
             }
         }
+        else if (strcmp(profile, "json-dialect") == 0) {
+            char b64[BUFSIZE * 2];
+            if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
+                /* Dialect: Looks like a telemetry report */
+                const char* statuses[] = {"active", "idle", "processing", "maintenance"};
+                const char* regions[] = {"us-east-1", "eu-west-1", "ap-southeast-2", "sa-east-1"};
+                int prefix_len = snprintf((char*)temp_buf,
+                                          sizeof(temp_buf),
+                                          "{\"metadata\":{\"id\":%u,\"region\":\"%s\",\"status\":\"%s\"},\"payload\":\"",
+                                          nc_random_uniform(10000),
+                                          regions[nc_random_uniform(4)],
+                                          statuses[nc_random_uniform(4)]);
+                if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
+                    memcpy(temp_buf, buf, original_len);
+                    write_len = original_len;
+                }
+                else {
+                    size_t used = (size_t)prefix_len;
+                    size_t avail = sizeof(temp_buf) - used;
+                    size_t payload_len = strlen(b64);
+
+                    if (avail <= 3)
+                        payload_len = 0;
+                    else if (payload_len > avail - 3)
+                        payload_len = avail - 3;
+
+                    memcpy(temp_buf + used, b64, payload_len);
+                    used += payload_len;
+                    temp_buf[used++] = '"';
+                    temp_buf[used++] = '}';
+                    temp_buf[used] = '\0';
+                    write_len = used;
+                }
+            }
+            else {
+                memcpy(temp_buf, buf, original_len);
+                write_len = original_len;
+            }
+        }
+        else if (strcmp(profile, "xor-mask") == 0) {
+            /* 4-byte rolling key: DE AD BE EF */
+            unsigned char key[] = {0xDE, 0xAD, 0xBE, 0xEF};
+            rolling_xor(buf, original_len, temp_buf, key, sizeof(key));
+            write_len = original_len;
+            write_buf = temp_buf;
+        }
         else {
+            /* Unknown profile, just copy */
             memcpy(temp_buf, buf, original_len);
             write_len = original_len;
-        }
-
-        /* QUIC Masking (Padding) */
-        if (quic_mask && write_len < 1350 && sizeof(temp_buf) > 1350) {
-            memset(write_buf + write_len, 'X', 1350 - write_len);
-            write_len = 1350;
         }
 
         /* Blocking write loop to ensure masked packet is sent intact */
