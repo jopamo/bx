@@ -444,6 +444,11 @@ int udptest(int s) {
 void connection_info(int s, const char* host, const char* port, const char* proto, const char* ipaddr) {
     struct servent* sv;
     char* service = "*";
+    char src_addr[NI_MAXHOST];
+    char src_port[NI_MAXSERV];
+    char dst_addr[NI_MAXHOST];
+    char dst_port[NI_MAXSERV];
+    int tuple_available = 0;
 
     /* Look up service name unless -n. */
     if (!nflag) {
@@ -457,26 +462,24 @@ void connection_info(int s, const char* host, const char* port, const char* prot
             service = sv->s_name;
     }
 
+    if (jflag || tfoflag)
+        tuple_available = json_socket_tuple_from_fd(s, src_addr, sizeof(src_addr), src_port, sizeof(src_port), dst_addr, sizeof(dst_addr), dst_port, sizeof(dst_port)) == 0;
+    int requested = tfoflag && !tuple_available;
+
     if (jflag) {
-        char src_addr[NI_MAXHOST];
-        char src_port[NI_MAXSERV];
-        char dst_addr[NI_MAXHOST];
-        char dst_port[NI_MAXSERV];
         const char* src_addr_p = NULL;
         const char* src_port_p = NULL;
         const char* dst_addr_p = NULL;
         const char* dst_port_p = NULL;
 
-        if (json_socket_tuple_from_fd(s, src_addr, sizeof(src_addr), src_port, sizeof(src_port), dst_addr,
-                                      sizeof(dst_addr), dst_port, sizeof(dst_port)) == 0) {
+        if (tuple_available) {
             src_addr_p = src_addr;
             src_port_p = src_port;
             dst_addr_p = dst_addr;
             dst_port_p = dst_port;
         }
 
-        json_event_begin(stderr, "info", "connection_succeeded", "out", proto, "disabled", src_addr_p,
-                         src_port_p, dst_addr_p, dst_port_p);
+        json_event_begin(stderr, "info", requested ? "connection_requested" : "connection_succeeded", "out", proto, "disabled", src_addr_p, src_port_p, dst_addr_p, dst_port_p);
         fputs(",\"host\":", stderr);
         json_print_string_or_null(stderr, host);
         fputs(",\"ip\":", stderr);
@@ -499,7 +502,7 @@ void connection_info(int s, const char* host, const char* port, const char* prot
         if (!nflag && ipaddr != NULL && strcmp(host, ipaddr) != 0)
             fprintf(stderr, " (%s)", ipaddr);
 
-        fprintf(stderr, " %s port [%s/%s] succeeded!\n", port, proto, service);
+        fprintf(stderr, " %s port [%s/%s] %s\n", port, proto, service, requested ? "requested (TCP Fast Open)" : "succeeded!");
     }
 }
 
