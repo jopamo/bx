@@ -417,7 +417,15 @@ void help(void) {
             "      --mptcp                Unavailable in this build\n"
             "      --mptcp-netlink        Unavailable in this build\n"
 #endif
-            "      --tfo                  Enable TCP Fast Open\n"
+#if defined(TCP_FASTOPEN_CONNECT) && defined(TCP_FASTOPEN)
+            "      --tfo                  Request TCP Fast Open on internet TCP sockets\n"
+#elif defined(TCP_FASTOPEN_CONNECT)
+            "      --tfo                  Request TCP Fast Open on internet TCP clients\n"
+#elif defined(TCP_FASTOPEN)
+            "      --tfo                  Request TCP Fast Open on internet TCP listeners\n"
+#else
+            "      --tfo                  Unavailable in this build\n"
+#endif
 #ifdef SO_MARK
             "      --mark <mark>          Set SO_MARK (not UNIX sockets)\n"
 #else

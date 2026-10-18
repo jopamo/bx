@@ -546,6 +546,16 @@ int main(int argc, char* argv[]) {
     if (transparent)
         errx(EXIT_USAGE, "IP_TRANSPARENT is not supported by this build");
 #endif
+    if (tfoflag && (uflag || family == AF_UNIX || family == AF_VSOCK))
+        errx(EXIT_USAGE, "must use --tfo with internet TCP sockets");
+#ifndef TCP_FASTOPEN_CONNECT
+    if (tfoflag && !lflag)
+        errx(EXIT_USAGE, "TCP Fast Open clients are not supported by this build");
+#endif
+#ifndef TCP_FASTOPEN
+    if (tfoflag && lflag)
+        errx(EXIT_USAGE, "TCP Fast Open listeners are not supported by this build");
+#endif
     if (pcapfile) {
         if (zflag || Fflag || quic_probe)
             errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");
