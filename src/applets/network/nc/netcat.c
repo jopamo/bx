@@ -560,6 +560,12 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use --quic with --vsock");
     if (xflag && quic_probe)
         errx(EXIT_USAGE, "no proxy support for QUIC");
+    if (fuzz_tcp && uflag)
+        errx(EXIT_USAGE, "cannot use --fuzz-tcp with UDP");
+    if (fuzz_udp && !uflag)
+        errx(EXIT_USAGE, "must use -u with --fuzz-udp");
+    if ((fuzz_tcp || fuzz_udp) && (zflag || Fflag || quic_probe || spliceflag))
+        errx(EXIT_USAGE, "cannot use random payloads with port scanning, FD passing, QUIC probing or splice");
     if (mptcp_netlink && !mptcpflag)
         errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
     if (pcap_path_explicit && pcap_path_default)

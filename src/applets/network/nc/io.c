@@ -199,6 +199,7 @@ void readwrite(int net_fd) {
     int stdout_fd = STDOUT_FILENO;
     int sendfile_stdin_fd = -1;
     int sendfile_enabled = 0;
+    int generate_payload = (fuzz_tcp || fuzz_udp);
     size_t iobufsize = io_buffer_capacity();
     unsigned char* netinbuf = NULL;
     unsigned char* stdinbuf = NULL;
@@ -313,7 +314,7 @@ void readwrite(int net_fd) {
         }
 
         /* try to fill buffer for fuzzing */
-        if (((fuzz_tcp && !uflag) || (fuzz_udp && uflag)) && stdinbufpos < iobufsize) {
+        if (generate_payload && pfd[POLL_NETOUT].fd != -1 && stdinbufpos < iobufsize) {
             nc_random_buf(stdinbuf + stdinbufpos, iobufsize - stdinbufpos);
             stdinbufpos = iobufsize;
             pfd[POLL_NETOUT].events = POLLOUT;
@@ -441,6 +442,7 @@ void readwrite(int net_fd) {
                 pfd[POLL_NETIN].fd = -1;
             }
             if (recvlimit > 0 && ++recvcount >= recvlimit) {
+                generate_payload = 0;
                 if (pfd[POLL_NETIN].fd != -1)
                     shutdown(pfd[POLL_NETIN].fd, SHUT_RD);
                 pfd[POLL_NETIN].fd = -1;

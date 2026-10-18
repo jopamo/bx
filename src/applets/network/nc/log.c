@@ -381,7 +381,7 @@ void help(void) {
             "      --namespace <path>     Network namespace path\n"
             "      --splice               Use zero-copy splice loop\n"
             "      --fuzz-tcp             Send random TCP data\n"
-            "      --fuzz-udp             Send random UDP data\n"
+            "      --fuzz-udp             Send random UDP data (requires -u)\n"
             "      --quic                 QUIC probe (UDP)\n"
             "      --profile <type>       Malleable profile: html, css, base64-json,\n"
             "                             json-dialect, xor-mask\n"
