@@ -520,6 +520,10 @@ int main(int argc, char* argv[]) {
         if (quic_probe)
             errx(EXIT_USAGE, "cannot use -F with --quic");
     }
+    if (mptcp_netlink && !mptcpflag)
+        errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
+    if (mptcpflag && (uflag || family == AF_UNIX || family == AF_VSOCK))
+        errx(EXIT_USAGE, "must use --mptcp with internet TCP sockets");
     if (pcapfile) {
         if (zflag || Fflag || quic_probe)
             errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");
@@ -639,8 +643,6 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use -i with port scanning, FD passing or QUIC probing");
     if (profile != NC_PROFILE_NONE && (zflag || Fflag || quic_probe))
         errx(EXIT_USAGE, "cannot use --profile with port scanning, FD passing or QUIC probing");
-    if (mptcp_netlink && !mptcpflag)
-        errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
     if (pcap_path_explicit && pcap_path_default)
         errx(EXIT_USAGE, "cannot use --pcap and --pcap-default-path together");
     if ((pcap_snaplen != 65535 || pcap_filter != PCAP_FILTER_BOTH || pcap_rotate_size != 0 ||
