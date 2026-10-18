@@ -528,6 +528,12 @@ int main(int argc, char* argv[]) {
     if (mptcpflag)
         errx(EXIT_USAGE, "MPTCP is not supported by this build");
 #endif
+    if (sockmark != -1 && family == AF_UNIX)
+        errx(EXIT_USAGE, "cannot use --mark with -U");
+#ifndef SO_MARK
+    if (sockmark != -1)
+        errx(EXIT_USAGE, "SO_MARK is not supported by this build");
+#endif
     if (pcapfile) {
         if (zflag || Fflag || quic_probe)
             errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");

@@ -418,7 +418,11 @@ void help(void) {
             "      --mptcp-netlink        Unavailable in this build\n"
 #endif
             "      --tfo                  Enable TCP Fast Open\n"
-            "      --mark <mark>          Set SO_MARK\n"
+#ifdef SO_MARK
+            "      --mark <mark>          Set SO_MARK (not UNIX sockets)\n"
+#else
+            "      --mark <mark>          Unavailable in this build\n"
+#endif
             "      --interface <iface>    Bind socket to device\n"
             "      --transparent          Enable IP_TRANSPARENT\n"
             "      --namespace <path>     Network namespace path\n"
