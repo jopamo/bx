@@ -12,6 +12,12 @@
 #include "lib/fd_ops.h"
 #include "lib/sockaddr_format.h"
 
+static void close_failed_socket(int s) {
+    int error = errno;
+    bx_fd_cleanup(&s);
+    errno = error;
+}
+
 #ifndef IPTOS_DSCP_CS0
 #define IPTOS_DSCP_CS0 0x00
 #define IPTOS_DSCP_CS1 0x20
@@ -262,8 +268,10 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
             }
 
             if (bind(s, (struct sockaddr*)ares->ai_addr, ares->ai_addrlen) == -1) {
+                save_errno = errno;
                 freeaddrinfo(ares);
                 close(s);
+                errno = save_errno;
                 err(EXIT_RUNTIME, "bind failed");
             }
             freeaddrinfo(ares);
@@ -277,7 +285,7 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
                 case 0:
                     break;
                 case EAI_SYSTEM:
-                    close(s);
+                    close_failed_socket(s);
                     err(EXIT_RUNTIME, "getnameinfo");
                 default:
                     close(s);
@@ -332,7 +340,7 @@ int timeout_connect(int s, const struct sockaddr* name, socklen_t namelen) {
             ret = -1;
         }
         else {
-            close(s);
+            close_failed_socket(s);
             err(EXIT_RUNTIME, "connect wait failed");
         }
     }
@@ -374,8 +382,10 @@ int local_listen(const char* host, const char* port, struct addrinfo hints) {
 
         ret = setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &x, sizeof(x));
         if (ret == -1) {
+            save_errno = errno;
             freeaddrinfo(res0);
             close(s);
+            errno = save_errno;
             err(EXIT_RUNTIME, NULL);
         }
 
@@ -392,8 +402,10 @@ int local_listen(const char* host, const char* port, struct addrinfo hints) {
 
     if (!uflag && s != -1) {
         if (listen(s, 1) == -1) {
+            save_errno = errno;
             freeaddrinfo(res0);
             close(s);
+            errno = save_errno;
             err(EXIT_RUNTIME, "listen");
         }
     }
@@ -403,8 +415,10 @@ int local_listen(const char* host, const char* port, struct addrinfo hints) {
 
         len = sizeof(ss);
         if (getsockname(s, (struct sockaddr*)&ss, &len) == -1) {
+            save_errno = errno;
             freeaddrinfo(res0);
             close(s);
+            errno = save_errno;
             err(EXIT_RUNTIME, "getsockname");
         }
         report_sock(uflag ? "Bound" : "Listening", (struct sockaddr*)&ss, len, NULL);
@@ -504,12 +518,6 @@ void connection_info(int s, const char* host, const char* port, const char* prot
 
         fprintf(stderr, " %s port [%s/%s] %s\n", port, proto, service, requested ? "requested (TCP Fast Open)" : "succeeded!");
     }
-}
-
-static void close_failed_socket(int s) {
-    int error = errno;
-    bx_fd_cleanup(&s);
-    errno = error;
 }
 
 void set_common_sockopts(int s, int af) {
