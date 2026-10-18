@@ -468,8 +468,17 @@ void connection_info(int s, const char* host, const char* port, const char* prot
 
         json_event_begin(stderr, "info", "connection_succeeded", "out", proto, "disabled", src_addr_p,
                          src_port_p, dst_addr_p, dst_port_p);
-        fprintf(stderr, ",\"host\":\"%s\",\"ip\":\"%s\",\"port\":\"%s\",\"proto\":\"%s\",\"service\":\"%s\"}\n", host,
-                ipaddr, port, proto, service);
+        fputs(",\"host\":", stderr);
+        json_print_string_or_null(stderr, host);
+        fputs(",\"ip\":", stderr);
+        json_print_string_or_null(stderr, ipaddr);
+        fputs(",\"port\":", stderr);
+        json_print_string_or_null(stderr, port);
+        fputs(",\"proto\":", stderr);
+        json_print_string_or_null(stderr, proto);
+        fputs(",\"service\":", stderr);
+        json_print_string_or_null(stderr, service);
+        fputs("}\n", stderr);
     }
     else {
         fprintf(stderr, "Connection to %s", host);
@@ -478,7 +487,7 @@ void connection_info(int s, const char* host, const char* port, const char* prot
          * if we aren't connecting thru a proxy and
          * there is something to report, print IP
          */
-        if (!nflag && !xflag && strcmp(host, ipaddr) != 0)
+        if (!nflag && ipaddr != NULL && strcmp(host, ipaddr) != 0)
             fprintf(stderr, " (%s)", ipaddr);
 
         fprintf(stderr, " %s port [%s/%s] succeeded!\n", port, proto, service);

@@ -901,7 +901,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 if (print_info == 1 && !quietflag)
-                    connection_info(s, host, portlist[i], uflag ? "udp" : "tcp", ipaddr);
+                    connection_info(s, host, portlist[i], uflag ? "udp" : "tcp", xflag ? NULL : ipaddr);
             }
             if (quic_probe) {
                 close(s);
