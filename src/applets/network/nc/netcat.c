@@ -521,6 +521,10 @@ int main(int argc, char* argv[]) {
         if (quic_probe)
             errx(EXIT_USAGE, "cannot use -F with --quic");
     }
+    if (pcapfile && (zflag || Fflag || quic_probe))
+        errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");
+    if (hex_path && (zflag || Fflag || quic_probe))
+        errx(EXIT_USAGE, "cannot use --hex-dump with port scanning, FD passing or QUIC probing");
     if (proxy_proto && (!lflag || uflag))
         errx(EXIT_USAGE, "must use --proxy-proto with a stream listener");
     if (proxy_proto && send_proxy)
@@ -600,8 +604,6 @@ int main(int argc, char* argv[]) {
      * - QUIC probing automatically enables UDP mode.
      * - Proxy (SOCKS/HTTP) requires TCP and cannot be used with QUIC,
      *   listen mode, UNIX sockets, or local source address.
-     * - PCAP capture (-pcap) and JSON output (-j) are orthogonal and can be
-     *   combined with any protocol.
      * - UDP mode (-u) is required for QUIC.
      * - Keep-open requires listen mode.
      */
