@@ -362,7 +362,7 @@ void help(void) {
             "  -X <proto>                 Proxy protocol: \"5\" (SOCKS) or \"connect\"\n"
             "  -P <proxyuser>             Proxy authentication username\n"
             "      --proxy-proto          Require PROXY v1/v2 on stream listeners\n"
-            "      --send-proxy           Send PROXY v2 from internet stream clients\n"
+            "      --send-proxy           Send PROXY v2 from direct internet stream clients\n"
             "      --pcap <file>          Write a PCAP capture\n"
             "      --pcap-default-path    Write PCAP to a safe auto-generated path\n"
             "      --pcap-snaplen <bytes> Limit captured bytes per packet (1-65535)\n"

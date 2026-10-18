@@ -517,6 +517,8 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use --proxy-proto with --send-proxy");
     if (send_proxy && (lflag || uflag || family == AF_UNIX || family == AF_VSOCK))
         errx(EXIT_USAGE, "must use --send-proxy with an internet stream client");
+    if (send_proxy && xflag)
+        errx(EXIT_USAGE, "cannot use --send-proxy with -x");
 
     if (log_file_path != NULL) {
         int logfd;
