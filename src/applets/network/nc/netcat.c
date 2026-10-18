@@ -540,6 +540,12 @@ int main(int argc, char* argv[]) {
     if (iface != NULL)
         errx(EXIT_USAGE, "SO_BINDTODEVICE is not supported by this build");
 #endif
+    if (transparent && (family == AF_UNIX || family == AF_VSOCK))
+        errx(EXIT_USAGE, "must use --transparent with internet TCP/UDP sockets");
+#ifndef IP_TRANSPARENT
+    if (transparent)
+        errx(EXIT_USAGE, "IP_TRANSPARENT is not supported by this build");
+#endif
     if (pcapfile) {
         if (zflag || Fflag || quic_probe)
             errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");

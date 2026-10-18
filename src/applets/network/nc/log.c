@@ -428,7 +428,11 @@ void help(void) {
 #else
             "      --interface <iface>    Unavailable in this build\n"
 #endif
-            "      --transparent          Enable IP_TRANSPARENT\n"
+#ifdef IP_TRANSPARENT
+            "      --transparent          Enable IP_TRANSPARENT on internet sockets\n"
+#else
+            "      --transparent          Unavailable in this build\n"
+#endif
             "      --namespace <path>     Network namespace path\n"
             "      --fuzz-tcp             Send random TCP data\n"
             "      --fuzz-udp             Send random UDP data (requires -u)\n"
