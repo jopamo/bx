@@ -364,6 +364,7 @@ void help(void) {
             "      --proxy-proto          Require PROXY v1/v2 on stream listeners\n"
             "      --send-proxy           Send PROXY v2 from direct internet stream clients\n"
             "      --pcap <file>          Capture connected internet TCP/UDP relay data\n"
+            "                             Queue loss returns status 1 at relay cleanup\n"
             "      --pcap-default-path    Capture relay PCAP to an auto-generated path\n"
             "      --pcap-snaplen <bytes> Limit captured bytes per packet (1-65535)\n"
             "      --pcap-filter <dir>    Capture direction: in, out, or both\n"

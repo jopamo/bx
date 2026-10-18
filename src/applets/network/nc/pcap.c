@@ -693,6 +693,8 @@ int pcap_close(void) {
             error = errno;
         pcap_cancel_fd = -1;
     }
+    if (error == 0 && pcap_capture_counter_shard.packets_dropped_queue != 0)
+        error = ENOBUFS;
 
     pcap_emit_summary();
     pcap_reset_state();
