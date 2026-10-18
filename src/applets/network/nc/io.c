@@ -2,7 +2,6 @@
 #include "pcap.h"
 #include <fcntl.h>
 #include <math.h>
-#include <sys/mman.h>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
 
@@ -211,11 +210,10 @@ void readwrite(int net_fd) {
     struct timespec mptcp_diag_last;
     struct nc_hex_offsets hex_offsets = {0u, 0u};
 
-    /* Use aligned heap memory for mprotect compatibility (Foliage Sleep) */
-    if (posix_memalign((void**)&netinbuf, 4096, iobufsize))
-        err(EXIT_RUNTIME, "memalign");
-    if (posix_memalign((void**)&stdinbuf, 4096, iobufsize))
-        err(EXIT_RUNTIME, "memalign");
+    if ((netinbuf = malloc(iobufsize)) == NULL)
+        err(EXIT_RUNTIME, "malloc");
+    if ((stdinbuf = malloc(iobufsize)) == NULL)
+        err(EXIT_RUNTIME, "malloc");
 
     if (spliceflag) {
         free(netinbuf);
@@ -277,9 +275,6 @@ void readwrite(int net_fd) {
         if (lflag && pfd[POLL_NETIN].fd == -1 && stdinbufpos == 0 && netinbufpos == 0)
             goto cleanup;
 
-        /* help says -i is for "wait between lines sent". We read and
-         * write arbitrary amounts of data, and we don't want to start
-         * scanning for newlines, so this is as good as it gets */
         if (iflag) {
             double s = (double)iflag;
             if (jitter) {
@@ -289,28 +284,8 @@ void readwrite(int net_fd) {
                     s = 0;
             }
 
-            /* Foliage / Timer-Queue Sleep Logic */
-            /* 1. Obfuscate buffers (XOR) */
-            unsigned char key = 0x55;
-            for (size_t k = 0; k < iobufsize; k++) {
-                stdinbuf[k] ^= key;
-                netinbuf[k] ^= key;
-            }
-            /* 2. Mark memory inaccessible (PAGE_NOACCESS equivalent) */
-            mprotect(stdinbuf, iobufsize, PROT_NONE);
-            mprotect(netinbuf, iobufsize, PROT_NONE);
-
-            /* 3. Sleep on monotonic clock for sub-second jitter precision. */
             if (nc_sleep_monotonic(s) == -1)
                 err(EXIT_RUNTIME, "jitter sleep");
-
-            /* 4. Wake up & Restore */
-            mprotect(stdinbuf, iobufsize, PROT_READ | PROT_WRITE);
-            mprotect(netinbuf, iobufsize, PROT_READ | PROT_WRITE);
-            for (size_t k = 0; k < iobufsize; k++) {
-                stdinbuf[k] ^= key;
-                netinbuf[k] ^= key;
-            }
         }
 
         /* try to fill buffer for fuzzing */

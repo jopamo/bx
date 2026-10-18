@@ -565,6 +565,10 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "must use -u with --fuzz-udp");
     if ((fuzz_tcp || fuzz_udp) && (zflag || Fflag || quic_probe || spliceflag))
         errx(EXIT_USAGE, "cannot use random payloads with port scanning, FD passing, QUIC probing or splice");
+    if (jitter && !iflag)
+        errx(EXIT_USAGE, "must use a nonzero -i with --jitter");
+    if (iflag && (zflag || Fflag || quic_probe || spliceflag))
+        errx(EXIT_USAGE, "cannot use -i with port scanning, FD passing, QUIC probing or splice");
     if (mptcp_netlink && !mptcpflag)
         errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
     if (pcap_path_explicit && pcap_path_default)
