@@ -91,6 +91,7 @@ static pthread_mutex_t pcap_ring_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pcap_ring_cond = PTHREAD_COND_INITIALIZER;
 static pthread_t pcap_writer_thread;
 static int pcap_writer_running;
+static int pcap_writer_error; /* Published to the relay by pthread_join(). */
 static atomic_int pcap_writer_stop;
 
 static void pcap_reset_state(void) {
@@ -110,6 +111,7 @@ static void pcap_reset_state(void) {
     pcap_ring_tail = 0;
     pcap_ring_count = 0;
     pcap_writer_running = 0;
+    pcap_writer_error = 0;
     atomic_store(&pcap_writer_stop, 0);
 }
 
@@ -129,8 +131,10 @@ static int pcap_write_all_fd(int fd, const void* data, size_t len, int stop_sens
             struct pollfd pfd;
             int pr;
 
-            if (stop_sensitive && atomic_load(&pcap_writer_stop))
-                return 1;
+            if (stop_sensitive && atomic_load(&pcap_writer_stop)) {
+                errno = ECANCELED;
+                return -1;
+            }
 
             pfd.fd = fd;
             pfd.events = POLLOUT;
@@ -141,8 +145,10 @@ static int pcap_write_all_fd(int fd, const void* data, size_t len, int stop_sens
                     continue;
                 return -1;
             }
-            if (pr == 0 && stop_sensitive && atomic_load(&pcap_writer_stop))
-                return 1;
+            if (pr == 0 && stop_sensitive && atomic_load(&pcap_writer_stop)) {
+                errno = ECANCELED;
+                return -1;
+            }
             continue;
         }
         if (n == 0)
@@ -201,20 +207,24 @@ fail:
 static int pcap_build_path(unsigned int index, char* out, size_t outsz) {
     int n;
 
-    if (out == NULL || outsz == 0)
+    if (out == NULL || outsz == 0 || pcap_base_path[0] == '\0') {
+        errno = EINVAL;
         return -1;
-    if (pcap_base_path[0] == '\0')
-        return -1;
+    }
 
     if (index == 0) {
-        if (nc_strlcpy(out, pcap_base_path, outsz) >= outsz)
+        if (nc_strlcpy(out, pcap_base_path, outsz) >= outsz) {
+            errno = ENAMETOOLONG;
             return -1;
+        }
         return 0;
     }
 
     n = snprintf(out, outsz, "%s.%u", pcap_base_path, index);
-    if (n < 0 || (size_t)n >= outsz)
+    if (n < 0 || (size_t)n >= outsz) {
+        errno = ENAMETOOLONG;
         return -1;
+    }
     return 0;
 }
 
@@ -249,8 +259,10 @@ static int pcap_open_file_for_index(unsigned int index) {
 static int pcap_maybe_rotate(size_t next_record_size, time_t now) {
     int rotate = 0;
 
-    if (pcap_file_fd == -1)
+    if (pcap_file_fd == -1) {
+        errno = EBADF;
         return -1;
+    }
     if (pcap_writer_file.packets_current_file == 0)
         return 0;
 
@@ -264,9 +276,10 @@ static int pcap_maybe_rotate(size_t next_record_size, time_t now) {
     if (!rotate)
         return 0;
 
-    if (close(pcap_file_fd) == -1)
-        return -1;
+    int fd = pcap_file_fd;
     pcap_file_fd = -1;
+    if (close(fd) == -1)
+        return -1;
 
     pcap_writer_file.rotation_index++;
     if (pcap_open_file_for_index(pcap_writer_file.rotation_index) == -1)
@@ -348,7 +361,6 @@ static void* pcap_writer_main(void* arg) {
 
     for (;;) {
         struct pcap_ring_entry entry;
-        int wr;
 
         pthread_mutex_lock(&pcap_ring_lock);
         while (pcap_ring_count == 0 && !atomic_load(&pcap_writer_stop))
@@ -364,33 +376,15 @@ static void* pcap_writer_main(void* arg) {
         pcap_ring_count--;
         pthread_mutex_unlock(&pcap_ring_lock);
 
-        if (pcap_maybe_rotate(sizeof(entry.rec) + entry.incl_len, entry.capture_time) == -1) {
+        if (pcap_maybe_rotate(sizeof(entry.rec) + entry.incl_len, entry.capture_time) == -1 || pcap_write_all_fd(pcap_file_fd, &entry.rec, sizeof(entry.rec), 1) == -1 ||
+            pcap_write_all_fd(pcap_file_fd, entry.packet, entry.incl_len, 1) == -1) {
+            pcap_writer_error = errno;
             pcap_writer_counter_shard.packets_dropped_io++;
-            continue;
-        }
-
-        wr = pcap_write_all_fd(pcap_file_fd, &entry.rec, sizeof(entry.rec), 1);
-        if (wr != 0) {
-            pcap_writer_counter_shard.packets_dropped_io++;
-            if (wr == 1 && atomic_load(&pcap_writer_stop)) {
-                pthread_mutex_lock(&pcap_ring_lock);
-                pcap_drop_queued_locked();
-                pthread_mutex_unlock(&pcap_ring_lock);
-                break;
-            }
-            continue;
-        }
-
-        wr = pcap_write_all_fd(pcap_file_fd, entry.packet, entry.incl_len, 1);
-        if (wr != 0) {
-            pcap_writer_counter_shard.packets_dropped_io++;
-            if (wr == 1 && atomic_load(&pcap_writer_stop)) {
-                pthread_mutex_lock(&pcap_ring_lock);
-                pcap_drop_queued_locked();
-                pthread_mutex_unlock(&pcap_ring_lock);
-                break;
-            }
-            continue;
+            atomic_store(&pcap_writer_stop, 1);
+            pthread_mutex_lock(&pcap_ring_lock);
+            pcap_drop_queued_locked();
+            pthread_mutex_unlock(&pcap_ring_lock);
+            break;
         }
 
         pcap_writer_counter_shard.packets_written++;
@@ -476,7 +470,7 @@ void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
     size_t incl_len;
     time_t now;
 
-    if (pcap_file_fd == -1 || !pcap_writer_running || fd != pcap_fd)
+    if (!pcap_writer_running || fd != pcap_fd)
         return;
 
     pcap_capture_counter_shard.packets_seen++;
@@ -637,6 +631,11 @@ void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
     rec.orig_len = full_packet_len;
 
     pthread_mutex_lock(&pcap_ring_lock);
+    if (atomic_load(&pcap_writer_stop)) {
+        pcap_capture_counter_shard.packets_dropped_io++;
+        pthread_mutex_unlock(&pcap_ring_lock);
+        return;
+    }
     if (pcap_ring_count == PCAP_RING_CAPACITY) {
         pcap_capture_counter_shard.packets_dropped_queue++;
         pthread_mutex_unlock(&pcap_ring_lock);
@@ -656,21 +655,34 @@ void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
     pthread_mutex_unlock(&pcap_ring_lock);
 }
 
-void pcap_close(void) {
+int pcap_close(void) {
+    int error = 0;
+
     if (pcap_writer_running) {
         atomic_store(&pcap_writer_stop, 1);
         pthread_mutex_lock(&pcap_ring_lock);
         pthread_cond_signal(&pcap_ring_cond);
         pthread_mutex_unlock(&pcap_ring_lock);
-        pthread_join(pcap_writer_thread, NULL);
+        error = pthread_join(pcap_writer_thread, NULL);
+        if (error != 0) {
+            errno = error;
+            return -1;
+        }
         pcap_writer_running = 0;
+        error = pcap_writer_error;
     }
 
     if (pcap_file_fd != -1) {
-        close(pcap_file_fd);
+        if (close(pcap_file_fd) == -1 && error == 0)
+            error = errno;
         pcap_file_fd = -1;
     }
 
     pcap_emit_summary();
     pcap_reset_state();
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
+    return 0;
 }

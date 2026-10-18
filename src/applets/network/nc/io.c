@@ -134,6 +134,7 @@ void readwrite(int net_fd) {
     int mptcp_diag_enabled = (mptcpflag && vflag >= 2 && !uflag);
     struct timespec mptcp_diag_last;
     struct nc_hex_offsets hex_offsets = {0u, 0u};
+    int pcap_error = 0;
 
     if ((netinbuf = malloc(iobufsize)) == NULL)
         err(EXIT_RUNTIME, "malloc");
@@ -374,10 +375,14 @@ void readwrite(int net_fd) {
         }
     }
 cleanup:
-    if (pcapfile)
-        pcap_close();
+    if (pcapfile && pcap_close() == -1)
+        pcap_error = errno;
     free(netinbuf);
     free(stdinbuf);
+    if (pcap_error) {
+        errno = pcap_error;
+        err(EXIT_RUNTIME, "pcap %s", pcapfile[0] ? pcapfile : "default path");
+    }
 }
 
 ssize_t drainbuf(int fd,

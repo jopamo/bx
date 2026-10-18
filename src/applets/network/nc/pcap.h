@@ -5,6 +5,6 @@
 
 int pcap_open(int fd, const char* path);
 void pcap_log(int fd, const unsigned char* buf, size_t len, int direction);
-void pcap_close(void);
+int pcap_close(void);
 
 #endif
