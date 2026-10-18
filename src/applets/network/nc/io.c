@@ -4,15 +4,27 @@
 #include <sys/sendfile.h>
 #include <sys/stat.h>
 
+#include "lib/fd_ops.h"
 #include "lib/poll_deadline.h"
 #include "lib/time_parse.h"
 
-struct nc_hex_offsets {
+struct nc_hex_output {
+    FILE* stream;
     size_t in;
     size_t out;
+    int error;
 };
 
 ssize_t (*nc_sendfile_fn)(int out_fd, int in_fd, off_t* offset, size_t count) = sendfile;
+
+static void io_hexdump(struct nc_hex_output* hex, int outbound, const unsigned char* buf, size_t len) {
+    if (hex == NULL || hex->stream == NULL || hex->error)
+        return;
+    size_t* offset = outbound ? &hex->out : &hex->in;
+    if (hexdump(hex->stream, outbound ? ">" : "<", buf, len, *offset) == -1)
+        hex->error = errno ? errno : EIO;
+    *offset += len;
+}
 
 static size_t io_buffer_capacity(void) {
     if (uflag)
@@ -133,7 +145,8 @@ void readwrite(int net_fd) {
     ssize_t ret;
     int mptcp_diag_enabled = (mptcpflag && vflag >= 2 && !uflag);
     struct timespec mptcp_diag_last;
-    struct nc_hex_offsets hex_offsets = {0u, 0u};
+    struct nc_hex_output hex = {0};
+    FILE* hex_owned = NULL;
     int pcap_error = 0;
 
     if ((netinbuf = malloc(iobufsize)) == NULL)
@@ -146,9 +159,21 @@ void readwrite(int net_fd) {
 
     if (hex_path) {
         if (strcmp(hex_path, "-") == 0)
-            hex_fp = stderr;
-        else if ((hex_fp = fopen(hex_path, "w")) == NULL)
-            err(EXIT_RUNTIME, "hex-dump");
+            hex.stream = stderr;
+        else {
+            int fd = bx_fd_open_cloexec(hex_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (fd == -1) {
+                hex.error = errno;
+                goto cleanup;
+            }
+            hex_owned = fdopen(fd, "w");
+            if (hex_owned == NULL) {
+                hex.error = errno;
+                close(fd);
+                goto cleanup;
+            }
+            hex.stream = hex_owned;
+        }
     }
 
     /* don't read from stdin if requested or fuzzing */
@@ -272,8 +297,7 @@ void readwrite(int net_fd) {
 
         /* try to read from stdin */
         if (pfd[POLL_STDIN].revents & POLLIN && stdinbufpos < iobufsize) {
-            ret = fillbuf(
-                pfd[POLL_STDIN].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex_offsets);
+            ret = fillbuf(pfd[POLL_STDIN].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex);
             if (ret == 0 || ret == -1)
                 pfd[POLL_STDIN].fd = -1;
             /* read something - poll net out */
@@ -313,8 +337,7 @@ void readwrite(int net_fd) {
         }
         /* try to write to network */
         if (!sendfile_enabled && (pfd[POLL_NETOUT].revents & POLLOUT) && stdinbufpos > 0) {
-            ret = drainbuf(
-                pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex_offsets);
+            ret = drainbuf(pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex);
             if (ret == -1)
                 pfd[POLL_NETOUT].fd = -1;
             /* buffer empty - remove self from polling */
@@ -326,8 +349,7 @@ void readwrite(int net_fd) {
         }
         /* try to read from network */
         if (pfd[POLL_NETIN].revents & POLLIN && netinbufpos < iobufsize) {
-            ret = fillbuf(
-                pfd[POLL_NETIN].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex_offsets);
+            ret = fillbuf(pfd[POLL_NETIN].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex);
             if (ret == -1)
                 pfd[POLL_NETIN].fd = -1;
             /* eof on net in - remove from pfd */
@@ -351,8 +373,7 @@ void readwrite(int net_fd) {
         }
         /* try to write to stdout */
         if (pfd[POLL_STDOUT].revents & POLLOUT && netinbufpos > 0) {
-            ret = drainbuf(
-                pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex_offsets);
+            ret = drainbuf(pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex);
             if (ret == -1)
                 pfd[POLL_STDOUT].fd = -1;
             /* buffer empty - remove self from polling */
@@ -377,20 +398,21 @@ void readwrite(int net_fd) {
 cleanup:
     if (pcapfile && pcap_close() == -1)
         pcap_error = errno;
+    if (hex_owned != NULL && fclose(hex_owned) == EOF && !hex.error)
+        hex.error = errno ? errno : EIO;
     free(netinbuf);
     free(stdinbuf);
     if (pcap_error) {
         errno = pcap_error;
         err(EXIT_RUNTIME, "pcap %s", pcapfile[0] ? pcapfile : "default path");
     }
+    if (hex.error) {
+        errno = hex.error;
+        err(EXIT_RUNTIME, "hex-dump %s", hex_path);
+    }
 }
 
-ssize_t drainbuf(int fd,
-                 unsigned char* buf,
-                 size_t* bufpos,
-                 size_t buflen,
-                 int net_fd,
-                 struct nc_hex_offsets* hex_offsets) {
+ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int net_fd, struct nc_hex_output* hex) {
     ssize_t n;
     ssize_t adjust;
     size_t write_len;
@@ -528,10 +550,7 @@ ssize_t drainbuf(int fd,
         if (pcapfile)
             pcap_log(fd, write_buf, write_len, 1);
 
-        if (hex_fp && hex_offsets != NULL) {
-            hexdump(hex_fp, ">", write_buf, write_len, hex_offsets->out);
-            hex_offsets->out += write_len;
-        }
+        io_hexdump(hex, 1, write_buf, write_len);
     }
     else {
         write_len = *bufpos;
@@ -547,10 +566,8 @@ ssize_t drainbuf(int fd,
         if (pcapfile)
             pcap_log(fd, buf, n, 1);
 
-        if (hex_fp && fd == net_fd && hex_offsets != NULL) {
-            hexdump(hex_fp, ">", buf, n, hex_offsets->out);
-            hex_offsets->out += n;
-        }
+        if (fd == net_fd)
+            io_hexdump(hex, 1, buf, n);
     }
 
     /* adjust buffer */
@@ -561,12 +578,7 @@ ssize_t drainbuf(int fd,
     return n;
 }
 
-ssize_t fillbuf(int fd,
-                unsigned char* buf,
-                size_t* bufpos,
-                size_t buflen,
-                int net_fd,
-                struct nc_hex_offsets* hex_offsets) {
+ssize_t fillbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int net_fd, struct nc_hex_output* hex) {
     size_t num;
     ssize_t n;
 
@@ -587,10 +599,8 @@ ssize_t fillbuf(int fd,
     if (pcapfile)
         pcap_log(fd, buf + *bufpos, n, 0);
 
-    if (hex_fp && fd == net_fd && hex_offsets != NULL) {
-        hexdump(hex_fp, "<", buf + *bufpos, n, hex_offsets->in);
-        hex_offsets->in += n;
-    }
+    if (fd == net_fd)
+        io_hexdump(hex, 0, buf + *bufpos, n);
 
     *bufpos += n;
     return n;

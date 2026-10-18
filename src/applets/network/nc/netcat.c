@@ -72,7 +72,6 @@ unsigned int pcap_rotate_seconds;
 int proxy_proto;        /* PROXY protocol server */
 int send_proxy;         /* PROXY protocol client */
 int quic_probe;         /* QUIC probing */
-FILE* hex_fp;           /* Hex dump file pointer */
 char* hex_path;         /* Hex dump file path */
 int Nflag;              /* shutdown() network socket */
 int nflag;              /* Don't do name look up */

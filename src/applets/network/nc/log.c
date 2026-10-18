@@ -408,6 +408,8 @@ void help(void) {
             "      --pcap-rotate-seconds <seconds>\n"
             "                             Rotate capture after this many seconds\n"
             "      --hex-dump <file>      Dump relay data as hex\n"
+            "                             Truncate per session; - writes to stderr\n"
+            "                             Output errors return status 1 at relay cleanup\n"
             "      --mptcp                Enable Multipath TCP\n"
             "      --mptcp-netlink        Enable MPTCP PM netlink transition events\n"
             "      --tfo                  Enable TCP Fast Open\n"

@@ -73,7 +73,6 @@ extern unsigned long long pcap_rotate_size;
 extern unsigned int pcap_rotate_seconds;
 extern int proxy_proto;   /* PROXY protocol server */
 extern int send_proxy;    /* PROXY protocol client */
-extern FILE* hex_fp;      /* Hex dump file pointer */
 extern char* hex_path;    /* Hex dump file path */
 extern int Nflag;         /* shutdown() network socket */
 extern int fuzz_tcp;      /* Fuzz TCP with random data */
@@ -182,10 +181,10 @@ int json_socket_tuple_from_fd(int fd,
                               size_t dst_addr_len,
                               char* dst_port,
                               size_t dst_port_len);
-void hexdump(FILE* fp, const char* prefix, const unsigned char* buf, size_t len, size_t total);
+int hexdump(FILE* fp, const char* prefix, const unsigned char* buf, size_t len, size_t total);
 
-struct nc_hex_offsets;
-ssize_t drainbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_offsets*);
-ssize_t fillbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_offsets*);
+struct nc_hex_output;
+ssize_t drainbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_output*);
+ssize_t fillbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_output*);
 
 #endif
