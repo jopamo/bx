@@ -1,11 +1,9 @@
 #include "netcat.h"
 #include "pcap.h"
-#include <fcntl.h>
 #include <math.h>
 #include <sys/sendfile.h>
 #include <sys/stat.h>
 
-#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 
 struct nc_hex_offsets {
@@ -114,80 +112,6 @@ static int base64_encode(const unsigned char* in, size_t in_len, char* out, size
     return p - out;
 }
 
-static void splice_loop(int net_fd) {
-    int p_in[2], p_out[2];
-    struct pollfd pfd[4];
-    int stdin_fd = STDIN_FILENO;
-    int stdout_fd = STDOUT_FILENO;
-    int n, num_fds;
-
-    if (bx_fd_pipe_cloexec(p_in) == -1)
-        err(EXIT_RUNTIME, "pipe");
-    if (bx_fd_pipe_cloexec(p_out) == -1) {
-        int saved_errno = errno;
-        close(p_in[0]);
-        close(p_in[1]);
-        errno = saved_errno;
-        err(EXIT_RUNTIME, "pipe");
-    }
-
-    if (dflag)
-        stdin_fd = -1;
-
-    pfd[POLL_STDIN].fd = stdin_fd;
-    pfd[POLL_STDIN].events = POLLIN;
-    pfd[POLL_NETOUT].fd = net_fd;
-    pfd[POLL_NETOUT].events = 0;
-    pfd[POLL_NETIN].fd = net_fd;
-    pfd[POLL_NETIN].events = POLLIN;
-    pfd[POLL_STDOUT].fd = stdout_fd;
-    pfd[POLL_STDOUT].events = 0;
-
-    while (1) {
-        if (pfd[POLL_STDIN].fd == -1 && pfd[POLL_NETIN].fd == -1)
-            return;
-        if (pfd[POLL_NETOUT].fd == -1 && pfd[POLL_STDOUT].fd == -1)
-            return;
-
-        num_fds = poll(pfd, 4, timeout);
-        if (num_fds == -1)
-            err(EXIT_RUNTIME, "poll");
-        if (num_fds == 0)
-            return;
-
-        for (n = 0; n < 4; n++) {
-            if (pfd[n].revents & (POLLERR | POLLNVAL))
-                pfd[n].fd = -1;
-        }
-
-        if (pfd[POLL_STDIN].revents & POLLIN) {
-            ssize_t s = splice(pfd[POLL_STDIN].fd, NULL, p_in[1], NULL, BUFSIZE, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
-            if (s > 0) {
-                if (splice(p_in[0], NULL, pfd[POLL_NETOUT].fd, NULL, s, SPLICE_F_MOVE) == -1)
-                    pfd[POLL_NETOUT].fd = -1;
-            }
-            else if (s == 0) {
-                pfd[POLL_STDIN].fd = -1;
-                if (Nflag)
-                    shutdown(pfd[POLL_NETOUT].fd, SHUT_WR);
-                pfd[POLL_NETOUT].fd = -1;
-            }
-        }
-
-        if (pfd[POLL_NETIN].revents & POLLIN) {
-            ssize_t s = splice(pfd[POLL_NETIN].fd, NULL, p_out[1], NULL, BUFSIZE, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
-            if (s > 0) {
-                if (splice(p_out[0], NULL, pfd[POLL_STDOUT].fd, NULL, s, SPLICE_F_MOVE) == -1)
-                    pfd[POLL_STDOUT].fd = -1;
-            }
-            else if (s == 0) {
-                pfd[POLL_NETIN].fd = -1;
-                pfd[POLL_STDOUT].fd = -1;
-            }
-        }
-    }
-}
-
 /*
  * readwrite()
  * Loop that polls on the network file descriptor and stdin.
@@ -214,13 +138,6 @@ void readwrite(int net_fd) {
         err(EXIT_RUNTIME, "malloc");
     if ((stdinbuf = malloc(iobufsize)) == NULL)
         err(EXIT_RUNTIME, "malloc");
-
-    if (spliceflag) {
-        free(netinbuf);
-        free(stdinbuf);
-        splice_loop(net_fd);
-        return;
-    }
 
     if (pcapfile)
         pcap_open(net_fd, pcapfile);

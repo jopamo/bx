@@ -379,7 +379,6 @@ void help(void) {
             "      --interface <iface>    Bind socket to device\n"
             "      --transparent          Enable IP_TRANSPARENT\n"
             "      --namespace <path>     Network namespace path\n"
-            "      --splice               Use zero-copy splice loop\n"
             "      --fuzz-tcp             Send random TCP data\n"
             "      --fuzz-udp             Send random UDP data (requires -u)\n"
             "      --quic                 QUIC probe (UDP)\n"

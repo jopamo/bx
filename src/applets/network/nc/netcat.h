@@ -78,7 +78,6 @@ extern int fuzz_udp;      /* Fuzz UDP with random data */
 extern int tfoflag;       /* TCP Fast Open */
 extern int mptcpflag;     /* Multipath TCP */
 extern int mptcp_netlink; /* MPTCP PM netlink diagnostics */
-extern int spliceflag;    /* Zero-copy splice */
 extern int sockmark;      /* SO_MARK */
 extern int nflag;         /* Don't do name look up */
 extern char* Pflag;       /* Proxy username */

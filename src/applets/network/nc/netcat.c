@@ -90,8 +90,6 @@ int tfoflag; /* TCP Fast Open */
 int mptcpflag;     /* Multipath TCP */
 int mptcp_netlink; /* MPTCP PM netlink diagnostics */
 
-int spliceflag; /* Zero-copy splice */
-
 char* netns; /* Network namespace path */
 
 int sockmark = -1; /* SO_MARK */
@@ -181,7 +179,6 @@ int main(int argc, char* argv[]) {
                                            {"pcap-default-path", no_argument, NULL, 1033},
                                            {"fuzz-tcp", no_argument, NULL, 1011},
                                            {"fuzz-udp", no_argument, NULL, 1012},
-                                           {"splice", no_argument, NULL, 1013},
                                            {"hex-dump", required_argument, NULL, 1015},
                                            {"keep-open", no_argument, NULL, 1017},
                                            {"interface", required_argument, NULL, 1018},
@@ -284,9 +281,6 @@ int main(int argc, char* argv[]) {
                 break;
             case 1012:
                 fuzz_udp = 1;
-                break;
-            case 1013:
-                spliceflag = 1;
                 break;
             case 1015:
                 hex_path = optarg;
@@ -540,7 +534,6 @@ int main(int argc, char* argv[]) {
      *   combined with any protocol.
      * - UDP mode (-u) is required for QUIC.
      * - Keep-open requires listen mode.
-     * - Splice cannot be used with UDP, port scanning, or FD passing.
      */
 
     if (lflag && sflag)
@@ -563,12 +556,12 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use --fuzz-tcp with UDP");
     if (fuzz_udp && !uflag)
         errx(EXIT_USAGE, "must use -u with --fuzz-udp");
-    if ((fuzz_tcp || fuzz_udp) && (zflag || Fflag || quic_probe || spliceflag))
-        errx(EXIT_USAGE, "cannot use random payloads with port scanning, FD passing, QUIC probing or splice");
+    if ((fuzz_tcp || fuzz_udp) && (zflag || Fflag || quic_probe))
+        errx(EXIT_USAGE, "cannot use random payloads with port scanning, FD passing or QUIC probing");
     if (jitter && !iflag)
         errx(EXIT_USAGE, "must use a nonzero -i with --jitter");
-    if (iflag && (zflag || Fflag || quic_probe || spliceflag))
-        errx(EXIT_USAGE, "cannot use -i with port scanning, FD passing, QUIC probing or splice");
+    if (iflag && (zflag || Fflag || quic_probe))
+        errx(EXIT_USAGE, "cannot use -i with port scanning, FD passing or QUIC probing");
     if (mptcp_netlink && !mptcpflag)
         errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
     if (pcap_path_explicit && pcap_path_default)
@@ -577,8 +570,6 @@ int main(int argc, char* argv[]) {
          pcap_rotate_seconds != 0) &&
         pcapfile == NULL)
         errx(EXIT_USAGE, "pcap options require --pcap or --pcap-default-path");
-    if (spliceflag && (uflag || zflag || Fflag))
-        errx(EXIT_USAGE, "cannot use --splice with UDP, port scanning or FD passing");
     if ((family == AF_UNIX) && Fflag)
         errx(EXIT_USAGE, "cannot use -F and -U");
 
