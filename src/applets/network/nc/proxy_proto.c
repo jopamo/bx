@@ -14,7 +14,6 @@ struct proxy_info {
     struct sockaddr_storage src;
     struct sockaddr_storage dst;
     int family;
-    int type;
 };
 
 struct proxy_hdr_v2 {
@@ -35,10 +34,6 @@ struct proxy_hdr_v2 {
             uint16_t src_port;
             uint16_t dst_port;
         } ipv6_addr;
-        struct {
-            uint8_t src_addr[108];
-            uint8_t dst_addr[108];
-        } unix_addr;
     } addr;
 } __attribute__((packed));
 
@@ -200,8 +195,10 @@ static int parse_proxy_v2(const uint8_t* buf, size_t len, struct proxy_info* inf
 
 static int serialize_proxy_v2(uint8_t* buf, size_t len, const struct proxy_info* info) {
     struct proxy_hdr_v2* hdr = (struct proxy_hdr_v2*)buf;
-    if (len < 16)
+    if (len < 16) {
+        errno = EMSGSIZE;
         return -1;
+    }
 
     memset(hdr, 0, 16);
     memcpy(hdr->sig, sig_v2, 12);
@@ -211,9 +208,11 @@ static int serialize_proxy_v2(uint8_t* buf, size_t len, const struct proxy_info*
         const struct sockaddr_in* src4 = (const struct sockaddr_in*)&info->src;
         const struct sockaddr_in* dst4 = (const struct sockaddr_in*)&info->dst;
 
-        if (len < 16 + 12)
+        if (len < 16 + 12) {
+            errno = EMSGSIZE;
             return -1;
-        hdr->fam_proto = (info->type == SOCK_STREAM) ? 0x11 : 0x12;
+        }
+        hdr->fam_proto = 0x11;
         hdr->len = htons(12);
         hdr->addr.ipv4_addr.src_addr = src4->sin_addr.s_addr;
         hdr->addr.ipv4_addr.dst_addr = dst4->sin_addr.s_addr;
@@ -225,9 +224,11 @@ static int serialize_proxy_v2(uint8_t* buf, size_t len, const struct proxy_info*
         const struct sockaddr_in6* src6 = (const struct sockaddr_in6*)&info->src;
         const struct sockaddr_in6* dst6 = (const struct sockaddr_in6*)&info->dst;
 
-        if (len < 16 + 36)
+        if (len < 16 + 36) {
+            errno = EMSGSIZE;
             return -1;
-        hdr->fam_proto = (info->type == SOCK_STREAM) ? 0x21 : 0x22;
+        }
+        hdr->fam_proto = 0x21;
         hdr->len = htons(36);
         memcpy(hdr->addr.ipv6_addr.src_addr, &src6->sin6_addr, 16);
         memcpy(hdr->addr.ipv6_addr.dst_addr, &dst6->sin6_addr, 16);
@@ -236,9 +237,8 @@ static int serialize_proxy_v2(uint8_t* buf, size_t len, const struct proxy_info*
         return 16 + 36;
     }
     else {
-        hdr->fam_proto = 0x00; /* UNSPEC */
-        hdr->len = htons(0);
-        return 16;
+        errno = EAFNOSUPPORT;
+        return -1;
     }
 }
 
@@ -287,48 +287,58 @@ static int get_proxy_info_from_fd(int fd, struct proxy_info* info) {
     len = sizeof(type);
     if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == -1)
         return -1;
+    if (type != SOCK_STREAM) {
+        errno = EPROTOTYPE;
+        return -1;
+    }
 
     info->family = info->src.ss_family;
-    info->type = type;
+    if ((info->family != AF_INET && info->family != AF_INET6) || info->dst.ss_family != info->family) {
+        errno = EAFNOSUPPORT;
+        return -1;
+    }
     return 0;
 }
 
-void send_proxy_v2(int fd) {
-    struct proxy_info info;
-    uint8_t buf[512];
-    int n;
-
-    if (get_proxy_info_from_fd(fd, &info) == -1)
-        return;
-
-    n = serialize_proxy_v2(buf, sizeof(buf), &info);
-    if (n > 0)
-        atomicio(vwrite, fd, buf, n);
-}
-
-static int proxy_read_exact(int fd, void* data, size_t len, struct bx_poll_deadline* deadline) {
+static int proxy_io_exact(int fd, void* data, size_t len, struct bx_poll_deadline* deadline, int sending) {
     uint8_t* bytes = data;
     size_t pos = 0;
 
     while (pos < len) {
-        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        struct pollfd pfd = {.fd = fd, .events = sending ? POLLOUT : POLLIN};
         int ready = bx_poll_deadline_wait(deadline, &pfd, 1);
         if (ready <= 0) {
             if (ready == 0)
                 errno = ETIMEDOUT;
             return -1;
         }
-        ssize_t n = recv(fd, bytes + pos, len - pos, MSG_DONTWAIT);
+        ssize_t n = sending ? send(fd, bytes + pos, len - pos, MSG_DONTWAIT | MSG_NOSIGNAL) : recv(fd, bytes + pos, len - pos, MSG_DONTWAIT);
         if (n > 0)
             pos += (size_t)n;
         else if (n == 0) {
-            errno = EPROTO;
+            errno = sending ? EPIPE : EPROTO;
             return -1;
         }
         else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
             return -1;
     }
     return 0;
+}
+
+int send_proxy_v2(int fd) {
+    struct proxy_info info;
+    struct bx_poll_deadline deadline;
+    uint8_t buf[sizeof(struct proxy_hdr_v2)];
+    int n;
+
+    if (get_proxy_info_from_fd(fd, &info) == -1)
+        return -1;
+
+    n = serialize_proxy_v2(buf, sizeof(buf), &info);
+    if (n == -1)
+        return -1;
+    bx_poll_deadline_init(&deadline, timeout);
+    return proxy_io_exact(fd, buf, (size_t)n, &deadline, 1);
 }
 
 int recv_proxy(int fd) {
@@ -339,7 +349,7 @@ int recv_proxy(int fd) {
     memset(&info, 0, sizeof(info));
     bx_poll_deadline_init(&deadline, timeout);
 
-    if (proxy_read_exact(fd, buf, 5, &deadline) == -1)
+    if (proxy_io_exact(fd, buf, 5, &deadline, 0) == -1)
         return -1;
 
     if (memcmp(buf, "PROXY", 5) == 0) {
@@ -347,7 +357,7 @@ int recv_proxy(int fd) {
         size_t i = 5;
         memcpy(line, "PROXY", 5);
         while (i < sizeof(line) - 1) {
-            if (proxy_read_exact(fd, &line[i], 1, &deadline) == -1)
+            if (proxy_io_exact(fd, &line[i], 1, &deadline, 0) == -1)
                 return -1;
             if (line[i] == '\0')
                 goto invalid;
@@ -365,14 +375,14 @@ int recv_proxy(int fd) {
             goto invalid;
     }
     else if (memcmp(buf, sig_v2, 5) == 0) {
-        if (proxy_read_exact(fd, buf + 5, 11, &deadline) == -1)
+        if (proxy_io_exact(fd, buf + 5, 11, &deadline, 0) == -1)
             return -1;
 
         uint16_t len = ntohs(((struct proxy_hdr_v2*)buf)->len);
         if (len > sizeof(buf) - 16)
             goto invalid;
 
-        if (proxy_read_exact(fd, buf + 16, len, &deadline) == -1)
+        if (proxy_io_exact(fd, buf + 16, len, &deadline, 0) == -1)
             return -1;
 
         if (parse_proxy_v2(buf, 16 + len, &info) == 0)

@@ -515,6 +515,8 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "must use --proxy-proto with a stream listener");
     if (proxy_proto && send_proxy)
         errx(EXIT_USAGE, "cannot use --proxy-proto with --send-proxy");
+    if (send_proxy && (lflag || uflag || family == AF_UNIX || family == AF_VSOCK))
+        errx(EXIT_USAGE, "must use --send-proxy with an internet stream client");
 
     if (log_file_path != NULL) {
         int logfd;
@@ -851,8 +853,11 @@ int main(int argc, char* argv[]) {
             if (s == -1)
                 continue;
 
-            if (send_proxy)
-                send_proxy_v2(s);
+            if (send_proxy && send_proxy_v2(s) == -1) {
+                warn("send PROXY header");
+                ret = EXIT_RUNTIME;
+                continue;
+            }
 
             ret = 0;
             if (vflag || zflag || quic_probe) {
