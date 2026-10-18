@@ -1,9 +1,9 @@
 #include "netcat.h"
 #include "pcap.h"
-#include "syscalls.h"
 #include <fcntl.h>
 #include <math.h>
 #include <sys/mman.h>
+#include <sys/sendfile.h>
 #include <sys/stat.h>
 
 #include "lib/fd_ops.h"
@@ -14,7 +14,7 @@ struct nc_hex_offsets {
     size_t out;
 };
 
-ssize_t (*nc_sendfile_fn)(int out_fd, int in_fd, off_t* offset, size_t count) = direct_sendfile;
+ssize_t (*nc_sendfile_fn)(int out_fd, int in_fd, off_t* offset, size_t count) = sendfile;
 
 static size_t io_buffer_capacity(void) {
     if (uflag)
@@ -613,7 +613,7 @@ ssize_t drainbuf(int fd,
         /* Blocking write loop to ensure masked packet is sent intact */
         size_t total_written = 0;
         while (total_written < write_len) {
-            ssize_t res = direct_write(fd, write_buf + total_written, write_len - total_written);
+            ssize_t res = write(fd, write_buf + total_written, write_len - total_written);
 
             if (res == -1) {
                 if (errno == EAGAIN || errno == EINTR) {
@@ -642,7 +642,7 @@ ssize_t drainbuf(int fd,
         if (uflag && fd == net_fd && write_len > UDP_MAX_WRITE_PAYLOAD)
             write_len = UDP_MAX_WRITE_PAYLOAD;
 
-        n = direct_write(fd, buf, write_len);
+        n = write(fd, buf, write_len);
         if (n == -1 && (errno == EAGAIN || errno == EINTR))
             return NC_IO_RETRY;
         if (n <= 0)
@@ -682,7 +682,7 @@ ssize_t fillbuf(int fd,
     }
     num = buflen - *bufpos;
 
-    n = direct_read(fd, buf + *bufpos, num);
+    n = read(fd, buf + *bufpos, num);
     if (n == -1 && (errno == EAGAIN || errno == EINTR))
         return NC_IO_RETRY;
     if (n <= 0)

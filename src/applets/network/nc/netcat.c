@@ -36,7 +36,6 @@
 #include "pcap.h"
 #include "proxy_proto.h"
 #include "quic.h"
-#include "syscalls.h"
 #include "version.h"
 #include "lib/fd_ops.h"
 #include <getopt.h>
@@ -708,7 +707,7 @@ int main(int argc, char* argv[]) {
                     err(EXIT_RUNTIME, "recvfrom");
                 }
 
-                rv = direct_connect(s, (struct sockaddr*)&z, len);
+                rv = connect(s, (struct sockaddr*)&z, len);
                 if (rv == -1) {
                     close(s);
                     err(EXIT_RUNTIME, "connect");

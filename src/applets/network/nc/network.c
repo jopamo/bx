@@ -1,6 +1,5 @@
 #include "netcat.h"
 #include <stddef.h>
-#include "syscalls.h"
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -80,12 +79,12 @@ int vsock_listen(const char* cid_str, const char* port_str) {
 
     set_common_sockopts(s, AF_VSOCK);
 
-    if (direct_bind(s, (struct sockaddr*)&svm, sizeof(svm)) == -1) {
+    if (bind(s, (struct sockaddr*)&svm, sizeof(svm)) == -1) {
         close(s);
         return -1;
     }
 
-    if (direct_listen(s, 5) == -1) {
+    if (listen(s, 5) == -1) {
         close(s);
         return -1;
     }
@@ -119,7 +118,7 @@ int vsock_connect(const char* cid_str, const char* port_str) {
 
     set_common_sockopts(s, AF_VSOCK);
 
-    if (direct_connect(s, (struct sockaddr*)&svm, sizeof(svm)) == -1) {
+    if (connect(s, (struct sockaddr*)&svm, sizeof(svm)) == -1) {
         close(s);
         return -1;
     }
@@ -161,7 +160,7 @@ int unix_bind(char* path, int flags) {
         len = sizeof(s_un);
     }
 
-    if (direct_bind(s, (struct sockaddr*)&s_un, len) == -1) {
+    if (bind(s, (struct sockaddr*)&s_un, len) == -1) {
         save_errno = errno;
         close(s);
         errno = save_errno;
@@ -212,7 +211,7 @@ int unix_connect(char* path) {
         len = sizeof(s_un);
     }
 
-    if (direct_connect(s, (struct sockaddr*)&s_un, len) == -1) {
+    if (connect(s, (struct sockaddr*)&s_un, len) == -1) {
         save_errno = errno;
         close(s);
         errno = save_errno;
@@ -230,7 +229,7 @@ int unix_listen(char* path) {
 
     if ((s = unix_bind(path, 0)) == -1)
         return -1;
-    if (direct_listen(s, 5) == -1) {
+    if (listen(s, 5) == -1) {
         close(s);
         return -1;
     }
@@ -282,7 +281,7 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
                 errx(EXIT_RUNTIME, "getaddrinfo: %s", gai_strerror(error));
             }
 
-            if (direct_bind(s, (struct sockaddr*)ares->ai_addr, ares->ai_addrlen) == -1) {
+            if (bind(s, (struct sockaddr*)ares->ai_addr, ares->ai_addrlen) == -1) {
                 freeaddrinfo(ares);
                 close(s);
                 err(EXIT_RUNTIME, "bind failed");
@@ -336,7 +335,7 @@ int timeout_connect(int s, const struct sockaddr* name, socklen_t namelen) {
     int optval;
     int ret;
 
-    if ((ret = direct_connect(s, name, namelen)) != 0 && errno == EINPROGRESS) {
+    if ((ret = connect(s, name, namelen)) != 0 && errno == EINPROGRESS) {
         ret = nc_wait_fd_events_monotonic(s, POLLOUT, timeout);
         if (ret == 1) {
             optlen = sizeof(optval);
@@ -400,7 +399,7 @@ int local_listen(const char* host, const char* port, struct addrinfo hints) {
 
         set_common_sockopts(s, res->ai_family);
 
-        if (direct_bind(s, (struct sockaddr*)res->ai_addr, res->ai_addrlen) == 0)
+        if (bind(s, (struct sockaddr*)res->ai_addr, res->ai_addrlen) == 0)
             break;
 
         save_errno = errno;
@@ -410,7 +409,7 @@ int local_listen(const char* host, const char* port, struct addrinfo hints) {
     }
 
     if (!uflag && s != -1) {
-        if (direct_listen(s, 1) == -1) {
+        if (listen(s, 1) == -1) {
             freeaddrinfo(res0);
             close(s);
             err(EXIT_RUNTIME, "listen");
@@ -450,7 +449,7 @@ int udptest(int s) {
         return 0;
 
     for (i = 0; i <= 3; i++) {
-        if (direct_write(s, "X", 1) == 1)
+        if (write(s, "X", 1) == 1)
             ret = 1;
         else
             ret = -1;
