@@ -1,5 +1,6 @@
 #include "netcat.h"
 #include "proxy_proto.h"
+#include "lib/poll_deadline.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +9,13 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+
+struct proxy_info {
+    struct sockaddr_storage src;
+    struct sockaddr_storage dst;
+    int family;
+    int type;
+};
 
 struct proxy_hdr_v2 {
     uint8_t sig[12];
@@ -37,8 +45,12 @@ struct proxy_hdr_v2 {
 static const uint8_t sig_v2[12] = {0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a};
 
 static int parse_proxy_port(const char* text, uint16_t* port_out) {
-    if (text == NULL || text[0] == '\0' || text[0] == '-')
+    if (text == NULL || text[0] == '\0')
         return -1;
+    for (const char* p = text; *p; p++) {
+        if (*p < '0' || *p > '9')
+            return -1;
+    }
 
     errno = 0;
     char* end = NULL;
@@ -50,14 +62,16 @@ static int parse_proxy_port(const char* text, uint16_t* port_out) {
     return 0;
 }
 
-int parse_proxy_v1(const char* line, struct proxy_info* info) {
+static int parse_proxy_v1(const char* line, struct proxy_info* info) {
     char marker[6], protocol[16], src_addr[INET6_ADDRSTRLEN], dst_addr[INET6_ADDRSTRLEN];
     char src_port_text[16], dst_port_text[16], extra;
     uint16_t src_port, dst_port;
 
-    /* Sanitize: only printable ASCII allowed in v1 header */
-    for (const char* p = line; *p; p++) {
-        if (!isprint((unsigned char)*p) && *p != '\r' && *p != '\n')
+    size_t len = strlen(line);
+    if (len < 2 || line[len - 2] != '\r' || line[len - 1] != '\n')
+        return -1;
+    for (size_t i = 0; i < len - 2; i++) {
+        if ((unsigned char)line[i] < 0x20 || (unsigned char)line[i] > 0x7e)
             return -1;
     }
 
@@ -104,7 +118,7 @@ int parse_proxy_v1(const char* line, struct proxy_info* info) {
         }
     }
 
-    if (strncmp(line, "PROXY UNKNOWN", 13) == 0) {
+    if (strncmp(line, "PROXY UNKNOWN", 13) == 0 && (line[13] == ' ' || line[13] == '\r')) {
         info->family = AF_UNSPEC;
         return 0;
     }
@@ -112,22 +126,52 @@ int parse_proxy_v1(const char* line, struct proxy_info* info) {
     return -1;
 }
 
-int parse_proxy_v2(const uint8_t* buf, size_t len, struct proxy_info* info) {
+static int parse_proxy_v2(const uint8_t* buf, size_t len, struct proxy_info* info) {
     const struct proxy_hdr_v2* hdr = (const struct proxy_hdr_v2*)buf;
+    size_t addr_len;
 
     if (len < 16)
         return -1;
 
-    if (memcmp(hdr->sig, sig_v2, 12) != 0)
+    if (memcmp(hdr->sig, sig_v2, 12) != 0 || (hdr->ver_cmd & 0xf0) != 0x20)
         return -1;
 
     uint16_t h_len = ntohs(hdr->len);
-    if (len < (size_t)16 + h_len)
+    if (len != (size_t)16 + h_len)
         return -1;
 
-    if (hdr->fam_proto == 0x11 || hdr->fam_proto == 0x12) {
-        if (h_len < 12)
+    if ((hdr->ver_cmd & 0x0f) == 0) {
+        info->family = AF_UNSPEC;
+        return 0;
+    }
+    if ((hdr->ver_cmd & 0x0f) != 1)
+        return -1;
+
+    if (hdr->fam_proto == 0)
+        addr_len = 0;
+    else if (hdr->fam_proto == 0x11)
+        addr_len = 12;
+    else if (hdr->fam_proto == 0x21)
+        addr_len = 36;
+    else
+        return -1;
+    if (h_len < addr_len)
+        return -1;
+    for (size_t i = 16 + addr_len; i < len;) {
+        if (len - i < 3)
             return -1;
+        size_t value_len = ((size_t)buf[i + 1] << 8) | buf[i + 2];
+        i += 3;
+        if (value_len > len - i)
+            return -1;
+        i += value_len;
+    }
+
+    if (hdr->fam_proto == 0) {
+        info->family = AF_UNSPEC;
+        return 0;
+    }
+    else if (hdr->fam_proto == 0x11) {
         struct sockaddr_in* sin_src = (struct sockaddr_in*)&info->src;
         struct sockaddr_in* sin_dst = (struct sockaddr_in*)&info->dst;
         info->family = AF_INET;
@@ -139,9 +183,7 @@ int parse_proxy_v2(const uint8_t* buf, size_t len, struct proxy_info* info) {
         sin_dst->sin_port = hdr->addr.ipv4_addr.dst_port;
         return 0;
     }
-    else if (hdr->fam_proto == 0x21 || hdr->fam_proto == 0x22) {
-        if (h_len < 36)
-            return -1;
+    else if (hdr->fam_proto == 0x21) {
         struct sockaddr_in6* sin6_src = (struct sockaddr_in6*)&info->src;
         struct sockaddr_in6* sin6_dst = (struct sockaddr_in6*)&info->dst;
         info->family = AF_INET6;
@@ -153,44 +195,10 @@ int parse_proxy_v2(const uint8_t* buf, size_t len, struct proxy_info* info) {
         sin6_dst->sin6_port = hdr->addr.ipv6_addr.dst_port;
         return 0;
     }
-    else if ((hdr->ver_cmd & 0x0F) == 0x00) { /* LOCAL */
-        info->family = AF_UNSPEC;
-        return 0;
-    }
-
     return -1;
 }
 
-int serialize_proxy_v1(char* buf, size_t len, const struct proxy_info* info) {
-    char src[INET6_ADDRSTRLEN], dst[INET6_ADDRSTRLEN];
-    uint16_t src_p, dst_p;
-
-    if (info->family == AF_INET) {
-        const struct sockaddr_in* src4 = (const struct sockaddr_in*)&info->src;
-        const struct sockaddr_in* dst4 = (const struct sockaddr_in*)&info->dst;
-
-        inet_ntop(AF_INET, &src4->sin_addr, src, sizeof(src));
-        inet_ntop(AF_INET, &dst4->sin_addr, dst, sizeof(dst));
-        src_p = ntohs(src4->sin_port);
-        dst_p = ntohs(dst4->sin_port);
-        return snprintf(buf, len, "PROXY TCP4 %s %s %u %u\r\n", src, dst, src_p, dst_p);
-    }
-    else if (info->family == AF_INET6) {
-        const struct sockaddr_in6* src6 = (const struct sockaddr_in6*)&info->src;
-        const struct sockaddr_in6* dst6 = (const struct sockaddr_in6*)&info->dst;
-
-        inet_ntop(AF_INET6, &src6->sin6_addr, src, sizeof(src));
-        inet_ntop(AF_INET6, &dst6->sin6_addr, dst, sizeof(dst));
-        src_p = ntohs(src6->sin6_port);
-        dst_p = ntohs(dst6->sin6_port);
-        return snprintf(buf, len, "PROXY TCP6 %s %s %u %u\r\n", src, dst, src_p, dst_p);
-    }
-    else {
-        return snprintf(buf, len, "PROXY UNKNOWN\r\n");
-    }
-}
-
-int serialize_proxy_v2(uint8_t* buf, size_t len, const struct proxy_info* info) {
+static int serialize_proxy_v2(uint8_t* buf, size_t len, const struct proxy_info* info) {
     struct proxy_hdr_v2* hdr = (struct proxy_hdr_v2*)buf;
     if (len < 16)
         return -1;
@@ -298,56 +306,85 @@ void send_proxy_v2(int fd) {
         atomicio(vwrite, fd, buf, n);
 }
 
-void recv_proxy(int fd) {
+static int proxy_read_exact(int fd, void* data, size_t len, struct bx_poll_deadline* deadline) {
+    uint8_t* bytes = data;
+    size_t pos = 0;
+
+    while (pos < len) {
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int ready = bx_poll_deadline_wait(deadline, &pfd, 1);
+        if (ready <= 0) {
+            if (ready == 0)
+                errno = ETIMEDOUT;
+            return -1;
+        }
+        ssize_t n = recv(fd, bytes + pos, len - pos, MSG_DONTWAIT);
+        if (n > 0)
+            pos += (size_t)n;
+        else if (n == 0) {
+            errno = EPROTO;
+            return -1;
+        }
+        else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+            return -1;
+    }
+    return 0;
+}
+
+int recv_proxy(int fd) {
     struct proxy_info info;
+    struct bx_poll_deadline deadline;
     uint8_t buf[256];
 
     memset(&info, 0, sizeof(info));
+    bx_poll_deadline_init(&deadline, timeout);
 
-    if (atomicio(read, fd, buf, 5) != 5)
-        return;
+    if (proxy_read_exact(fd, buf, 5, &deadline) == -1)
+        return -1;
 
     if (memcmp(buf, "PROXY", 5) == 0) {
         char line[128];
         size_t i = 5;
         memcpy(line, "PROXY", 5);
         while (i < sizeof(line) - 1) {
-            if (atomicio(read, fd, &line[i], 1) != 1)
-                return;
+            if (proxy_read_exact(fd, &line[i], 1, &deadline) == -1)
+                return -1;
+            if (line[i] == '\0')
+                goto invalid;
             if (line[i] == '\n') {
                 line[++i] = '\0';
                 break;
             }
             i++;
         }
-        if (i == sizeof(line) - 1) {
-            warnx("PROXY v1 header too long");
-            return;
-        }
+        if (i == sizeof(line) - 1)
+            goto invalid;
         if (parse_proxy_v1(line, &info) == 0)
             report_proxy(&info, 1);
         else
-            warnx("Invalid PROXY v1 header");
+            goto invalid;
     }
     else if (memcmp(buf, sig_v2, 5) == 0) {
-        if (atomicio(read, fd, buf + 5, 11) != 11)
-            return;
+        if (proxy_read_exact(fd, buf + 5, 11, &deadline) == -1)
+            return -1;
 
         uint16_t len = ntohs(((struct proxy_hdr_v2*)buf)->len);
-        if (len > sizeof(buf) - 16) {
-            warnx("PROXY protocol header too large");
-            return;
-        }
+        if (len > sizeof(buf) - 16)
+            goto invalid;
 
-        if (atomicio(read, fd, buf + 16, len) != len)
-            return;
+        if (proxy_read_exact(fd, buf + 16, len, &deadline) == -1)
+            return -1;
 
         if (parse_proxy_v2(buf, 16 + len, &info) == 0)
             report_proxy(&info, 2);
         else
-            warnx("Invalid PROXY v2 header");
+            goto invalid;
     }
-    else {
-        warnx("Invalid PROXY protocol signature");
-    }
+    else
+        goto invalid;
+    return 0;
+
+invalid:
+    errno = EPROTO;
+    return -1;
 }

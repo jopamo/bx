@@ -511,6 +511,10 @@ int main(int argc, char* argv[]) {
         parse_vsock(vsock_address, lflag, &vsock_cid, &vsock_port);
         family = AF_VSOCK;
     }
+    if (proxy_proto && (!lflag || uflag))
+        errx(EXIT_USAGE, "must use --proxy-proto with a stream listener");
+    if (proxy_proto && send_proxy)
+        errx(EXIT_USAGE, "cannot use --proxy-proto with --send-proxy");
 
     if (log_file_path != NULL) {
         int logfd;
@@ -777,8 +781,14 @@ int main(int argc, char* argv[]) {
                     close(s);
                     err(EXIT_RUNTIME, "accept");
                 }
-                if (proxy_proto)
-                    recv_proxy(connfd);
+                if (proxy_proto && recv_proxy(connfd) == -1) {
+                    warn("PROXY header");
+                    close(connfd);
+                    ret = EXIT_RUNTIME;
+                    if (!keepopen)
+                        break;
+                    continue;
+                }
                 if (vflag)
                     report_sock("Connection received", (struct sockaddr*)&cliaddr, len,
                                 family == AF_UNIX ? host : NULL);

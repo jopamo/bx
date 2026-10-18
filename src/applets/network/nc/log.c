@@ -361,7 +361,7 @@ void help(void) {
             "  -x <addr[:port]>           Proxy address and port\n"
             "  -X <proto>                 Proxy protocol: \"5\" (SOCKS) or \"connect\"\n"
             "  -P <proxyuser>             Proxy authentication username\n"
-            "      --proxy-proto          Expect PROXY protocol v2 header\n"
+            "      --proxy-proto          Require PROXY v1/v2 on stream listeners\n"
             "      --send-proxy           Send PROXY protocol v2 header\n"
             "      --pcap <file>          Write a PCAP capture\n"
             "      --pcap-default-path    Write PCAP to a safe auto-generated path\n"
