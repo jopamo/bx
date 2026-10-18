@@ -534,6 +534,12 @@ int main(int argc, char* argv[]) {
     if (sockmark != -1)
         errx(EXIT_USAGE, "SO_MARK is not supported by this build");
 #endif
+    if (iface != NULL && family == AF_UNIX)
+        errx(EXIT_USAGE, "cannot use --interface with -U");
+#ifndef SO_BINDTODEVICE
+    if (iface != NULL)
+        errx(EXIT_USAGE, "SO_BINDTODEVICE is not supported by this build");
+#endif
     if (pcapfile) {
         if (zflag || Fflag || quic_probe)
             errx(EXIT_USAGE, "cannot use --pcap with port scanning, FD passing or QUIC probing");

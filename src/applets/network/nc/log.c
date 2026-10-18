@@ -423,7 +423,11 @@ void help(void) {
 #else
             "      --mark <mark>          Unavailable in this build\n"
 #endif
-            "      --interface <iface>    Bind socket to device\n"
+#ifdef SO_BINDTODEVICE
+            "      --interface <iface>    Bind socket to device (not UNIX sockets)\n"
+#else
+            "      --interface <iface>    Unavailable in this build\n"
+#endif
             "      --transparent          Enable IP_TRANSPARENT\n"
             "      --namespace <path>     Network namespace path\n"
             "      --fuzz-tcp             Send random TCP data\n"
