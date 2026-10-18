@@ -548,6 +548,8 @@ int main(int argc, char* argv[]) {
 #endif
     if (tfoflag && (uflag || family == AF_UNIX || family == AF_VSOCK))
         errx(EXIT_USAGE, "must use --tfo with internet TCP sockets");
+    if (tfoflag && zflag)
+        errx(EXIT_USAGE, "cannot use --tfo with -z");
 #ifndef TCP_FASTOPEN_CONNECT
     if (tfoflag && !lflag)
         errx(EXIT_USAGE, "TCP Fast Open clients are not supported by this build");

@@ -426,6 +426,9 @@ void help(void) {
 #else
             "      --tfo                  Unavailable in this build\n"
 #endif
+#ifdef TCP_FASTOPEN_CONNECT
+            "                             Clients may defer connect until first write; no -z\n"
+#endif
 #ifdef SO_MARK
             "      --mark <mark>          Set SO_MARK (not UNIX sockets)\n"
 #else
