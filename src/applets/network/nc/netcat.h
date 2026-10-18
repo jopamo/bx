@@ -106,9 +106,6 @@ extern char* unix_dg_tmp_socket;
 extern int ttl;
 extern int minttl;
 
-extern char* vsock_cid;
-extern char* vsock_port;
-
 extern int jitter;
 enum nc_payload_profile {
     NC_PROFILE_NONE,
@@ -156,8 +153,8 @@ void connection_info(int, const char*, const char*, const char*, const char*);
 int unix_bind(char*, int);
 int unix_connect(char*);
 int unix_listen(char*);
-int vsock_listen(const char*, const char*);
-int vsock_connect(const char*, const char*);
+int vsock_listen(unsigned int, unsigned int);
+int vsock_connect(unsigned int, unsigned int);
 void set_common_sockopts(int, int);
 int process_tos_opt(char*, int*);
 void report_sock(const char*, const struct sockaddr*, socklen_t, char*);

@@ -333,7 +333,7 @@ void help(void) {
             "  -4                         Use IPv4 only\n"
             "  -6                         Use IPv6 only\n"
             "  -U                         Use UNIX domain socket\n"
-            "      --vsock <cid:port>     Use vsock sockets only\n"
+            "      --vsock <cid:port>     Use vsock stream sockets only\n"
             "  -l                         Listen mode, for inbound connects\n"
             "      --keep-open            Accept multiple connections in listen mode\n"
             "  -u                         UDP mode\n"

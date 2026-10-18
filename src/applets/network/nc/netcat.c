@@ -47,6 +47,16 @@
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
 
+#ifdef __linux__
+#include <linux/vm_sockets.h>
+#endif
+#ifndef VMADDR_CID_ANY
+#define VMADDR_CID_ANY -1U
+#endif
+#ifndef VMADDR_CID_LOCAL
+#define VMADDR_CID_LOCAL 1
+#endif
+
 /* Command Line Options */
 int dflag;          /* detached, no stdin */
 int Fflag;          /* fdpass sock to stdout */
@@ -101,9 +111,6 @@ char* portlist[PORT_MAX + 1];
 char* unix_dg_tmp_socket;
 int ttl = -1;
 int minttl = -1;
-
-char* vsock_cid;
-char* vsock_port;
 
 int jitter;
 enum nc_payload_profile profile = NC_PROFILE_NONE;
@@ -162,6 +169,31 @@ static enum nc_payload_profile parse_profile(const char* name) {
     errx(EXIT_USAGE, "unknown payload profile: %s", name);
 }
 
+static void parse_vsock(const char* address, int listener, unsigned int* cid, unsigned int* port) {
+    const char* separator = strchr(address, ':');
+    const char* errstr = NULL;
+    char* cid_text;
+
+    if (separator == NULL)
+        errx(EXIT_USAGE, "vsock: expected CID:PORT");
+    if ((cid_text = strndup(address, (size_t)(separator - address))) == NULL)
+        err(EXIT_USAGE, NULL);
+
+    if (listener && strcmp(cid_text, "any") == 0)
+        *cid = VMADDR_CID_ANY;
+    else if (!listener && strcmp(cid_text, "local") == 0)
+        *cid = VMADDR_CID_LOCAL;
+    else
+        *cid = (unsigned int)nc_strtonum(cid_text, 0, UINT_MAX, &errstr);
+    free(cid_text);
+    if (errstr)
+        errx(EXIT_USAGE, "vsock CID is %s: %s", errstr, address);
+
+    *port = (unsigned int)nc_strtonum(separator + 1, 0, UINT_MAX, &errstr);
+    if (errstr)
+        errx(EXIT_USAGE, "vsock port is %s: %s", errstr, address);
+}
+
 int main(int argc, char* argv[]) {
     int ch, s = -1, ret, socksv;
     char *host, *uport;
@@ -176,6 +208,8 @@ int main(int argc, char* argv[]) {
     int option_index = 0;
     int pcap_path_explicit = 0;
     int pcap_path_default = 0;
+    const char* vsock_address = NULL;
+    unsigned int vsock_cid = 0, vsock_port = 0;
     const char* progname = nc_progname(argc > 0 ? argv[0] : NULL);
     static struct option long_options[] = {{"mptcp", no_argument, NULL, 1001},
                                            {"help", no_argument, NULL, 'h'},
@@ -248,11 +282,9 @@ int main(int argc, char* argv[]) {
                 send_proxy = 1;
                 break;
             case 1008:
-                if ((vsock_cid = strdup(optarg)) == NULL)
-                    err(EXIT_USAGE, NULL);
-                if ((vsock_port = strchr(vsock_cid, ':')) == NULL)
+                if (strchr(optarg, ':') == NULL)
                     errx(EXIT_USAGE, "vsock: expected CID:PORT");
-                *vsock_port++ = '\0';
+                vsock_address = optarg;
                 break;
             case 1009:
                 netns = optarg;
@@ -469,6 +501,17 @@ int main(int argc, char* argv[]) {
         jflag = 0;
     }
 
+    if (vsock_address != NULL) {
+        if (family != AF_UNSPEC)
+            errx(EXIT_USAGE, "cannot use -4, -6 or -U with --vsock");
+        if (quic_probe)
+            errx(EXIT_USAGE, "cannot use --quic with --vsock");
+        if (uflag)
+            errx(EXIT_USAGE, "cannot use -u with --vsock");
+        parse_vsock(vsock_address, lflag, &vsock_cid, &vsock_port);
+        family = AF_VSOCK;
+    }
+
     if (log_file_path != NULL) {
         int logfd;
 
@@ -496,12 +539,6 @@ int main(int argc, char* argv[]) {
 #else
         errx(EXIT_USAGE, "Namespaces not supported on this platform");
 #endif
-    }
-
-    if (vsock_cid) {
-        if (family != AF_UNSPEC)
-            errx(EXIT_USAGE, "cannot use -4, -6 or -U with --vsock");
-        family = AF_VSOCK;
     }
 
     /* Cruft to make sure options are clean, and used properly. */
@@ -563,8 +600,6 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "cannot use --quic with -l");
     if (quic_probe && family == AF_UNIX)
         errx(EXIT_USAGE, "cannot use --quic with -U");
-    if (quic_probe && family == AF_VSOCK)
-        errx(EXIT_USAGE, "cannot use --quic with --vsock");
     if (xflag && quic_probe)
         errx(EXIT_USAGE, "no proxy support for QUIC");
     if (fuzz_tcp && uflag)
@@ -782,7 +817,7 @@ int main(int argc, char* argv[]) {
             close(s);
         }
         else {
-            warn("vsock %s:%s", vsock_cid, vsock_port);
+            warn("vsock %s", vsock_address);
             ret = 1;
         }
         free(proxy_alloc);

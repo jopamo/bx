@@ -31,18 +31,6 @@
 #define AF_VSOCK 40
 #endif
 
-#ifndef VMADDR_CID_ANY
-#define VMADDR_CID_ANY -1U
-#endif
-
-#ifndef VMADDR_CID_LOCAL
-#define VMADDR_CID_LOCAL 1
-#endif
-
-#ifndef VMADDR_PORT_ANY
-#define VMADDR_PORT_ANY -1U
-#endif
-
 #ifndef __linux__
 #ifndef HAVE_SOCKADDR_VM
 struct sockaddr_vm {
@@ -56,23 +44,15 @@ struct sockaddr_vm {
 #endif
 #endif
 
-int vsock_listen(const char* cid_str, const char* port_str) {
+int vsock_listen(unsigned int cid, unsigned int port) {
     struct sockaddr_vm svm;
     int s;
-    const char* errstr;
 
     memset(&svm, 0, sizeof(svm));
     svm.svm_family = AF_VSOCK;
 
-    if (cid_str == NULL || strcmp(cid_str, "any") == 0)
-        svm.svm_cid = VMADDR_CID_ANY;
-    else
-        svm.svm_cid = (unsigned int)nc_strtonum(cid_str, 0, UINT_MAX, &errstr);
-
-    if (port_str == NULL)
-        svm.svm_port = VMADDR_PORT_ANY;
-    else
-        svm.svm_port = (unsigned int)nc_strtonum(port_str, 0, UINT_MAX, &errstr);
+    svm.svm_cid = cid;
+    svm.svm_port = port;
 
     if ((s = bx_fd_socket_cloexec(AF_VSOCK, SOCK_STREAM, 0)) == -1)
         return -1;
@@ -98,20 +78,15 @@ int vsock_listen(const char* cid_str, const char* port_str) {
     return s;
 }
 
-int vsock_connect(const char* cid_str, const char* port_str) {
+int vsock_connect(unsigned int cid, unsigned int port) {
     struct sockaddr_vm svm;
     int s;
-    const char* errstr;
 
     memset(&svm, 0, sizeof(svm));
     svm.svm_family = AF_VSOCK;
 
-    if (strcmp(cid_str, "local") == 0)
-        svm.svm_cid = VMADDR_CID_LOCAL;
-    else
-        svm.svm_cid = (unsigned int)nc_strtonum(cid_str, 0, UINT_MAX, &errstr);
-
-    svm.svm_port = (unsigned int)nc_strtonum(port_str, 0, UINT_MAX, &errstr);
+    svm.svm_cid = cid;
+    svm.svm_port = port;
 
     if ((s = bx_fd_socket_cloexec(AF_VSOCK, SOCK_STREAM, 0)) == -1)
         return -1;
