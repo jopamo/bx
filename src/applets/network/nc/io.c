@@ -35,7 +35,7 @@ static int io_sendfile_eligible(int net_fd, int stdin_fd) {
         return 0;
     if (uflag || dflag || fuzz_tcp || fuzz_udp)
         return 0;
-    if (iflag || jitter || profile)
+    if (iflag || jitter || profile != NC_PROFILE_NONE)
         return 0;
     if (pcapfile || hex_path)
         return 0;
@@ -397,11 +397,10 @@ ssize_t drainbuf(int fd,
     }
 
     /* Apply Traffic Masking/Shaping when writing to network */
-    if (fd == net_fd && profile) {
+    if (fd == net_fd && profile != NC_PROFILE_NONE) {
         unsigned char temp_buf[BUFSIZE * 2];
         unsigned char* write_buf = temp_buf;
         size_t original_len = *bufpos;
-        write_len = 0;
 
         /* Preserve UDP datagram semantics by splitting oversized writes. */
         if (uflag && original_len > UDP_MAX_WRITE_PAYLOAD)
@@ -409,15 +408,15 @@ ssize_t drainbuf(int fd,
         if (original_len > BUFSIZE)
             original_len = BUFSIZE;
 
-        if (strcmp(profile, "html") == 0) {
+        if (profile == NC_PROFILE_HTML) {
             snprintf((char*)temp_buf, sizeof(temp_buf), "<!-- %.*s -->", (int)original_len, buf);
             write_len = strlen((char*)temp_buf);
         }
-        else if (strcmp(profile, "css") == 0) {
+        else if (profile == NC_PROFILE_CSS) {
             snprintf((char*)temp_buf, sizeof(temp_buf), "/* %.*s */", (int)original_len, buf);
             write_len = strlen((char*)temp_buf);
         }
-        else if (strcmp(profile, "base64-json") == 0) {
+        else if (profile == NC_PROFILE_BASE64_JSON) {
             char b64[BUFSIZE * 2];
             if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
                 int prefix_len = snprintf((char*)temp_buf,
@@ -450,7 +449,7 @@ ssize_t drainbuf(int fd,
                 write_len = original_len;
             }
         }
-        else if (strcmp(profile, "json-dialect") == 0) {
+        else if (profile == NC_PROFILE_JSON_DIALECT) {
             char b64[BUFSIZE * 2];
             if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
                 /* Dialect: Looks like a telemetry report */
@@ -489,7 +488,7 @@ ssize_t drainbuf(int fd,
                 write_len = original_len;
             }
         }
-        else if (strcmp(profile, "xor-mask") == 0) {
+        else if (profile == NC_PROFILE_XOR_MASK) {
             /* 4-byte rolling key: DE AD BE EF */
             unsigned char key[] = {0xDE, 0xAD, 0xBE, 0xEF};
             rolling_xor(buf, original_len, temp_buf, key, sizeof(key));
@@ -497,9 +496,8 @@ ssize_t drainbuf(int fd,
             write_buf = temp_buf;
         }
         else {
-            /* Unknown profile, just copy */
-            memcpy(temp_buf, buf, original_len);
-            write_len = original_len;
+            errno = EINVAL;
+            return -1;
         }
 
         /* Blocking write loop to ensure masked packet is sent intact */

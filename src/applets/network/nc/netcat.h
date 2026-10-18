@@ -1,5 +1,8 @@
 /* $OpenBSD: netcat.c,v 1.237 2025/12/06 09:48:30 phessler Exp $ */
 
+#ifndef BX_NC_NETCAT_H
+#define BX_NC_NETCAT_H
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -107,7 +110,15 @@ extern char* vsock_cid;
 extern char* vsock_port;
 
 extern int jitter;
-extern char* profile;
+enum nc_payload_profile {
+    NC_PROFILE_NONE,
+    NC_PROFILE_HTML,
+    NC_PROFILE_CSS,
+    NC_PROFILE_BASE64_JSON,
+    NC_PROFILE_JSON_DIALECT,
+    NC_PROFILE_XOR_MASK,
+};
+extern enum nc_payload_profile profile;
 
 /* RNG hook for testing */
 extern uint32_t (*nc_random)(void);
@@ -178,3 +189,5 @@ void hexdump(FILE* fp, const char* prefix, const unsigned char* buf, size_t len,
 struct nc_hex_offsets;
 ssize_t drainbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_offsets*);
 ssize_t fillbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_offsets*);
+
+#endif

@@ -106,7 +106,7 @@ char* vsock_cid;
 char* vsock_port;
 
 int jitter;
-char* profile;
+enum nc_payload_profile profile = NC_PROFILE_NONE;
 static int quietflag;             /* suppress non-error informational output */
 static const char* log_file_path; /* append diagnostic output to this file */
 
@@ -145,6 +145,21 @@ static int parse_pcap_rotate_size(const char* text, unsigned long long* size_out
 
     *size_out = (unsigned long long)value;
     return 1;
+}
+
+static enum nc_payload_profile parse_profile(const char* name) {
+    static const struct {
+        const char* name;
+        enum nc_payload_profile value;
+    } profiles[] = {
+        {"html", NC_PROFILE_HTML}, {"css", NC_PROFILE_CSS}, {"base64-json", NC_PROFILE_BASE64_JSON}, {"json-dialect", NC_PROFILE_JSON_DIALECT}, {"xor-mask", NC_PROFILE_XOR_MASK},
+    };
+
+    for (size_t i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
+        if (strcmp(name, profiles[i].name) == 0)
+            return profiles[i].value;
+    }
+    errx(EXIT_USAGE, "unknown payload profile: %s", name);
 }
 
 int main(int argc, char* argv[]) {
@@ -300,7 +315,7 @@ int main(int argc, char* argv[]) {
                     errx(EXIT_USAGE, "jitter is %s", errstr);
                 break;
             case 1022:
-                profile = optarg;
+                profile = parse_profile(optarg);
                 break;
             case 1025:
                 printf("netcat %s (commit %s %s)\n", NC_VERSION, NC_GIT_HASH, NC_GIT_DATE);
@@ -562,6 +577,8 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "must use a nonzero -i with --jitter");
     if (iflag && (zflag || Fflag || quic_probe))
         errx(EXIT_USAGE, "cannot use -i with port scanning, FD passing or QUIC probing");
+    if (profile != NC_PROFILE_NONE && (zflag || Fflag || quic_probe))
+        errx(EXIT_USAGE, "cannot use --profile with port scanning, FD passing or QUIC probing");
     if (mptcp_netlink && !mptcpflag)
         errx(EXIT_USAGE, "must use --mptcp with --mptcp-netlink");
     if (pcap_path_explicit && pcap_path_default)
