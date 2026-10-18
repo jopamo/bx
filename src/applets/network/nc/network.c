@@ -235,8 +235,13 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
         if (mptcpflag && res->ai_protocol == IPPROTO_TCP)
             proto = IPPROTO_MPTCP;
 #endif
-        if ((s = bx_fd_socket_cloexec(res->ai_family, res->ai_socktype | SOCK_NONBLOCK, proto)) == -1)
+        if ((s = bx_fd_socket_cloexec(res->ai_family, res->ai_socktype | SOCK_NONBLOCK, proto)) == -1) {
+            save_errno = errno;
+            if (mptcpflag)
+                warn("MPTCP socket for %s port %s", host, port);
+            errno = save_errno;
             continue;
+        }
 
         /* Bind to a local port or source address if specified. */
         if (sflag || pflag) {
@@ -283,6 +288,7 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
         if (timeout_connect(s, res->ai_addr, res->ai_addrlen) == 0)
             break;
 
+        save_errno = errno;
         if (vflag) {
             /* only print IP if there is something to report */
             if (nflag || ipaddr == NULL || (strncmp(host, ipaddr, NI_MAXHOST) == 0))
@@ -291,16 +297,17 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
                 warn("connect to %s (%s) port %s (%s) failed", host, ipaddr, port, uflag ? "udp" : "tcp");
         }
 
-        save_errno = errno;
         close(s);
         errno = save_errno;
         s = -1;
     }
 
-    if (vflag >= 2 && !uflag)
+    save_errno = errno;
+    if (s != -1 && vflag >= 2 && !uflag)
         report_mptcp_info(s);
 
     freeaddrinfo(res0);
+    errno = save_errno;
 
     return s;
 }
@@ -403,10 +410,12 @@ int local_listen(const char* host, const char* port, struct addrinfo hints) {
         report_sock(uflag ? "Bound" : "Listening", (struct sockaddr*)&ss, len, NULL);
     }
 
-    if (vflag >= 2 && !uflag)
+    save_errno = errno;
+    if (s != -1 && vflag >= 2 && !uflag)
         report_mptcp_info(s);
 
     freeaddrinfo(res0);
+    errno = save_errno;
 
     return s;
 }
