@@ -793,7 +793,7 @@ int main(int argc, char* argv[]) {
     else if (family == AF_UNIX) {
         ret = 0;
 
-        if ((s = unix_connect(host)) > 0) {
+        if ((s = unix_connect(host)) >= 0) {
             if (!zflag)
                 readwrite(s);
             close(s);
@@ -811,7 +811,7 @@ int main(int argc, char* argv[]) {
     else if (family == AF_VSOCK) {
         ret = 0;
 
-        if ((s = vsock_connect(vsock_cid, vsock_port)) > 0) {
+        if ((s = vsock_connect(vsock_cid, vsock_port)) >= 0) {
             if (!zflag)
                 readwrite(s);
             close(s);
