@@ -277,9 +277,10 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
             ahints.ai_socktype = uflag ? SOCK_DGRAM : SOCK_STREAM;
             ahints.ai_protocol = uflag ? IPPROTO_UDP : IPPROTO_TCP;
             ahints.ai_flags = AI_PASSIVE;
-            if ((error = getaddrinfo(sflag, pflag, &ahints, &ares)))
+            if ((error = getaddrinfo(sflag, pflag, &ahints, &ares))) {
                 close(s);
-            errx(EXIT_RUNTIME, "getaddrinfo: %s", gai_strerror(error));
+                errx(EXIT_RUNTIME, "getaddrinfo: %s", gai_strerror(error));
+            }
 
             if (direct_bind(s, (struct sockaddr*)ares->ai_addr, ares->ai_addrlen) == -1) {
                 freeaddrinfo(ares);

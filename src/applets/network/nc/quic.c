@@ -128,6 +128,17 @@ int quic_test(int s, char* host, char* port) {
             return -1;
         }
 
+        if (len == 0) {
+            if (vflag)
+                warnx("Received empty QUIC datagram from %s:%s", host, port);
+            if (jflag) {
+                json_event_begin(stderr, "info", "quic_truncated_received", "in", "udp", "truncated_received",
+                                 src_addr_p, src_port_p, dst_addr_p, dst_port_p);
+                fprintf(stderr, ",\"host\":\"%s\",\"port\":\"%s\",\"length\":%zd}\n", host, port, len);
+            }
+            return 0;
+        }
+
         /* Check for Version Negotiation Packet */
         /* Header: 1xxxxxxx */
         if ((recv_buf[0] & 0x80) == 0) {
@@ -144,14 +155,24 @@ int quic_test(int s, char* host, char* port) {
             return 0;
         }
 
+        if (len < 5) {
+            if (vflag)
+                warnx("Received truncated QUIC packet from %s:%s", host, port);
+            if (jflag) {
+                json_event_begin(stderr, "info", "quic_truncated_received", "in", "udp", "truncated_received",
+                                 src_addr_p, src_port_p, dst_addr_p, dst_port_p);
+                fprintf(stderr, ",\"host\":\"%s\",\"port\":\"%s\",\"length\":%zd}\n", host, port, len);
+            }
+            return 0;
+        }
+
         /* Version must be 0 for Version Negotiation */
-        if (len >= 5 && recv_buf[1] == 0 && recv_buf[2] == 0 && recv_buf[3] == 0 && recv_buf[4] == 0) {
+        if (recv_buf[1] == 0 && recv_buf[2] == 0 && recv_buf[3] == 0 && recv_buf[4] == 0) {
             if (vflag)
                 fprintf(stderr, "QUIC Version Negotiation packet received from %s:%s\n", host, port);
             if (jflag) {
                 char dcid_hex[513];
                 char scid_hex[513];
-                char versions[2048];
                 size_t i, off;
                 size_t dcid_len, scid_len;
                 size_t recv_len = (size_t)len;
@@ -172,25 +193,20 @@ int quic_test(int s, char* host, char* port) {
                 scid_hex[scid_len * 2] = '\0';
 
                 off = off + 1 + scid_len;
-                versions[0] = '\0';
-                if (recv_len >= off + 4 && ((recv_len - off) % 4 == 0)) {
-                    size_t num_versions = (recv_len - off) / 4;
-                    char* p = versions;
-                    for (i = 0; i < num_versions; i++) {
-                        if (i > 0)
-                            *p++ = ',';
-                        p += sprintf(p, "\"0x%02x%02x%02x%02x\"", recv_buf[off + i * 4], recv_buf[off + i * 4 + 1],
-                                     recv_buf[off + i * 4 + 2], recv_buf[off + i * 4 + 3]);
-                    }
-                    *p = '\0';
-                }
 
                 json_event_begin(stderr, "info", "quic_version_negotiation_received", "in", "udp",
                                  "version_negotiation", src_addr_p, src_port_p, dst_addr_p, dst_port_p);
                 fprintf(stderr,
                         ",\"host\":\"%s\",\"port\":\"%s\",\"dcid_len\":%zu,\"dcid\":\"%s\","
-                        "\"scid_len\":%zu,\"scid\":\"%s\",\"offered_versions\":[%s]}\n",
-                        host, port, dcid_len, dcid_hex, scid_len, scid_hex, versions);
+                        "\"scid_len\":%zu,\"scid\":\"%s\",\"offered_versions\":[",
+                        host, port, dcid_len, dcid_hex, scid_len, scid_hex);
+                if (recv_len >= off + 4 && ((recv_len - off) % 4 == 0)) {
+                    size_t num_versions = (recv_len - off) / 4;
+                    for (i = 0; i < num_versions; i++)
+                        fprintf(stderr, "%s\"0x%02x%02x%02x%02x\"", i ? "," : "", recv_buf[off + i * 4],
+                                recv_buf[off + i * 4 + 1], recv_buf[off + i * 4 + 2], recv_buf[off + i * 4 + 3]);
+                }
+                fprintf(stderr, "]}\n");
             }
             return 1;
         }
