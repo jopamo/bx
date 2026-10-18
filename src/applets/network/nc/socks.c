@@ -3,6 +3,10 @@
 /*
  * Copyright (c) 1999 Niklas Hallqvist.  All rights reserved.
  * Copyright (c) 2004, 2005 Damien Miller.  All rights reserved.
+ * Copyright (c) 2006 Damien Miller. All rights reserved.
+ * Copyright (c) 2005 Anil Madhavapeddy. All rights reserved.
+ * Copyright (c) 1995,1999 Theo de Raadt.  All rights reserved.
+ * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,7 +43,6 @@
 #include <termios.h>
 #include <unistd.h>
 #include <resolv.h>
-#include "atomicio.h"
 #include "netcat.h"
 
 #define SOCKS_PORT "1080"
@@ -105,13 +108,14 @@ static int proxy_wait_io(int fd, short events) {
     return -1;
 }
 
-static size_t proxy_atomicio(ssize_t (*f)(int, void*, size_t), int fd, void* _s, size_t n, short events) {
+/* Derived from OpenBSD atomicio.c,v 1.11 (2012/12/04). */
+static size_t proxy_atomicio(int fd, void* _s, size_t n, short events) {
     char* s = _s;
     size_t pos = 0;
     ssize_t res;
 
     while (n > pos) {
-        res = f(fd, s + pos, n - pos);
+        res = events == POLLOUT ? write(fd, s + pos, n - pos) : read(fd, s + pos, n - pos);
         switch (res) {
             case -1:
                 if (errno == EINTR)
@@ -133,11 +137,11 @@ static size_t proxy_atomicio(ssize_t (*f)(int, void*, size_t), int fd, void* _s,
 }
 
 static size_t proxy_read_full(int fd, void* buf, size_t n) {
-    return proxy_atomicio(read, fd, buf, n, POLLIN);
+    return proxy_atomicio(fd, buf, n, POLLIN);
 }
 
 static size_t proxy_write_full(int fd, void* buf, size_t n) {
-    return proxy_atomicio(vwrite, fd, buf, n, POLLOUT);
+    return proxy_atomicio(fd, buf, n, POLLOUT);
 }
 
 static int decode_addrport(const char* h,

@@ -27,8 +27,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "atomicio.h"
-
 #ifndef AF_VSOCK
 #define AF_VSOCK 40
 #endif

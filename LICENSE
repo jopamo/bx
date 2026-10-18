@@ -13,7 +13,7 @@ areas include:
 
 - src/applets/base/bc/ — BSD-2-Clause, plus extra third-party notices in some
   files
-- src/applets/network/nc/atomicio.[ch], netcat.[ch], socks.c — OpenBSD/BSD-style
+- src/applets/network/nc/netcat.[ch], socks.c — OpenBSD/BSD-style
   notices
 - src/applets/network/traceroute/ — GPL-2.0-or-later, with clif.[ch] under
   LGPL-2.1-or-later
