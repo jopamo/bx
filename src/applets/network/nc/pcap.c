@@ -75,7 +75,6 @@ static int pcap_file_fd = -1;
 static int pcap_fd = -1;
 static int pcap_family = AF_UNSPEC;
 static int pcap_socktype = SOCK_STREAM;
-static int pcap_peer_valid;
 static struct sockaddr_storage local_addr, remote_addr;
 static uint32_t seq_local = 1000, seq_remote = 2000;
 static char pcap_base_path[PATH_MAX];
@@ -99,7 +98,6 @@ static void pcap_reset_state(void) {
     pcap_fd = -1;
     pcap_family = AF_UNSPEC;
     pcap_socktype = SOCK_STREAM;
-    pcap_peer_valid = 0;
     memset(&local_addr, 0, sizeof(local_addr));
     memset(&remote_addr, 0, sizeof(remote_addr));
     seq_local = 1000;
@@ -147,6 +145,8 @@ static int pcap_write_all_fd(int fd, const void* data, size_t len, int stop_sens
                 return 1;
             continue;
         }
+        if (n == 0)
+            errno = EIO;
         return -1;
     }
 
@@ -174,29 +174,28 @@ static int pcap_write_global_header(int fd) {
 
 static int pcap_open_default_file(void) {
     char tmpl[] = "/tmp/nc-pcap-XXXXXX.pcap";
-    int fd;
+    int fd, saved_errno;
 
     fd = mkstemps(tmpl, 5);
     if (fd == -1)
         return -1;
     if (nc_strlcpy(pcap_base_path, tmpl, sizeof(pcap_base_path)) >= sizeof(pcap_base_path)) {
-        close(fd);
-        unlink(tmpl);
-        return -1;
+        errno = ENAMETOOLONG;
+        goto fail;
     }
-    if (bx_fd_set_nonblocking(fd, true) == -1) {
-        close(fd);
-        unlink(pcap_base_path);
-        return -1;
-    }
-    if (pcap_write_global_header(fd) == -1) {
-        close(fd);
-        unlink(pcap_base_path);
-        return -1;
-    }
+    if (bx_fd_set_cloexec(fd, true) == -1 || bx_fd_set_nonblocking(fd, true) == -1)
+        goto fail;
+    if (pcap_write_global_header(fd) == -1)
+        goto fail;
 
     pcap_file_fd = fd;
     return 0;
+fail:
+    saved_errno = errno;
+    close(fd);
+    unlink(tmpl);
+    errno = saved_errno;
+    return -1;
 }
 
 static int pcap_build_path(unsigned int index, char* out, size_t outsz) {
@@ -237,7 +236,9 @@ static int pcap_open_file_for_index(unsigned int index) {
         return -1;
 
     if (pcap_write_global_header(fd) == -1) {
+        int saved_errno = errno;
         close(fd);
+        errno = saved_errno;
         return -1;
     }
 
@@ -402,59 +403,67 @@ static void* pcap_writer_main(void* arg) {
     return NULL;
 }
 
-void pcap_open(int fd, const char* path) {
+int pcap_open(int fd, const char* path) {
     socklen_t len;
-    int type;
+    int error;
 
-    if (!path)
-        return;
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
 
     pcap_reset_state();
 
-    if (path[0] == '\0') {
-        if (pcap_open_default_file() == -1) {
-            warn("pcap default path");
-            return;
-        }
-    }
-    else if (nc_strlcpy(pcap_base_path, path, sizeof(pcap_base_path)) >= sizeof(pcap_base_path)) {
-        warnx("pcap path too long");
-        return;
+    len = sizeof(local_addr);
+    if (getsockname(fd, (struct sockaddr*)&local_addr, &len) == -1)
+        goto fail;
+    len = sizeof(remote_addr);
+    if (getpeername(fd, (struct sockaddr*)&remote_addr, &len) == -1)
+        goto fail;
+    pcap_family = local_addr.ss_family;
+    if ((pcap_family != AF_INET && pcap_family != AF_INET6) || remote_addr.ss_family != pcap_family) {
+        errno = EAFNOSUPPORT;
+        goto fail;
     }
 
-    if (path[0] != '\0' && pcap_open_file_for_index(0) == -1) {
-        warn("pcap open %s", pcap_base_path);
-        return;
+    len = sizeof(pcap_socktype);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &pcap_socktype, &len) == -1)
+        goto fail;
+    if (pcap_socktype != SOCK_STREAM && pcap_socktype != SOCK_DGRAM) {
+        errno = EPROTOTYPE;
+        goto fail;
+    }
+
+    if (path[0] == '\0') {
+        if (pcap_open_default_file() == -1)
+            goto fail;
+    }
+    else {
+        if (nc_strlcpy(pcap_base_path, path, sizeof(pcap_base_path)) >= sizeof(pcap_base_path)) {
+            errno = ENAMETOOLONG;
+            goto fail;
+        }
+        if (pcap_open_file_for_index(0) == -1)
+            goto fail;
     }
 
     pcap_fd = fd;
-
-    len = sizeof(local_addr);
-    if (getsockname(fd, (struct sockaddr*)&local_addr, &len) == -1) {
-        warn("pcap getsockname");
-        pcap_disable_capture();
-        return;
-    }
-    len = sizeof(remote_addr);
-    if (getpeername(fd, (struct sockaddr*)&remote_addr, &len) == -1)
-        pcap_peer_valid = 0;
-    else
-        pcap_peer_valid = 1;
-    pcap_family = local_addr.ss_family;
-
-    len = sizeof(type);
-    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0)
-        pcap_socktype = type;
-
-    if (path[0] == '\0' && vflag >= 2)
-        fprintf(stderr, "PCAP default path: %s\n", pcap_base_path);
-
-    if (pthread_create(&pcap_writer_thread, NULL, pcap_writer_main, NULL) != 0) {
-        warn("pcap writer thread");
-        pcap_disable_capture();
-        return;
+    error = pthread_create(&pcap_writer_thread, NULL, pcap_writer_main, NULL);
+    if (error != 0) {
+        errno = error;
+        goto fail;
     }
     pcap_writer_running = 1;
+    if (path[0] == '\0' && vflag >= 2)
+        fprintf(stderr, "PCAP default path: %s\n", pcap_base_path);
+    return 0;
+fail:
+    error = errno;
+    if (path[0] == '\0' && pcap_file_fd != -1)
+        unlink(pcap_base_path);
+    pcap_disable_capture();
+    errno = error;
+    return -1;
 }
 
 void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
@@ -467,7 +476,7 @@ void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
     size_t incl_len;
     time_t now;
 
-    if (pcap_file_fd == -1 || !pcap_writer_running || fd != pcap_fd || pcap_family == AF_UNIX || !pcap_peer_valid)
+    if (pcap_file_fd == -1 || !pcap_writer_running || fd != pcap_fd)
         return;
 
     pcap_capture_counter_shard.packets_seen++;

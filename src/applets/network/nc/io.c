@@ -140,8 +140,8 @@ void readwrite(int net_fd) {
     if ((stdinbuf = malloc(iobufsize)) == NULL)
         err(EXIT_RUNTIME, "malloc");
 
-    if (pcapfile)
-        pcap_open(net_fd, pcapfile);
+    if (pcapfile && pcap_open(net_fd, pcapfile) == -1)
+        err(EXIT_RUNTIME, "pcap %s", pcapfile[0] ? pcapfile : "default path");
 
     if (hex_path) {
         if (strcmp(hex_path, "-") == 0)
