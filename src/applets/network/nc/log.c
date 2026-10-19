@@ -74,13 +74,46 @@ void json_timestamp_now(char* tbuf, size_t tbufsz) {
 #endif
 }
 
+static size_t json_utf8_sequence_length(const unsigned char* p, size_t remaining) {
+    size_t length;
+    unsigned char lower = 0x80, upper = 0xbf;
+    if (*p >= 0xc2 && *p <= 0xdf)
+        length = 2;
+    else if (*p >= 0xe0 && *p <= 0xef) {
+        length = 3;
+        if (*p == 0xe0)
+            lower = 0xa0;
+        else if (*p == 0xed)
+            upper = 0x9f;
+    }
+    else if (*p >= 0xf0 && *p <= 0xf4) {
+        length = 4;
+        if (*p == 0xf0)
+            lower = 0x90;
+        else if (*p == 0xf4)
+            upper = 0x8f;
+    }
+    else
+        return 0;
+    if (length > remaining)
+        return 0;
+    for (size_t i = 1; i < length; i++) {
+        if (p[i] < lower || p[i] > upper)
+            return 0;
+        lower = 0x80;
+        upper = 0xbf;
+    }
+    return length;
+}
+
 void json_print_string_or_null(FILE* fp, const char* value) {
     if (value == NULL) {
         fputs("null", fp);
         return;
     }
     fputc('"', fp);
-    for (const unsigned char* p = (const unsigned char*)value; *p; p++) {
+    const unsigned char* end = (const unsigned char*)value + strlen(value);
+    for (const unsigned char* p = (const unsigned char*)value; p < end; p++) {
         switch (*p) {
             case '"':
                 fputs("\\\"", fp);
@@ -106,8 +139,17 @@ void json_print_string_or_null(FILE* fp, const char* value) {
             default:
                 if (*p < 0x20)
                     fprintf(fp, "\\u%04x", (unsigned int)*p);
-                else
+                else if (*p < 0x80)
                     fputc(*p, fp);
+                else {
+                    size_t length = json_utf8_sequence_length(p, (size_t)(end - p));
+                    if (length == 0)
+                        fprintf(fp, "\\u%04x", (unsigned int)*p);
+                    else {
+                        fwrite(p, 1, length, fp);
+                        p += length - 1;
+                    }
+                }
                 break;
         }
     }
