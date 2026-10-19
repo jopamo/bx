@@ -506,6 +506,8 @@ int main(int argc, char* argv[]) {
             errx(EXIT_USAGE, "cannot use --quic with --vsock");
         if (uflag)
             errx(EXIT_USAGE, "cannot use -u with --vsock");
+        if (xflag)
+            errx(EXIT_USAGE, "cannot use -x with --vsock");
         parse_vsock(vsock_address, lflag, &vsock_cid, &vsock_port);
         family = AF_VSOCK;
     }

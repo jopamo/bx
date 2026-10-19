@@ -403,7 +403,7 @@ void help(void) {
             "  -T <keyword|value>         IP TOS/TCLASS\n"
             "  -I <length>                TCP receive buffer size\n"
             "  -O <length>                TCP send buffer size\n"
-            "  -x <addr[:port]>           Proxy address and port\n"
+            "  -x <addr[:port]>           Proxy address and port (internet TCP only)\n"
             "  -X <proto>                 Proxy protocol: \"5\" (SOCKS) or \"connect\"\n"
             "  -P <proxyuser>             Proxy authentication username\n"
             "      --proxy-proto          Require PROXY v1/v2 on stream listeners\n"
