@@ -799,7 +799,8 @@ int main(int argc, char* argv[]) {
                  * let it receive datagrams from multiple
                  * socket pairs.
                  */
-                readwrite(s);
+                if (readwrite(s) == -1)
+                    ret = EXIT_RUNTIME;
             }
             else if (uflag && !keepopen) {
                 /*
@@ -829,7 +830,8 @@ int main(int argc, char* argv[]) {
                 if (vflag)
                     report_sock("Connection received", (struct sockaddr*)&z, len, family == AF_UNIX ? host : NULL);
 
-                readwrite(s);
+                if (readwrite(s) == -1)
+                    ret = EXIT_RUNTIME;
             }
             else {
                 int connfd;
@@ -852,7 +854,8 @@ int main(int argc, char* argv[]) {
                 if (vflag)
                     report_sock("Connection received", (struct sockaddr*)&cliaddr, len,
                                 family == AF_UNIX ? host : NULL);
-                readwrite(connfd);
+                if (readwrite(connfd) == -1)
+                    ret = EXIT_RUNTIME;
                 close(connfd);
             }
 
@@ -864,8 +867,8 @@ int main(int argc, char* argv[]) {
         ret = 0;
 
         if ((s = unix_connect(host)) >= 0) {
-            if (!zflag)
-                readwrite(s);
+            if (!zflag && readwrite(s) == -1)
+                ret = EXIT_RUNTIME;
             close(s);
         }
         else {
@@ -882,8 +885,8 @@ int main(int argc, char* argv[]) {
         ret = 0;
 
         if ((s = vsock_connect(vsock_cid, vsock_port)) >= 0) {
-            if (!zflag)
-                readwrite(s);
+            if (!zflag && readwrite(s) == -1)
+                ret = EXIT_RUNTIME;
             close(s);
         }
         else {
@@ -952,8 +955,8 @@ int main(int argc, char* argv[]) {
             if (Fflag)
                 fdpass(s);
             else {
-                if (!zflag)
-                    readwrite(s);
+                if (!zflag && readwrite(s) == -1)
+                    ret = EXIT_RUNTIME;
             }
         }
     }

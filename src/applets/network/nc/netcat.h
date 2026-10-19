@@ -133,7 +133,7 @@ int strtoport(char* portstr, int udp);
 void build_ports(char*);
 void help(void) __attribute__((noreturn));
 int local_listen(const char*, const char*, struct addrinfo);
-void readwrite(int);
+int readwrite(int);
 void fdpass(int nfd) __attribute__((noreturn));
 int remote_connect(const char*, const char*, struct addrinfo, char*);
 int timeout_connect(int, const struct sockaddr*, socklen_t);

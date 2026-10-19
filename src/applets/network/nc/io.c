@@ -129,7 +129,7 @@ static int base64_encode(const unsigned char* in, size_t in_len, char* out, size
  * readwrite()
  * Loop that polls on the network file descriptor and stdin.
  */
-void readwrite(int net_fd) {
+int readwrite(int net_fd) {
     struct pollfd pfd[4];
     int stdin_fd = STDIN_FILENO;
     int stdout_fd = STDOUT_FILENO;
@@ -148,6 +148,7 @@ void readwrite(int net_fd) {
     struct nc_hex_output hex = {0};
     FILE* hex_owned = NULL;
     int pcap_error = 0;
+    int profile_error = 0;
 
     if ((netinbuf = malloc(iobufsize)) == NULL)
         err(EXIT_RUNTIME, "malloc");
@@ -338,8 +339,13 @@ void readwrite(int net_fd) {
         /* try to write to network */
         if (!sendfile_enabled && (pfd[POLL_NETOUT].revents & POLLOUT) && stdinbufpos > 0) {
             ret = drainbuf(pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex);
-            if (ret == -1)
+            if (ret == -1) {
+                if (profile != NC_PROFILE_NONE) {
+                    profile_error = errno ? errno : EIO;
+                    goto cleanup;
+                }
                 pfd[POLL_NETOUT].fd = -1;
+            }
             /* buffer empty - remove self from polling */
             if (stdinbufpos == 0)
                 pfd[POLL_NETOUT].events = 0;
@@ -410,6 +416,13 @@ cleanup:
         errno = hex.error;
         err(EXIT_RUNTIME, "hex-dump %s", hex_path);
     }
+    if (profile_error) {
+        errno = profile_error;
+        warn("profile write");
+        errno = profile_error;
+        return -1;
+    }
+    return 0;
 }
 
 ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int net_fd, struct nc_hex_output* hex) {
@@ -541,6 +554,10 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int 
                         return -1;
                     continue;
                 }
+                return -1;
+            }
+            if (res == 0) {
+                errno = EIO;
                 return -1;
             }
             total_written += res;
