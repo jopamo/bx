@@ -436,13 +436,15 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int 
         if (original_len > BUFSIZE)
             original_len = BUFSIZE;
 
-        if (profile == NC_PROFILE_HTML) {
-            snprintf((char*)temp_buf, sizeof(temp_buf), "<!-- %.*s -->", (int)original_len, buf);
-            write_len = strlen((char*)temp_buf);
-        }
-        else if (profile == NC_PROFILE_CSS) {
-            snprintf((char*)temp_buf, sizeof(temp_buf), "/* %.*s */", (int)original_len, buf);
-            write_len = strlen((char*)temp_buf);
+        if (profile == NC_PROFILE_HTML || profile == NC_PROFILE_CSS) {
+            const char* prefix = profile == NC_PROFILE_HTML ? "<!-- " : "/* ";
+            const char* suffix = profile == NC_PROFILE_HTML ? " -->" : " */";
+            size_t prefix_len = strlen(prefix);
+            size_t suffix_len = strlen(suffix);
+            memcpy(temp_buf, prefix, prefix_len);
+            memcpy(temp_buf + prefix_len, buf, original_len);
+            memcpy(temp_buf + prefix_len + original_len, suffix, suffix_len);
+            write_len = prefix_len + original_len + suffix_len;
         }
         else if (profile == NC_PROFILE_BASE64_JSON) {
             char b64[BUFSIZE * 2];
