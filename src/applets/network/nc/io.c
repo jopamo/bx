@@ -15,6 +15,16 @@ struct nc_hex_output {
     int error;
 };
 
+struct nc_profile_output {
+    size_t length;
+    size_t offset;
+    size_t input_length;
+    struct bx_poll_deadline deadline;
+    unsigned char bytes[BUFSIZE * 2];
+};
+
+static ssize_t drainbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_output*, struct nc_profile_output*);
+
 ssize_t (*nc_sendfile_fn)(int out_fd, int in_fd, off_t* offset, size_t count) = sendfile;
 
 static void io_hexdump(struct nc_hex_output* hex, int outbound, const unsigned char* buf, size_t len) {
@@ -125,6 +135,65 @@ static int base64_encode(const unsigned char* in, size_t in_len, char* out, size
     return p - out;
 }
 
+static int profile_prepare(struct nc_profile_output* output, const unsigned char* input, size_t length) {
+    size_t used;
+
+    if (output->length != 0)
+        return 0;
+    if (length > BUFSIZE)
+        length = BUFSIZE;
+
+    if (profile == NC_PROFILE_HTML || profile == NC_PROFILE_CSS) {
+        const char* prefix = profile == NC_PROFILE_HTML ? "<!-- " : "/* ";
+        const char* suffix = profile == NC_PROFILE_HTML ? " -->" : " */";
+        size_t prefix_length = strlen(prefix);
+        size_t suffix_length = strlen(suffix);
+        memcpy(output->bytes, prefix, prefix_length);
+        memcpy(output->bytes + prefix_length, input, length);
+        memcpy(output->bytes + prefix_length + length, suffix, suffix_length);
+        used = prefix_length + length + suffix_length;
+    }
+    else if (profile == NC_PROFILE_BASE64_JSON || profile == NC_PROFILE_JSON_DIALECT) {
+        int prefix_length;
+        if (profile == NC_PROFILE_BASE64_JSON)
+            prefix_length = snprintf((char*)output->bytes, sizeof(output->bytes), "{\"status\": \"success\", \"session_id\": \"89234\", \"debug_trace\": \"");
+        else {
+            const char* statuses[] = {"active", "idle", "processing", "maintenance"};
+            const char* regions[] = {"us-east-1", "eu-west-1", "ap-southeast-2", "sa-east-1"};
+            prefix_length = snprintf((char*)output->bytes, sizeof(output->bytes), "{\"metadata\":{\"id\":%u,\"region\":\"%s\",\"status\":\"%s\"},\"payload\":\"", nc_random_uniform(10000),
+                                     regions[nc_random_uniform(4)], statuses[nc_random_uniform(4)]);
+        }
+        if (prefix_length < 0 || (size_t)prefix_length >= sizeof(output->bytes) - 2) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        used = (size_t)prefix_length;
+        int encoded = base64_encode(input, length, (char*)output->bytes + used, sizeof(output->bytes) - used - 2);
+        if (encoded < 0) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        used += (size_t)encoded;
+        output->bytes[used++] = '"';
+        output->bytes[used++] = '}';
+    }
+    else if (profile == NC_PROFILE_XOR_MASK) {
+        const unsigned char key[] = {0xde, 0xad, 0xbe, 0xef};
+        rolling_xor(input, length, output->bytes, key, sizeof(key));
+        used = length;
+    }
+    else {
+        errno = EINVAL;
+        return -1;
+    }
+
+    output->offset = 0;
+    output->input_length = length;
+    bx_poll_deadline_init(&output->deadline, timeout);
+    output->length = used;
+    return 0;
+}
+
 /*
  * readwrite()
  * Loop that polls on the network file descriptor and stdin.
@@ -149,6 +218,7 @@ int readwrite(int net_fd) {
     FILE* hex_owned = NULL;
     int pcap_error = 0;
     int profile_error = 0;
+    struct nc_profile_output* profile_output = NULL;
 
     if ((netinbuf = malloc(iobufsize)) == NULL)
         err(EXIT_RUNTIME, "malloc");
@@ -175,6 +245,15 @@ int readwrite(int net_fd) {
             }
             hex.stream = hex_owned;
         }
+    }
+
+    if (profile != NC_PROFILE_NONE) {
+        profile_output = malloc(sizeof(*profile_output));
+        if (profile_output == NULL) {
+            profile_error = ENOMEM;
+            goto cleanup;
+        }
+        profile_output->length = 0;
     }
 
     /* don't read from stdin if requested or fuzzing */
@@ -220,7 +299,7 @@ int readwrite(int net_fd) {
         if (lflag && pfd[POLL_NETIN].fd == -1 && stdinbufpos == 0 && netinbufpos == 0)
             goto cleanup;
 
-        if (iflag) {
+        if (iflag && !(profile_output != NULL && profile_output->length != 0)) {
             double s = (double)iflag;
             if (jitter) {
                 /* Use Gaussian distribution for human-like burstiness */
@@ -240,6 +319,11 @@ int readwrite(int net_fd) {
             pfd[POLL_NETOUT].events = POLLOUT;
         }
 
+        if (profile_output != NULL && stdinbufpos > 0 && profile_prepare(profile_output, stdinbuf, stdinbufpos) == -1) {
+            profile_error = errno;
+            goto cleanup;
+        }
+
         if (mptcp_diag_enabled) {
             struct timespec now;
             int64_t elapsed_ms;
@@ -253,15 +337,36 @@ int readwrite(int net_fd) {
         }
 
         /* poll */
-        num_fds = poll(pfd, 4, timeout);
+        num_fds = profile_output != NULL && profile_output->length != 0 ? bx_poll_deadline_wait(&profile_output->deadline, pfd, 4) : poll(pfd, 4, timeout);
 
         /* treat poll errors */
-        if (num_fds == -1)
+        if (num_fds == -1) {
+            if (profile_output != NULL && profile_output->length != 0) {
+                profile_error = errno;
+                goto cleanup;
+            }
             err(EXIT_RUNTIME, "polling error");
+        }
 
         /* timeout happened */
-        if (num_fds == 0)
+        if (num_fds == 0) {
+            if (profile_output != NULL && stdinbufpos > 0)
+                profile_error = ETIMEDOUT;
             goto cleanup;
+        }
+
+        if (profile_output != NULL && stdinbufpos > 0 && (pfd[POLL_NETOUT].revents & (POLLERR | POLLNVAL | POLLHUP))) {
+            int socket_error = 0;
+            socklen_t length = sizeof(socket_error);
+            profile_error = EPIPE;
+            if (pfd[POLL_NETOUT].revents & POLLNVAL)
+                profile_error = EBADF;
+            else if (getsockopt(net_fd, SOL_SOCKET, SO_ERROR, &socket_error, &length) == -1)
+                profile_error = errno;
+            else if (socket_error != 0)
+                profile_error = socket_error;
+            goto cleanup;
+        }
 
         /* treat socket error conditions */
         for (n = 0; n < 4; n++) {
@@ -338,7 +443,7 @@ int readwrite(int net_fd) {
         }
         /* try to write to network */
         if (!sendfile_enabled && (pfd[POLL_NETOUT].revents & POLLOUT) && stdinbufpos > 0) {
-            ret = drainbuf(pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex);
+            ret = drainbuf(pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, net_fd, &hex, profile_output);
             if (ret == -1) {
                 if (profile != NC_PROFILE_NONE) {
                     profile_error = errno ? errno : EIO;
@@ -379,7 +484,7 @@ int readwrite(int net_fd) {
         }
         /* try to write to stdout */
         if (pfd[POLL_STDOUT].revents & POLLOUT && netinbufpos > 0) {
-            ret = drainbuf(pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex);
+            ret = drainbuf(pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, net_fd, &hex, NULL);
             if (ret == -1)
                 pfd[POLL_STDOUT].fd = -1;
             /* buffer empty - remove self from polling */
@@ -408,6 +513,7 @@ cleanup:
         hex.error = errno ? errno : EIO;
     free(netinbuf);
     free(stdinbuf);
+    free(profile_output);
     if (pcap_error) {
         errno = pcap_error;
         err(EXIT_RUNTIME, "pcap %s", pcapfile[0] ? pcapfile : "default path");
@@ -425,7 +531,7 @@ cleanup:
     return 0;
 }
 
-ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int net_fd, struct nc_hex_output* hex) {
+static ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int net_fd, struct nc_hex_output* hex, struct nc_profile_output* output) {
     ssize_t n;
     ssize_t adjust;
     size_t write_len;
@@ -437,139 +543,30 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, int 
         return -1;
     }
 
-    /* Apply Traffic Masking/Shaping when writing to network */
-    if (fd == net_fd && profile != NC_PROFILE_NONE) {
-        unsigned char temp_buf[BUFSIZE * 2];
-        unsigned char* write_buf = temp_buf;
-        size_t original_len = *bufpos;
-
-        /* Preserve UDP datagram semantics by splitting oversized writes. */
-        if (uflag && original_len > UDP_MAX_WRITE_PAYLOAD)
-            original_len = UDP_MAX_WRITE_PAYLOAD;
-        if (original_len > BUFSIZE)
-            original_len = BUFSIZE;
-
-        if (profile == NC_PROFILE_HTML || profile == NC_PROFILE_CSS) {
-            const char* prefix = profile == NC_PROFILE_HTML ? "<!-- " : "/* ";
-            const char* suffix = profile == NC_PROFILE_HTML ? " -->" : " */";
-            size_t prefix_len = strlen(prefix);
-            size_t suffix_len = strlen(suffix);
-            memcpy(temp_buf, prefix, prefix_len);
-            memcpy(temp_buf + prefix_len, buf, original_len);
-            memcpy(temp_buf + prefix_len + original_len, suffix, suffix_len);
-            write_len = prefix_len + original_len + suffix_len;
-        }
-        else if (profile == NC_PROFILE_BASE64_JSON) {
-            char b64[BUFSIZE * 2];
-            if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
-                int prefix_len = snprintf((char*)temp_buf,
-                                          sizeof(temp_buf),
-                                          "{\"status\": \"success\", \"session_id\": \"89234\", \"debug_trace\": \"");
-                if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
-                    memcpy(temp_buf, buf, original_len);
-                    write_len = original_len;
-                }
-                else {
-                    size_t used = (size_t)prefix_len;
-                    size_t avail = sizeof(temp_buf) - used;
-                    size_t payload_len = strlen(b64);
-
-                    if (avail <= 3)
-                        payload_len = 0;
-                    else if (payload_len > avail - 3)
-                        payload_len = avail - 3;
-
-                    memcpy(temp_buf + used, b64, payload_len);
-                    used += payload_len;
-                    temp_buf[used++] = '"';
-                    temp_buf[used++] = '}';
-                    temp_buf[used] = '\0';
-                    write_len = used;
-                }
-            }
-            else {
-                memcpy(temp_buf, buf, original_len);
-                write_len = original_len;
-            }
-        }
-        else if (profile == NC_PROFILE_JSON_DIALECT) {
-            char b64[BUFSIZE * 2];
-            if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
-                /* Dialect: Looks like a telemetry report */
-                const char* statuses[] = {"active", "idle", "processing", "maintenance"};
-                const char* regions[] = {"us-east-1", "eu-west-1", "ap-southeast-2", "sa-east-1"};
-                int prefix_len = snprintf((char*)temp_buf,
-                                          sizeof(temp_buf),
-                                          "{\"metadata\":{\"id\":%u,\"region\":\"%s\",\"status\":\"%s\"},\"payload\":\"",
-                                          nc_random_uniform(10000),
-                                          regions[nc_random_uniform(4)],
-                                          statuses[nc_random_uniform(4)]);
-                if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
-                    memcpy(temp_buf, buf, original_len);
-                    write_len = original_len;
-                }
-                else {
-                    size_t used = (size_t)prefix_len;
-                    size_t avail = sizeof(temp_buf) - used;
-                    size_t payload_len = strlen(b64);
-
-                    if (avail <= 3)
-                        payload_len = 0;
-                    else if (payload_len > avail - 3)
-                        payload_len = avail - 3;
-
-                    memcpy(temp_buf + used, b64, payload_len);
-                    used += payload_len;
-                    temp_buf[used++] = '"';
-                    temp_buf[used++] = '}';
-                    temp_buf[used] = '\0';
-                    write_len = used;
-                }
-            }
-            else {
-                memcpy(temp_buf, buf, original_len);
-                write_len = original_len;
-            }
-        }
-        else if (profile == NC_PROFILE_XOR_MASK) {
-            /* 4-byte rolling key: DE AD BE EF */
-            unsigned char key[] = {0xDE, 0xAD, 0xBE, 0xEF};
-            rolling_xor(buf, original_len, temp_buf, key, sizeof(key));
-            write_len = original_len;
-            write_buf = temp_buf;
-        }
-        else {
-            errno = EINVAL;
+    if (output != NULL) {
+        write_len = output->length - output->offset;
+        n = send(fd, output->bytes + output->offset, write_len, MSG_DONTWAIT);
+        if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+            return NC_IO_RETRY;
+        if (n <= 0) {
+            if (n == 0)
+                errno = EIO;
             return -1;
         }
-
-        /* Blocking write loop to ensure masked packet is sent intact */
-        size_t total_written = 0;
-        while (total_written < write_len) {
-            ssize_t res = write(fd, write_buf + total_written, write_len - total_written);
-
-            if (res == -1) {
-                if (errno == EAGAIN || errno == EINTR) {
-                    if (nc_sleep_milliseconds(1) == -1)
-                        return -1;
-                    continue;
-                }
-                return -1;
-            }
-            if (res == 0) {
+        if (pcapfile)
+            pcap_log(fd, output->bytes + output->offset, n, 1);
+        io_hexdump(hex, 1, output->bytes + output->offset, n);
+        output->offset += (size_t)n;
+        if (output->offset != output->length) {
+            if (uflag) {
                 errno = EIO;
                 return -1;
             }
-            total_written += res;
+            return NC_IO_RETRY;
         }
-
-        /* We pretend we wrote 'original_len' of the input buffer */
-        n = original_len;
-
-        if (pcapfile)
-            pcap_log(fd, write_buf, write_len, 1);
-
-        io_hexdump(hex, 1, write_buf, write_len);
+        /* Retain the raw prefix until its entire encoded frame drains. */
+        n = (ssize_t)output->input_length;
+        output->length = 0;
     }
     else {
         write_len = *bufpos;

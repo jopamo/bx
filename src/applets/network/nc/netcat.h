@@ -183,7 +183,6 @@ int json_socket_tuple_from_fd(int fd,
 int hexdump(FILE* fp, const char* prefix, const unsigned char* buf, size_t len, size_t total);
 
 struct nc_hex_output;
-ssize_t drainbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_output*);
 ssize_t fillbuf(int, unsigned char*, size_t*, size_t, int, struct nc_hex_output*);
 
 #endif
