@@ -232,7 +232,7 @@ int readwrite(int net_fd) {
         if (strcmp(hex_path, "-") == 0)
             hex.stream = stderr;
         else {
-            int fd = bx_fd_open_cloexec(hex_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            int fd = bx_fd_open_cloexec(hex_path, O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK, 0666);
             if (fd == -1) {
                 hex.error = errno;
                 goto cleanup;

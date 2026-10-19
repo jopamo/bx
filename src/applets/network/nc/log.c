@@ -409,6 +409,7 @@ void help(void) {
             "                             Rotate capture after this many seconds\n"
             "      --hex-dump <file>      Dump relay data as hex\n"
             "                             Truncate per session; - writes to stderr\n"
+            "                             Named pipe opens/writes fail rather than wait\n"
             "                             Output errors return status 1 at relay cleanup\n"
 #ifdef IPPROTO_MPTCP
             "      --mptcp                Request MPTCP on internet TCP sockets\n"
