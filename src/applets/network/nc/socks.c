@@ -44,6 +44,7 @@
 #include <unistd.h>
 #include <resolv.h>
 #include "netcat.h"
+#include "lib/poll_deadline.h"
 
 #define SOCKS_PORT "1080"
 #define HTTP_PROXY_PORT "3128"
@@ -97,10 +98,11 @@ int socks_connect(const char*,
                   int,
                   const char*);
 
-static int proxy_wait_io(int fd, short events) {
+static int proxy_wait_io(int fd, short events, struct bx_poll_deadline* deadline) {
     int ret;
+    struct pollfd pfd = {.fd = fd, .events = events};
 
-    ret = nc_wait_fd_events_monotonic(fd, events, timeout);
+    ret = bx_poll_deadline_wait(deadline, &pfd, 1);
     if (ret == 1)
         return 0;
     if (ret == 0)
@@ -109,22 +111,19 @@ static int proxy_wait_io(int fd, short events) {
 }
 
 /* Derived from OpenBSD atomicio.c,v 1.11 (2012/12/04). */
-static size_t proxy_atomicio(int fd, void* _s, size_t n, short events) {
+static size_t proxy_atomicio(int fd, void* _s, size_t n, short events, struct bx_poll_deadline* deadline) {
     char* s = _s;
     size_t pos = 0;
     ssize_t res;
 
     while (n > pos) {
+        if (proxy_wait_io(fd, events, deadline) == -1)
+            return pos;
         res = events == POLLOUT ? write(fd, s + pos, n - pos) : read(fd, s + pos, n - pos);
         switch (res) {
             case -1:
-                if (errno == EINTR)
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS)
                     continue;
-                if ((errno == EAGAIN) || (errno == EWOULDBLOCK) || (errno == ENOBUFS)) {
-                    if (proxy_wait_io(fd, events) == -1)
-                        return pos;
-                    continue;
-                }
                 return pos;
             case 0:
                 errno = EPIPE;
@@ -136,12 +135,12 @@ static size_t proxy_atomicio(int fd, void* _s, size_t n, short events) {
     return pos;
 }
 
-static size_t proxy_read_full(int fd, void* buf, size_t n) {
-    return proxy_atomicio(fd, buf, n, POLLIN);
+static size_t proxy_read_full(int fd, void* buf, size_t n, struct bx_poll_deadline* deadline) {
+    return proxy_atomicio(fd, buf, n, POLLIN, deadline);
 }
 
-static size_t proxy_write_full(int fd, void* buf, size_t n) {
-    return proxy_atomicio(fd, buf, n, POLLOUT);
+static size_t proxy_write_full(int fd, void* buf, size_t n, struct bx_poll_deadline* deadline) {
+    return proxy_atomicio(fd, buf, n, POLLOUT, deadline);
 }
 
 static int decode_addrport(const char* h,
@@ -174,7 +173,7 @@ static int decode_addrport(const char* h,
     return (0);
 }
 
-static int proxy_read_line(int fd, char* buf, size_t bufsz) {
+static int proxy_read_line(int fd, char* buf, size_t bufsz, struct bx_poll_deadline* deadline) {
     size_t off;
 
     for (off = 0;;) {
@@ -182,7 +181,7 @@ static int proxy_read_line(int fd, char* buf, size_t bufsz) {
             close(fd);
             errx(EXIT_RUNTIME, "proxy read too long");
         }
-        if (proxy_read_full(fd, buf + off, 1) != 1) {
+        if (proxy_read_full(fd, buf + off, 1, deadline) != 1) {
             close_failed_socket(fd);
             err(EXIT_RUNTIME, "proxy read");
         }
@@ -284,6 +283,7 @@ int socks_connect(const char* host,
     struct sockaddr_in* in4 = (struct sockaddr_in*)&addr;
     struct sockaddr_in6* in6 = (struct sockaddr_in6*)&addr;
     in_port_t serverport;
+    struct bx_poll_deadline deadline;
 
     if (proxyport == NULL)
         proxyport = (socksv == -1) ? HTTP_PROXY_PORT : SOCKS_PORT;
@@ -301,6 +301,8 @@ again:
 
     if (proxyfd < 0)
         return (-1);
+    if (authretry == 1)
+        bx_poll_deadline_init(&deadline, timeout);
 
     if (socksv == 5) {
         if (decode_addrport(host, port, (struct sockaddr*)&addr, sizeof(addr), 0, 1) == -1)
@@ -313,13 +315,13 @@ again:
         if (proxyuser != NULL)
             buf[3] = SOCKS_USERPASS;
         wlen = 2 + buf[1];
-        cnt = proxy_write_full(proxyfd, buf, wlen);
+        cnt = proxy_write_full(proxyfd, buf, wlen, &deadline);
         if (cnt != wlen) {
             close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/%zu)", cnt, wlen);
         }
 
-        cnt = proxy_read_full(proxyfd, buf, 2);
+        cnt = proxy_read_full(proxyfd, buf, 2, &deadline);
         if (cnt != 2) {
             close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "read failed (%zu/3)", cnt);
@@ -356,13 +358,13 @@ again:
             explicit_bzero(proxypass, sizeof proxypass);
 
             wlen = 3 + ulen + plen;
-            cnt = proxy_write_full(proxyfd, buf, wlen);
+            cnt = proxy_write_full(proxyfd, buf, wlen, &deadline);
             if (cnt != wlen) {
                 close_failed_socket(proxyfd);
                 err(EXIT_RUNTIME, "write failed (%zu/%zu)", cnt, wlen);
             }
 
-            cnt = proxy_read_full(proxyfd, buf, 2);
+            cnt = proxy_read_full(proxyfd, buf, 2, &deadline);
             if (cnt != 2) {
                 close_failed_socket(proxyfd);
                 err(EXIT_RUNTIME, "read failed (%zu/2)", cnt);
@@ -421,13 +423,13 @@ again:
                 errx(EXIT_RUNTIME, "internal error: silly AF");
         }
 
-        cnt = proxy_write_full(proxyfd, buf, wlen);
+        cnt = proxy_write_full(proxyfd, buf, wlen, &deadline);
         if (cnt != wlen) {
             close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/%zu)", cnt, wlen);
         }
 
-        cnt = proxy_read_full(proxyfd, buf, 4);
+        cnt = proxy_read_full(proxyfd, buf, 4, &deadline);
         if (cnt != 4) {
             close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "read failed (%zu/4)", cnt);
@@ -438,14 +440,14 @@ again:
         }
         switch (buf[3]) {
             case SOCKS_IPV4:
-                cnt = proxy_read_full(proxyfd, buf + 4, 6);
+                cnt = proxy_read_full(proxyfd, buf + 4, 6, &deadline);
                 if (cnt != 6) {
                     close_failed_socket(proxyfd);
                     err(EXIT_RUNTIME, "read failed (%zu/6)", cnt);
                 }
                 break;
             case SOCKS_IPV6:
-                cnt = proxy_read_full(proxyfd, buf + 4, 18);
+                cnt = proxy_read_full(proxyfd, buf + 4, 18, &deadline);
                 if (cnt != 18) {
                     close_failed_socket(proxyfd);
                     err(EXIT_RUNTIME, "read failed (%zu/18)", cnt);
@@ -478,7 +480,7 @@ again:
         }
         r = strlen((char*)buf);
 
-        cnt = proxy_write_full(proxyfd, buf, r);
+        cnt = proxy_write_full(proxyfd, buf, r, &deadline);
         if (cnt != (size_t)r) {
             close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/%d)", cnt, r);
@@ -505,7 +507,7 @@ again:
                 errx(EXIT_USAGE, "Proxy auth response too long");
             }
             r = strlen((char*)buf);
-            if ((cnt = proxy_write_full(proxyfd, buf, r)) != (size_t)r) {
+            if ((cnt = proxy_write_full(proxyfd, buf, r, &deadline)) != (size_t)r) {
                 close_failed_socket(proxyfd);
                 err(EXIT_RUNTIME, "write failed (%zu/%d)", cnt, r);
             }
@@ -514,13 +516,13 @@ again:
         }
 
         /* Terminate headers */
-        if ((cnt = proxy_write_full(proxyfd, "\r\n", 2)) != 2) {
+        if ((cnt = proxy_write_full(proxyfd, "\r\n", 2, &deadline)) != 2) {
             close_failed_socket(proxyfd);
             err(EXIT_RUNTIME, "write failed (%zu/2)", cnt);
         }
 
         /* Read status reply */
-        proxy_read_line(proxyfd, (char*)buf, sizeof(buf));
+        proxy_read_line(proxyfd, (char*)buf, sizeof(buf), &deadline);
         if (proxyuser != NULL &&
             (strncmp((char*)buf, "HTTP/1.0 407 ", 13) == 0 || strncmp((char*)buf, "HTTP/1.1 407 ", 13) == 0)) {
             if (authretry > 1) {
@@ -538,7 +540,7 @@ again:
 
         /* Headers continue until we hit an empty line */
         for (r = 0; r < HTTP_MAXHDRS; r++) {
-            proxy_read_line(proxyfd, (char*)buf, sizeof(buf));
+            proxy_read_line(proxyfd, (char*)buf, sizeof(buf), &deadline);
             if (*buf == '\0')
                 break;
         }
