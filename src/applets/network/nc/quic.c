@@ -1,6 +1,13 @@
 #include "netcat.h"
 #include "quic.h"
 
+static void quic_json_peer(const char* host, const char* port) {
+    fputs(",\"host\":", stderr);
+    json_print_string_or_null(stderr, host);
+    fputs(",\"port\":", stderr);
+    json_print_string_or_null(stderr, port);
+}
+
 /*
  * QUIC Probing
  *
@@ -97,10 +104,11 @@ int quic_test(int s, char* host, char* port) {
 
         json_event_begin(stderr, "info", "quic_initial_sent", "out", "udp", "initial_sent", src_addr_p,
                          src_port_p, dst_addr_p, dst_port_p);
+        quic_json_peer(host, port);
         fprintf(stderr,
-                ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\",\"dcid\":\"%s\","
+                ",\"version\":\"%02x%02x%02x%02x\",\"dcid\":\"%s\","
                 "\"scid_len\":%u}\n",
-                host, port, buf[1], buf[2], buf[3], buf[4], dcid_hex, (unsigned int)buf[14]);
+                buf[1], buf[2], buf[3], buf[4], dcid_hex, (unsigned int)buf[14]);
     }
 
     /* Send the probe */
@@ -134,7 +142,8 @@ int quic_test(int s, char* host, char* port) {
             if (jflag) {
                 json_event_begin(stderr, "info", "quic_truncated_received", "in", "udp", "truncated_received",
                                  src_addr_p, src_port_p, dst_addr_p, dst_port_p);
-                fprintf(stderr, ",\"host\":\"%s\",\"port\":\"%s\",\"length\":%zd}\n", host, port, len);
+                quic_json_peer(host, port);
+                fprintf(stderr, ",\"length\":%zd}\n", len);
             }
             return 0;
         }
@@ -150,7 +159,8 @@ int quic_test(int s, char* host, char* port) {
                 const char* quic_state = (len >= 21) ? "stateless_reset_detected" : "short_header_received";
                 json_event_begin(stderr, "info", event, "in", "udp", quic_state, src_addr_p, src_port_p,
                                  dst_addr_p, dst_port_p);
-                fprintf(stderr, ",\"host\":\"%s\",\"port\":\"%s\",\"length\":%zd}\n", host, port, len);
+                quic_json_peer(host, port);
+                fprintf(stderr, ",\"length\":%zd}\n", len);
             }
             return 0;
         }
@@ -161,7 +171,8 @@ int quic_test(int s, char* host, char* port) {
             if (jflag) {
                 json_event_begin(stderr, "info", "quic_truncated_received", "in", "udp", "truncated_received",
                                  src_addr_p, src_port_p, dst_addr_p, dst_port_p);
-                fprintf(stderr, ",\"host\":\"%s\",\"port\":\"%s\",\"length\":%zd}\n", host, port, len);
+                quic_json_peer(host, port);
+                fprintf(stderr, ",\"length\":%zd}\n", len);
             }
             return 0;
         }
@@ -196,10 +207,11 @@ int quic_test(int s, char* host, char* port) {
 
                 json_event_begin(stderr, "info", "quic_version_negotiation_received", "in", "udp",
                                  "version_negotiation", src_addr_p, src_port_p, dst_addr_p, dst_port_p);
+                quic_json_peer(host, port);
                 fprintf(stderr,
-                        ",\"host\":\"%s\",\"port\":\"%s\",\"dcid_len\":%zu,\"dcid\":\"%s\","
+                        ",\"dcid_len\":%zu,\"dcid\":\"%s\","
                         "\"scid_len\":%zu,\"scid\":\"%s\",\"offered_versions\":[",
-                        host, port, dcid_len, dcid_hex, scid_len, scid_hex);
+                        dcid_len, dcid_hex, scid_len, scid_hex);
                 if (recv_len >= off + 4 && ((recv_len - off) % 4 == 0)) {
                     size_t num_versions = (recv_len - off) / 4;
                     for (i = 0; i < num_versions; i++)
@@ -253,11 +265,11 @@ int quic_test(int s, char* host, char* port) {
                 size_t token_len = (recv_len >= off + 16) ? (recv_len - off - 16) : 0;
                 json_event_begin(stderr, "info", "quic_retry_received", "in", "udp", "retry_received",
                                  src_addr_p, src_port_p, dst_addr_p, dst_port_p);
+                quic_json_peer(host, port);
                 fprintf(stderr,
-                        ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\","
+                        ",\"version\":\"%02x%02x%02x%02x\","
                         "\"dcid_len\":%zu,\"dcid\":\"%s\",\"scid_len\":%zu,\"scid\":\"%s\",\"token_len\":%zu}\n",
-                        host, port, recv_buf[1], recv_buf[2], recv_buf[3], recv_buf[4], dcid_len, dcid_hex, scid_len,
-                        scid_hex, token_len);
+                        recv_buf[1], recv_buf[2], recv_buf[3], recv_buf[4], dcid_len, dcid_hex, scid_len, scid_hex, token_len);
             }
             else {
                 const char* event = "quic_response_received";
@@ -276,11 +288,11 @@ int quic_test(int s, char* host, char* port) {
                     quic_state = "handshake_received";
                 json_event_begin(stderr, "info", event, "in", "udp", quic_state, src_addr_p, src_port_p,
                                  dst_addr_p, dst_port_p);
+                quic_json_peer(host, port);
                 fprintf(stderr,
-                        ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\","
+                        ",\"version\":\"%02x%02x%02x%02x\","
                         "\"dcid_len\":%zu,\"dcid\":\"%s\",\"scid_len\":%zu,\"scid\":\"%s\"}\n",
-                        host, port, recv_buf[1], recv_buf[2], recv_buf[3], recv_buf[4], dcid_len, dcid_hex, scid_len,
-                        scid_hex);
+                        recv_buf[1], recv_buf[2], recv_buf[3], recv_buf[4], dcid_len, dcid_hex, scid_len, scid_hex);
             }
         }
 

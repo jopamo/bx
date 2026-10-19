@@ -928,7 +928,7 @@ int main(int argc, char* argv[]) {
                 if (uflag) {
                     if (quic_probe) {
                         if (quic_test(s, host, portlist[i]) == 1) {
-                            if (!zflag && !quietflag)
+                            if (!zflag && !quietflag && !jflag)
                                 fprintf(stderr, "QUIC Connection to %s %s succeeded!\n", host, portlist[i]);
                             print_info = 0; /* Already printed */
                         }

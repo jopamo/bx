@@ -276,7 +276,9 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
         if (jflag) {
             json_event_begin(stderr, "info", event_name, direction, protocol,
                              "disabled", src_addr, src_port, dst_addr, dst_port);
-            fprintf(stderr, ",\"message\":\"%s\",\"path\":", msg);
+            fputs(",\"message\":", stderr);
+            json_print_string_or_null(stderr, msg);
+            fputs(",\"path\":", stderr);
             json_print_string_or_null(stderr, path);
             fputs("}\n", stderr);
         }
@@ -305,7 +307,9 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
         if (jflag) {
             json_event_begin(stderr, "info", event_name, direction, protocol,
                              "disabled", src_addr, src_port, dst_addr, dst_port);
-            fprintf(stderr, ",\"message\":\"%s\",\"cid\":%u,\"port\":%u}\n", msg, svm->svm_cid, svm->svm_port);
+            fputs(",\"message\":", stderr);
+            json_print_string_or_null(stderr, msg);
+            fprintf(stderr, ",\"cid\":%u,\"port\":%u}\n", svm->svm_cid, svm->svm_port);
         }
         else {
             fprintf(stderr, "%s on vsock:%u:%u\n", msg, svm->svm_cid, svm->svm_port);
@@ -335,7 +339,13 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
         }
         json_event_begin(stderr, "info", event_name, direction, protocol, "disabled",
                          src_addr, src_port, dst_addr, dst_port);
-        fprintf(stderr, ",\"message\":\"%s\",\"host\":\"%s\",\"port\":\"%s\"}\n", msg, host, port);
+        fputs(",\"message\":", stderr);
+        json_print_string_or_null(stderr, msg);
+        fputs(",\"host\":", stderr);
+        json_print_string_or_null(stderr, host);
+        fputs(",\"port\":", stderr);
+        json_print_string_or_null(stderr, port);
+        fputs("}\n", stderr);
     }
     else {
         fprintf(stderr, "%s on %s %s\n", msg, host, port);
