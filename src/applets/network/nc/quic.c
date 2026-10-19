@@ -179,7 +179,7 @@ int quic_test(int s, char* host, char* port) {
 
         /* Version must be 0 for Version Negotiation */
         if (recv_buf[1] == 0 && recv_buf[2] == 0 && recv_buf[3] == 0 && recv_buf[4] == 0) {
-            if (vflag)
+            if (vflag && !jflag)
                 fprintf(stderr, "QUIC Version Negotiation packet received from %s:%s\n", host, port);
             if (jflag) {
                 char dcid_hex[513];
