@@ -364,9 +364,8 @@ int main(int argc, char* argv[]) {
                 family = AF_INET;
                 break;
             case '6':
-                fprintf(stderr, "%s: IPv6 is not supported in this IPv4-only build\n", progname);
-                fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-                exit(EXIT_USAGE);
+                family = AF_INET6;
+                break;
             case 'j':
                 jflag = 1;
                 break;
