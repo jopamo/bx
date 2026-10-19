@@ -81,22 +81,6 @@ int nc_sleep_monotonic(double seconds) {
     return 0;
 }
 
-int nc_sleep_milliseconds(int milliseconds) {
-    struct timespec req;
-
-    if (milliseconds <= 0)
-        return 0;
-    if (!nc_msec_to_timespec(milliseconds, &req)) {
-        errno = EINVAL;
-        return -1;
-    }
-    while (nanosleep(&req, &req) == -1) {
-        if (errno != EINTR)
-            return -1;
-    }
-    return 0;
-}
-
 int nc_wait_fd_events_monotonic(int fd, short events, int timeout_ms) {
     struct pollfd pfd[2];
     int nfds = 1;
