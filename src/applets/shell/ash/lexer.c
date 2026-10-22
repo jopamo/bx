@@ -1913,7 +1913,7 @@ static enum ash_lexer_result ash_lexer_scan_dollar_single_quote(
         char ch = ash_lexer_peek(lexer, 0u);
         if (ch == '\'') {
             size_t length = lexer->offset - start;
-            if ((lexer->here_document_source ? ash_word_add_part : ash_word_append_span)(word, ASH_WORD_TEXT, ASH_QUOTE_DOLLAR_SINGLE, location, lexer->input + start, length) != 0) {
+            if (ash_word_add_part(word, ASH_WORD_TEXT, ASH_QUOTE_DOLLAR_SINGLE, location, lexer->input + start, length) != 0) {
                 return ash_lexer_fail(lexer, ASH_LEXER_ERROR, location, "out of memory");
             }
             (void)ash_lexer_advance(lexer);
