@@ -111,6 +111,17 @@ static bool ash_pathname_pattern_literal_append(
     return true;
 }
 
+static char* ash_pathname_pattern_literal_duplicate(const char* pattern, size_t length) {
+    struct bx_text_buffer literal = {0};
+    if (!ash_pathname_pattern_literal_append(&literal, pattern, length)) {
+        bx_text_buffer_destroy(&literal);
+        return NULL;
+    }
+    char* result = bx_text_buffer_take(&literal);
+    bx_text_buffer_destroy(&literal);
+    return result;
+}
+
 static int ash_pathname_plan_reserve(
     struct ash_pathname_plan* plan
 ) {
@@ -151,24 +162,11 @@ static int ash_pathname_plan_add_component(
         !plan->components[plan->count - 1u].active) {
         struct bx_text_buffer* literal =
             &plan->components[plan->count - 1u].literal;
-        return
-            bx_text_buffer_append_span(
-                literal,
-                separator,
-                separator_length
-            ) &&
-            ash_pathname_pattern_literal_append(
-                literal,
-                pattern,
-                pattern_length
-            ) ? 0 : -1;
+        return ash_pathname_pattern_literal_append(literal, separator, separator_length) && ash_pathname_pattern_literal_append(literal, pattern, pattern_length) ? 0 : -1;
     }
 
     struct ash_pathname_component component = {
-        .separator = ash_pathname_duplicate_span(
-            separator,
-            separator_length
-        ),
+        .separator = ash_pathname_pattern_literal_duplicate(separator, separator_length),
     };
     enum ash_pattern_compile_result result = ASH_PATTERN_COMPILE_OK;
     if (component.separator != NULL &&
@@ -247,6 +245,13 @@ static int ash_pathname_plan_add_component(
     return 0;
 }
 
+static size_t ash_pathname_separator_width(const char* pattern, size_t remaining) {
+    if (remaining != 0u && pattern[0] == '/') {
+        return 1u;
+    }
+    return remaining > 1u && pattern[0] == '\\' && pattern[1] == '/' ? 2u : 0u;
+}
+
 static int ash_pathname_plan_build(
     const char* pattern,
     struct ash_pathname_plan* plan
@@ -256,14 +261,12 @@ static int ash_pathname_plan_build(
     size_t position = 0u;
     while (position < length) {
         size_t separator = position;
-        while (position < length && pattern[position] == '/') {
-            position++;
+        size_t width;
+        while ((width = ash_pathname_separator_width(pattern + position, length - position)) != 0u) {
+            position += width;
         }
         if (position == length) {
-            plan->trailing_separator = ash_pathname_duplicate_span(
-                pattern + separator,
-                position - separator
-            );
+            plan->trailing_separator = ash_pathname_pattern_literal_duplicate(pattern + separator, position - separator);
             if (plan->trailing_separator == NULL) {
                 ash_pathname_plan_destroy(plan);
                 return -1;
@@ -272,8 +275,8 @@ static int ash_pathname_plan_build(
         }
 
         size_t component = position;
-        while (position < length && pattern[position] != '/') {
-            position++;
+        while (position < length && ash_pathname_separator_width(pattern + position, length - position) == 0u) {
+            position += pattern[position] == '\\' && length - position > 1u ? 2u : 1u;
         }
         if (ash_pathname_plan_add_component(
                 plan,
