@@ -1688,21 +1688,28 @@ struct ash_substitution_child_context {
     int write_fd;
 };
 
-static int ash_substitution_child_main(void* user_data) {
-    struct ash_substitution_child_context* context = user_data;
-    close(context->read_fd);
-    if (context->write_fd == STDOUT_FILENO) {
-        if (bx_fd_set_cloexec(context->write_fd, false) < 0) {
-            ash_exec_error(context->shell, "fcntl", errno);
-            return 1;
+static int ash_child_move_fd(struct ash_shell* shell, int source, int target) {
+    if (source == target) {
+        if (bx_fd_set_cloexec(source, false) < 0) {
+            ash_exec_error(shell, "fcntl", errno);
+            return -1;
         }
     }
     else {
-        if (bx_fd_dup2_exact(context->write_fd, STDOUT_FILENO) < 0) {
-            ash_exec_error(context->shell, "dup2", errno);
-            return 1;
+        if (bx_fd_dup2_exact(source, target) < 0) {
+            ash_exec_error(shell, "dup2", errno);
+            return -1;
         }
-        close(context->write_fd);
+        close(source);
+    }
+    return 0;
+}
+
+static int ash_substitution_child_main(void* user_data) {
+    struct ash_substitution_child_context* context = user_data;
+    close(context->read_fd);
+    if (ash_child_move_fd(context->shell, context->write_fd, STDOUT_FILENO) != 0) {
+        return 1;
     }
 
     struct ash_shell* child = context->shell;
@@ -2191,30 +2198,30 @@ struct ash_pipeline_child_context {
 static int ash_pipeline_child_main(void* user_data) {
     struct ash_pipeline_child_context* context = user_data;
     ash_shell_context_detach_after_fork(context->shell);
-    if (context->previous_read >= 0 &&
-        bx_fd_dup2_exact(context->previous_read, STDIN_FILENO) < 0) {
-        ash_exec_error(context->shell, "dup2", errno);
-        return 1;
-    }
-    if (context->pipe_write >= 0) {
-        if (bx_fd_dup2_exact(context->pipe_write, STDOUT_FILENO) < 0) {
-            ash_exec_error(context->shell, "dup2", errno);
-            return 1;
-        }
-        if (context->pipe_stderr &&
-            bx_fd_dup2_exact(context->pipe_write, STDERR_FILENO) < 0) {
-            ash_exec_error(context->shell, "dup2", errno);
-            return 1;
-        }
-    }
-    if (context->previous_read >= 0) {
-        close(context->previous_read);
-    }
     if (context->pipe_read >= 0) {
         close(context->pipe_read);
     }
-    if (context->pipe_write >= 0) {
+    int pipe_write = context->pipe_write;
+    /* Preserve the output source before replacing stdin. */
+    if (context->previous_read >= 0 && pipe_write == STDIN_FILENO) {
+        pipe_write = bx_fd_dup_cloexec_min(pipe_write, STDERR_FILENO + 1);
+        if (pipe_write < 0) {
+            ash_exec_error(context->shell, "fcntl", errno);
+            return 1;
+        }
         close(context->pipe_write);
+    }
+    if (context->previous_read >= 0 && ash_child_move_fd(context->shell, context->previous_read, STDIN_FILENO) != 0) {
+        return 1;
+    }
+    if (pipe_write >= 0) {
+        if (ash_child_move_fd(context->shell, pipe_write, STDOUT_FILENO) != 0) {
+            return 1;
+        }
+        if (context->pipe_stderr && bx_fd_dup2_exact(STDOUT_FILENO, STDERR_FILENO) < 0) {
+            ash_exec_error(context->shell, "dup2", errno);
+            return 1;
+        }
     }
     context->shell->should_exit = false;
     context->shell->control = (struct ash_control_state){0};
