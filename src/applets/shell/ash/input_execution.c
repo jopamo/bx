@@ -99,13 +99,8 @@ static struct ash_input_unit_result ash_input_parse_error(struct ash_shell* shel
     return (struct ash_input_unit_result){.state = ASH_INPUT_UNIT_PARSE_ERROR, .status = 2};
 }
 
-static struct ash_input_unit_result ash_input_execute_buffer(struct ash_shell* shell,
-                                                             struct ash_input_parser* state,
-                                                             struct ash_source_location origin,
-                                                             const char* input,
-                                                             size_t length,
-                                                             enum ash_input_boundary boundary) {
-    int status = shell->last_status;
+static struct ash_input_unit_result
+ash_input_execute_buffer(struct ash_shell* shell, struct ash_input_parser* state, struct ash_source_location origin, const char* input, size_t length, enum ash_input_boundary boundary, int status) {
     while (!shell->should_exit && !ash_control_pending(shell)) {
         struct ash_parser* parser = state->checkpoint == &state->storage[0] ? &state->storage[1] : &state->storage[0];
         if (state->checkpoint == NULL) {
@@ -299,7 +294,7 @@ static int ash_input_execute_current(
                 status = 1;
             }
             else if (logical_input.length != 0u) {
-                struct ash_input_unit_result result = ash_input_execute_buffer(shell, &parser, pending_origin, logical_input.data, logical_input.length, ASH_INPUT_BOUNDARY_SOURCE_END);
+                struct ash_input_unit_result result = ash_input_execute_buffer(shell, &parser, pending_origin, logical_input.data, logical_input.length, ASH_INPUT_BOUNDARY_SOURCE_END, status);
                 assert(result.state != ASH_INPUT_UNIT_NEEDS_MORE);
                 status = result.status;
             }
@@ -343,7 +338,7 @@ static int ash_input_execute_current(
             }
         }
 
-        struct ash_input_unit_result result = ash_input_execute_buffer(shell, &parser, pending_origin, logical_input.data, logical_input.length, ASH_INPUT_BOUNDARY_PHYSICAL_LINE);
+        struct ash_input_unit_result result = ash_input_execute_buffer(shell, &parser, pending_origin, logical_input.data, logical_input.length, ASH_INPUT_BOUNDARY_PHYSICAL_LINE, status);
         status = result.status;
         if (result.state == ASH_INPUT_UNIT_NEEDS_MORE) {
             continue;
