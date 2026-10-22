@@ -54,6 +54,23 @@ static struct ash_trap_table* ash_trap_table_new(struct ash_shell* shell) {
     return table;
 }
 
+static void ash_traps_discard_inherited_actions(struct ash_trap_table* table) {
+    /* Inactive caught actions exist only for the initial subshell trap view. */
+    if (!table->exit_enabled && table->exit_action != NULL && table->exit_action[0] != '\0') {
+        free(table->exit_action);
+        table->exit_action = NULL;
+    }
+    if (table->signals != NULL) {
+        for (int number = 1; number < NSIG; number++) {
+            struct ash_signal_trap* entry = &table->signals->entries[number];
+            if (!entry->enabled) {
+                free(entry->action);
+                entry->action = NULL;
+            }
+        }
+    }
+}
+
 bool ash_trap_exit_set(struct ash_shell* shell, const char* action) {
     assert(ash_traps_invariants(shell));
     char* replacement = action == NULL ? NULL : strdup(action);
@@ -71,6 +88,7 @@ bool ash_trap_exit_set(struct ash_shell* shell, const char* action) {
             return false;
         }
     }
+    ash_traps_discard_inherited_actions(table);
     free(table->exit_action);
     table->exit_action = replacement;
     table->exit_enabled = action != NULL;
@@ -213,12 +231,14 @@ int ash_trap_signal_set(struct ash_shell* shell, int number, const char* action)
     }
     struct ash_signal_trap* entry = &shell->traps->signals->entries[number];
     if (entry->original.sa_handler == SIG_IGN) {
+        ash_traps_discard_inherited_actions(shell->traps);
         return 0;
     }
     bool ignored = action != NULL && action[0] == '\0';
     bool caught = action != NULL && !ignored;
     /* Fork setup can change dispositions without changing saved trap actions. */
     if (!shell->forked_execution && !caught && entry->action == NULL && entry->ignored == ignored) {
+        ash_traps_discard_inherited_actions(shell->traps);
         return 0;
     }
     char* replacement_action = caught ? strdup(action) : NULL;
@@ -247,6 +267,7 @@ int ash_trap_signal_set(struct ash_shell* shell, int number, const char* action)
         return error;
     }
     signals->pending = pending;
+    ash_traps_discard_inherited_actions(shell->traps);
     free(entry->action);
     entry->action = replacement_action;
     entry->enabled = caught;
@@ -291,6 +312,7 @@ int ash_trap_signal_wait_child(struct ash_shell* shell, pid_t pid, int* number) 
 void ash_traps_detach_after_fork(struct ash_shell* shell) {
     assert(ash_traps_invariants(shell));
     if (shell->traps != NULL) {
+        ash_traps_discard_inherited_actions(shell->traps);
         shell->traps->exit_enabled = false;
         shell->traps->exit_fired = false;
         shell->traps->exit_running = false;
