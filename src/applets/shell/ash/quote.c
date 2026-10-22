@@ -38,12 +38,9 @@ static bool ash_append_ansi_codepoint(struct bx_text_buffer* output, uint32_t va
         length = 5u;
         lead = 0xf8u;
     }
-    else if (value <= 0x7fffffffu) {
+    else {
         length = 6u;
         lead = 0xfcu;
-    }
-    else {
-        return bx_text_buffer_append_char(output, '\0');
     }
 
     char encoded[6];
@@ -171,6 +168,9 @@ bool ash_quote_append_dollar_single(struct bx_text_buffer* output, const char* t
                     decoded = (char)escaped;
                     break;
                 }
+                if (value == 0u || value > 0x7fffffffu) {
+                    return true;
+                }
                 if (!ash_append_ansi_codepoint(output, value)) {
                     return false;
                 }
@@ -193,6 +193,9 @@ bool ash_quote_append_dollar_single(struct bx_text_buffer* output, const char* t
                     decoded = (char)escaped;
                 }
                 break;
+        }
+        if (decoded == '\0') {
+            return true;
         }
         if (!bx_text_buffer_append_char(output, decoded)) {
             return false;
