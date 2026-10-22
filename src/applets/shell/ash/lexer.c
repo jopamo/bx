@@ -2121,6 +2121,7 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(struct ash_lexer* lexer
             if (result != ASH_LEXER_TOKEN) {
                 return result;
             }
+            word->parts[word->count - 1u].backquote_escape_double_quote = delimited || here_document;
             produced_part = true;
             continue;
         }

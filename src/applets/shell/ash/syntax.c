@@ -114,6 +114,7 @@ int ash_word_clone(struct ash_word* destination, const struct ash_word* source) 
         }
         destination->parts[i].here_document_source = part->here_document_source;
         destination->parts[i].here_document_strip_tabs = part->here_document_strip_tabs;
+        destination->parts[i].backquote_escape_double_quote = part->backquote_escape_double_quote;
         if (part->raw_source != NULL) {
             if (part->raw_length == SIZE_MAX) {
                 errno = ENOMEM;

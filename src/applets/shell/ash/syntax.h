@@ -89,6 +89,8 @@ struct ash_word_part {
     /* Retain body-reading policy when re-lexing nested operands. */
     bool here_document_source;
     bool here_document_strip_tabs;
+    /* Inherited operand quoting alone does not make \" special in backquotes. */
+    bool backquote_escape_double_quote;
 };
 
 struct ash_word {

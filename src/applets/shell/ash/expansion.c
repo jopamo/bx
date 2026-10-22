@@ -390,6 +390,39 @@ static bool ash_expand_parameter(struct ash_shell* shell, const struct ash_word_
     return ash_append_parameter_value(shell, output, value, input + start, position - start, false);
 }
 
+static bool ash_backquote_escape(char character, bool double_quote) {
+    return character == '$' || character == '`' || character == '\\' || character == '\n' || (double_quote && character == '"');
+}
+
+static bool ash_backquote_source(struct ash_shell* shell, const struct ash_word_part* part, const char** source, size_t* length, char** owned) {
+    for (size_t i = 0u; i + 1u < *length; i++) {
+        if ((*source)[i] != '\\' || !ash_backquote_escape((*source)[i + 1u], part->backquote_escape_double_quote)) {
+            continue;
+        }
+        *owned = malloc(*length + 1u);
+        if (*owned == NULL) {
+            return ash_expansion_oom(shell);
+        }
+        memcpy(*owned, *source, i);
+        size_t written = i;
+        while (i < *length) {
+            char character = (*source)[i++];
+            if (character == '\\' && i < *length && ash_backquote_escape((*source)[i], part->backquote_escape_double_quote)) {
+                character = (*source)[i++];
+                if (character == '\n') {
+                    continue;
+                }
+            }
+            (*owned)[written++] = character;
+        }
+        (*owned)[written] = '\0';
+        *source = *owned;
+        *length = written;
+        return true;
+    }
+    return true;
+}
+
 static bool ash_expand_part(
     struct ash_shell* shell,
     const struct ash_word_part* part,
@@ -414,15 +447,16 @@ static bool ash_expand_part(
             return ash_expansion_infrastructure_failure(shell);
         }
 
+        const char* source = part->text + prefix;
+        size_t length = part->length - prefix - suffix;
+        char* owned = NULL;
+        if (part->kind == ASH_WORD_BACKQUOTE && !ash_backquote_source(shell, part, &source, &length, &owned)) {
+            return false;
+        }
         char* substitution = NULL;
         int status;
-        bool expanded = shell->command_substitution(
-            shell,
-            part->text + prefix,
-            part->length - prefix - suffix,
-            &substitution,
-            &status
-        );
+        bool expanded = shell->command_substitution(shell, source, length, &substitution, &status);
+        free(owned);
         if (expanded) {
             if (substitution_status != NULL) {
                 *substitution_status = status;
