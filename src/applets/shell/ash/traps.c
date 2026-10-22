@@ -196,7 +196,7 @@ const char* ash_trap_signal_action(const struct ash_shell* shell, int number) {
 
 bool ash_trap_signal_supported(const struct ash_shell* shell, int number, const char* action) {
     assert(ash_traps_invariants(shell));
-    if (number <= 0 || number >= NSIG || shell->traps == NULL || shell->traps->signals == NULL || ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE)) {
+    if (number <= 0 || number >= NSIG || shell->traps == NULL || shell->traps->signals == NULL || (!shell->forked_execution && ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE))) {
         return false;
     }
     const struct ash_signal_trap* entry = &shell->traps->signals->entries[number];
