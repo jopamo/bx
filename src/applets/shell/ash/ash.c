@@ -1691,11 +1691,19 @@ struct ash_substitution_child_context {
 static int ash_substitution_child_main(void* user_data) {
     struct ash_substitution_child_context* context = user_data;
     close(context->read_fd);
-    if (bx_fd_dup2_exact(context->write_fd, STDOUT_FILENO) < 0) {
-        ash_exec_error(context->shell, "dup2", errno);
-        return 1;
+    if (context->write_fd == STDOUT_FILENO) {
+        if (bx_fd_set_cloexec(context->write_fd, false) < 0) {
+            ash_exec_error(context->shell, "fcntl", errno);
+            return 1;
+        }
     }
-    close(context->write_fd);
+    else {
+        if (bx_fd_dup2_exact(context->write_fd, STDOUT_FILENO) < 0) {
+            ash_exec_error(context->shell, "dup2", errno);
+            return 1;
+        }
+        close(context->write_fd);
+    }
 
     struct ash_shell* child = context->shell;
     ash_shell_context_detach_after_fork(child);
