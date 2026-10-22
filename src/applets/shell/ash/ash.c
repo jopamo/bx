@@ -2377,18 +2377,18 @@ struct ash_async_child_context {
 static int ash_async_child_main(void* user_data) {
     struct ash_async_child_context* context = user_data;
     ash_shell_context_detach_after_fork(context->shell);
-    if (!ash_shell_policy_has(
-            &context->shell->policy,
-            ASH_SHELL_POLICY_INTERACTIVE
-        )) {
+    if ((context->shell->options & ASH_SHELL_OPTION_MONITOR) == 0u) {
         int null_fd = bx_fd_open_cloexec(
             "/dev/null",
             O_RDONLY,
             0
         );
-        if (null_fd >= 0) {
-            (void)bx_fd_dup2_exact(null_fd, STDIN_FILENO);
-            close(null_fd);
+        if (null_fd < 0) {
+            ash_exec_error(context->shell, "/dev/null", errno);
+            return 1;
+        }
+        if (ash_child_move_fd(context->shell, null_fd, STDIN_FILENO) != 0) {
+            return 1;
         }
     }
     context->shell->should_exit = false;
