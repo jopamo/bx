@@ -364,14 +364,15 @@ static void bx_child_setup_abort(int fd, pid_t pid, int error) {
 }
 
 pid_t bx_child_fork_callback_start(bx_child_fork_callback callback, void* user, enum bx_child_callback_signals signals) {
-    if (!callback || (signals != BX_CHILD_SIGNALS_INHERIT && signals != BX_CHILD_SIGNALS_RESET_CAUGHT)) {
+    if (!callback || (signals != BX_CHILD_SIGNALS_INHERIT && signals != BX_CHILD_SIGNALS_RESET_CAUGHT && signals != BX_CHILD_SIGNALS_RESET_CAUGHT_IGNORE_INT_QUIT)) {
         errno = EINVAL;
         return -1;
     }
 
+    bool prepare_signals = signals != BX_CHILD_SIGNALS_INHERIT;
     int setup[2] = {-1, -1};
     sigset_t original_mask;
-    if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+    if (prepare_signals) {
         if (bx_fd_socketpair_cloexec(AF_UNIX, SOCK_STREAM, 0, setup) < 0)
             return -1;
         if (bx_child_internal_fd_pair(setup) < 0)
@@ -390,7 +391,7 @@ pid_t bx_child_fork_callback_start(bx_child_fork_callback callback, void* user, 
     pid_t pid = fork();
     if (pid < 0) {
         int error = errno;
-        if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+        if (prepare_signals) {
             (void)sigprocmask(SIG_SETMASK, &original_mask, NULL);
             close(setup[0]);
             close(setup[1]);
@@ -399,9 +400,14 @@ pid_t bx_child_fork_callback_start(bx_child_fork_callback callback, void* user, 
         return -1;
     }
     if (pid == 0) {
-        if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+        if (prepare_signals) {
             close(setup[0]);
             int error = bx_child_reset_caught_signal_handlers();
+            if (!error && signals == BX_CHILD_SIGNALS_RESET_CAUGHT_IGNORE_INT_QUIT) {
+                struct sigaction ignored = {.sa_handler = SIG_IGN};
+                if (sigemptyset(&ignored.sa_mask) < 0 || sigaction(SIGINT, &ignored, NULL) < 0 || sigaction(SIGQUIT, &ignored, NULL) < 0)
+                    error = errno != 0 ? errno : EIO;
+            }
             if (!error && sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0)
                 error = errno != 0 ? errno : EIO;
             int commit = 0;
@@ -412,7 +418,7 @@ pid_t bx_child_fork_callback_start(bx_child_fork_callback callback, void* user, 
         int status = callback(user);
         _exit(status >= 0 && status <= 255 ? status : 255);
     }
-    if (signals == BX_CHILD_SIGNALS_RESET_CAUGHT) {
+    if (prepare_signals) {
         close(setup[1]);
         if (sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0) {
             int error = errno;

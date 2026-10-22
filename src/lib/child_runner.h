@@ -171,10 +171,13 @@ int bx_child_exec_file_argv_in_path(
 enum bx_child_callback_signals {
     BX_CHILD_SIGNALS_INHERIT,
     BX_CHILD_SIGNALS_RESET_CAUGHT,
+    BX_CHILD_SIGNALS_RESET_CAUGHT_IGNORE_INT_QUIT,
 };
 /*
  * RESET_CAUGHT blocks delivery across fork and resets caught dispositions
  * before callback entry. Ignored dispositions and the caller's mask survive.
+ * IGNORE_INT_QUIT also ignores SIGINT/SIGQUIT before restoring that mask and
+ * reporting child setup to the parent.
  * Setup failure returns -1 with errno and reaps the child without entry.
  */
 int bx_child_fork_callback_wait(bx_child_fork_callback callback, void* user, enum bx_child_callback_signals signals, int* status_out);

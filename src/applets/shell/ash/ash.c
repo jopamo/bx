@@ -2400,6 +2400,14 @@ static int ash_execute_ast_async(
     struct ash_shell* shell,
     const struct ash_ast* command
 ) {
+    if ((shell->options & ASH_SHELL_OPTION_MONITOR) == 0u) {
+        /* Keep child-only ignores out of the inherited trap baseline. */
+        int error = ash_trap_signals_init(shell);
+        if (error != 0) {
+            ash_exec_error(shell, "signal setup", error);
+            return 1;
+        }
+    }
     struct ash_job* job = ash_job_create(shell, ASH_JOB_ASYNC, false);
     if (job == NULL) {
         ash_diag_oom(shell);

@@ -217,7 +217,8 @@ int ash_trap_signal_set(struct ash_shell* shell, int number, const char* action)
     }
     bool ignored = action != NULL && action[0] == '\0';
     bool caught = action != NULL && !ignored;
-    if (!caught && entry->action == NULL && entry->ignored == ignored) {
+    /* Fork setup can change dispositions without changing saved trap actions. */
+    if (!shell->forked_execution && !caught && entry->action == NULL && entry->ignored == ignored) {
         return 0;
     }
     char* replacement_action = caught ? strdup(action) : NULL;

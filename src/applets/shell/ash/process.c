@@ -400,7 +400,9 @@ int ash_job_start_process(
     if (ash_job_add_process(job, role, process_index) != 0) {
         return -1;
     }
-    pid_t pid = bx_child_fork_callback_start(callback, user_data, BX_CHILD_SIGNALS_RESET_CAUGHT);
+    enum bx_child_callback_signals signals =
+        job->kind == ASH_JOB_ASYNC && (job->owner->options & ASH_SHELL_OPTION_MONITOR) == 0u ? BX_CHILD_SIGNALS_RESET_CAUGHT_IGNORE_INT_QUIT : BX_CHILD_SIGNALS_RESET_CAUGHT;
+    pid_t pid = bx_child_fork_callback_start(callback, user_data, signals);
     if (pid < 0) {
         ash_job_remove_last_process(job);
         assert(ash_jobs_invariants(job->owner));
