@@ -7,6 +7,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
+#include "applets/shell/ash/character.h"
 #include "applets/shell/ash/pattern.h"
 
 struct ash_pattern_compiler {
@@ -551,14 +552,7 @@ enum ash_pattern_compile_result ash_pattern_compile(
 
 static size_t ash_pattern_character(const char* text, wint_t* character) {
     mbstate_t state = {0};
-    wchar_t decoded;
-    size_t width = mbrtowc(&decoded, text, strnlen(text, MB_CUR_MAX), &state);
-    if (width == (size_t)-1 || width == (size_t)-2) {
-        *character = WEOF;
-        return 1u;
-    }
-    *character = (wint_t)decoded;
-    return width;
+    return ash_character_decode(text, strnlen(text, MB_CUR_MAX), &state, character);
 }
 
 static bool ash_pattern_literal(const struct ash_pattern_span* span, const char** value, bool fold) {

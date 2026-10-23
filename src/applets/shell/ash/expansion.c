@@ -8,6 +8,7 @@
 #include <wchar.h>
 
 #include "applets/shell/ash/arithmetic.h"
+#include "applets/shell/ash/character.h"
 #include "applets/shell/ash/control.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
@@ -110,13 +111,9 @@ static size_t ash_character_width(const char* value, size_t remaining, mbstate_t
     if (MB_CUR_MAX == 1u) {
         return 1u;
     }
-    size_t width = mbrlen(value, remaining, state);
-    if (width == 0u || width == (size_t)-1 || width == (size_t)-2) {
-        /* Undefined malformed input consumes one byte and resets conversion. */
-        *state = (mbstate_t){0};
-        return 1u;
-    }
-    return width;
+    wint_t character;
+    size_t width = ash_character_decode(value, remaining, state, &character);
+    return width == 0u ? 1u : width;
 }
 
 static size_t ash_parameter_character_count(const char* value) {

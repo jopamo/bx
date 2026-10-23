@@ -1,5 +1,6 @@
 #include <stdint.h>
 
+#include "applets/shell/ash/character.h"
 #include "applets/shell/ash/quote.h"
 #include "lib/text_buffer.h"
 
@@ -160,7 +161,7 @@ bool ash_quote_append_dollar_single(struct bx_text_buffer* output, const char* t
                     decoded = (char)escaped;
                     break;
                 }
-                if (value == 0u || value > 0x10ffffu || (value >= 0xd800u && value <= 0xdfffu)) {
+                if (value == 0u || !ash_character_is_scalar(value)) {
                     return true;
                 }
                 if (!ash_append_ansi_codepoint(output, value)) {
