@@ -681,6 +681,50 @@ static enum ash_pattern_match_result ash_pattern_classify(const char* bracket, c
     return ASH_PATTERN_MATCH_ERROR;
 }
 
+static enum ash_pattern_match_result ash_pattern_collation_range(const struct ash_bracket_atom* left, const struct ash_bracket_atom* right, const char* single, wint_t character, bool fold) {
+    char first[MB_LEN_MAX + 1u];
+    char last[MB_LEN_MAX + 1u];
+    memcpy(first, left->literal, left->literal_length);
+    first[left->literal_length] = '\0';
+    memcpy(last, right->literal, right->literal_length);
+    last[right->literal_length] = '\0';
+    char folded[MB_LEN_MAX + 1u];
+    const char* candidate = single;
+    /* Some libc declarations mark strcoll pure despite its errno contract. */
+    int (*volatile compare)(const char*, const char*) = strcoll;
+    for (unsigned int attempt = 0u; attempt < (fold ? 2u : 1u); attempt++) {
+        if (attempt != 0u) {
+            wint_t alternate = towupper(character);
+            if (alternate == character) {
+                alternate = towlower(character);
+            }
+            if (alternate == character) {
+                break;
+            }
+            mbstate_t state = {0};
+            size_t length = wcrtomb(folded, (wchar_t)alternate, &state);
+            if (length == (size_t)-1) {
+                return ASH_PATTERN_MATCH_ERROR;
+            }
+            folded[length] = '\0';
+            candidate = folded;
+        }
+        errno = 0;
+        int lower = compare(first, candidate);
+        if (errno != 0) {
+            return ASH_PATTERN_MATCH_ERROR;
+        }
+        int upper = compare(candidate, last);
+        if (errno != 0) {
+            return ASH_PATTERN_MATCH_ERROR;
+        }
+        if (lower <= 0 && upper <= 0) {
+            return ASH_PATTERN_MATCH;
+        }
+    }
+    return ASH_PATTERN_NO_MATCH;
+}
+
 static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_pattern_span* span, const char* single, wint_t character, bool fold, int flags) {
     if ((MB_CUR_MAX == 1u || (character != WEOF && ash_pattern_valid_span(span->text, span->length))) && strstr(span->text, "[.") == NULL && strstr(span->text, "[=") == NULL) {
         return ash_pattern_classify(span->text, single, flags);
@@ -699,11 +743,13 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
         bool classify = left.valid && (left.literal == NULL || left.notation == '=');
         struct ash_bracket_atom right = {0};
         bool normalize_range = false;
+        bool symbol_range = false;
         if (cursor + 1u < end && *cursor == '-') {
             right = ash_pattern_bracket_atom(cursor + 1u, end);
             cursor = right.end;
             classify = left.valid && right.valid;
-            normalize_range = (left.notation == '.' || right.notation == '.') && ash_pattern_range_literal(&left) && ash_pattern_range_literal(&right);
+            symbol_range = classify && left.literal != NULL && right.literal != NULL && left.notation != '=' && right.notation != '=' && (left.notation == '.' || right.notation == '.');
+            normalize_range = symbol_range && ash_pattern_range_literal(&left) && ash_pattern_range_literal(&right);
             if (character == WEOF && !left.valid && !right.valid && left.literal != NULL && right.literal != NULL) {
                 unsigned char byte = (unsigned char)*single;
                 matched |= (unsigned char)*left.literal <= byte && byte <= (unsigned char)*right.literal;
@@ -747,7 +793,19 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
             }
             member[length++] = ']';
             member[length] = '\0';
-            enum ash_pattern_match_result result = ash_pattern_classify(member, single, flags);
+            enum ash_pattern_match_result result;
+            if (symbol_range && !normalize_range) {
+                result = ash_pattern_classify("[[.a.]]", "a", 0);
+                if (result == ASH_PATTERN_MATCH) {
+                    result = ash_pattern_classify(member, single, flags);
+                }
+                else if (result == ASH_PATTERN_NO_MATCH) {
+                    result = ash_pattern_collation_range(&left, &right, single, character, fold);
+                }
+            }
+            else {
+                result = ash_pattern_classify(member, single, flags);
+            }
             if (result == ASH_PATTERN_MATCH_ERROR) {
                 int error = errno;
                 free(member);
