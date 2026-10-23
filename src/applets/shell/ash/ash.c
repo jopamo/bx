@@ -2466,21 +2466,45 @@ static int ash_execute_ast_list(
     return status;
 }
 
-static int ash_execute_ast_if(
-    struct ash_shell* shell,
-    const struct ash_ast* node
-) {
-    int condition = ash_execute_ast_ignoring_errexit(shell, node->value.conditional.condition, true);
-    if (shell->should_exit || ash_control_pending(shell)) {
-        return condition;
+static int ash_execute_ast_if(struct ash_shell* shell, const struct ash_ast* node) {
+    struct ash_execution_location_guard location_guard = {0};
+    int status;
+    for (;;) {
+        status = ash_execute_ast_ignoring_errexit(shell, node->value.conditional.condition, true);
+        if (shell->should_exit || ash_control_pending(shell)) {
+            break;
+        }
+        if (status == 0) {
+            status = ash_execute_ast(shell, node->value.conditional.then_branch);
+            break;
+        }
+        node = node->value.conditional.else_branch;
+        if (node == NULL) {
+            status = 0;
+            break;
+        }
+        if (node->kind != ASH_AST_IF || node->trailing_redirection_count != 0u) {
+            status = ash_execute_ast(shell, node);
+            break;
+        }
+        /* Flat elif arms share the enclosing if's redirection transaction. */
+        status = ash_dispatch_signal_traps(shell, shell->last_status);
+        if (shell->should_exit || ash_control_pending(shell)) {
+            break;
+        }
+        if (ash_execution_suppressed(shell)) {
+            status = 0;
+            break;
+        }
+        if (location_guard.active) {
+            ash_execution_location_leave(shell, &location_guard);
+        }
+        ash_execution_location_enter(shell, node->location, &location_guard);
     }
-    if (condition == 0) {
-        return ash_execute_ast(shell, node->value.conditional.then_branch);
+    if (location_guard.active) {
+        ash_execution_location_leave(shell, &location_guard);
     }
-    if (node->value.conditional.else_branch != NULL) {
-        return ash_execute_ast(shell, node->value.conditional.else_branch);
-    }
-    return 0;
+    return status;
 }
 
 static int ash_execute_ast_loop(
