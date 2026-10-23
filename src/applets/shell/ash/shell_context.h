@@ -97,6 +97,8 @@ struct ash_shell {
      * parameters. Its bottom frame is always the global scope.
      */
     struct ash_scope* scopes;
+    /* Retired nodes own pending environment names, not visible bindings. */
+    struct ash_var* pending_exports;
     /* Borrow the invocation owner; forked shell contexts inherit its copy. */
     struct ash_locale_scope* locale_scope;
     uint32_t options;

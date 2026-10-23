@@ -53,7 +53,7 @@ enum ash_scope_lookup_status {
 enum ash_scope_pop_result {
     ASH_SCOPE_POP_MISMATCH,
     ASH_SCOPE_POP_OK,
-    /* The expected frame was consumed, but environment publication failed. */
+    /* The frame was consumed; failed publication names remain shell-owned. */
     ASH_SCOPE_POP_PUBLICATION_ERROR,
 };
 

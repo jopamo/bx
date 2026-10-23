@@ -30,8 +30,7 @@ static bool ash_scope_chain_acyclic(const struct ash_scope* scope) {
 }
 
 bool ash_scope_stack_invariants(const struct ash_shell* shell) {
-    if (shell == NULL || shell->scopes == NULL ||
-        !ash_scope_chain_acyclic(shell->scopes)) {
+    if (shell == NULL || shell->scopes == NULL || !ash_scope_chain_acyclic(shell->scopes) || !ash_var_list_invariants(shell->pending_exports)) {
         return false;
     }
 
@@ -85,8 +84,7 @@ bool ash_scope_stack_init(
     char** positional_values,
     size_t positional_count
 ) {
-    if (shell == NULL || shell->scopes != NULL || argv0 == NULL ||
-        (positional_count > 0 && positional_values == NULL)) {
+    if (shell == NULL || shell->scopes != NULL || shell->pending_exports != NULL || argv0 == NULL || (positional_count > 0 && positional_values == NULL)) {
         return false;
     }
     struct ash_scope* global = ash_scope_allocate(ASH_SCOPE_GLOBAL);
@@ -167,11 +165,17 @@ enum ash_scope_pop_result ash_scope_pop(
     struct ash_scope* removed = shell->scopes;
     shell->scopes = removed->parent;
     bool published = true;
-    for (const struct ash_var* var = removed->variables;
-         var != NULL;
-         var = var->next) {
+    struct ash_var** link = &removed->variables;
+    while (*link != NULL) {
+        struct ash_var* var = *link;
         if (!ash_var_publish_visible(shell, var->name, var->name_length)) {
+            *link = var->next;
+            var->next = NULL;
+            ash_var_defer_publication(shell, var);
             published = false;
+        }
+        else {
+            link = &var->next;
         }
     }
     ash_var_list_destroy(&removed->variables);
@@ -196,6 +200,7 @@ void ash_scope_stack_destroy(struct ash_shell* shell) {
         ash_positional_frame_destroy(&scope->positionals);
         free(scope);
     }
+    ash_var_list_destroy(&shell->pending_exports);
     assert(shell->scopes == NULL);
 }
 

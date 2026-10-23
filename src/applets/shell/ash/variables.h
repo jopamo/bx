@@ -122,6 +122,9 @@ bool ash_var_publish_visible(
     const char* name,
     size_t name_length
 );
+/* Take a detached binding; retain only its name until publication succeeds. */
+void ash_var_defer_publication(struct ash_shell* shell, struct ash_var* variable);
+bool ash_vars_publish_pending(struct ash_shell* shell);
 bool ash_var_unset(struct ash_shell* shell, const char* name);
 void ash_var_list_destroy(struct ash_var** variables);
 bool ash_import_environment(struct ash_shell* shell);

@@ -181,7 +181,7 @@ void ash_shell_context_assert_invariants(const struct ash_shell* shell) {
 
 #ifndef NDEBUG
 static bool ash_shell_context_empty(const struct ash_shell* shell) {
-    return shell->progname == NULL && shell->locale_scope == NULL && shell->scopes == NULL && shell->interactive.input == ASH_STARTUP_COMMAND_STRING &&
+    return shell->progname == NULL && shell->locale_scope == NULL && shell->scopes == NULL && shell->pending_exports == NULL && shell->interactive.input == ASH_STARTUP_COMMAND_STRING &&
            shell->interactive.mode == ASH_INTERACTIVE_DISABLED && shell->interactive.terminal_attachments == ASH_TERMINAL_DETACHED && shell->shopt.enabled == 0u && shell->aliases == NULL &&
            shell->functions == NULL && shell->traps == NULL && shell->exit_trap_defer_depth == 0u && shell->jobs == NULL && shell->command_cache == NULL && shell->input_stack == NULL &&
            shell->source_names == NULL && shell->source_identities == NULL && shell->execution_frames == NULL && ash_source_location_is_none(&shell->execution_location) &&

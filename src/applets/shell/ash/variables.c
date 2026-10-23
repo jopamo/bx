@@ -246,6 +246,34 @@ bool ash_var_publish_visible(struct ash_shell* shell, const char* name, size_t n
     return ash_var_publish_environment(shell, name, name_length) && ash_vars_refresh_locale(shell);
 }
 
+void ash_var_defer_publication(struct ash_shell* shell, struct ash_var* variable) {
+    assert(variable->next == NULL);
+    for (const struct ash_var* pending = shell->pending_exports; pending != NULL; pending = pending->next) {
+        if (pending->name_length == variable->name_length && memcmp(pending->name, variable->name, variable->name_length) == 0) {
+            ash_var_list_destroy(&variable);
+            return;
+        }
+    }
+    ash_value_destroy(&variable->value);
+    variable->attributes = 0u;
+    variable->next = shell->pending_exports;
+    shell->pending_exports = variable;
+    assert(ash_var_list_invariants(shell->pending_exports));
+}
+
+bool ash_vars_publish_pending(struct ash_shell* shell) {
+    while (shell->pending_exports != NULL) {
+        struct ash_var* pending = shell->pending_exports;
+        if (!ash_var_publish_visible(shell, pending->name, pending->name_length)) {
+            return false;
+        }
+        shell->pending_exports = pending->next;
+        pending->next = NULL;
+        ash_var_list_destroy(&pending);
+    }
+    return true;
+}
+
 static struct ash_var* ash_var_find_in_scope(
     struct ash_scope* scope,
     const char* name,
@@ -567,9 +595,13 @@ bool ash_var_unset(struct ash_shell* shell, const char* name) {
             memcmp(current->name, name, name_length) == 0) {
             *link = current->next;
             bool published = ash_var_publish_visible(shell, name, name_length);
-            free(current->name);
-            ash_value_destroy(&current->value);
-            free(current);
+            current->next = NULL;
+            if (published) {
+                ash_var_list_destroy(&current);
+            }
+            else {
+                ash_var_defer_publication(shell, current);
+            }
             assert(ash_var_list_invariants(owner->variables));
             return published;
         }

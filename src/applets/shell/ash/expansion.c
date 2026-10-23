@@ -1002,7 +1002,10 @@ static const struct ash_word* ash_operand_frame_word(const struct ash_operand_fr
     return frame->borrowed != NULL ? frame->borrowed : &frame->owned;
 }
 
-static bool ash_expansion_refresh_locale(struct ash_shell* shell) {
+static bool ash_expansion_refresh_state(struct ash_shell* shell) {
+    if (!ash_vars_publish_pending(shell)) {
+        return ash_expansion_infrastructure_failure(shell);
+    }
     int error = ash_locale_refresh(shell);
     if (error != 0) {
         ash_exec_error(shell, "locale", error);
@@ -1012,7 +1015,7 @@ static bool ash_expansion_refresh_locale(struct ash_shell* shell) {
 }
 
 static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, bool assignment, int* substitution_status) {
-    if (!ash_expansion_refresh_locale(shell)) {
+    if (!ash_expansion_refresh_state(shell)) {
         return false;
     }
     struct ash_operand_frames frames;
@@ -1793,7 +1796,7 @@ fail:
 
 bool ash_expand_argument(struct ash_shell* shell, const struct ash_word* word, struct ash_expanded_fields* fields, int* substitution_status) {
     ash_expanded_fields_init(fields);
-    if (!ash_expansion_refresh_locale(shell)) {
+    if (!ash_expansion_refresh_state(shell)) {
         return false;
     }
     bool pathname_expansion = ash_pathname_expansion_enabled(shell) && ash_word_may_expand_pathname(word);
