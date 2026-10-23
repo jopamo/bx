@@ -161,7 +161,8 @@ static void* ash_malloc_bytes(const struct ash_shell* shell, size_t size) {
 
 static bool ash_allocation_size(const struct ash_shell* shell, size_t count, size_t size, size_t* bytes_out) {
     if (size != 0u && count > SIZE_MAX / size) {
-        return ash_diag_oom(shell);
+        ash_diag_oom(shell);
+        return false;
     }
 
     *bytes_out = count * size;
