@@ -30,20 +30,12 @@ static bool ash_append_ansi_codepoint(struct bx_text_buffer* output, uint32_t va
         length = 3u;
         lead = 0xe0u;
     }
-    else if (value <= 0x1fffffu) {
+    else {
         length = 4u;
         lead = 0xf0u;
     }
-    else if (value <= 0x3ffffffu) {
-        length = 5u;
-        lead = 0xf8u;
-    }
-    else {
-        length = 6u;
-        lead = 0xfcu;
-    }
 
-    char encoded[6];
+    char encoded[4];
     uint32_t remaining = value;
     for (size_t i = length - 1u; i != 0u; i--) {
         encoded[i] = (char)(0x80u | (remaining & 0x3fu));
@@ -168,7 +160,7 @@ bool ash_quote_append_dollar_single(struct bx_text_buffer* output, const char* t
                     decoded = (char)escaped;
                     break;
                 }
-                if (value == 0u || value > 0x7fffffffu) {
+                if (value == 0u || value > 0x10ffffu || (value >= 0xd800u && value <= 0xdfffu)) {
                     return true;
                 }
                 if (!ash_append_ansi_codepoint(output, value)) {

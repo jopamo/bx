@@ -6,7 +6,7 @@
 
 struct bx_text_buffer;
 
-/* A decoded NUL discards the rest of this quoted segment, not later segments. */
+/* NUL or a non-scalar Unicode escape discards this segment's remainder. */
 bool ash_quote_append_dollar_single(struct bx_text_buffer* output, const char* text, size_t length);
 
 #endif /* BX_APPLETS_SHELL_ASH_QUOTE_H */
