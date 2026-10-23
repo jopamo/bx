@@ -402,8 +402,8 @@ void ash_shell_context_release_owned(struct ash_shell* shell) {
     ash_input_release_all(shell);
     ash_aliases_destroy(&shell->aliases);
     ash_functions_destroy(shell);
-    ash_traps_destroy(shell);
     ash_jobs_destroy(shell);
+    ash_traps_destroy(shell);
     bx_fd_transaction_stack_discard(&shell->redirections);
     ash_input_source_registry_destroy(shell);
     ash_scope_stack_destroy(shell);

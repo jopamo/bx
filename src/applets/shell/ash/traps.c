@@ -23,6 +23,7 @@ struct ash_signal_traps {
     struct ash_signal_trap entries[NSIG];
     struct bx_signal_pending* pending;
     bool restore_blocked_child;
+    bool restore_child_action;
 };
 
 static bool ash_signal_traps_invariants(const struct ash_signal_traps* signals) {
@@ -189,17 +190,31 @@ int ash_traps_enter_signals(struct ash_shell* shell) {
     sigset_t mask;
     if (sigprocmask(SIG_SETMASK, NULL, &mask) < 0)
         return errno;
-    if (sigismember(&mask, SIGCHLD) != 1)
+    struct sigaction current;
+    if (sigaction(SIGCHLD, NULL, &current) < 0)
+        return errno;
+    bool blocked = sigismember(&mask, SIGCHLD) == 1;
+    bool auto_reap = current.sa_handler == SIG_IGN || (current.sa_flags & SA_NOCLDWAIT) != 0;
+    if (!blocked && !auto_reap)
         return 0;
     int error = ash_trap_signals_init(shell);
     if (error != 0)
         return error;
-    sigset_t child;
-    sigemptyset(&child);
-    sigaddset(&child, SIGCHLD);
-    if (sigprocmask(SIG_UNBLOCK, &child, NULL) < 0)
-        return errno;
-    shell->traps->signals->restore_blocked_child = true;
+    if (auto_reap) {
+        struct sigaction defaults = {.sa_handler = SIG_DFL};
+        sigemptyset(&defaults.sa_mask);
+        if (sigaction(SIGCHLD, &defaults, NULL) < 0)
+            return errno;
+        shell->traps->signals->restore_child_action = true;
+    }
+    if (blocked) {
+        sigset_t child;
+        sigemptyset(&child);
+        sigaddset(&child, SIGCHLD);
+        if (sigprocmask(SIG_UNBLOCK, &child, NULL) < 0)
+            return errno;
+        shell->traps->signals->restore_blocked_child = true;
+    }
     return 0;
 }
 
@@ -322,6 +337,7 @@ void ash_traps_detach_after_fork(struct ash_shell* shell) {
             struct ash_signal_traps* signals = shell->traps->signals;
             bx_signal_pending_detach_after_fork(signals->pending);
             signals->restore_blocked_child = false;
+            signals->restore_child_action = false;
             for (int number = 1; number < NSIG; number++) {
                 struct ash_signal_trap* entry = &signals->entries[number];
                 entry->enabled = false;
@@ -356,6 +372,11 @@ void ash_traps_destroy(struct ash_shell* shell) {
                     (void)sigprocmask(SIG_BLOCK, &child, NULL);
                     ash_exec_error(shell, "signal mask restore", error);
                 }
+            }
+            if (signals->restore_child_action && sigaction(SIGCHLD, &signals->entries[SIGCHLD].original, NULL) < 0) {
+                int error = errno;
+                (void)sigaction(SIGCHLD, &signals->entries[SIGCHLD].original, NULL);
+                ash_exec_error(shell, "signal disposition restore", error);
             }
             free(signals);
         }
