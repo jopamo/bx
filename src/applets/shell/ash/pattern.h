@@ -139,7 +139,7 @@ enum ash_pattern_compile_result ash_pattern_compile(
 
 /*
  * Matching observes only the immutable compiled pattern, explicit options,
- * and borrowed NUL-terminated candidate.
+ * and borrowed NUL-terminated candidate. MATCH_ERROR sets errno.
  */
 enum ash_pattern_match_result ash_pattern_match(
     const struct ash_pattern* pattern,

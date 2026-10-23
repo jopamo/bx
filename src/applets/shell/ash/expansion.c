@@ -1189,6 +1189,10 @@ static bool ash_parameter_remove_match(struct ash_shell* shell, struct ash_opera
         enum ash_pattern_match_result match = ash_pattern_match(&pattern, text + (prefix ? 0u : position));
         text[position] = saved;
         if (match == ASH_PATTERN_MATCH_ERROR || match == ASH_PATTERN_MATCH_UNSUPPORTED) {
+            if (match == ASH_PATTERN_MATCH_ERROR && errno == ENOMEM) {
+                (void)ash_expansion_oom(shell);
+                goto out;
+            }
             ash_diag_expansion(shell, "parameter removal pattern matching failed");
             (void)ash_expansion_fail(shell, ash_shell_policy_noninteractive_posix(&shell->policy));
             goto out;
@@ -1251,8 +1255,12 @@ bool ash_expand_case_pattern(struct ash_shell* shell, const struct ash_word* wor
         return ash_expansion_infrastructure_failure(shell);
     }
     enum ash_pattern_match_result result = ash_pattern_match(&pattern, value);
+    int error = errno;
     ash_pattern_destroy(&pattern);
     if (result != ASH_PATTERN_MATCH && result != ASH_PATTERN_NO_MATCH) {
+        if (result == ASH_PATTERN_MATCH_ERROR && error == ENOMEM) {
+            return ash_expansion_oom(shell);
+        }
         ash_diag_expansion(shell, "case pattern matching failed");
         return ash_expansion_infrastructure_failure(shell);
     }

@@ -611,12 +611,132 @@ static bool ash_pattern_wildcard_allowed(const struct ash_pattern* pattern, cons
     return *value != '/' && !(*value == '.' && (value == start || value[-1] == '/') && (pattern->options.flags & ASH_PATTERN_MATCH_DOTFILES) == 0u);
 }
 
+static bool ash_pattern_valid_span(const char* text, size_t length) {
+    for (size_t offset = 0u; offset < length;) {
+        if ((unsigned char)text[offset] < 0x80u) {
+            offset++;
+            continue;
+        }
+        wint_t character;
+        size_t width = ash_pattern_character(text + offset, &character);
+        if (character == WEOF || width > length - offset) {
+            return false;
+        }
+        offset += width;
+    }
+    return true;
+}
+
+struct ash_bracket_atom {
+    const char* end;
+    const char* literal;
+    bool valid;
+    wint_t character;
+};
+
+static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const char* end) {
+    if (*text == '\\' && text + 1u < end) {
+        text++;
+    }
+    else if (*text == '[' && text + 1u < end && strchr(".=:", text[1]) != NULL) {
+        for (const char* close = text + 2u; close + 1u < end; close++) {
+            if (close[0] == text[1] && close[1] == ']') {
+                return (struct ash_bracket_atom){close + 2u, NULL, ash_pattern_valid_span(text, (size_t)(close + 2u - text)), WEOF};
+            }
+        }
+    }
+    wint_t character;
+    size_t width = ash_pattern_character(text, &character);
+    return (struct ash_bracket_atom){text + width, text, character != WEOF, character};
+}
+
+static enum ash_pattern_match_result ash_pattern_classify(const char* bracket, const char* single, int flags) {
+    errno = 0;
+    int result = fnmatch(bracket, single, flags);
+    if (result == 0 || result == FNM_NOMATCH) {
+        return result == 0 ? ASH_PATTERN_MATCH : ASH_PATTERN_NO_MATCH;
+    }
+    if (errno == 0) {
+        errno = EINVAL;
+    }
+    return ASH_PATTERN_MATCH_ERROR;
+}
+
+static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_pattern_span* span, const char* single, wint_t character, bool fold, int flags) {
+    if (MB_CUR_MAX == 1u || (character != WEOF && ash_pattern_valid_span(span->text, span->length))) {
+        return ash_pattern_classify(span->text, single, flags);
+    }
+
+    const char* cursor = span->text + 1u;
+    const char* end = span->text + span->length - 1u;
+    bool negate = *cursor == '!' || *cursor == '^';
+    cursor += negate ? 1u : 0u;
+    char* member = NULL;
+    bool matched = false;
+    while (cursor < end) {
+        const char* start = cursor;
+        struct ash_bracket_atom left = ash_pattern_bracket_atom(cursor, end);
+        cursor = left.end;
+        bool classify = left.valid && left.literal == NULL;
+        if (cursor + 1u < end && *cursor == '-') {
+            struct ash_bracket_atom right = ash_pattern_bracket_atom(cursor + 1u, end);
+            cursor = right.end;
+            classify = left.valid && right.valid;
+            if (character == WEOF && !left.valid && !right.valid && left.literal != NULL && right.literal != NULL) {
+                unsigned char byte = (unsigned char)*single;
+                matched |= (unsigned char)*left.literal <= byte && byte <= (unsigned char)*right.literal;
+            }
+        }
+        else if (left.literal != NULL) {
+            if (character == WEOF) {
+                matched |= !left.valid && *left.literal == *single;
+            }
+            else if (left.valid) {
+                matched |= fold ? towlower(left.character) == towlower(character) : left.character == character;
+            }
+        }
+        if (classify && character != WEOF) {
+            if (member == NULL) {
+                if (span->length > SIZE_MAX - 2u) {
+                    errno = ENOMEM;
+                    return ASH_PATTERN_MATCH_ERROR;
+                }
+                member = malloc(span->length + 2u);
+                if (member == NULL) {
+                    return ASH_PATTERN_MATCH_ERROR;
+                }
+            }
+            size_t length = 1u;
+            member[0] = '[';
+            if (*start == '!' || *start == '^') {
+                member[length++] = '\\';
+            }
+            size_t copied = (size_t)(cursor - start);
+            memcpy(member + length, start, copied);
+            length += copied;
+            member[length++] = ']';
+            member[length] = '\0';
+            enum ash_pattern_match_result result = ash_pattern_classify(member, single, flags);
+            if (result == ASH_PATTERN_MATCH_ERROR) {
+                int error = errno;
+                free(member);
+                errno = error;
+                return ASH_PATTERN_MATCH_ERROR;
+            }
+            matched |= result == ASH_PATTERN_MATCH;
+        }
+    }
+    free(member);
+    return matched != negate ? ASH_PATTERN_MATCH : ASH_PATTERN_NO_MATCH;
+}
+
 enum ash_pattern_match_result ash_pattern_match(
     const struct ash_pattern* pattern,
     const char* value
 ) {
     if (pattern == NULL || pattern->source == NULL || value == NULL ||
         !ash_pattern_options_valid(&pattern->options)) {
+        errno = EINVAL;
         return ASH_PATTERN_MATCH_ERROR;
     }
     if ((pattern->required_features &
@@ -686,12 +806,11 @@ enum ash_pattern_match_result ash_pattern_match(
                         char single[MB_LEN_MAX + 1u];
                         memcpy(single, value, width);
                         single[width] = '\0';
-                        /* libc classifies one character; it never advances wildcards. */
-                        int result = fnmatch(term->value.span.text, single, flags);
-                        if (result != 0 && result != FNM_NOMATCH) {
+                        enum ash_pattern_match_result result = ash_pattern_bracket(&term->value.span, single, character, fold, flags);
+                        if (result == ASH_PATTERN_MATCH_ERROR) {
                             return ASH_PATTERN_MATCH_ERROR;
                         }
-                        matched = result == 0;
+                        matched = result == ASH_PATTERN_MATCH;
                     }
                     value += matched ? width : 0u;
                 }

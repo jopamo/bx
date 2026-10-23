@@ -476,7 +476,9 @@ static int ash_pathname_expand_active_component(
         );
         if (matched == ASH_PATTERN_MATCH_ERROR ||
             matched == ASH_PATTERN_MATCH_UNSUPPORTED) {
-            errno = EINVAL;
+            if (matched == ASH_PATTERN_MATCH_UNSUPPORTED) {
+                errno = EINVAL;
+            }
             result = -1;
             break;
         }
