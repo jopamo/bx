@@ -630,7 +630,8 @@ struct ash_bracket_atom {
     const char* literal;
     bool valid;
     wint_t character;
-    bool equivalence;
+    size_t literal_length;
+    char notation;
 };
 
 static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const char* end) {
@@ -644,7 +645,7 @@ static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const 
                     .end = close + 2u,
                     .valid = ash_pattern_valid_span(text, (size_t)(close + 2u - text)),
                     .character = WEOF,
-                    .equivalence = text[1] == '=',
+                    .notation = text[1],
                 };
                 if (atom.valid && text[1] != ':' && text + 2u < close) {
                     wint_t character;
@@ -652,6 +653,7 @@ static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const 
                     if (character != WEOF && width == (size_t)(close - text - 2u)) {
                         atom.literal = text + 2u;
                         atom.character = character;
+                        atom.literal_length = width;
                     }
                 }
                 return atom;
@@ -660,7 +662,11 @@ static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const 
     }
     wint_t character;
     size_t width = ash_pattern_character(text, &character);
-    return (struct ash_bracket_atom){text + width, text, character != WEOF, character, false};
+    return (struct ash_bracket_atom){text + width, text, character != WEOF, character, width, '\0'};
+}
+
+static bool ash_pattern_range_literal(const struct ash_bracket_atom* atom) {
+    return atom->valid && atom->literal != NULL && atom->notation != '=' && (atom->character >= 0x80u || strchr("[]!^-\\", (int)atom->character) == NULL);
 }
 
 static enum ash_pattern_match_result ash_pattern_classify(const char* bracket, const char* single, int flags) {
@@ -690,11 +696,14 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
         const char* start = cursor;
         struct ash_bracket_atom left = ash_pattern_bracket_atom(cursor, end);
         cursor = left.end;
-        bool classify = left.valid && (left.literal == NULL || left.equivalence);
+        bool classify = left.valid && (left.literal == NULL || left.notation == '=');
+        struct ash_bracket_atom right = {0};
+        bool normalize_range = false;
         if (cursor + 1u < end && *cursor == '-') {
-            struct ash_bracket_atom right = ash_pattern_bracket_atom(cursor + 1u, end);
+            right = ash_pattern_bracket_atom(cursor + 1u, end);
             cursor = right.end;
             classify = left.valid && right.valid;
+            normalize_range = (left.notation == '.' || right.notation == '.') && ash_pattern_range_literal(&left) && ash_pattern_range_literal(&right);
             if (character == WEOF && !left.valid && !right.valid && left.literal != NULL && right.literal != NULL) {
                 unsigned char byte = (unsigned char)*single;
                 matched |= (unsigned char)*left.literal <= byte && byte <= (unsigned char)*right.literal;
@@ -721,12 +730,21 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
             }
             size_t length = 1u;
             member[0] = '[';
-            if (*start == '!' || *start == '^') {
-                member[length++] = '\\';
+            if (normalize_range) {
+                memcpy(member + length, left.literal, left.literal_length);
+                length += left.literal_length;
+                member[length++] = '-';
+                memcpy(member + length, right.literal, right.literal_length);
+                length += right.literal_length;
             }
-            size_t copied = (size_t)(cursor - start);
-            memcpy(member + length, start, copied);
-            length += copied;
+            else {
+                if (*start == '!' || *start == '^') {
+                    member[length++] = '\\';
+                }
+                size_t copied = (size_t)(cursor - start);
+                memcpy(member + length, start, copied);
+                length += copied;
+            }
             member[length++] = ']';
             member[length] = '\0';
             enum ash_pattern_match_result result = ash_pattern_classify(member, single, flags);
