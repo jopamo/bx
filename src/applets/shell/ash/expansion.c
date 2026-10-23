@@ -1347,10 +1347,12 @@ static size_t ash_ifs_delimiter_length(const char* ifs, size_t ifs_length, const
     if (MB_CUR_MAX == 1u) {
         return strchr(ifs, (unsigned char)text[0]) != NULL ? 1u : 0u;
     }
+    mbstate_t text_state = {0};
+    size_t text_width = ash_character_width(text, remaining, &text_state);
     mbstate_t state = {0};
     for (size_t position = 0u; position < ifs_length;) {
         size_t width = ash_character_width(ifs + position, ifs_length - position, &state);
-        if (width <= remaining && memcmp(ifs + position, text, width) == 0) {
+        if (width == text_width && memcmp(ifs + position, text, width) == 0) {
             return width;
         }
         position += width;
@@ -1511,10 +1513,11 @@ static bool ash_split_components(struct ash_shell* shell, const struct ash_expan
                 ok = false;
                 break;
             }
-            size_t start = position++;
-            while (position < length && ash_ifs_delimiter_length(ifs, ifs_length, text + position, length - position) == 0u) {
-                position++;
-            }
+            size_t start = position;
+            mbstate_t state = {0};
+            do {
+                position += ash_character_width(text + position, length - position, &state);
+            } while (position < length && ash_ifs_delimiter_length(ifs, ifs_length, text + position, length - position) == 0u);
             ok = ash_split_candidate_append(shell, &candidate, patterns != NULL, text + start, position - start, false);
         }
     }
