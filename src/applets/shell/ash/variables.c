@@ -538,14 +538,13 @@ bool ash_var_update_attributes(
     }
     uint32_t previous = var->attributes;
     var->attributes = candidate;
-    if (!ash_var_publish_visible(shell, name, name_length)) {
+    if (!ash_var_publish_environment(shell, name, name_length)) {
         var->attributes = previous;
-        (void)ash_var_publish_visible(shell, name, name_length);
         assert(ash_scope_stack_invariants(shell));
         return false;
     }
     assert(ash_scope_stack_invariants(shell));
-    return true;
+    return ash_vars_refresh_locale(shell);
 }
 
 void ash_vars_visit_visible(

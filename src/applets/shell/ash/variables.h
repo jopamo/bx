@@ -54,6 +54,7 @@ bool ash_var_has_attribute(
     enum ash_var_attribute attribute
 );
 bool ash_var_has_attribute_len(const struct ash_shell* shell, const char* name, size_t name_length, enum ash_var_attribute attribute);
+/* Commit attributes with environment publication, before locale activation. */
 bool ash_var_update_attributes(
     struct ash_shell* shell,
     const char* name,
