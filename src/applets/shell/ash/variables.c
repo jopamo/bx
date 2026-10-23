@@ -211,11 +211,7 @@ static bool ash_vars_refresh_locale(struct ash_shell* shell) {
     return false;
 }
 
-bool ash_var_publish_visible(
-    struct ash_shell* shell,
-    const char* name,
-    size_t name_length
-) {
+static bool ash_var_publish_environment(struct ash_shell* shell, const char* name, size_t name_length) {
     if (shell->locale_scope != NULL && ash_locale_variable(name, name_length)) {
         shell->locale_scope->dirty = true;
     }
@@ -234,7 +230,7 @@ bool ash_var_publish_visible(
          * frame-owned NUL-terminated name whenever a binding remains.
          */
         (void)unsetenv(var != NULL ? var->name : name);
-        return ash_vars_refresh_locale(shell);
+        return true;
     }
     if (setenv(var->name, scalar, 1) != 0) {
         if (errno == ENOMEM) {
@@ -243,7 +239,11 @@ bool ash_var_publish_visible(
         ash_vars_error(shell, var->name, errno);
         return false;
     }
-    return ash_vars_refresh_locale(shell);
+    return true;
+}
+
+bool ash_var_publish_visible(struct ash_shell* shell, const char* name, size_t name_length) {
+    return ash_var_publish_environment(shell, name, name_length) && ash_vars_refresh_locale(shell);
 }
 
 static struct ash_var* ash_var_find_in_scope(
@@ -311,7 +311,14 @@ static bool ash_var_create_in_scope(struct ash_shell* shell, struct ash_scope* s
     var->next = scope->variables;
     scope->variables = var;
     assert(ash_var_list_invariants(scope->variables));
-    return ash_var_publish_visible(shell, name, name_length);
+    if (!ash_var_publish_environment(shell, name, name_length)) {
+        scope->variables = var->next;
+        free(var->name);
+        ash_value_destroy(&var->value);
+        free(var);
+        return false;
+    }
+    return ash_vars_refresh_locale(shell);
 }
 
 static bool ash_var_set_in_scope(
@@ -343,12 +350,23 @@ static bool ash_var_set_in_scope(
     if (var == NULL) {
         return ash_var_create_in_scope(shell, scope, name, name_length, value, attributes);
     }
-    if (!ash_value_set_scalar(&var->value, value)) {
+    struct ash_value candidate;
+    if (!ash_value_init_scalar(&candidate, value)) {
         return ash_vars_oom(shell);
     }
+    struct ash_value previous = var->value;
+    uint32_t previous_attributes = var->attributes;
+    var->value = candidate;
     var->attributes |= attributes;
+    if (!ash_var_publish_environment(shell, name, name_length)) {
+        var->value = previous;
+        var->attributes = previous_attributes;
+        ash_value_destroy(&candidate);
+        return false;
+    }
+    ash_value_destroy(&previous);
     assert(ash_var_list_invariants(scope->variables));
-    return ash_var_publish_visible(shell, name, name_length);
+    return ash_vars_refresh_locale(shell);
 }
 
 bool ash_var_set_with_export(

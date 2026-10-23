@@ -66,6 +66,8 @@ bool ash_var_builtin_assignment_allowed(struct ash_shell* shell, const char* nam
 /*
  * force_export adds the export attribute independently of shell options.
  * Every assignment setter also honors the canonical allexport option.
+ * Failed environment publication retains the old binding and attributes.
+ * Locale activation follows that commit and can leave a dirty locale request.
  */
 bool ash_var_set_with_export(
     struct ash_shell* shell,
