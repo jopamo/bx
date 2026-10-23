@@ -551,6 +551,10 @@ enum ash_pattern_compile_result ash_pattern_compile(
 }
 
 static size_t ash_pattern_character(const char* text, wint_t* character) {
+    if (MB_CUR_MAX == 1u) {
+        *character = (unsigned char)*text;
+        return *text != '\0' ? 1u : 0u;
+    }
     mbstate_t state = {0};
     return ash_character_decode(text, strnlen(text, MB_CUR_MAX), &state, character);
 }
@@ -626,6 +630,7 @@ struct ash_bracket_atom {
     const char* literal;
     bool valid;
     wint_t character;
+    bool equivalence;
 };
 
 static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const char* end) {
@@ -635,13 +640,27 @@ static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const 
     else if (*text == '[' && text + 1u < end && strchr(".=:", text[1]) != NULL) {
         for (const char* close = text + 2u; close + 1u < end; close++) {
             if (close[0] == text[1] && close[1] == ']') {
-                return (struct ash_bracket_atom){close + 2u, NULL, ash_pattern_valid_span(text, (size_t)(close + 2u - text)), WEOF};
+                struct ash_bracket_atom atom = {
+                    .end = close + 2u,
+                    .valid = ash_pattern_valid_span(text, (size_t)(close + 2u - text)),
+                    .character = WEOF,
+                    .equivalence = text[1] == '=',
+                };
+                if (atom.valid && text[1] != ':' && text + 2u < close) {
+                    wint_t character;
+                    size_t width = ash_pattern_character(text + 2u, &character);
+                    if (character != WEOF && width == (size_t)(close - text - 2u)) {
+                        atom.literal = text + 2u;
+                        atom.character = character;
+                    }
+                }
+                return atom;
             }
         }
     }
     wint_t character;
     size_t width = ash_pattern_character(text, &character);
-    return (struct ash_bracket_atom){text + width, text, character != WEOF, character};
+    return (struct ash_bracket_atom){text + width, text, character != WEOF, character, false};
 }
 
 static enum ash_pattern_match_result ash_pattern_classify(const char* bracket, const char* single, int flags) {
@@ -657,7 +676,7 @@ static enum ash_pattern_match_result ash_pattern_classify(const char* bracket, c
 }
 
 static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_pattern_span* span, const char* single, wint_t character, bool fold, int flags) {
-    if (MB_CUR_MAX == 1u || (character != WEOF && ash_pattern_valid_span(span->text, span->length))) {
+    if ((MB_CUR_MAX == 1u || (character != WEOF && ash_pattern_valid_span(span->text, span->length))) && strstr(span->text, "[.") == NULL && strstr(span->text, "[=") == NULL) {
         return ash_pattern_classify(span->text, single, flags);
     }
 
@@ -671,7 +690,7 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
         const char* start = cursor;
         struct ash_bracket_atom left = ash_pattern_bracket_atom(cursor, end);
         cursor = left.end;
-        bool classify = left.valid && left.literal == NULL;
+        bool classify = left.valid && (left.literal == NULL || left.equivalence);
         if (cursor + 1u < end && *cursor == '-') {
             struct ash_bracket_atom right = ash_pattern_bracket_atom(cursor + 1u, end);
             cursor = right.end;
