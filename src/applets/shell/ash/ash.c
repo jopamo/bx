@@ -2150,19 +2150,10 @@ static int ash_subshell_child_main(void* user_data) {
     return ash_finish_execution(context->shell, status);
 }
 
-static int ash_execute_ast_group(
-    struct ash_shell* shell,
-    const struct ash_ast* node,
-    bool subshell
-) {
-    if (subshell) {
-        struct ash_subshell_child_context context = {
-            .shell = shell,
-            .node = node,
-        };
-        return ash_run_foreground_child(shell, ASH_JOB_FOREGROUND_COMMAND, ASH_PROCESS_SUBSHELL, ash_subshell_child_main, &context, NULL);
+static int ash_execute_ast_compound(struct ash_shell* shell, const struct ash_ast* node, int (*body)(struct ash_shell*, const struct ash_ast*)) {
+    if (node->trailing_redirection_count == 0u) {
+        return body(shell, node);
     }
-
     struct ash_command redirections;
     enum ash_command_build_result build = ash_ast_trailing_redirections_to_command(shell, node, &redirections);
     if (build != ASH_COMMAND_BUILD_OK) {
@@ -2180,10 +2171,25 @@ static int ash_execute_ast_group(
     }
     ash_command_destroy(&redirections);
     shell->exit_trap_defer_depth++;
-    int status = ash_execute_ast(shell, node->value.group.body);
+    int status = body(shell, node);
     status = ash_redirection_transaction_rollback(shell, &saved) == 0 ? status : ash_errexit_status(shell, 1);
     shell->exit_trap_defer_depth--;
     return shell->should_exit ? ash_finish_execution(shell, status) : status;
+}
+
+static int ash_execute_ast_group_body(struct ash_shell* shell, const struct ash_ast* node) {
+    return ash_execute_ast(shell, node->value.group.body);
+}
+
+static int ash_execute_ast_group(struct ash_shell* shell, const struct ash_ast* node, bool subshell) {
+    if (subshell) {
+        struct ash_subshell_child_context context = {
+            .shell = shell,
+            .node = node,
+        };
+        return ash_run_foreground_child(shell, ASH_JOB_FOREGROUND_COMMAND, ASH_PROCESS_SUBSHELL, ash_subshell_child_main, &context, NULL);
+    }
+    return ash_execute_ast_compound(shell, node, ash_execute_ast_group_body);
 }
 
 struct ash_pipeline_child_context {
@@ -2649,38 +2655,6 @@ static int ash_execute_ast_case_body(
     return status;
 }
 
-static int ash_execute_ast_case(
-    struct ash_shell* shell,
-    const struct ash_ast* node
-) {
-    struct ash_command redirections;
-    enum ash_command_build_result build =
-        ash_ast_trailing_redirections_to_command(
-            shell,
-            node,
-            &redirections
-        );
-    if (build != ASH_COMMAND_BUILD_OK) {
-        return ash_errexit_status(shell, ash_command_build_status(build));
-    }
-    struct ash_redirection_transaction saved;
-    ash_redirection_transaction_init(&saved);
-    if (ash_redirection_transaction_apply(
-            shell,
-            &redirections,
-            &saved
-        ) != 0) {
-        ash_command_destroy(&redirections);
-        return ash_errexit_status(shell, 1);
-    }
-    ash_command_destroy(&redirections);
-    shell->exit_trap_defer_depth++;
-    int status = ash_execute_ast_case_body(shell, node);
-    status = ash_redirection_transaction_rollback(shell, &saved) == 0 ? status : ash_errexit_status(shell, 1);
-    shell->exit_trap_defer_depth--;
-    return shell->should_exit ? ash_finish_execution(shell, status) : status;
-}
-
 static int ash_execute_ast_function(
     struct ash_shell* shell,
     const struct ash_ast* node
@@ -2729,17 +2703,17 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
             status = ash_execute_ast_group(shell, node, false);
             break;
         case ASH_AST_IF:
-            status = ash_execute_ast_if(shell, node);
+            status = ash_execute_ast_compound(shell, node, ash_execute_ast_if);
             break;
         case ASH_AST_WHILE:
         case ASH_AST_UNTIL:
-            status = ash_execute_ast_loop(shell, node);
+            status = ash_execute_ast_compound(shell, node, ash_execute_ast_loop);
             break;
         case ASH_AST_FOR:
-            status = ash_execute_ast_for(shell, node);
+            status = ash_execute_ast_compound(shell, node, ash_execute_ast_for);
             break;
         case ASH_AST_CASE:
-            status = ash_execute_ast_case(shell, node);
+            status = ash_execute_ast_compound(shell, node, ash_execute_ast_case_body);
             break;
         case ASH_AST_FUNCTION:
             status = ash_execute_ast_function(shell, node);
