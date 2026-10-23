@@ -568,6 +568,17 @@ static bool ash_pattern_literal(const struct ash_pattern_span* span, const char*
         if (strncmp(literal, cursor, span->length) != 0) {
             return false;
         }
+        if (span->length != 0u && (unsigned char)literal[span->length - 1u] >= 0x80u && MB_CUR_MAX > 1u && cursor[span->length] != '\0') {
+            /* UTF-8 resynchronizes within one maximum-width character. */
+            size_t consumed = span->length > MB_CUR_MAX ? span->length - MB_CUR_MAX : 0u;
+            while (consumed < span->length) {
+                wint_t character;
+                consumed += ash_pattern_character(cursor + consumed, &character);
+            }
+            if (consumed != span->length) {
+                return false;
+            }
+        }
         *value += span->length;
         return true;
     }
