@@ -1,8 +1,11 @@
 #include <errno.h>
 #include <fnmatch.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <wctype.h>
 
 #include "applets/shell/ash/pattern.h"
 
@@ -344,6 +347,17 @@ static size_t ash_pattern_bracket_end(
             position++;
             continue;
         }
+        if (compiler->input[position] == '[' && position + 1u < compiler->length && strchr(".=:", compiler->input[position + 1u]) != NULL) {
+            char delimiter = compiler->input[position + 1u];
+            size_t end = position + 2u;
+            while (end + 1u < compiler->length && !(compiler->input[end] == delimiter && compiler->input[end + 1u] == ']')) {
+                end++;
+            }
+            if (end + 1u < compiler->length) {
+                position = end + 1u;
+                continue;
+            }
+        }
         if (compiler->input[position] == ']') {
             return position + 1u;
         }
@@ -535,6 +549,57 @@ enum ash_pattern_compile_result ash_pattern_compile(
     return ASH_PATTERN_COMPILE_OK;
 }
 
+static size_t ash_pattern_character(const char* text, wint_t* character) {
+    mbstate_t state = {0};
+    wchar_t decoded;
+    size_t width = mbrtowc(&decoded, text, strnlen(text, MB_CUR_MAX), &state);
+    if (width == (size_t)-1 || width == (size_t)-2) {
+        *character = WEOF;
+        return 1u;
+    }
+    *character = (wint_t)decoded;
+    return width;
+}
+
+static bool ash_pattern_literal(const struct ash_pattern_span* span, const char** value, bool fold) {
+    const char* literal = span->text;
+    const char* cursor = *value;
+    if (!fold) {
+        if (strncmp(literal, cursor, span->length) != 0) {
+            return false;
+        }
+        *value += span->length;
+        return true;
+    }
+    while (*literal != '\0') {
+        if (*cursor == '\0') {
+            return false;
+        }
+        wint_t left, right;
+        size_t left_width = ash_pattern_character(literal, &left);
+        size_t right_width = ash_pattern_character(cursor, &right);
+        if (left == WEOF || right == WEOF) {
+            if (left != right || *literal != *cursor) {
+                return false;
+            }
+        }
+        else if (towlower(left) != towlower(right)) {
+            return false;
+        }
+        literal += left_width;
+        cursor += right_width;
+    }
+    *value = cursor;
+    return true;
+}
+
+static bool ash_pattern_wildcard_allowed(const struct ash_pattern* pattern, const char* start, const char* value) {
+    if (pattern->options.domain != ASH_PATTERN_PATHNAME) {
+        return true;
+    }
+    return *value != '/' && !(*value == '.' && (value == start || value[-1] == '/') && (pattern->options.flags & ASH_PATTERN_MATCH_DOTFILES) == 0u);
+}
+
 enum ash_pattern_match_result ash_pattern_match(
     const struct ash_pattern* pattern,
     const char* value
@@ -550,17 +615,10 @@ enum ash_pattern_match_result ash_pattern_match(
         return ASH_PATTERN_MATCH_UNSUPPORTED;
     }
 
+    bool fold = (pattern->options.flags & ASH_PATTERN_CASE_INSENSITIVE) != 0u;
     int flags = 0;
-    if (pattern->options.domain == ASH_PATTERN_PATHNAME) {
-        flags |= FNM_PATHNAME;
-        if ((pattern->options.flags &
-            ASH_PATTERN_MATCH_DOTFILES) == 0u) {
-            flags |= FNM_PERIOD;
-        }
-    }
 #ifdef FNM_CASEFOLD
-    if ((pattern->options.flags &
-        ASH_PATTERN_CASE_INSENSITIVE) != 0u) {
+    if (fold) {
         flags |= FNM_CASEFOLD;
     }
 #else
@@ -570,12 +628,74 @@ enum ash_pattern_match_result ash_pattern_match(
     }
 #endif
 
-    int result = fnmatch(pattern->source, value, flags);
-    if (result == 0) {
-        return ASH_PATTERN_MATCH;
+    size_t trailing = pattern->source_length;
+    while (trailing != 0u && pattern->source[trailing - 1u] == '\\') {
+        trailing--;
     }
-    if (result == FNM_NOMATCH) {
+    if ((pattern->source_length - trailing) % 2u != 0u) {
         return ASH_PATTERN_NO_MATCH;
     }
-    return ASH_PATTERN_MATCH_ERROR;
+
+    const char* start = value;
+    const char* retry = NULL;
+    size_t after_star = 0u;
+    size_t position = 0u;
+    for (;;) {
+        if (position == pattern->root.count) {
+            if (*value == '\0') {
+                return ASH_PATTERN_MATCH;
+            }
+        }
+        else {
+            const struct ash_pattern_term* term = &pattern->root.terms[position];
+            bool matched = false;
+            if (term->kind == ASH_PATTERN_LITERAL) {
+                matched = ash_pattern_literal(&term->value.span, &value, fold);
+            }
+            else if (term->kind == ASH_PATTERN_PATH_SEPARATOR) {
+                matched = *value == '/';
+                value += matched ? 1u : 0u;
+                if (matched) {
+                    retry = NULL;
+                }
+            }
+            else if (ash_pattern_wildcard_allowed(pattern, start, value) || (term->kind == ASH_PATTERN_ANY_STRING && *value == '/')) {
+                if (term->kind == ASH_PATTERN_ANY_STRING) {
+                    after_star = ++position;
+                    retry = value;
+                    continue;
+                }
+                if (*value != '\0') {
+                    wint_t character;
+                    size_t width = ash_pattern_character(value, &character);
+                    if (term->kind == ASH_PATTERN_ANY_CHARACTER) {
+                        matched = true;
+                    }
+                    else if (term->kind == ASH_PATTERN_BRACKET) {
+                        char single[MB_LEN_MAX + 1u];
+                        memcpy(single, value, width);
+                        single[width] = '\0';
+                        /* libc classifies one character; it never advances wildcards. */
+                        int result = fnmatch(term->value.span.text, single, flags);
+                        if (result != 0 && result != FNM_NOMATCH) {
+                            return ASH_PATTERN_MATCH_ERROR;
+                        }
+                        matched = result == 0;
+                    }
+                    value += matched ? width : 0u;
+                }
+            }
+            if (matched) {
+                position++;
+                continue;
+            }
+        }
+        if (retry == NULL || *retry == '\0' || !ash_pattern_wildcard_allowed(pattern, start, retry)) {
+            return ASH_PATTERN_NO_MATCH;
+        }
+        wint_t character;
+        retry += ash_pattern_character(retry, &character);
+        value = retry;
+        position = after_star;
+    }
 }

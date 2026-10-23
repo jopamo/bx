@@ -115,8 +115,8 @@ struct ash_pattern {
     struct ash_pattern_options options;
     struct ash_pattern_sequence root;
     /*
-     * Owned expanded source is retained for diagnostics and the current
-     * compatibility matcher. The recursive IR is canonical for consumers.
+     * Owned expanded source retains diagnostics and trailing-escape spelling.
+     * Matching traverses the compiled IR.
      */
     char* source;
     size_t source_length;
@@ -138,8 +138,8 @@ enum ash_pattern_compile_result ash_pattern_compile(
 );
 
 /*
- * Allocation-free hot path. Matching observes only the immutable compiled
- * pattern, explicit options, and borrowed NUL-terminated candidate.
+ * Matching observes only the immutable compiled pattern, explicit options,
+ * and borrowed NUL-terminated candidate.
  */
 enum ash_pattern_match_result ash_pattern_match(
     const struct ash_pattern* pattern,
