@@ -655,6 +655,7 @@ struct ash_matched_frame {
     bool comment_eligible;
     enum ash_quote_kind backquote_quote;
     bool parameter_double_quotes;
+    bool arithmetic_context;
     bool commands_enabled;
     bool word_start;
     bool command_start;
@@ -714,6 +715,7 @@ static int ash_matched_stack_push(
         kind == ASH_MATCH_COMMAND ||
         kind == ASH_MATCH_PROCESS ||
         kind == ASH_MATCH_BACKQUOTE;
+    bool arithmetic_context = kind == ASH_MATCH_ARITHMETIC;
     bool commands_enabled = kind == ASH_MATCH_COMMAND ||
         kind == ASH_MATCH_PROCESS || kind == ASH_MATCH_CASE;
     if (kind == ASH_MATCH_CASE) {
@@ -723,6 +725,7 @@ static int ash_matched_stack_push(
         struct ash_matched_frame* parent =
             &stack->frames[stack->count - 1u];
         if (kind == ASH_MATCH_PAREN) {
+            arithmetic_context = parent->arithmetic_context;
             comments_enabled = parent->comments_enabled;
             parent->comment_eligible = parent->comments_enabled;
             commands_enabled = parent->commands_enabled &&
@@ -770,6 +773,7 @@ static int ash_matched_stack_push(
         .comments_enabled = comments_enabled,
         .comment_eligible = comments_enabled,
         .commands_enabled = commands_enabled,
+        .arithmetic_context = arithmetic_context,
         .word_start = true,
         .command_start = true,
         .delimiter_owner = SIZE_MAX,
@@ -836,7 +840,8 @@ static int ash_lexer_push_matched_frame(
     bool parameter_double_quotes = false;
     if (frame == ASH_MATCH_PARAMETER && stack->count != 0u) {
         const struct ash_matched_frame* parent = &stack->frames[stack->count - 1u];
-        parameter_double_quotes = (parent->kind == ASH_MATCH_DOUBLE_QUOTE || parent->kind == ASH_MATCH_LOCALE_QUOTE || parent->parameter_double_quotes) && !ash_lexer_parameter_pattern_at(lexer);
+        parameter_double_quotes = (parent->kind == ASH_MATCH_DOUBLE_QUOTE || parent->kind == ASH_MATCH_LOCALE_QUOTE || parent->parameter_double_quotes || parent->arithmetic_context) &&
+                                  !ash_lexer_parameter_pattern_at(lexer);
     }
     if (ash_matched_stack_push(stack, frame) != 0) {
         return -1;
@@ -1561,7 +1566,7 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                 }
             }
             (void)ash_lexer_advance(lexer);
-            if (!ash_lexer_at_end(lexer)) {
+            if (!ash_lexer_at_end(lexer) && (!active->arithmetic_context || strchr("$`\"\\\n", ash_lexer_peek(lexer, 0u)) != NULL)) {
                 (void)ash_lexer_advance(lexer);
             }
             if (active->comments_enabled) {
@@ -1712,13 +1717,13 @@ static enum ash_lexer_result ash_lexer_scan_matched(
         }
 
         enum ash_matched_frame_kind nested;
-        if (ch == '$' && ash_lexer_dollar_frame(lexer, !active->parameter_double_quotes, &nested)) {
+        if (ch == '$' && ash_lexer_dollar_frame(lexer, !active->parameter_double_quotes && !active->arithmetic_context, &nested)) {
             if (ash_lexer_push_matched_frame(lexer, &stack, nested) != 0) {
                 goto out_of_memory;
             }
             continue;
         }
-        if (!active->parameter_double_quotes && ash_lexer_starts_process_substitution(lexer)) {
+        if (!active->parameter_double_quotes && !active->arithmetic_context && ash_lexer_starts_process_substitution(lexer)) {
             if (ash_lexer_push_matched_frame(
                     lexer,
                     &stack,
@@ -1728,7 +1733,7 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             }
             continue;
         }
-        if (ch == '\'' && !active->parameter_double_quotes) {
+        if (ch == '\'' && !active->parameter_double_quotes && !active->arithmetic_context) {
             if (ash_lexer_push_matched_frame(
                     lexer,
                     &stack,
@@ -1738,7 +1743,7 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             }
             continue;
         }
-        if (ch == '"') {
+        if (ch == '"' && !active->arithmetic_context) {
             if (ash_lexer_push_matched_frame(
                     lexer,
                     &stack,
