@@ -11,6 +11,7 @@
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/input_execution.h"
 #include "applets/shell/ash/lexer.h"
+#include "applets/shell/ash/locale_state.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/shell_policy.h"
 #include "applets/shell/ash/startup.h"
@@ -214,6 +215,7 @@ static enum ash_startup_outcome ash_startup_execute_env_file(struct ash_shell* s
 
     struct ash_lexer lexer;
     ash_lexer_init(&lexer, name, requested, strlen(requested));
+    lexer.options.lexical_locale = ash_locale_lexical(shell);
     struct ash_word word;
     errno = 0;
     enum ash_lexer_result lexed = ash_lexer_scan_expansion_string(&lexer, &word, ASH_QUOTE_NONE);

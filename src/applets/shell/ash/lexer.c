@@ -62,7 +62,7 @@ struct ash_source_location ash_lexer_current_location(
 bool ash_lexer_options_valid(
     const struct ash_lexer_options* options
 ) {
-    return options != NULL &&
+    return options != NULL && options->lexical_locale != LC_GLOBAL_LOCALE &&
         (options->flags & ~(uint32_t)ASH_LEXER_FLAG_ALL) == 0u;
 }
 

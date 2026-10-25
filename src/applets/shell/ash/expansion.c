@@ -895,6 +895,7 @@ static bool ash_operand_frames_push_arithmetic(struct ash_shell* shell, struct a
     }
     struct ash_lexer lexer;
     ash_lexer_init_at(&lexer, origin, source, position);
+    lexer.options.lexical_locale = ash_locale_lexical(shell);
     lexer.here_document_source = part->here_document_source;
     lexer.here_document_strip_tabs = part->here_document_strip_tabs;
     if (!ash_lexer_discard_remaining(&lexer)) {
@@ -1139,6 +1140,7 @@ static bool ash_parameter_operand_word(struct ash_shell* shell, const struct ash
     }
     struct ash_lexer lexer;
     ash_lexer_init_at(&lexer, origin, source, position);
+    lexer.options.lexical_locale = ash_locale_lexical(shell);
     lexer.here_document_source = part->here_document_source;
     lexer.here_document_strip_tabs = part->here_document_strip_tabs;
     if (!ash_lexer_discard_remaining(&lexer)) {
@@ -1294,6 +1296,7 @@ bool ash_expand_here_document(struct ash_shell* shell,
     }
     struct ash_lexer lexer;
     ash_lexer_init_at(&lexer, *location, body, length);
+    lexer.options.lexical_locale = ash_locale_lexical(shell);
     struct ash_word word;
     enum ash_lexer_result result = ash_lexer_scan_here_document(&lexer, &word, strip_tabs);
     bool expanded = false;

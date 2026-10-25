@@ -1,6 +1,7 @@
 #ifndef BX_APPLETS_SHELL_ASH_LEXER_H
 #define BX_APPLETS_SHELL_ASH_LEXER_H
 
+#include <locale.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -73,6 +74,8 @@ enum ash_lexer_flag {
 
 struct ash_lexer_options {
     uint32_t flags;
+    /* Borrow the invocation's immutable startup locale; zero is byte syntax. */
+    locale_t lexical_locale;
 };
 
 struct ash_lexer {

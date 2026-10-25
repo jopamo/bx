@@ -42,7 +42,7 @@ int ash_locale_scope_enter(struct ash_locale_scope* scope) {
     if (candidate == (locale_t)0) {
         return errno != 0 ? errno : EINVAL;
     }
-    struct ash_locale_scope owned = {.active = candidate, .dirty = fallback};
+    struct ash_locale_scope owned = {.active = candidate, .lexical = candidate, .dirty = fallback};
     for (size_t i = 0u; i < ASH_LOCALE_CATEGORY_COUNT; i++) {
         owned.requests[i] = strdup(fallback ? "C" : ash_locale_request(getenv("LC_ALL"), getenv(ash_locale_categories[i].name), getenv("LANG")));
         if (owned.requests[i] == NULL) {
@@ -74,12 +74,19 @@ int ash_locale_scope_leave(struct ash_locale_scope* scope) {
     if (uselocale(scope->previous) == (locale_t)0) {
         return errno != 0 ? errno : EINVAL;
     }
+    if (scope->lexical != (locale_t)0 && scope->lexical != scope->active) {
+        freelocale(scope->lexical);
+    }
     freelocale(scope->active);
     for (size_t i = 0u; i < ASH_LOCALE_CATEGORY_COUNT; i++) {
         free(scope->requests[i]);
     }
     *scope = (struct ash_locale_scope){0};
     return 0;
+}
+
+locale_t ash_locale_lexical(const struct ash_shell* shell) {
+    return shell->locale_scope != NULL ? shell->locale_scope->lexical : (locale_t)0;
 }
 
 bool ash_locale_variable(const char* name, size_t length) {
@@ -151,7 +158,9 @@ int ash_locale_refresh(struct ash_shell* shell) {
         }
     }
     scope->dirty = false;
-    freelocale(old);
+    if (old != scope->lexical) {
+        freelocale(old);
+    }
     return 0;
 
 free_copies:

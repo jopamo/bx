@@ -13,6 +13,7 @@
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/input_execution.h"
 #include "applets/shell/ash/lexer.h"
+#include "applets/shell/ash/locale_state.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/traps.h"
@@ -189,6 +190,7 @@ static bool ash_input_print_prompt(struct ash_shell* shell, bool continuation) {
     if (strpbrk(prompt, "$`\\") != NULL) {
         struct ash_lexer lexer;
         ash_lexer_init(&lexer, name, prompt, strlen(prompt));
+        lexer.options.lexical_locale = ash_locale_lexical(shell);
         struct ash_word word;
         enum ash_lexer_result result = ash_lexer_scan_expansion_string(&lexer, &word, ASH_QUOTE_NONE);
         bool valid = result == ASH_LEXER_TOKEN && ash_expand_word(shell, &word, &expanded, NULL);

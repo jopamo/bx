@@ -62,6 +62,7 @@ static bool ash_parser_storage_invariants(const struct ash_parser* parser) {
                 ash_alias_value_length(frame->alias) ||
             frame->lexer.offset > frame->lexer.length ||
             frame->lexer.options.flags != lexer->options.flags ||
+            frame->lexer.options.lexical_locale != lexer->options.lexical_locale ||
             frame->lexer.source_offset >
                 SIZE_MAX - frame->lexer.length ||
             (frame->releases == NULL) !=
@@ -103,7 +104,7 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
     const struct ash_parser* parser = shell->active_parser;
     const struct ash_alias_table* expected_aliases = ash_shell_policy_expands_aliases(&shell->policy) ? shell->aliases : NULL;
     return ash_parser_storage_invariants(parser) &&
-           (parser == NULL || (parser->aliases == expected_aliases &&
+           (parser == NULL || (parser->aliases == expected_aliases && parser->lexer.options.lexical_locale == ash_locale_lexical(shell) &&
                                (shell->input_stack == NULL || (parser->lexer.source_name == shell->input_stack->name && parser->lexer.source_identity == shell->input_stack->identity))));
 }
 
@@ -163,8 +164,8 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
             ASH_SHELL_POLICY_INTERACTIVE
         );
     return shell != NULL && shell->progname != NULL &&
-           (shell->locale_scope == NULL || (shell->locale_scope->active != (locale_t)0 && shell->locale_scope->previous != (locale_t)0 && shell->locale_scope->requests[ASH_LOCALE_CTYPE] != NULL &&
-                                            shell->locale_scope->requests[ASH_LOCALE_COLLATE] != NULL)) &&
+           (shell->locale_scope == NULL || (shell->locale_scope->active != (locale_t)0 && shell->locale_scope->lexical != (locale_t)0 && shell->locale_scope->previous != (locale_t)0 &&
+                                            shell->locale_scope->requests[ASH_LOCALE_CTYPE] != NULL && shell->locale_scope->requests[ASH_LOCALE_COLLATE] != NULL)) &&
            standalone_applets == shell->owns_self_executable_fd && (shell->owns_self_executable_fd ? shell->self_executable_fd >= 0 : shell->self_executable_fd == -1) && shell->shell_pid > 0 &&
            shell->last_async_pid >= -1 && shell->command_substitution != NULL && ash_shell_options_valid_for_personality(shell->options, shell->policy.personality) &&
            ash_shopt_state_valid_for_personality(&shell->shopt, shell->policy.personality) && ash_shell_policy_valid(&shell->policy) && ash_aliases_invariants(shell->aliases) &&
@@ -268,6 +269,7 @@ static struct ash_parser_config ash_shell_context_parser_config(const struct ash
                 shell->aliases :
                 NULL,
         .lexer = {
+            .lexical_locale = ash_locale_lexical(shell),
             .flags = (ash_shell_policy_is_bash(&shell->policy)
                 ? ASH_LEXER_COMBINED_REDIRECTION | ASH_LEXER_STDERR_PIPE | ASH_LEXER_HERE_STRING | ASH_LEXER_PROCESS_SUBSTITUTION | ASH_LEXER_CASE_TEST_NEXT
                 : 0u) |
