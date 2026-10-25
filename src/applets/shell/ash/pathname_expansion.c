@@ -604,14 +604,62 @@ static int ash_pathname_execute_plan(
     return 0;
 }
 
-static int ash_pathname_compare(
-    const void* left,
-    const void* right
-) {
-    const char* const* left_path = left;
-    const char* const* right_path = right;
-    int order = strcoll(*left_path, *right_path);
-    return order != 0 ? order : strcmp(*left_path, *right_path);
+static bool ash_pathname_compare(const char* left, const char* right, int* order) {
+    /* Preserve errno writes even when libc declares strcoll pure. */
+    int (*volatile compare)(const char*, const char*) = strcoll;
+    errno = 0;
+    int result = compare(left, right);
+    if (errno != 0) {
+        return false;
+    }
+    *order = result != 0 ? result : strcmp(left, right);
+    return true;
+}
+
+static void ash_pathname_swap(char** left, char** right) {
+    char* saved = *left;
+    *left = *right;
+    *right = saved;
+}
+
+static bool ash_pathname_sift(char** paths, size_t count, size_t root) {
+    while (root < count / 2u) {
+        size_t child = root * 2u + 1u;
+        int order;
+        if (child + 1u < count) {
+            if (!ash_pathname_compare(paths[child], paths[child + 1u], &order)) {
+                return false;
+            }
+            if (order < 0) {
+                child++;
+            }
+        }
+        if (!ash_pathname_compare(paths[root], paths[child], &order)) {
+            return false;
+        }
+        if (order >= 0) {
+            break;
+        }
+        /* Keep every owned path in the array across comparison failures. */
+        ash_pathname_swap(&paths[root], &paths[child]);
+        root = child;
+    }
+    return true;
+}
+
+static bool ash_pathname_sort(struct ash_pathname_matches* matches) {
+    for (size_t root = matches->count / 2u; root != 0u;) {
+        if (!ash_pathname_sift(matches->values, matches->count, --root)) {
+            return false;
+        }
+    }
+    for (size_t count = matches->count; count > 1u;) {
+        ash_pathname_swap(&matches->values[0], &matches->values[--count]);
+        if (!ash_pathname_sift(matches->values, count, 0u)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 enum ash_pathname_expansion_result ash_pathname_expand(
@@ -646,11 +694,11 @@ enum ash_pathname_expansion_result ash_pathname_expand(
     if (output->count == 0u) {
         return ASH_PATHNAME_EXPANSION_NO_MATCH;
     }
-    qsort(
-        output->values,
-        output->count,
-        sizeof(*output->values),
-        ash_pathname_compare
-    );
+    if (!ash_pathname_sort(output)) {
+        int error = errno;
+        ash_pathname_matches_destroy(output);
+        errno = error;
+        return ASH_PATHNAME_EXPANSION_ERROR;
+    }
     return ASH_PATHNAME_EXPANSION_MATCH;
 }
