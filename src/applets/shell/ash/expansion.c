@@ -495,7 +495,9 @@ static bool ash_append_pattern_span(
             (character == '\\' || character == '*' ||
              character == '?' || character == '[' ||
              character == ']' || character == '!' ||
-             character == '^' || character == '-')) {
+             character == '^' || character == '-' ||
+             character == '.' || character == '=' ||
+             character == ':')) {
             if (!ash_expansion_append_char(shell, output, '\\')) {
                 return false;
             }

@@ -329,6 +329,18 @@ static int ash_pattern_compile_extglob(
     return 0;
 }
 
+static const char* ash_pattern_notation_end(const char* text, const char* end) {
+    for (const char* cursor = text + 2u; cursor < end - 1u; cursor++) {
+        if (*cursor == '\\') {
+            cursor++;
+        }
+        else if (cursor[0] == text[1] && cursor[1] == ']') {
+            return cursor + 2u;
+        }
+    }
+    return NULL;
+}
+
 static size_t ash_pattern_bracket_end(
     const struct ash_pattern_compiler* compiler
 ) {
@@ -349,13 +361,9 @@ static size_t ash_pattern_bracket_end(
             continue;
         }
         if (compiler->input[position] == '[' && position + 1u < compiler->length && strchr(".=:", compiler->input[position + 1u]) != NULL) {
-            char delimiter = compiler->input[position + 1u];
-            size_t end = position + 2u;
-            while (end + 1u < compiler->length && !(compiler->input[end] == delimiter && compiler->input[end + 1u] == ']')) {
-                end++;
-            }
-            if (end + 1u < compiler->length) {
-                position = end + 1u;
+            const char* end = ash_pattern_notation_end(compiler->input + position, compiler->input + compiler->length);
+            if (end != NULL) {
+                position = (size_t)(end - compiler->input) - 1u;
                 continue;
             }
         }
@@ -639,25 +647,28 @@ static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const 
         text++;
     }
     else if (*text == '[' && text + 1u < end && strchr(".=:", text[1]) != NULL) {
-        for (const char* close = text + 2u; close + 1u < end; close++) {
-            if (close[0] == text[1] && close[1] == ']') {
-                struct ash_bracket_atom atom = {
-                    .end = close + 2u,
-                    .valid = ash_pattern_valid_span(text, (size_t)(close + 2u - text)),
-                    .character = WEOF,
-                    .notation = text[1],
-                };
-                if (atom.valid && text[1] != ':' && text + 2u < close) {
-                    wint_t character;
-                    size_t width = ash_pattern_character(text + 2u, &character);
-                    if (character != WEOF && width == (size_t)(close - text - 2u)) {
-                        atom.literal = text + 2u;
-                        atom.character = character;
-                        atom.literal_length = width;
-                    }
+        const char* close = ash_pattern_notation_end(text, end);
+        if (close != NULL) {
+            struct ash_bracket_atom atom = {
+                .end = close,
+                .valid = ash_pattern_valid_span(text, (size_t)(close - text)),
+                .character = WEOF,
+                .notation = text[1],
+            };
+            if (atom.valid && text[1] != ':' && text + 4u < close) {
+                const char* literal = text + 2u;
+                if (*literal == '\\' && literal + 1u < close - 2u) {
+                    literal++;
                 }
-                return atom;
+                wint_t character;
+                size_t width = ash_pattern_character(literal, &character);
+                if (character != WEOF && width == (size_t)(close - 2u - literal)) {
+                    atom.literal = literal;
+                    atom.character = character;
+                    atom.literal_length = width;
+                }
             }
+            return atom;
         }
     }
     wint_t character;
@@ -726,7 +737,8 @@ static enum ash_pattern_match_result ash_pattern_collation_range(const struct as
 }
 
 static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_pattern_span* span, const char* single, wint_t character, bool fold, int flags) {
-    if ((MB_CUR_MAX == 1u || (character != WEOF && ash_pattern_valid_span(span->text, span->length))) && strstr(span->text, "[.") == NULL && strstr(span->text, "[=") == NULL) {
+    if ((MB_CUR_MAX == 1u || (character != WEOF && ash_pattern_valid_span(span->text, span->length))) && strchr(span->text, '\\') == NULL && strstr(span->text, "[.") == NULL &&
+        strstr(span->text, "[=") == NULL) {
         return ash_pattern_classify(span->text, single, flags);
     }
 
