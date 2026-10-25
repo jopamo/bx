@@ -3,8 +3,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wctype.h>
 
 #include "applets/shell/ash/aliases.h"
+#include "applets/shell/ash/character.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/syntax.h"
 
@@ -18,6 +20,7 @@ struct ash_alias {
     size_t value_length;
     uint64_t hash;
     bool value_ends_blank;
+    bool locale_sensitive;
     bool requires_tail;
     bool requires_extglob_tail;
     struct ash_alias* next;
@@ -239,6 +242,15 @@ static bool ash_alias_value_ends_blank_bytes(
          value[length - 1u] == '\t');
 }
 
+static bool ash_alias_value_locale_sensitive(const char* value, size_t length) {
+    for (size_t i = 0u; i < length; i++) {
+        if ((unsigned char)value[i] >= 0x80u) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool ash_alias_value_metadata(
     const char* value,
     size_t* length,
@@ -306,6 +318,7 @@ static struct ash_alias* ash_alias_create(
         .value_length = value_length,
         .hash = ash_alias_hash(name, name_length),
         .value_ends_blank = value_ends_blank,
+        .locale_sensitive = ash_alias_value_locale_sensitive(value, value_length),
         .requires_tail = requires_tail,
         .requires_extglob_tail = requires_extglob_tail,
     };
@@ -461,8 +474,33 @@ size_t ash_alias_value_length(const struct ash_alias* alias) {
     return alias != NULL ? alias->value_length : 0u;
 }
 
-bool ash_alias_value_ends_blank(const struct ash_alias* alias) {
-    return alias != NULL && alias->value_ends_blank;
+bool ash_alias_value_ends_blank(const struct ash_alias* alias, const struct ash_lexer_options* options, bool* ends_blank) {
+    if (alias == NULL || !ash_lexer_options_valid(options) || ends_blank == NULL) {
+        errno = EINVAL;
+        return false;
+    }
+    if (!alias->locale_sensitive || options->lexical_locale == (locale_t)0) {
+        *ends_blank = alias->value_ends_blank;
+        return true;
+    }
+    locale_t previous = uselocale(options->lexical_locale);
+    if (previous == (locale_t)0) {
+        return false;
+    }
+    bool blank = false;
+    mbstate_t state = {0};
+    int error = errno;
+    for (size_t offset = 0u; offset < alias->value_length;) {
+        wint_t character;
+        offset += ash_character_decode(alias->value + offset, alias->value_length - offset, &state, &character);
+        blank = character != WEOF && iswblank(character);
+    }
+    if (uselocale(previous) == (locale_t)0) {
+        return false;
+    }
+    errno = error;
+    *ends_blank = blank;
+    return true;
 }
 
 bool ash_alias_requires_tail(const struct ash_alias* alias, const struct ash_lexer_options* options, bool* requires_tail) {
@@ -470,7 +508,7 @@ bool ash_alias_requires_tail(const struct ash_alias* alias, const struct ash_lex
         errno = EINVAL;
         return false;
     }
-    if ((options->flags & ~(uint32_t)ASH_LEXER_EXTGLOB) == 0u) {
+    if ((!alias->locale_sensitive || options->lexical_locale == (locale_t)0) && (options->flags & ~(uint32_t)ASH_LEXER_EXTGLOB) == 0u) {
         *requires_tail = (options->flags & ASH_LEXER_EXTGLOB) != 0u ? alias->requires_extglob_tail : alias->requires_tail;
         return true;
     }
@@ -569,6 +607,7 @@ bool ash_aliases_invariants(const struct ash_alias_table* table) {
                 !ash_alias_name_valid(alias->name) ||
                 strlen(alias->name) != alias->name_length ||
                 value_length != alias->value_length ||
+                alias->locale_sensitive != ash_alias_value_locale_sensitive(alias->value, value_length) ||
                 ash_alias_hash(alias->name, alias->name_length) !=
                     alias->hash ||
                 ash_alias_bucket(alias->hash, table->bucket_count) !=

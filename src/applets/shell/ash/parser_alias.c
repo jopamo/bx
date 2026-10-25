@@ -429,8 +429,9 @@ static bool ash_parser_push_alias(struct ash_parser* parser, struct ash_alias* a
     size_t alias_length = ash_alias_value_length(alias);
     size_t tail_length = 0u;
     bool bridge_tail;
-    if (!ash_alias_requires_tail(alias, &parser->lexer.options, &bridge_tail)) {
-        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+    bool continue_alias;
+    if (!ash_alias_requires_tail(alias, &parser->lexer.options, &bridge_tail) || !ash_alias_value_ends_blank(alias, &parser->lexer.options, &continue_alias)) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, location, errno == ENOMEM ? "out of memory" : "cannot classify alias expansion");
         return false;
     }
     if (bridge_tail) {
@@ -639,7 +640,7 @@ static bool ash_parser_push_alias(struct ash_parser* parser, struct ash_alias* a
         &parser->alias_frames[parser->alias_frame_count++];
     *frame = (struct ash_parser_alias_frame){
         .alias = alias,
-        .continue_alias = ash_alias_value_ends_blank(alias),
+        .continue_alias = continue_alias,
         .alias_active = true,
         .alias_length = alias_length,
         .owned_input = owned_input,
