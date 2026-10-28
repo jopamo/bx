@@ -775,13 +775,13 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
         bool classify = left.valid && (left.literal == NULL || left.notation == '=');
         struct ash_bracket_atom right = {0};
         bool normalize_range = false;
-        bool symbol_range = false;
+        bool literal_range = false;
         if (cursor + 1u < end && *cursor == '-') {
             right = ash_pattern_bracket_atom(cursor + 1u, end);
             cursor = right.end;
             classify = left.valid && right.valid;
-            symbol_range = classify && left.literal != NULL && right.literal != NULL && left.notation != '=' && right.notation != '=' && (left.notation == '.' || right.notation == '.');
-            normalize_range = symbol_range && ash_pattern_range_literal(&left) && ash_pattern_range_literal(&right);
+            literal_range = classify && left.literal != NULL && right.literal != NULL && left.notation != '=' && right.notation != '=';
+            normalize_range = literal_range && ash_pattern_range_literal(&left) && ash_pattern_range_literal(&right);
             if (character == WEOF && !left.valid && !right.valid && left.literal != NULL && right.literal != NULL) {
                 unsigned char byte = (unsigned char)*single;
                 matched |= (unsigned char)*left.literal <= byte && byte <= (unsigned char)*right.literal;
@@ -797,7 +797,7 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
         }
         if (classify && character != WEOF) {
             enum ash_pattern_match_result result;
-            if (symbol_range && !normalize_range) {
+            if (literal_range && !normalize_range) {
                 result = ash_pattern_symbol_range(&left, &right, single, character, fold, flags);
             }
             else {
