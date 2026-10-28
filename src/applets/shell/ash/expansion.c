@@ -719,14 +719,14 @@ static bool ash_select_parameter_operand(struct ash_shell* shell, const struct a
     if (part->length == 0u || part->text[part->length - 1u] != '}' || (reference.special && strchr("@*", part->text[reference.start]) != NULL)) {
         return ash_expansion_bad_substitution(shell, part->text);
     }
-    if (operator == '=' && (reference.numbered || reference.special)) {
-        return ash_expansion_bad_substitution(shell, part->text);
-    }
     bool null;
     bool set = ash_parameter_reference_state(shell, part->text, &reference, &null);
     bool missing = !set || (colon && null);
     bool use_word = operator == '+' ? !missing : missing;
     if (use_word) {
+        if (operator == '=' && (reference.numbered || reference.special)) {
+            return ash_expansion_bad_substitution(shell, part->text);
+        }
         selection->kind = ASH_PARAMETER_SELECTED_WORD;
         if (!ash_parameter_operand_word(shell, part, position + 1u, ash_word_part_is_quoted(part), &selection->word)) {
             ash_parameter_selection_destroy(selection);
