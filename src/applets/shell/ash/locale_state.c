@@ -101,10 +101,21 @@ bool ash_locale_variable(const char* name, size_t length) {
     return false;
 }
 
+static int ash_locale_activate(locale_t locale) {
+    /* A failed lexical restore can leave the thread on the startup locale. */
+    if (uselocale((locale_t)0) != locale && uselocale(locale) == (locale_t)0) {
+        return errno != 0 ? errno : EINVAL;
+    }
+    return 0;
+}
+
 int ash_locale_refresh(struct ash_shell* shell) {
     struct ash_locale_scope* scope = shell->locale_scope;
-    if (scope == NULL || !scope->dirty) {
+    if (scope == NULL) {
         return 0;
+    }
+    if (!scope->dirty) {
+        return ash_locale_activate(scope->active);
     }
     char* copies[ASH_LOCALE_CATEGORY_COUNT] = {0};
     const char* all = ash_var_get(shell, "LC_ALL");
@@ -124,6 +135,10 @@ int ash_locale_refresh(struct ash_shell* shell) {
         changed = true;
     }
     if (!changed) {
+        error = ash_locale_activate(scope->active);
+        if (error != 0) {
+            goto free_copies;
+        }
         scope->dirty = false;
         return 0;
     }
