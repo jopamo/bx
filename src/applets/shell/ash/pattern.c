@@ -736,6 +736,26 @@ static enum ash_pattern_match_result ash_pattern_collation_range(const struct as
     return ASH_PATTERN_NO_MATCH;
 }
 
+static enum ash_pattern_match_result ash_pattern_symbol_range(const struct ash_bracket_atom* left, const struct ash_bracket_atom* right, const char* single, wint_t character, bool fold, int flags) {
+    enum ash_pattern_match_result result = ash_pattern_classify("[[.a.]]", "a", 0);
+    if (result == ASH_PATTERN_NO_MATCH) {
+        return ash_pattern_collation_range(left, right, single, character, fold);
+    }
+    if (result != ASH_PATTERN_MATCH) {
+        return result;
+    }
+    char range[2u * MB_LEN_MAX + 12u] = "[[.";
+    size_t length = 3u;
+    memcpy(range + length, left->literal, left->literal_length);
+    length += left->literal_length;
+    memcpy(range + length, ".]-[.", 5u);
+    length += 5u;
+    memcpy(range + length, right->literal, right->literal_length);
+    length += right->literal_length;
+    memcpy(range + length, ".]]", 4u);
+    return ash_pattern_classify(range, single, flags);
+}
+
 static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_pattern_span* span, const char* single, wint_t character, bool fold, int flags) {
     if ((MB_CUR_MAX == 1u || (character != WEOF && ash_pattern_valid_span(span->text, span->length))) && strchr(span->text, '\\') == NULL && strstr(span->text, "[.") == NULL &&
         strstr(span->text, "[=") == NULL) {
@@ -776,46 +796,40 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
             }
         }
         if (classify && character != WEOF) {
-            if (member == NULL) {
-                if (span->length > SIZE_MAX - 2u) {
-                    errno = ENOMEM;
-                    return ASH_PATTERN_MATCH_ERROR;
-                }
-                member = malloc(span->length + 2u);
-                if (member == NULL) {
-                    return ASH_PATTERN_MATCH_ERROR;
-                }
-            }
-            size_t length = 1u;
-            member[0] = '[';
-            if (normalize_range) {
-                memcpy(member + length, left.literal, left.literal_length);
-                length += left.literal_length;
-                member[length++] = '-';
-                memcpy(member + length, right.literal, right.literal_length);
-                length += right.literal_length;
-            }
-            else {
-                if (*start == '!' || *start == '^') {
-                    member[length++] = '\\';
-                }
-                size_t copied = (size_t)(cursor - start);
-                memcpy(member + length, start, copied);
-                length += copied;
-            }
-            member[length++] = ']';
-            member[length] = '\0';
             enum ash_pattern_match_result result;
             if (symbol_range && !normalize_range) {
-                result = ash_pattern_classify("[[.a.]]", "a", 0);
-                if (result == ASH_PATTERN_MATCH) {
-                    result = ash_pattern_classify(member, single, flags);
-                }
-                else if (result == ASH_PATTERN_NO_MATCH) {
-                    result = ash_pattern_collation_range(&left, &right, single, character, fold);
-                }
+                result = ash_pattern_symbol_range(&left, &right, single, character, fold, flags);
             }
             else {
+                if (member == NULL) {
+                    if (span->length > SIZE_MAX - 2u) {
+                        errno = ENOMEM;
+                        return ASH_PATTERN_MATCH_ERROR;
+                    }
+                    member = malloc(span->length + 2u);
+                    if (member == NULL) {
+                        return ASH_PATTERN_MATCH_ERROR;
+                    }
+                }
+                size_t length = 1u;
+                member[0] = '[';
+                if (normalize_range) {
+                    memcpy(member + length, left.literal, left.literal_length);
+                    length += left.literal_length;
+                    member[length++] = '-';
+                    memcpy(member + length, right.literal, right.literal_length);
+                    length += right.literal_length;
+                }
+                else {
+                    if (*start == '!' || *start == '^') {
+                        member[length++] = '\\';
+                    }
+                    size_t copied = (size_t)(cursor - start);
+                    memcpy(member + length, start, copied);
+                    length += copied;
+                }
+                member[length++] = ']';
+                member[length] = '\0';
                 result = ash_pattern_classify(member, single, flags);
             }
             if (result == ASH_PATTERN_MATCH_ERROR) {
