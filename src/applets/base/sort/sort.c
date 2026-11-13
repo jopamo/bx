@@ -16,12 +16,15 @@
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/random_bytes.h"
+#include "crypto/sha256.h"
 
 typedef enum {
     SORT_MODE_LEXICOGRAPHIC,
     SORT_MODE_NUMERIC,
     SORT_MODE_HUMAN,
     SORT_MODE_VERSION,
+    SORT_MODE_RANDOM,
 } sort_mode_t;
 
 typedef struct {
@@ -61,6 +64,8 @@ typedef struct {
     unsigned char field_separator;
     sort_key_spec_vec_t key_specs;
     const char* output_path;
+    const char* random_source;
+    struct bx_sha256_ctx random_prefix;
 } sort_opts_t;
 
 typedef struct {
@@ -108,6 +113,7 @@ typedef enum {
 enum {
     SORT_OPT_HELP = 256,
     SORT_OPT_VERSION,
+    SORT_OPT_RANDOM_SOURCE,
 };
 
 static int sort_cmp_sign(int value) {
@@ -136,6 +142,8 @@ static void sort_print_help(const char* progname) {
     puts("  -n, --numeric-sort      compare according to numeric value");
     puts("  -h, --human-numeric-sort  compare human readable numbers (e.g., 2K 1G)");
     puts("  -V, --version-sort      natural sort of version numbers within text");
+    puts("  -R, --random-sort       randomize key order, grouping equal keys");
+    puts("      --random-source=FILE  read the random seed from FILE");
     puts("  -f, --ignore-case       fold lower case to upper case characters");
     puts("  -r, --reverse           reverse the result of comparisons");
     puts("  -s, --stable            stabilize sort by disabling last-resort comparison");
@@ -306,6 +314,11 @@ static bool sort_parse_key_part(const char** text, sort_key_spec_t* spec, sort_k
                     return false;
                 }
                 break;
+            case 'R':
+                if (!sort_set_mode(&spec->mode, &spec->has_mode, SORT_MODE_RANDOM)) {
+                    return false;
+                }
+                break;
             default:
                 return false;
         }
@@ -472,20 +485,93 @@ static char* sort_make_key_copy_for_spec(const sort_opts_t* opts, const sort_key
     return sort_strdup_range(key_start, (size_t)(key_end - key_start));
 }
 
+static size_t sort_cached_key_count(const sort_opts_t* opts) {
+    return opts->key_specs.len ? opts->key_specs.len : (opts->mode == SORT_MODE_RANDOM ? 1u : 0u);
+}
+
+static bool sort_seed_random_order(sort_opts_t* opts, const char* progname) {
+    bool needed = opts->key_specs.len == 0 && opts->mode == SORT_MODE_RANDOM;
+    for (size_t i = 0; i < opts->key_specs.len; i++) {
+        const sort_key_spec_t* spec = &opts->key_specs.items[i];
+        needed |= (spec->has_mode ? spec->mode : opts->mode) == SORT_MODE_RANDOM;
+    }
+    if (!needed) {
+        return true;
+    }
+
+    unsigned char seed[BX_SHA256_DIGEST_SIZE];
+    if (opts->random_source) {
+        FILE* source = fopen(opts->random_source, "rb");
+        if (!source) {
+            sort_report_errno(progname, opts->random_source);
+            return false;
+        }
+        size_t count = fread(seed, 1, sizeof(seed), source);
+        int saved_errno = ferror(source) ? errno : EIO;
+        int close_status = fclose(source);
+        if (count != sizeof(seed) || close_status != 0) {
+            if (count != sizeof(seed)) {
+                errno = saved_errno;
+            }
+            sort_report_errno(progname, opts->random_source);
+            return false;
+        }
+    } else if (!bx_random_bytes(seed, sizeof(seed))) {
+        sort_report_errno(progname, "random seed");
+        return false;
+    }
+    bx_sha256_init(&opts->random_prefix);
+    bx_sha256_update(&opts->random_prefix, seed, sizeof(seed));
+    return true;
+}
+
+static char* sort_make_random_key(const sort_opts_t* opts, char* text, bool ignore_case) {
+    if (ignore_case) {
+        for (unsigned char* p = (unsigned char*)text; *p; p++) {
+            *p = (unsigned char)toupper(*p);
+        }
+    }
+    char unused;
+    size_t length = strxfrm(&unused, text, 0);
+    if (length > SIZE_MAX - BX_SHA256_DIGEST_SIZE - 1u) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    char* key = malloc(BX_SHA256_DIGEST_SIZE + length + 1u);
+    if (!key) {
+        return NULL;
+    }
+    /* Cache the digest and collation key; equal keys must remain grouped. */
+    strxfrm(key + BX_SHA256_DIGEST_SIZE, text, length + 1u);
+    struct bx_sha256_ctx hash = opts->random_prefix;
+    bx_sha256_update(&hash, key + BX_SHA256_DIGEST_SIZE, length);
+    bx_sha256_final(&hash, (unsigned char*)key);
+    return key;
+}
+
 static char** sort_make_key_copies(const sort_opts_t* opts, const char* line) {
-    if (opts->key_specs.len == 0) {
+    size_t count = sort_cached_key_count(opts);
+    if (count == 0) {
         return NULL;
     }
 
-    char** key_texts = calloc(opts->key_specs.len, sizeof(key_texts[0]));
+    char** key_texts = calloc(count, sizeof(key_texts[0]));
     if (!key_texts) {
         return NULL;
     }
 
-    for (size_t i = 0; i < opts->key_specs.len; i++) {
-        key_texts[i] = sort_make_key_copy_for_spec(opts, &opts->key_specs.items[i], line);
+    for (size_t i = 0; i < count; i++) {
+        const sort_key_spec_t* spec = opts->key_specs.len ? &opts->key_specs.items[i] : NULL;
+        sort_mode_t mode = spec && spec->has_mode ? spec->mode : opts->mode;
+        key_texts[i] = spec ? sort_make_key_copy_for_spec(opts, spec, line)
+                           : strdup(opts->ignore_leading_blanks ? sort_skip_leading_blanks(line) : line);
+        if (key_texts[i] && mode == SORT_MODE_RANDOM) {
+            char* key = sort_make_random_key(opts, key_texts[i], opts->ignore_case || (spec && spec->ignore_case));
+            free(key_texts[i]);
+            key_texts[i] = key;
+        }
         if (!key_texts[i]) {
-            sort_free_key_texts(key_texts, opts->key_specs.len);
+            sort_free_key_texts(key_texts, count);
             return NULL;
         }
     }
@@ -842,6 +928,12 @@ static int sort_compare_text_with_order(const sort_order_opts_t* order, const ch
     int cmp = 0;
 
     switch (order->mode) {
+        case SORT_MODE_RANDOM:
+            cmp = sort_cmp_sign(memcmp(left, right, BX_SHA256_DIGEST_SIZE));
+            if (cmp == 0) {
+                cmp = sort_cmp_sign(strcmp(left + BX_SHA256_DIGEST_SIZE, right + BX_SHA256_DIGEST_SIZE));
+            }
+            break;
         case SORT_MODE_NUMERIC:
             cmp = sort_compare_numeric_key(left, right);
             break;
@@ -896,6 +988,9 @@ static int sort_compare_primary(const sort_opts_t* opts,
         const char* left_key = opts->ignore_leading_blanks ? sort_skip_leading_blanks(left_line) : left_line;
         const char* right_key = opts->ignore_leading_blanks ? sort_skip_leading_blanks(right_line) : right_line;
         sort_order_opts_t order = sort_primary_order_for_line(opts, include_reverse);
+        if (order.mode == SORT_MODE_RANDOM) {
+            return sort_compare_text_with_order(&order, left_keys[0], right_keys[0]);
+        }
         return sort_compare_text_with_order(&order, left_key, right_key);
     }
 
@@ -979,7 +1074,7 @@ static sort_stream_status_t sort_read_stream(FILE* stream, const char* source_la
         }
 
         char** key_texts = NULL;
-        if (opts->key_specs.len > 0) {
+        if (sort_cached_key_count(opts) > 0) {
             key_texts = sort_make_key_copies(opts, copy);
             if (!key_texts) {
                 sort_report_memory_exhausted(progname);
@@ -992,7 +1087,7 @@ static sort_stream_status_t sort_read_stream(FILE* stream, const char* source_la
         if (!sort_line_vec_push(lines, copy, key_texts, *next_index)) {
             sort_report_memory_exhausted(progname);
             free(copy);
-            sort_free_key_texts(key_texts, opts->key_specs.len);
+            sort_free_key_texts(key_texts, sort_cached_key_count(opts));
             free(line);
             return SORT_STREAM_NOMEM;
         }
@@ -1028,7 +1123,7 @@ sort_check_stream(FILE* stream,
         line_number++;
 
         char** line_keys = NULL;
-        if (opts->key_specs.len > 0) {
+        if (sort_cached_key_count(opts) > 0) {
             line_keys = sort_make_key_copies(opts, line);
             if (!line_keys) {
                 sort_report_memory_exhausted(progname);
@@ -1043,7 +1138,7 @@ sort_check_stream(FILE* stream,
                 if (!opts->check_quiet) {
                     fprintf(stderr, "%s: %s:%zu: disorder\n", progname, source_label, line_number);
                 }
-                sort_free_key_texts(line_keys, opts->key_specs.len);
+                sort_free_key_texts(line_keys, sort_cached_key_count(opts));
                 free(line);
                 return SORT_STREAM_DISORDER;
             }
@@ -1052,18 +1147,18 @@ sort_check_stream(FILE* stream,
         char* copy = strdup(line);
         if (!copy) {
             sort_report_memory_exhausted(progname);
-            sort_free_key_texts(line_keys, opts->key_specs.len);
+            sort_free_key_texts(line_keys, sort_cached_key_count(opts));
             free(line);
             return SORT_STREAM_NOMEM;
         }
 
         free(*previous_line);
         *previous_line = copy;
-        sort_free_key_texts(*previous_keys, opts->key_specs.len);
+        sort_free_key_texts(*previous_keys, sort_cached_key_count(opts));
         *previous_keys = line_keys;
         line_keys = NULL;
         *have_previous_line = true;
-        sort_free_key_texts(line_keys, opts->key_specs.len);
+        sort_free_key_texts(line_keys, sort_cached_key_count(opts));
     }
 
     free(line);
@@ -1094,6 +1189,8 @@ int bx_sort_main(int argc, char** argv) {
         {"key", required_argument, NULL, 'k'},
         {"zero-terminated", no_argument, NULL, 'z'},
         {"version-sort", no_argument, NULL, 'V'},
+        {"random-sort", no_argument, NULL, 'R'},
+        {"random-source", required_argument, NULL, SORT_OPT_RANDOM_SOURCE},
         {"help", no_argument, NULL, SORT_OPT_HELP},
         {"version", no_argument, NULL, SORT_OPT_VERSION},
         {NULL, 0, NULL, 0},
@@ -1125,7 +1222,7 @@ int bx_sort_main(int argc, char** argv) {
 
     int c;
     bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, ":bhnrufo:cCszt:k:V", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, ":bhnrufo:cCszt:k:VR", long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
                 opts.ignore_leading_blanks = true;
@@ -1205,6 +1302,16 @@ int bx_sort_main(int argc, char** argv) {
                     return 1;
                 }
                 break;
+            case 'R':
+                if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_RANDOM)) {
+                    fprintf(stderr, "%s: incompatible sorting options\n", progname);
+                    sort_key_spec_vec_free(&opts.key_specs);
+                    return 1;
+                }
+                break;
+            case SORT_OPT_RANDOM_SOURCE:
+                opts.random_source = optarg;
+                break;
             case SORT_OPT_HELP:
                 sort_print_help(progname);
                 sort_key_spec_vec_free(&opts.key_specs);
@@ -1226,6 +1333,11 @@ int bx_sort_main(int argc, char** argv) {
 
     if (opts.check && opts.output_path) {
         fprintf(stderr, "%s: cannot use -o with -c or -C\n", progname);
+        sort_key_spec_vec_free(&opts.key_specs);
+        return 1;
+    }
+
+    if (!sort_seed_random_order(&opts, progname)) {
         sort_key_spec_vec_free(&opts.key_specs);
         return 1;
     }
@@ -1279,7 +1391,7 @@ int bx_sort_main(int argc, char** argv) {
         }
 
         free(previous_line);
-        sort_free_key_texts(previous_keys, opts.key_specs.len);
+        sort_free_key_texts(previous_keys, sort_cached_key_count(&opts));
         sort_key_spec_vec_free(&opts.key_specs);
         return had_error ? 1 : 0;
     }
@@ -1402,7 +1514,7 @@ int bx_sort_main(int argc, char** argv) {
         }
     }
 
-    sort_line_vec_free(&lines, opts.key_specs.len);
+    sort_line_vec_free(&lines, sort_cached_key_count(&opts));
     sort_key_spec_vec_free(&opts.key_specs);
     return had_error ? 1 : 0;
 }
