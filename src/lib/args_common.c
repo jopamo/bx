@@ -142,25 +142,26 @@ bool bx_args_parse_preserve_list(const char* arg, unsigned* mask, bool set_bits,
 
     for (char* token = strtok_r(copy, ",", &saveptr); token != NULL; token = strtok_r(NULL, ",", &saveptr)) {
         unsigned bits = 0;
+        size_t length = strlen(token);
 
-        if (strcmp(token, "mode") == 0) {
+        if (strncmp(token, "mode", length) == 0) {
             bits = BX_PRESERVE_MODE;
             mode_mentioned = true;
         }
-        else if (strcmp(token, "ownership") == 0) {
+        else if (strncmp(token, "ownership", length) == 0) {
             bits = BX_PRESERVE_OWNERSHIP;
         }
-        else if (strcmp(token, "timestamps") == 0) {
+        else if (strncmp(token, "timestamps", length) == 0) {
             bits = BX_PRESERVE_TIMESTAMPS;
         }
-        else if (strcmp(token, "links") == 0) {
+        else if (strncmp(token, "links", length) == 0) {
             bits = BX_PRESERVE_LINKS;
         }
-        else if (strcmp(token, "all") == 0) {
+        else if (strncmp(token, "all", length) == 0) {
             bits = BX_PRESERVE_ALL;
             mode_mentioned = true;
         }
-        else if (strcmp(token, "xattr") == 0) {
+        else if (strncmp(token, "xattr", length) == 0) {
             bits = BX_PRESERVE_XATTR;
         }
         else {
