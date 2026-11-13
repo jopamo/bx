@@ -1014,6 +1014,7 @@ static int ash_word_append_matched_span(struct ash_word* word,
         case ASH_MATCH_COUNT:
         case ASH_MATCH_CASE:
         case ASH_MATCH_DELIMITER:
+        default:
             errno = EINVAL;
             return -1;
     }
