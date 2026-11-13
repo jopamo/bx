@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -642,14 +643,23 @@ int bx_tr_main(int argc, char** argv) {
     };
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+    bool terminal_output = isatty(STDOUT_FILENO);
+    bool input_error = false;
 
     while (true) {
-        size_t input_len = fread(input_buffer, 1u, sizeof(input_buffer), stdin);
-        if (input_len == 0u) {
+        ssize_t input_len = read(STDIN_FILENO, input_buffer, sizeof(input_buffer));
+        if (input_len < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            input_error = true;
+            break;
+        }
+        if (input_len == 0) {
             break;
         }
         size_t output_len = bx_byte_transform(input_buffer,
-                                              input_len,
+                                              (size_t)input_len,
                                               transformed,
                                               map,
                                               delete_set,
@@ -657,7 +667,8 @@ int bx_tr_main(int argc, char** argv) {
                                               options.delete_bytes,
                                               options.squeeze,
                                               &transform_state);
-        if (!bx_line_writer_write(&writer, transformed, output_len)) {
+        if (!bx_line_writer_write(&writer, transformed, output_len)
+            || (terminal_output && !bx_line_writer_flush(&writer))) {
             tr_array_destroy(&set1);
             tr_array_destroy(&set2);
             return 1;
@@ -668,7 +679,7 @@ int bx_tr_main(int argc, char** argv) {
     tr_array_destroy(&set2);
 
     bool output_error = bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer);
-    if (ferror(stdin) || output_error) {
+    if (input_error || output_error) {
         return 1;
     }
 
