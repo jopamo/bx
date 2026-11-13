@@ -78,12 +78,15 @@ add_project_arguments('-DBX_STDBUF_INSTALLED_PATH="' + stdbuf_installed_path + '
 add_project_arguments('-DBX_STDBUF_INSTALL_SUBDIR="' + stdbuf_install_subdir + '"', language : 'c')
 
 cc = meson.get_compiler('c')
+host_driver_werror_args = []
+native_driver_werror_args = []
 if get_option('werror')
   # Meson's werror option covers compilation; enforce it at link time too.
+  host_driver_werror_args = cc.get_supported_link_arguments(['-Werror'])
+  native_driver_werror_args = meson.get_compiler('c', native : true).get_supported_link_arguments(['-Werror'])
   foreach native_build : [false, true]
     link_cc = meson.get_compiler('c', native : native_build)
     add_project_link_arguments(link_cc.get_supported_link_arguments([
-      '-Werror',
       '-Wl,--fatal-warnings',
     ]), language : 'c', native : native_build)
   endforeach
@@ -190,7 +193,7 @@ if host_machine.system() == 'linux'
     error('Linux bx requires linker build-id support for exact self-exec identity')
   endif
 endif
-bx_link_args = bx_static_link_args + bx_build_id_link_args
+bx_link_args = bx_static_link_args + bx_build_id_link_args + host_driver_werror_args
 
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
@@ -1486,6 +1489,7 @@ bc_strgen = executable('bx_bc_strgen',
   'src/applets/base/bc/strgen.c',
   include_directories : include_directories('src/applets/base/bc/include'),
   native : true,
+  link_args : native_driver_werror_args,
 )
 
 bc_help_src = custom_target(
@@ -1635,6 +1639,7 @@ stdbuf_preload = shared_module(
   ],
   include_directories : bx_include_dirs,
   dependencies : [cc.find_library('m', required : false)],
+  link_args : host_driver_werror_args,
   # This module is injected into arbitrary non-sanitized COMMAND processes.
   # Instrumenting it would add unresolved sanitizer-runtime dependencies.
   override_options : ['b_sanitize=none'],
