@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -427,6 +429,13 @@ static bool bx_chmod_apply_opened_top_directory_recursive(const char* path,
                                                           const struct bx_chmod_options* options,
                                                           struct bx_diag_ctx* diag) {
     int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_DIRECTORY, 0);
+#ifdef O_PATH
+    bool path_only = false;
+    if (fd < 0 && errno == EACCES) {
+        fd = bx_fd_open_nofollow_cloexec(path, O_PATH | O_DIRECTORY, 0);
+        path_only = true;
+    }
+#endif
     if (fd < 0) {
         bx_chmod_perror_path(options, diag, path);
         return false;
@@ -449,7 +458,28 @@ static bool bx_chmod_apply_opened_top_directory_recursive(const char* path,
         .parent = ancestor_stack,
     };
 
-    bool ok = bx_chmod_apply_existing_fd(path, fd, &opened_st, mode_spec, options, diag);
+    bool ok;
+#ifdef O_PATH
+    if (path_only) {
+        ok = bx_chmod_apply_existing_proc_fd_path(path, fd, &opened_st, mode_spec, options, diag);
+        if (!ok) {
+            bx_fd_cleanup(&fd);
+            return false;
+        }
+        int readable_fd = bx_fd_openat_cloexec(fd, ".", O_RDONLY | O_DIRECTORY, 0);
+        int saved_errno = errno;
+        bx_fd_cleanup(&fd);
+        fd = readable_fd;
+        if (fd < 0) {
+            errno = saved_errno;
+            bx_chmod_perror_path(options, diag, path);
+            return false;
+        }
+    } else
+#endif
+    {
+        ok = bx_chmod_apply_existing_fd(path, fd, &opened_st, mode_spec, options, diag);
+    }
 
     DIR* dir = fdopendir(fd);
     if (dir == NULL) {
