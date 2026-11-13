@@ -198,13 +198,18 @@ static bool bx_cat_process_fd(int fd, const char* path, const struct bx_cat_opti
             if (!bx_cat_write(writer, buffer, (size_t)nread, options)) {
                 return false;
             }
-            continue;
+        }
+        else {
+            for (ssize_t i = 0; i < nread; i++) {
+                if (!bx_cat_process_byte(buffer[i], options, state, writer)) {
+                    return false;
+                }
+            }
         }
 
-        for (ssize_t i = 0; i < nread; i++) {
-            if (!bx_cat_process_byte(buffer[i], options, state, writer)) {
-                return false;
-            }
+        if (!bx_line_writer_flush(writer)) {
+            bx_cat_print_write_error(options);
+            return false;
         }
     }
 }
