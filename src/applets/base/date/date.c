@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -415,6 +416,87 @@ static void bx_date_debug_annotation(const struct bx_date_options* options, cons
     fprintf(stderr, "%s: debug: final: %s\n", options->progname, timestamp_buf);
 }
 
+static bool bx_date_parse_relative(const char* text, bool utc, struct timespec* ts) {
+    char* end;
+    errno = 0;
+    intmax_t amount = strtoimax(text, &end, 10);
+    if (end == text || errno == ERANGE || !isspace((unsigned char)*end)) {
+        return false;
+    }
+    while (isspace((unsigned char)*end)) {
+        end++;
+    }
+
+    static const struct {
+        const char* name;
+        int scale;
+        bool calendar;
+    } units[] = {
+        {"second", 1, false},
+        {"minute", 60, false},
+        {"hour", 3600, false},
+        {"day", 1, true},
+        {"week", 7, true},
+    };
+    size_t unit;
+    for (unit = 0; unit < sizeof(units) / sizeof(units[0]); unit++) {
+        size_t len = strlen(units[unit].name);
+        if (strncmp(end, units[unit].name, len) != 0) {
+            continue;
+        }
+        const char* tail = end + len;
+        if (*tail == 's') {
+            tail++;
+        }
+        if (*tail != '\0' && !isspace((unsigned char)*tail)) {
+            continue;
+        }
+        while (isspace((unsigned char)*tail)) {
+            tail++;
+        }
+        if (strncmp(tail, "ago", 3) == 0) {
+            if (__builtin_sub_overflow((intmax_t)0, amount, &amount)) {
+                return false;
+            }
+            tail += 3;
+            while (isspace((unsigned char)*tail)) {
+                tail++;
+            }
+        }
+        if (*tail != '\0') {
+            return false;
+        }
+        break;
+    }
+    if (unit == sizeof(units) / sizeof(units[0]) ||
+        __builtin_mul_overflow(amount, units[unit].scale, &amount)) {
+        return false;
+    }
+
+    struct timespec result;
+    if (clock_gettime(CLOCK_REALTIME, &result) != 0) {
+        return false;
+    }
+    if (units[unit].calendar) {
+        struct tm tm_value;
+        if ((utc ? gmtime_r(&result.tv_sec, &tm_value) : localtime_r(&result.tv_sec, &tm_value)) == NULL ||
+            __builtin_add_overflow(tm_value.tm_mday, amount, &tm_value.tm_mday)) {
+            return false;
+        }
+        /* Calendar days preserve local wall time across offset changes. */
+        tm_value.tm_isdst = -1;
+        errno = 0;
+        result.tv_sec = utc ? timegm(&tm_value) : mktime(&tm_value);
+        if (result.tv_sec == (time_t)-1 && errno != 0) {
+            return false;
+        }
+    } else if (__builtin_add_overflow(result.tv_sec, amount, &result.tv_sec)) {
+        return false;
+    }
+    *ts = result;
+    return true;
+}
+
 static bool parse_date_string(const char* str, struct timespec* ts, const struct bx_date_options* options, struct bx_diag_ctx* diag) {
     static const struct bx_date_parse_pattern patterns[] = {
         {"%Y-%m-%d %H:%M:%S", true, true, true},
@@ -451,6 +533,11 @@ static bool parse_date_string(const char* str, struct timespec* ts, const struct
     }
 
     if (bx_date_parse_epoch_literal(text, ts)) {
+        bx_date_debug_annotation(options, str, ts);
+        return true;
+    }
+
+    if (bx_date_parse_relative(text, options->utc, ts)) {
         bx_date_debug_annotation(options, str, ts);
         return true;
     }
