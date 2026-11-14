@@ -203,103 +203,105 @@ bool bx_mode_parse_symbolic(const char* text, const struct bx_mode_parse_params*
             who_flags = BX_MODE_WHO_ALL;
         }
 
-        char op = *p;
-        if (op != '+' && op != '-' && op != '=') {
-            return false;
-        }
-        p++;
-
-        if ((op != '=' && (*p == '\0' || *p == ',')) || *p == '+' || *p == '-' || *p == '=') {
-            return false;
-        }
-
-        mode_t clause_rwx_bits = 0u;
-        mode_t clause_special_bits = 0u;
-        mode_t source_mode = mode;
-        bool saw_token = false;
-
-        while (*p != '\0' && *p != ',') {
-            switch (*p) {
-                case 'r':
-                case 'w':
-                case 'x':
-                    clause_rwx_bits |= bx_mode_perm_bits_for_who(who_flags, *p);
-                    saw_token = true;
-                    break;
-                case 'X':
-                    if (params->x_policy == BX_MODE_X_DISABLED) {
-                        return false;
-                    }
-                    if (bx_mode_should_apply_x(params, source_mode)) {
-                        clause_rwx_bits |= bx_mode_perm_bits_for_who(who_flags, 'x');
-                    }
-                    saw_token = true;
-                    break;
-                case 's':
-                    if (!params->allow_setuid && !params->allow_setgid) {
-                        return false;
-                    }
-                    if (params->allow_setuid && (who_flags & BX_MODE_WHO_U) != 0u) {
-                        clause_special_bits |= S_ISUID;
-                    }
-                    if (params->allow_setgid && (who_flags & BX_MODE_WHO_G) != 0u) {
-                        clause_special_bits |= S_ISGID;
-                    }
-                    saw_token = true;
-                    break;
-                case 't':
-                    if (!params->allow_sticky) {
-                        return false;
-                    }
-                    if ((who_flags & BX_MODE_WHO_O) != 0u) {
-                        clause_special_bits |= params->sticky_bit;
-                    }
-                    saw_token = true;
-                    break;
-                case 'u':
-                case 'g':
-                case 'o':
-                    clause_rwx_bits |= bx_mode_copy_perm_bits(source_mode, who_flags, *p);
-                    saw_token = true;
-                    break;
-                default:
-                    return false;
+        do {
+            char op = *p;
+            if (op != '+' && op != '-' && op != '=') {
+                return false;
             }
             p++;
-        }
 
-        if (!saw_token && op != '=') {
-            return false;
-        }
+            if ((op != '=' && (*p == '\0' || *p == ',')) || *p == '+' || *p == '-' || *p == '=') {
+                return false;
+            }
 
-        mode_t affected_rwx_mask = bx_mode_rwx_mask_from_who(who_flags);
-        if (!who_specified && params->apply_umask_when_who_omitted) {
-            affected_rwx_mask &= (mode_t)(~params->umask_value) & 0777u;
-        }
+            mode_t clause_rwx_bits = 0u;
+            mode_t clause_special_bits = 0u;
+            mode_t source_mode = mode;
+            bool saw_token = false;
 
-        mode_t clear_rwx_mask = affected_rwx_mask;
-        if (op == '=' && !who_specified) {
-            clear_rwx_mask = S_IRWXU | S_IRWXG | S_IRWXO;
-        }
+            while (*p != '\0' && *p != ',' && *p != '+' && *p != '-' && *p != '=') {
+                switch (*p) {
+                    case 'r':
+                    case 'w':
+                    case 'x':
+                        clause_rwx_bits |= bx_mode_perm_bits_for_who(who_flags, *p);
+                        saw_token = true;
+                        break;
+                    case 'X':
+                        if (params->x_policy == BX_MODE_X_DISABLED) {
+                            return false;
+                        }
+                        if (bx_mode_should_apply_x(params, source_mode)) {
+                            clause_rwx_bits |= bx_mode_perm_bits_for_who(who_flags, 'x');
+                        }
+                        saw_token = true;
+                        break;
+                    case 's':
+                        if (!params->allow_setuid && !params->allow_setgid) {
+                            return false;
+                        }
+                        if (params->allow_setuid && (who_flags & BX_MODE_WHO_U) != 0u) {
+                            clause_special_bits |= S_ISUID;
+                        }
+                        if (params->allow_setgid && (who_flags & BX_MODE_WHO_G) != 0u) {
+                            clause_special_bits |= S_ISGID;
+                        }
+                        saw_token = true;
+                        break;
+                    case 't':
+                        if (!params->allow_sticky) {
+                            return false;
+                        }
+                        if ((who_flags & BX_MODE_WHO_O) != 0u) {
+                            clause_special_bits |= params->sticky_bit;
+                        }
+                        saw_token = true;
+                        break;
+                    case 'u':
+                    case 'g':
+                    case 'o':
+                        clause_rwx_bits |= bx_mode_copy_perm_bits(source_mode, who_flags, *p);
+                        saw_token = true;
+                        break;
+                    default:
+                        return false;
+                }
+                p++;
+            }
 
-        mode_t affected_special_mask =
-            who_specified ? bx_mode_special_mask_from_who(params, who_flags) : bx_mode_full_special_mask(params);
-        mode_t applied_rwx_bits = clause_rwx_bits & affected_rwx_mask;
+            if (!saw_token && op != '=') {
+                return false;
+            }
 
-        if (op == '+') {
-            mode |= applied_rwx_bits;
-            mode |= clause_special_bits;
-        }
-        else if (op == '-') {
-            mode &= ~applied_rwx_bits;
-            mode &= ~clause_special_bits;
-        }
-        else {
-            mode &= ~clear_rwx_mask;
-            mode &= ~affected_special_mask;
-            mode |= applied_rwx_bits;
-            mode |= clause_special_bits;
-        }
+            mode_t affected_rwx_mask = bx_mode_rwx_mask_from_who(who_flags);
+            if (!who_specified && params->apply_umask_when_who_omitted) {
+                affected_rwx_mask &= (mode_t)(~params->umask_value) & 0777u;
+            }
+
+            mode_t clear_rwx_mask = affected_rwx_mask;
+            if (op == '=' && !who_specified) {
+                clear_rwx_mask = S_IRWXU | S_IRWXG | S_IRWXO;
+            }
+
+            mode_t affected_special_mask =
+                who_specified ? bx_mode_special_mask_from_who(params, who_flags) : bx_mode_full_special_mask(params);
+            mode_t applied_rwx_bits = clause_rwx_bits & affected_rwx_mask;
+
+            if (op == '+') {
+                mode |= applied_rwx_bits;
+                mode |= clause_special_bits;
+            }
+            else if (op == '-') {
+                mode &= ~applied_rwx_bits;
+                mode &= ~clause_special_bits;
+            }
+            else {
+                mode &= ~clear_rwx_mask;
+                mode &= ~affected_special_mask;
+                mode |= applied_rwx_bits;
+                mode |= clause_special_bits;
+            }
+        } while (*p == '+' || *p == '-' || *p == '=');
 
         if (*p == ',') {
             p++;
