@@ -6,10 +6,11 @@ License: ISC and the other notices retained in the source and LICENSE.md.
 The original program is built as a static library in bx. The applet entry
 point is src/applets/network/rsync/rsync.c. The Meson build runs Apple's
 compile/link-only configure probes out of tree; no generated header is kept
-in the repository. Upstream's Makefile also remains usable independently.
+in the repository. The standalone Makefile uses shared bx sources.
 
 Local changes to Apple's files:
-- Portable sbuf and human-readable formatting outside FreeBSD.
+- Shared bx text buffers for sbuf storage, and portable human-readable
+  formatting outside FreeBSD.
 - Portable getopt reset, socket lengths, FTS and queue handling.
 - Confined opens: Linux openat2, FreeBSD O_RESOLVE_BENEATH, otherwise a
   symlink-rejecting openat walk. The portable walk does not offer the native

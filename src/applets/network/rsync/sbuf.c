@@ -1,3 +1,4 @@
+#include "lib/text_buffer.h"
 #include "portable_sbuf.h"
 
 #include <errno.h>
@@ -5,48 +6,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 struct sbuf {
-	char *data;
-	size_t len;
-	size_t cap;
+	struct bx_text_buffer buffer;
 	int failed;
 };
-
-static int
-sbuf_reserve(struct sbuf *s, size_t extra)
-{
-	size_t need, cap;
-	char *newdata;
-
-	if (s->failed)
-		return -1;
-	if (extra > SIZE_MAX - s->len - 1) {
-		errno = EOVERFLOW;
-		s->failed = 1;
-		return -1;
-	}
-	need = s->len + extra + 1;
-	if (need <= s->cap)
-		return 0;
-	cap = s->cap ? s->cap : 128;
-	while (cap < need) {
-		if (cap > SIZE_MAX / 2) {
-			cap = need;
-			break;
-		}
-		cap *= 2;
-	}
-	newdata = realloc(s->data, cap);
-	if (newdata == NULL) {
-		s->failed = 1;
-		return -1;
-	}
-	s->data = newdata;
-	s->cap = cap;
-	return 0;
-}
 
 struct sbuf *
 bx_rsync_sbuf_new_auto(void)
@@ -59,24 +23,32 @@ bx_rsync_sbuf_delete(struct sbuf *s)
 {
 	if (s == NULL)
 		return;
-	free(s->data);
+	bx_text_buffer_destroy(&s->buffer);
 	free(s);
 }
 
 int
 bx_rsync_sbuf_bcat(struct sbuf *s, const void *data, size_t len)
 {
-	if (sbuf_reserve(s, len) == -1)
+	if (s->failed)
 		return -1;
-	memcpy(s->data + s->len, data, len);
-	s->len += len;
+	if (!bx_text_buffer_append_span(&s->buffer, data, len)) {
+		s->failed = 1;
+		return -1;
+	}
 	return 0;
 }
 
 int
 bx_rsync_sbuf_cat(struct sbuf *s, const char *str)
 {
-	return bx_rsync_sbuf_bcat(s, str, strlen(str));
+	if (s->failed)
+		return -1;
+	if (!bx_text_buffer_append_text(&s->buffer, str)) {
+		s->failed = 1;
+		return -1;
+	}
+	return 0;
 }
 
 int
@@ -92,38 +64,54 @@ bx_rsync_sbuf_printf(struct sbuf *s, const char *fmt, ...)
 	va_list ap, copy;
 	int count;
 
+	if (s->failed)
+		return -1;
 	va_start(ap, fmt);
 	va_copy(copy, ap);
 	count = vsnprintf(NULL, 0, fmt, copy);
 	va_end(copy);
-	if (count < 0 || sbuf_reserve(s, (size_t)count) == -1) {
+	if (count < 0 || s->buffer.length == SIZE_MAX ||
+	    (size_t)count > SIZE_MAX - s->buffer.length - 1) {
+		if (count >= 0)
+			errno = EOVERFLOW;
 		s->failed = 1;
 		va_end(ap);
 		return -1;
 	}
-	vsnprintf(s->data + s->len, s->cap - s->len, fmt, ap);
+	if (!bx_text_buffer_reserve(&s->buffer,
+	    s->buffer.length + (size_t)count + 1)) {
+		s->failed = 1;
+		va_end(ap);
+		return -1;
+	}
+	vsnprintf(s->buffer.data + s->buffer.length,
+	    s->buffer.capacity - s->buffer.length, fmt, ap);
 	va_end(ap);
-	s->len += (size_t)count;
+	s->buffer.length += (size_t)count;
 	return 0;
 }
 
 int
 bx_rsync_sbuf_finish(struct sbuf *s)
 {
-	if (sbuf_reserve(s, 0) == -1)
+	if (s->failed)
 		return -1;
-	s->data[s->len] = '\0';
+	if (!bx_text_buffer_reserve(&s->buffer, s->buffer.length + 1)) {
+		s->failed = 1;
+		return -1;
+	}
+	s->buffer.data[s->buffer.length] = '\0';
 	return 0;
 }
 
 char *
 bx_rsync_sbuf_data(struct sbuf *s)
 {
-	return s->data;
+	return s->buffer.data;
 }
 
 size_t
 bx_rsync_sbuf_len(const struct sbuf *s)
 {
-	return s->len;
+	return s->buffer.length;
 }

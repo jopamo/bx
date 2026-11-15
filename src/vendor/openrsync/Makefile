@@ -1,5 +1,7 @@
 include Makefile.configure
 
+CPPFLAGS += -I. -I../..
+
 OBJS	   = batch.o \
 	     blocks.o \
 	     cleanup.o \
@@ -23,7 +25,8 @@ OBJS	   = batch.o \
 	     mktemp.o \
 	     platform.o \
 	     portable_open.o \
-	     portable_sbuf.o \
+	     bx_rsync_sbuf.o \
+	     bx_text_buffer.o \
 	     portable_util.o \
 	     receiver.o \
 	     rmatch.o \
@@ -60,6 +63,12 @@ debug: openrsync
 openrsync: $(ALLOBJS)
 	$(CC) $(LDFLAGS) -o $@ $(ALLOBJS) -lm $(LDADD_BSD) $(LDADD_LIB_SOCKET) $(LDADD_SCAN_SCALED) $(LDADD_B64_NTOP) $(LDADD_CRYPT)
 
+bx_rsync_sbuf.o: ../../applets/network/rsync/sbuf.c portable_sbuf.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../applets/network/rsync/sbuf.c
+
+bx_text_buffer.o: ../../lib/text_buffer.c ../../lib/text_buffer.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/text_buffer.c
+
 install: all
 	mkdir -p $(DESTDIR)$(BINDIR)
 	mkdir -p $(DESTDIR)$(MANDIR)/man1
@@ -80,16 +89,6 @@ clean:
 
 distclean: clean
 	rm -f Makefile.configure config.h config.log
-
-distcheck:
-	mandoc -Tlint -Werror *.[15]
-	rm -rf .distcheck
-	mkdir .distcheck
-	cp *.c extern.h md4.h *.[15] configure Makefile .distcheck
-	( cd .distcheck && ./configure PREFIX=prefix )
-	( cd .distcheck && $(MAKE) )
-	( cd .distcheck && $(MAKE) install )
-	rm -rf .distcheck
 
 $(ALLOBJS): extern.h config.h
 

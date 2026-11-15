@@ -1563,6 +1563,7 @@ rsync_config = custom_target(
 
 rsync_sources = files(
   'src/applets/network/rsync/rsync.c',
+  'src/applets/network/rsync/sbuf.c',
   'src/vendor/openrsync/batch.c',
   'src/vendor/openrsync/blocks.c',
   'src/vendor/openrsync/cleanup.c',
@@ -1586,7 +1587,6 @@ rsync_sources = files(
   'src/vendor/openrsync/mktemp.c',
   'src/vendor/openrsync/platform.c',
   'src/vendor/openrsync/portable_open.c',
-  'src/vendor/openrsync/portable_sbuf.c',
   'src/vendor/openrsync/portable_util.c',
   'src/vendor/openrsync/receiver.c',
   'src/vendor/openrsync/rmatch.c',
