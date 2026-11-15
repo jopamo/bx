@@ -48,6 +48,7 @@
 #ifdef BX_RSYNC_APPLET
 #include "dispatch/applets.h"
 #include "bx/self_exec.h"
+#include "bx/version.h"
 extern char **environ;
 #endif
 
@@ -1120,33 +1121,148 @@ const struct option	 rsync_lopts[] = {
 static void
 usage(int exitcode)
 {
-	fprintf(exitcode == 0 ? stdout : stderr, "usage: %s"
-	    " [-0468BCDEFHIKLOPRSTWVabcdghiklnopqrtuvxyz] [-e program]\n"
-	    "\t[-f filter] [--8-bit-output] [--address=sourceaddr] [--append]\n"
-	    "\t[--backup-dir=dir] [--bwlimit=limit] [--cache | --no-cache]\n"
-	    "\t[--checksum-seed=NUM] [--chmod=mode] [--compare-dest=dir] [--compress]\n"
-	    "\t[--compress-level=NUM] [--contimeout] [--copy-dest=dir]\n"
-	    "\t[--copy-unsafe-links] [--del]\n"
-	    "\t[--delete-after | --delete-before | --delete-delay | --delete-during]\n"
-	    "\t[--delete-excluded] [--delay-updates] [--dirs] [--no-dirs]\n"
-	    "\t[--existing] [--exclude=pattern] [--exclude-from=file] [--executability]\n"
+	FILE *out = exitcode == 0 ? stdout : stderr;
+
+	fputs("Usage: rsync [OPTION]... SRC... DEST\n"
+	    "       rsync [OPTION]... [USER@]HOST:SRC... DEST\n"
+	    "       rsync [OPTION]... SRC... [USER@]HOST:DEST\n"
+	    "       rsync [OPTION]... rsync://[USER@]HOST[:PORT]/MODULE/PATH DEST\n"
+	    "       rsync --daemon [OPTION]...\n", out);
+	if (exitcode != 0) {
+		fputs("Try 'rsync --help' for options and examples.\n", out);
+		exit(exitcode);
+	}
+
+	fputs("\nCopy and synchronize files locally or with a remote host.\n"
+	    "A trailing slash on SRC copies its contents, not the directory itself.\n"
+	    "HOST::MODULE/PATH also selects a daemon. Only one endpoint may be remote.\n"
+	    "\nCommon options:\n"
+	    "  -a, --archive               Archive mode: -rlptgoD (not -H)\n"
+	    "  -r, --recursive             Copy directories recursively\n"
+	    "  -n, --dry-run               Show what would change without changing files\n"
+	    "  -v, --verbose               Increase verbosity; repeat for more detail\n"
+	    "  -q, --quiet                 Suppress non-error messages\n"
+	    "  -i, --itemize-changes       Describe changes for each file\n"
+	    "  -h, --human-readable        Format sizes for humans; -h alone shows help\n"
+	    "  -P                          Same as --partial --progress\n"
+	    "      --help                  Show this help\n"
+	    "  -V, --version               Show version and protocol information\n"
+	    "\nFile selection and filters:\n"
+	    "  -c, --checksum              Check file contents instead of modification times\n"
+	    "  -I, --ignore-times          Transfer even when size and mtime match\n"
+	    "      --size-only             Compare file sizes only\n"
+	    "  -u, --update                Skip files newer at the destination\n"
+	    "      --ignore-existing       Skip files already at the destination\n"
+	    "      --existing              Skip files missing from the destination\n"
+	    "      --min-size=SIZE         Skip files smaller than SIZE\n"
+	    "      --max-size=SIZE         Skip files larger than SIZE\n"
+	    "      --modify-window=SEC     Tolerance when comparing timestamps\n"
+	    "  -f, --filter=RULE           Add a filter rule\n"
+	    "      --include=PATTERN       Include matching paths\n"
+	    "      --exclude=PATTERN       Exclude matching paths\n"
+	    "      --include-from=FILE     Read include patterns from FILE\n"
+	    "      --exclude-from=FILE     Read exclude patterns from FILE\n"
+	    "      --files-from=FILE       Read source paths from FILE\n"
+	    "  -0, --from0                 Use NUL-delimited file and filter lists\n"
+	    "  -C, --cvs-exclude           Apply CVS-style exclusions\n"
+	    "  -F                          Read .rsync-filter files; repeat to exclude them\n"
+	    "  -m, --prune-empty-dirs      Omit empty directories from the file list\n"
+	    "  -x, --one-file-system       Do not cross filesystem boundaries\n"
+	    "  -R, --relative              Preserve relative path components\n"
+	    "      --no-implied-dirs       Do not transfer implied parent directories\n"
+	    "  -d, --dirs                  Copy directories without recursing\n", out);
+	fputs("\nLinks and metadata:\n"
+	    "  -l, --links                 Preserve symlinks as symlinks\n"
+	    "  -L, --copy-links            Copy symlink targets instead\n"
+	    "      --safe-links            Ignore symlinks pointing outside the source tree\n"
+	    "      --copy-unsafe-links     Copy targets of symlinks outside the source tree\n"
+	    "  -k, --copy-dirlinks         Follow source symlinks to directories\n"
+	    "  -K, --keep-dirlinks         Keep destination symlinks to directories\n"
+	    "  -H, --hard-links            Preserve hardlinks\n"
+	    "  -p, --perms                 Preserve permissions\n"
+	    "      --chmod=MODE            Adjust transferred permissions\n"
+	    "      --executability         Preserve executability without full permissions\n"
+	    "  -o, --owner                 Preserve owner (requires suitable privileges)\n"
+	    "  -g, --group                 Preserve group\n"
+	    "      --numeric-ids           Do not map user and group names\n"
+	    "  -t, --times                 Preserve modification times\n"
+	    "  -O, --omit-dir-times        Do not preserve directory modification times\n"
+	    "  -D                          Same as --devices --specials\n"
+	    "      --devices               Preserve device files\n"
+	    "      --specials              Preserve special files, such as FIFOs\n"
 #ifdef __APPLE__
-	    "\t[--extended-attributes]\n"
+	    "  -E, --extended-attributes   Preserve macOS extended attributes\n"
 #endif
-	    "\t[--existing] [--files-from=filespec] [--force] [--ignore-errors]\n"
-	    "\t[--ignore-existing] [--ignore-non-existing] [--include=pattern]\n"
-	    "\t[--include-from=file] [--inplace] [--itemize-changes]\n"
-	    "\t[--keep-dirlinks] [--link-dest=dir] [--list-only]\n"
-	    "\t[--max-delete=NUM] [--max-size=SIZE] [--min-size=SIZE]\n"
-	    "\t[--modify-window=sec] [--no-implied-dirs] [--no-motd] [--numeric-ids]\n"
-	    "\t[--out-format=FMT] [--partial] [--partial-dir] [--password-file=pwfile]\n"
-	    "\t[--port=portnumber] [--progress] [--protocol=NUM] [--prune-empty-dirs]\n"
-	    "\t[--read-batch=file] [--remove-source-files] [--rsync-path=program]\n"
-	    "\t[--safe-links] [--size-only] [--sockopts=sockopts] [--specials]\n"
-	    "\t[--stats] [--suffix] [--super] [--timeout=seconds]\n"
-	    "\t[--only-write-batch=file | --write-batch=file]\n"
-	    "\tsource ... directory\n",
-	    getprogname());
+	    "      --super                 Attempt privileged receiver operations\n", out);
+	fputs("\nDestination updates and deletion:\n"
+	    "      --delete                Delete destination entries absent from source\n"
+	    "      --delete-before         Delete before transfer\n"
+	    "      --delete-during         Delete as each directory is processed\n"
+	    "      --delete-delay          Find deletions during transfer, apply afterward\n"
+	    "      --delete-after          Delete after transfer\n"
+	    "      --delete-excluded       Also delete excluded destination entries\n"
+	    "      --max-delete=NUM        Limit the number of deletions\n"
+	    "      --ignore-errors         Allow deletion even after I/O errors\n"
+	    "      --force                 Replace nonempty directories when needed\n"
+	    "      --remove-source-files   Remove transferred source files, not directories\n"
+	    "  -b, --backup                Keep backups of replaced or deleted files\n"
+	    "      --backup-dir=DIR        Store backups in DIR\n"
+	    "      --suffix=SUFFIX         Set the backup filename suffix\n"
+	    "      --partial               Keep partially transferred files\n"
+	    "      --partial-dir=DIR       Keep partial files in DIR\n"
+	    "      --delay-updates         Put updated files in place at the end\n"
+	    "      --inplace               Write directly into destination files\n"
+	    "      --append                Append data to shorter destination files\n"
+	    "  -T, --temp-dir=DIR          Create temporary files in DIR\n"
+	    "      --compare-dest=DIR      Skip files identical to those in DIR\n"
+	    "      --copy-dest=DIR         Copy unchanged files from DIR\n"
+	    "      --link-dest=DIR         Hardlink unchanged files from DIR\n"
+	    "  -y, --fuzzy                 Find a similar destination file as a basis\n"
+	    "  -S, --sparse                Store runs of zeros as holes\n", out);
+	fputs("\nTransfer and connection options:\n"
+	    "  -z, --compress              Compress transferred data\n"
+	    "      --compress-level=NUM    Set compression level\n"
+	    "  -W, --whole-file            Copy whole files without delta transfers\n"
+	    "      --no-whole-file         Use delta transfers even for local copies\n"
+	    "  -B, --block-size=SIZE       Set delta-transfer block size\n"
+	    "      --checksum-seed=NUM     Set the block checksum seed\n"
+	    "      --bwlimit=RATE          Limit bandwidth in KiB/s (size suffixes accepted)\n"
+	    "      --cache / --no-cache    Use or bypass the filesystem buffer cache\n"
+	    "  -e, --rsh=COMMAND           Use COMMAND for remote-shell connections\n"
+	    "      --rsync-path=PROGRAM    Run PROGRAM on the remote host\n"
+	    "      --address=ADDRESS       Bind outgoing connections to ADDRESS\n"
+	    "      --port=PORT             Connect to a daemon on PORT\n"
+	    "      --password-file=FILE    Read the daemon password from FILE\n"
+	    "      --contimeout=SEC        Set connection timeout\n"
+	    "      --timeout=SEC           Set I/O timeout\n"
+	    "      --sockopts=OPTIONS      Set socket options\n"
+	    "  -4, --ipv4                  Use IPv4\n"
+	    "  -6, --ipv6                  Use IPv6\n"
+	    "      --protocol=NUM          Request protocol version NUM\n"
+	    "      --daemon --help         Show daemon options\n"
+	    "\nOutput and batch files:\n"
+	    "      --list-only             List files instead of transferring them\n"
+	    "      --progress              Show transfer progress\n"
+	    "      --stats                 Show transfer statistics\n"
+	    "      --out-format=FMT        Set per-file output format\n"
+	    "      --log-file=FILE         Write a transfer log\n"
+	    "      --log-file-format=FMT   Set transfer log format\n"
+	    "      --8-bit-output          Do not escape high-bit characters\n"
+	    "      --no-motd               Suppress the daemon message of the day\n"
+	    "      --write-batch=FILE      Record a batch while transferring\n"
+	    "      --only-write-batch=FILE Record a batch without updating the destination\n"
+	    "      --read-batch=FILE       Apply a recorded batch\n"
+	    "\nExamples:\n"
+	    "  rsync -av src/ dst/                 Copy the contents of src into dst\n"
+	    "  rsync -ani --delete src/ dst/       Preview a mirror, including deletions\n"
+	    "  rsync -avz src/ user@host:backup/   Copy to a remote host\n"
+	    "\nCompatibility:\n"
+	    "  Based on openrsync; not a full Samba rsync CLI implementation.\n"
+#ifndef __APPLE__
+	    "  Linux ACLs (-A) and extended attributes (-X) are not supported.\n"
+#endif
+	    "  Use --dry-run to check selection and deletion before a live transfer.\n",
+	    out);
 	exit(exitcode);
 }
 
@@ -1759,9 +1875,13 @@ basedir:
 			}
 			break;
 		case 'V':
-			printf("openrsync: protocol version %u\n",
+#ifdef BX_RSYNC_APPLET
+			printf("rsync (bx) %s\n", BX_VERSION);
+#else
+			printf("rsync (openrsync)\n");
+#endif
+			printf("Protocol version %u (rsync 2.6.9 wire compatibility)\n",
 			    RSYNC_PROTOCOL);
-			printf("rsync version 2.6.9 compatible\n");
 			exit(0);
 		case OP_HELP:
 			usage(0);

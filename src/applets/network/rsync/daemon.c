@@ -118,10 +118,25 @@ static const struct option	daemon_lopts[] = {
 static void
 daemon_usage(int exitcode)
 {
-	fprintf(exitcode == 0 ? stdout : stderr, "usage: %s --daemon"
-	    " [-46hv] [--address=bindaddr] [--bwlimit=limit] [--no-detach]\n"
-	    "\t[--log-file=logfile] [--port=portnumber] [--sockopts=sockopts]\n",
-	    getprogname());
+	FILE *out = exitcode == 0 ? stdout : stderr;
+
+	fputs("Usage: rsync --daemon [OPTION]...\n", out);
+	if (exitcode == 0)
+		fputs("\nServe rsync modules over the network.\n\n"
+		    "      --config=FILE           Read daemon configuration from FILE\n"
+		    "      --no-detach             Stay in the foreground\n"
+		    "      --address=ADDRESS       Bind to ADDRESS\n"
+		    "      --port=PORT             Listen on PORT\n"
+		    "  -4, --ipv4                  Use IPv4\n"
+		    "  -6, --ipv6                  Use IPv6\n"
+		    "      --bwlimit=RATE          Limit bandwidth in KiB/s\n"
+		    "      --sockopts=OPTIONS      Set socket options\n"
+		    "      --log-file=FILE         Write a log to FILE\n"
+		    "      --log-file-format=FMT   Set log format\n"
+		    "  -v, --verbose               Increase verbosity\n"
+		    "  -h, --help                  Show this help\n", out);
+	else
+		fputs("Try 'rsync --daemon --help' for daemon options.\n", out);
 	exit(exitcode);
 }
 
