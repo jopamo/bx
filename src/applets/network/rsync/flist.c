@@ -831,6 +831,10 @@ flist_recv_name(struct sess *sess, int fd, struct flist *f, uint8_t flags,
 			return 0;
 		}
 		partial = bval;
+		if (partial > strlen(last)) {
+			ERRX("filename prefix exceeds previous name");
+			return 0;
+		}
 	}
 
 	/* Get the (possibly-remaining) filename length. */
@@ -873,6 +877,10 @@ flist_recv_name(struct sess *sess, int fd, struct flist *f, uint8_t flags,
 		ERRX1("io_read_buf");
 		return 0;
 	}
+	if (memchr(f->path, '\0', len) != NULL) {
+		ERRX("filename contains a nul byte");
+		return 0;
+	}
 
 	if (f->path[0] == '/' && !sess->opts->relative) {
 		ERRX("security violation: absolute pathname: %s",
@@ -886,6 +894,11 @@ flist_recv_name(struct sess *sess, int fd, struct flist *f, uint8_t flags,
 	    strcmp(f->path, "..") == 0) {
 		ERRX("%s: security violation: backtracking pathname",
 		    f->path);
+		return 0;
+	}
+
+	if (sess->opts->relative && strspn(f->path, "/") == len) {
+		ERRX("empty relative filename");
 		return 0;
 	}
 
