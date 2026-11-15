@@ -188,13 +188,6 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
             scanner->scan_len = scanner->len;
             return scanner->scan_len > 0u;
         }
-
-        if (!bx_search_scanner_reserve(scanner, scanner->cap == 0u
-                                                    ? BX_SEARCH_SCANNER_CHUNK_CAP
-                                                    : scanner->cap * 2u)) {
-            scanner->errnum = ENOMEM;
-            return false;
-        }
     }
 }
 
