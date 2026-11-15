@@ -373,8 +373,8 @@ download_cleanup_partial(struct sess *sess, struct download *p)
 		 * situation so that the user can manually recover the partial
 		 * file and make a decision on it.
 		 */
-		if (platform_move_file(sess, f, p->rootfd, p->fname,
-		    pdfd, fname, 0, 0) == -1) {
+		if (!platform_move_file(sess, f, p->rootfd, p->fname,
+		    pdfd, fname, 0, 0)) {
 			/*
 			 * Don't leave the partial file laying around if
 			 * --partial-dir was requested and we can't manage it.
