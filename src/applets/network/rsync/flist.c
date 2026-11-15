@@ -121,6 +121,16 @@ flist_cmp29(const void *p1, const void *p2)
 		s2++;
 	}
 
+	if (!S_ISDIR(f1->st.mode) && !S_ISDIR(f2->st.mode)) {
+		/* At the first difference, only remaining directory components
+		 * can take precedence over the differing filename bytes. */
+		bool sub1 = strchr(s1, '/') != NULL;
+		bool sub2 = strchr(s2, '/') != NULL;
+		if (sub1 != sub2)
+			return sub1 ? 1 : -1;
+		return (u_char)*s1 - (u_char)*s2;
+	}
+
 	/* Rule #1: directories compare with a trailing "/" */
 	if (S_ISDIR(f1->st.mode) && *s1 == '\0') {
 		s1 = "/";
