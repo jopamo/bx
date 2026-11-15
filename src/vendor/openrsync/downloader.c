@@ -842,7 +842,8 @@ download_fix_metadata(const struct sess *sess, const char *fname, int fd,
 	 * Unlike rsync_set_metadata, we're using perms from the local system
 	 * and thus, we'll trust them a little bit more.
 	 */
-	mode = ost->st_mode & ALLPERMS;
+	mode = ost->st_mode & (S_ISUID | S_ISGID | S_ISVTX |
+	    S_IRWXU | S_IRWXG | S_IRWXO);
 	if (uid != (uid_t)-1 || gid != (gid_t)-1) {
 		if (fchown(fd, uid, gid) == -1) {
 			if (errno != EPERM) {

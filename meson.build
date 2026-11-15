@@ -1558,7 +1558,7 @@ rsync_config = custom_target(
     '@INPUT@',
     '@OUTPUT@',
   ] + cc.cmd_array(),
-  depend_files : files('src/vendor/openrsync/tests.c'),
+  depend_files : files('src/vendor/openrsync/feature_probes.c'),
 )
 
 rsync_sources = files(
@@ -1598,6 +1598,15 @@ rsync_sources = files(
   'src/vendor/openrsync/strmode.c',
   'src/vendor/openrsync/symlinks.c',
   'src/vendor/openrsync/uploader.c',
+  'src/vendor/openrsync/zlib/adler32.c',
+  'src/vendor/openrsync/zlib/compress.c',
+  'src/vendor/openrsync/zlib/crc32.c',
+  'src/vendor/openrsync/zlib/deflate.c',
+  'src/vendor/openrsync/zlib/inffast.c',
+  'src/vendor/openrsync/zlib/inflate.c',
+  'src/vendor/openrsync/zlib/inftrees.c',
+  'src/vendor/openrsync/zlib/trees.c',
+  'src/vendor/openrsync/zlib/zutil.c',
 )
 
 rsync_support_deps = [zlib_dep]
@@ -1613,6 +1622,7 @@ rsync_vendor_lib = static_library(
   rsync_sources + [rsync_config],
   c_args : [
     '-DBX_RSYNC_APPLET=1',
+    '-DZ_PREFIX',
     '-include',
     join_paths(meson.current_build_dir(), 'openrsync-feature-config.h'),
   ],

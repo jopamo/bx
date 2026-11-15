@@ -8,6 +8,11 @@
 #define ZLIB_INTERNAL
 #include "zlib.h"
 
+/* bx keeps this rename local to avoid changing struct opts.compress. */
+#ifdef Z_PREFIX
+#define compress bx_rsync_z_compress
+#endif
+
 /* ===========================================================================
      Compresses the source buffer into the destination buffer. The level
    parameter has the same meaning as in deflateInit.  sourceLen is the byte

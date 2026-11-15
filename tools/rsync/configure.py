@@ -25,10 +25,12 @@ def main() -> int:
     env = os.environ.copy()
     env["CC"] = " ".join(sys.argv[3:])
 
-    # Oconfigure uses tests.c and writes config.h, Makefile.configure, and
+    # Oconfigure uses feature_probes.c and writes config.h, Makefile.configure, and
     # temporary probe files. Keep them out of the vendored source tree.
     with tempfile.TemporaryDirectory(prefix="bx-openrsync-config-") as workdir:
-        shutil.copyfile(configure.parent / "tests.c", Path(workdir) / "tests.c")
+        shutil.copyfile(
+            configure.parent / "feature_probes.c", Path(workdir) / "feature_probes.c"
+        )
         result = subprocess.run(
             [str(configure)],
             cwd=workdir,

@@ -10,53 +10,77 @@
 
 /*
  * If you *really* need a unique prefix for all types and library functions,
- * compile with -DZ_PREFIX. The "standard" zlib should be compiled without it.
+ * compile with -DZ_PREFIX. bx changes this prefix to bx_rsync_z_ and also
+ * renames internal symbols so this copy can coexist with the system zlib.
+ * The "standard" zlib should be compiled without it.
  */
 #ifdef Z_PREFIX
-#  define deflateInit_          z_deflateInit_
-#  define deflate               z_deflate
-#  define deflateEnd            z_deflateEnd
-#  define inflateInit_          z_inflateInit_
-#  define inflate               z_inflate
-#  define inflateEnd            z_inflateEnd
-#  define deflateInit2_         z_deflateInit2_
-#  define deflateSetDictionary  z_deflateSetDictionary
-#  define deflateCopy           z_deflateCopy
-#  define deflateReset          z_deflateReset
-#  define deflateParams         z_deflateParams
-#  define deflateBound          z_deflateBound
-#  define deflatePrime          z_deflatePrime
-#  define inflateInit2_         z_inflateInit2_
-#  define inflateSetDictionary  z_inflateSetDictionary
-#  define inflateSync           z_inflateSync
-#  define inflateSyncPoint      z_inflateSyncPoint
-#  define inflateCopy           z_inflateCopy
-#  define inflateReset          z_inflateReset
-#  define inflateBack           z_inflateBack
-#  define inflateBackEnd        z_inflateBackEnd
-#  define compress              z_compress
-#  define compress2             z_compress2
-#  define compressBound         z_compressBound
-#  define uncompress            z_uncompress
-#  define adler32               z_adler32
-#  define crc32                 z_crc32
-#  define get_crc_table         z_get_crc_table
-#  define zError                z_zError
+#  define deflateInit_          bx_rsync_z_deflateInit_
+#  define deflate               bx_rsync_z_deflate
+#  define deflateEnd            bx_rsync_z_deflateEnd
+#  define inflateInit_          bx_rsync_z_inflateInit_
+#  define inflate               bx_rsync_z_inflate
+#  define inflateEnd            bx_rsync_z_inflateEnd
+#  define deflateInit2_         bx_rsync_z_deflateInit2_
+#  define deflateSetDictionary  bx_rsync_z_deflateSetDictionary
+#  define deflateCopy           bx_rsync_z_deflateCopy
+#  define deflateReset          bx_rsync_z_deflateReset
+#  define deflateParams         bx_rsync_z_deflateParams
+#  define deflateBound          bx_rsync_z_deflateBound
+#  define deflatePrime          bx_rsync_z_deflatePrime
+#  define inflateInit2_         bx_rsync_z_inflateInit2_
+#  define inflateSetDictionary  bx_rsync_z_inflateSetDictionary
+#  define inflateSync           bx_rsync_z_inflateSync
+#  define inflateSyncPoint      bx_rsync_z_inflateSyncPoint
+#  define inflateCopy           bx_rsync_z_inflateCopy
+#  define inflateReset          bx_rsync_z_inflateReset
+#  define inflateBack           bx_rsync_z_inflateBack
+#  define inflateBackEnd        bx_rsync_z_inflateBackEnd
+#  define compress2             bx_rsync_z_compress2
+#  define compressBound         bx_rsync_z_compressBound
+#  define uncompress            bx_rsync_z_uncompress
+#  define adler32               bx_rsync_z_adler32
+#  define crc32                 bx_rsync_z_crc32
+#  define get_crc_table         bx_rsync_z_get_crc_table
+#  define zError                bx_rsync_z_zError
 
-#  define alloc_func            z_alloc_func
-#  define free_func             z_free_func
-#  define in_func               z_in_func
-#  define out_func              z_out_func
-#  define Byte                  z_Byte
-#  define uInt                  z_uInt
-#  define uLong                 z_uLong
-#  define Bytef                 z_Bytef
-#  define charf                 z_charf
-#  define intf                  z_intf
-#  define uIntf                 z_uIntf
-#  define uLongf                z_uLongf
-#  define voidpf                z_voidpf
-#  define voidp                 z_voidp
+#  define alloc_func            bx_rsync_z_alloc_func
+#  define free_func             bx_rsync_z_free_func
+#  define in_func               bx_rsync_z_in_func
+#  define out_func              bx_rsync_z_out_func
+#  define Byte                  bx_rsync_z_Byte
+#  define uInt                  bx_rsync_z_uInt
+#  define uLong                 bx_rsync_z_uLong
+#  define Bytef                 bx_rsync_z_Bytef
+#  define charf                 bx_rsync_z_charf
+#  define intf                  bx_rsync_z_intf
+#  define uIntf                 bx_rsync_z_uIntf
+#  define uLongf                bx_rsync_z_uLongf
+#  define voidpf                bx_rsync_z_voidpf
+#  define voidp                 bx_rsync_z_voidp
+#  define _dist_code            bx_rsync_z_dist_code
+#  define _length_code          bx_rsync_z_length_code
+#  define _tr_align             bx_rsync_z_tr_align
+#  define _tr_flush_block       bx_rsync_z_tr_flush_block
+#  define _tr_init              bx_rsync_z_tr_init
+#  define _tr_stored_block      bx_rsync_z_tr_stored_block
+#  define _tr_tally             bx_rsync_z_tr_tally
+#  define adler32_combine       bx_rsync_z_adler32_combine
+#  define crc32_combine         bx_rsync_z_crc32_combine
+#  define deflateSetHeader      bx_rsync_z_deflateSetHeader
+#  define deflateTune           bx_rsync_z_deflateTune
+#  define deflate_copyright     bx_rsync_z_deflate_copyright
+#  define inflateGetHeader      bx_rsync_z_inflateGetHeader
+#  define inflatePrime          bx_rsync_z_inflatePrime
+#  define inflate_copyright     bx_rsync_z_inflate_copyright
+#  define inflate_fast          bx_rsync_z_inflate_fast
+#  define inflate_table         bx_rsync_z_inflate_table
+#  define zcalloc               bx_rsync_z_zcalloc
+#  define zcfree                bx_rsync_z_zcfree
+#  define z_errmsg              bx_rsync_z_errmsg
+#  define zlibCompileFlags      bx_rsync_z_zlibCompileFlags
+#  define zlibVersion           bx_rsync_z_zlibVersion
+
 #endif
 
 #if defined(__MSDOS__) && !defined(MSDOS)

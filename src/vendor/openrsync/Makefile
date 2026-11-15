@@ -48,12 +48,7 @@ ZLIBOBJS      = zlib/adler32.o \
 
 ALLOBJS	   = $(OBJS) $(ZLIBOBJS) \
 	     main.o
-AFLS	   = afl/test-blk_recv \
-	     afl/test-flist_recv
-
 all: openrsync
-
-afl: $(AFLS)
 
 asan: CFLAGS += -O0 -g3 -fsanitize=address,undefined
 asan: LDFLAGS += -fsanitize=address,undefined
@@ -64,9 +59,6 @@ debug: openrsync
 
 openrsync: $(ALLOBJS)
 	$(CC) $(LDFLAGS) -o $@ $(ALLOBJS) -lm $(LDADD_BSD) $(LDADD_LIB_SOCKET) $(LDADD_SCAN_SCALED) $(LDADD_B64_NTOP) $(LDADD_CRYPT)
-
-$(AFLS): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $*.c $(OBJS)
 
 install: all
 	mkdir -p $(DESTDIR)$(BINDIR)
@@ -84,7 +76,7 @@ uninstall:
 	rm -f $(DESTDIR)$(MANDIR)/man5/rsyncd.conf.5
 
 clean:
-	rm -f $(ALLOBJS) openrsync $(AFLS)
+	rm -f $(ALLOBJS) openrsync
 
 distclean: clean
 	rm -f Makefile.configure config.h config.log
@@ -99,10 +91,7 @@ distcheck:
 	( cd .distcheck && $(MAKE) install )
 	rm -rf .distcheck
 
-regress:
-	# Do nothing.
-
-$(ALLOBJS) $(AFLS): extern.h config.h
+$(ALLOBJS): extern.h config.h
 
 blocks.o downloader.o hash.o md4.o: md4.h
 

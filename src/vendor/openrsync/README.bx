@@ -17,7 +17,11 @@ Local changes to Apple's files:
 - The bx applet re-executes its own verified executable descriptor for
   local transfers. Remote transfers still default to the remote rsync.
 - All nonlocal symbols in this pinned source are namespaced in bx to avoid
-  clashes with other imported libraries. The bundled zlib is not linked into bx.
+  clashes with other imported libraries. The bundled rsync-modified zlib is
+  also namespaced and linked for protocol-compatible compressed deltas.
+- The generated FTS fallback declarations are inside the config header guard.
+- The metadata permission mask uses the standard mode bits on systems without
+  ALLPERMS.
 - Apple-private tracing is optional when its SDK header is unavailable.
 
 This is openrsync (protocol 29), not a GNU rsync CLI clone. In particular,
