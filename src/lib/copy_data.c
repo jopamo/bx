@@ -14,6 +14,10 @@
 #include "copy_data.h"
 #include "lib/fd_ops.h"
 
+#ifndef BX_HAVE_COPY_FILE_RANGE
+#define BX_HAVE_COPY_FILE_RANGE 0
+#endif
+
 static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
     if (errnum == EINVAL || errnum == ENOTSUP || errnum == ENOSYS) {
         return true;
@@ -27,7 +31,7 @@ static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
 }
 
 static int bx_copy_data_copy_range(int src_fd, int dest_fd, off_t length, bool* use_copy_range) {
-#ifdef __linux__
+#if BX_HAVE_COPY_FILE_RANGE
     while (*use_copy_range && length > 0) {
         size_t chunk = length > 1024 * 1024 * 1024 ? 1024 * 1024 * 1024 : (size_t)length;
         ssize_t copied = copy_file_range(src_fd, NULL, dest_fd, NULL, chunk, 0);

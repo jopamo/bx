@@ -195,6 +195,25 @@ if host_machine.system() == 'linux'
 endif
 bx_link_args = bx_static_link_args + bx_build_id_link_args + host_driver_werror_args
 
+have_copy_file_range = cc.links(
+  '''
+  #define _GNU_SOURCE
+  #define _POSIX_C_SOURCE 200809L
+  #include <unistd.h>
+  int main(void) {
+    ssize_t (*copy_range)(int, off_t *, int, off_t *, size_t, unsigned int) = copy_file_range;
+    return copy_range(-1, NULL, -1, NULL, 1, 0) != 0;
+  }
+  ''',
+  args : bx_static_link_args,
+  werror : true,
+  name : 'copy_file_range declaration and linkage',
+)
+add_project_arguments(
+  '-DBX_HAVE_COPY_FILE_RANGE=' + (have_copy_file_range ? '1' : '0'),
+  language : 'c',
+)
+
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
 acl_dep = dependency('libacl', static : use_static_binary)
