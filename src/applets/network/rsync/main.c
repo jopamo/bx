@@ -951,6 +951,7 @@ enum {
 	OP_ITEMIZE,
 	OP_BIT8,
 	OP_HELP,
+	OP_BX_PROTOCOL,
 	OP_BLOCKING_IO,
 	OP_MODWIN,
 	OP_MAX_DELETE,
@@ -965,8 +966,13 @@ enum {
 #endif
 };
 
-const char rsync_shopts[] = "0468B:CDEFHIKLOPRST:VWabcde:f:ghiklmnopqrtuvxyz";
+const char rsync_shopts[] = "0468AB:CDEFHIKLOPRST:VWXabcde:f:ghiklmnopqrtuvxyz";
 const struct option	 rsync_lopts[] = {
+    { "acls",		no_argument,	NULL,			'A' },
+    { "xattrs",		no_argument,	NULL,			'X' },
+    { "no-acls",		no_argument,	&opts.preserve_acls,	0 },
+    { "no-xattrs",	no_argument,	&opts.preserve_xattrs,	0 },
+    { "bx-protocol",	required_argument, NULL,		OP_BX_PROTOCOL },
     { "address",	required_argument, NULL,		OP_ADDRESS },
     { "append",		no_argument,	NULL,			OP_APPEND },
     { "archive",	no_argument,	NULL,			'a' },
@@ -1137,7 +1143,7 @@ usage(int exitcode)
 	    "A trailing slash on SRC copies its contents, not the directory itself.\n"
 	    "HOST::MODULE/PATH also selects a daemon. Only one endpoint may be remote.\n"
 	    "\nCommon options:\n"
-	    "  -a, --archive               Archive mode: -rlptgoD (not -H)\n"
+	    "  -a, --archive               Archive mode: -rlptgoD (not -HAX)\n"
 	    "  -r, --recursive             Copy directories recursively\n"
 	    "  -n, --dry-run               Show what would change without changing files\n"
 	    "  -v, --verbose               Increase verbosity; repeat for more detail\n"
@@ -1179,6 +1185,10 @@ usage(int exitcode)
 	    "  -k, --copy-dirlinks         Follow source symlinks to directories\n"
 	    "  -K, --keep-dirlinks         Keep destination symlinks to directories\n"
 	    "  -H, --hard-links            Preserve hardlinks\n"
+#ifdef __linux__
+	    "  -A, --acls                  Preserve POSIX ACLs (implies -p; requires bx peer)\n"
+	    "  -X, --xattrs                Preserve extended attributes (requires bx peer)\n"
+#endif
 	    "  -p, --perms                 Preserve permissions\n"
 	    "      --chmod=MODE            Adjust transferred permissions\n"
 	    "      --executability         Preserve executability without full permissions\n"
@@ -1238,7 +1248,7 @@ usage(int exitcode)
 	    "      --sockopts=OPTIONS      Set socket options\n"
 	    "  -4, --ipv4                  Use IPv4\n"
 	    "  -6, --ipv6                  Use IPv6\n"
-	    "      --protocol=NUM          Request protocol version NUM\n"
+	    "      --protocol=NUM          Request standard protocol NUM, or 29.5 for bx\n"
 	    "      --daemon --help         Show daemon options\n"
 	    "\nOutput and batch files:\n"
 	    "      --list-only             List files instead of transferring them\n"
@@ -1258,8 +1268,11 @@ usage(int exitcode)
 	    "  rsync -avz src/ user@host:backup/   Copy to a remote host\n"
 	    "\nCompatibility:\n"
 	    "  Based on openrsync; not a full Samba rsync CLI implementation.\n"
-#ifndef __APPLE__
-	    "  Linux ACLs (-A) and extended attributes (-X) are not supported.\n"
+#ifdef __linux__
+	    "  -A/-X select BX/29.5, a private extension requiring bx at both ends.\n"
+	    "  Ordinary peers use standard protocol 29. No fallback for -A/-X.\n"
+	    "  -X copies user.*; root senders also copy security.* and trusted.*.\n"
+	    "  BX/29.5 requires /proc/self/fd; batch files and --backup are unsupported.\n"
 #endif
 	    "  Use --dry-run to check selection and deletion before a live transfer.\n",
 	    out);
@@ -1290,6 +1303,7 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 	int		 opts_F = 0, opts_no_relative = 0, opts_no_dirs = 0;
 	int		 opts_only_batch = 0;
 	int		 opts_timeout = -1;
+	int		 protocol_set = 0;
 
 	/*
 	 * In the case of the daemon, we're re-entering and opts may be dirty
@@ -1346,6 +1360,13 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 				return NULL;
 		}
 		switch (c) {
+		case 'A':
+			opts.preserve_acls = 1;
+			opts.preserve_perms = 1;
+			break;
+		case 'X':
+			opts.preserve_xattrs = 1;
+			break;
 		case '0':
 			opts.from0 = 1;
 			break;
@@ -1780,7 +1801,18 @@ basedir:
 			if (opts.partial_dir == NULL)
 				errx(ERR_NOMEM, NULL);
 			break;
+		case OP_BX_PROTOCOL:
+			if (strcmp(optarg, "29.5") != 0)
+				errx(ERR_SYNTAX, "unsupported bx protocol: %s", optarg);
+			opts.bx_protocol = 1;
+			break;
 		case OP_PROTOCOL:
+			protocol_set = strcmp(optarg, "29.5") == 0 ? 2 : 1;
+			if (strcmp(optarg, "29.5") == 0) {
+				opts.protocol = RSYNC_PROTOCOL;
+				opts.bx_protocol = 1;
+				break;
+			}
 			if (*optarg != '\0') {
 				char *endptr;
 
@@ -1882,6 +1914,9 @@ basedir:
 #endif
 			printf("Protocol version %u (rsync 2.6.9 wire compatibility)\n",
 			    RSYNC_PROTOCOL);
+#ifdef __linux__
+			printf("BX/29.5: Linux POSIX ACLs and extended attributes (bx peers only)\n");
+#endif
 			exit(0);
 		case OP_HELP:
 			usage(0);
@@ -1902,6 +1937,25 @@ basedir:
 
 	if (quiet > 0)
 		verbose = 0;
+
+	if (opts.preserve_acls || opts.preserve_xattrs) {
+		if (protocol_set == 1)
+			errx(ERR_SYNTAX, "-A/-X require BX/29.5");
+		opts.bx_protocol = 1;
+	}
+	if (opts.bx_protocol) {
+		if (protocol_set == 1)
+			errx(ERR_SYNTAX, "conflicting standard and BX/29.5 protocols");
+#ifndef __linux__
+		errx(ERR_SYNTAX, "BX/29.5 requires Linux");
+#endif
+		if (opts.protocol != RSYNC_PROTOCOL)
+			errx(ERR_SYNTAX, "BX/29.5 requires base protocol 29");
+		if (opts.read_batch != NULL || opts.write_batch != NULL)
+			errx(ERR_SYNTAX, "BX/29.5 does not support batch files");
+		if (opts.backup || opts.backup_dir != NULL)
+			errx(ERR_SYNTAX, "BX/29.5 does not support --backup/--backup-dir");
+	}
 
 	/* Shouldn't be possible. */
 	assert(opts.ipf == 0 || opts.ipf == 4 || opts.ipf == 6);

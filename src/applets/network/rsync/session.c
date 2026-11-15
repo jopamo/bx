@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "extern.h"
+#include "metadata.h"
 
 /* To make the summary log output more closely resemble that of
  * standard rsync we remove the space from between the number
@@ -231,6 +232,8 @@ sess_stats_recv(struct sess *sess, int fd)
 void
 sess_cleanup(struct sess *sess)
 {
+	bx_rsync_meta_cleanup(sess);
+
 	free(sess->token_dbuf);
 	sess->token_dbuf = NULL;
 

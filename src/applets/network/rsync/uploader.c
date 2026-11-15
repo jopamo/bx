@@ -40,6 +40,7 @@
 #include <limits.h>
 
 #include "extern.h"
+#include "metadata.h"
 
 extern int verbose;
 
@@ -331,6 +332,9 @@ pre_symlink(struct upload *p, struct sess *sess)
 		free(b);
 		b = NULL;
 
+		if (!bx_rsync_meta_compare(sess, p->rootfd, f, f->path,
+		    &f->iflags))
+			return -1;
 		f->iflags |= itemize_changes(sess, &st, f);
 	} else {
 		f->iflags = IFLAG_NEW | IFLAG_LOCAL_CHANGE;
@@ -372,9 +376,14 @@ pre_symlink(struct upload *p, struct sess *sess)
 	if (rc != -1)
 		dstat_save(&st, &f->dstat);
 
-	rsync_set_metadata_at(sess, newlink,
+	if (!rsync_set_metadata_at(sess, newlink,
 	    newlink && sess->opts->temp_dir ? p->tempfd : p->rootfd, f,
-	    newlink && temp != NULL ? temp : f->path);
+	    newlink && temp != NULL ? temp : f->path)) {
+		if (temp != NULL)
+			(void)unlinkat(TMPDIR_FD, temp, 0);
+		free(temp);
+		return -1;
+	}
 
 	if (newlink && temp != NULL) {
 		if (move_file(TMPDIR_FD, temp, p->rootfd, f->path, 1, 0) == -1) {
@@ -455,6 +464,9 @@ pre_dev(struct upload *p, struct sess *sess)
 			updatedev = 1;
 		}
 
+		if (!bx_rsync_meta_compare(sess, p->rootfd, f, f->path,
+		    &f->iflags))
+			return -1;
 		f->iflags |= itemize_changes(sess, &st, f);
 	} else {
 		f->iflags = IFLAG_NEW | IFLAG_LOCAL_CHANGE;
@@ -492,8 +504,14 @@ pre_dev(struct upload *p, struct sess *sess)
 	if (rc != -1)
 		dstat_save(&st, &f->dstat);
 
-	rsync_set_metadata_at(sess, newdev, TMPDIR_FD, f,
-	    newdev && temp != NULL ? temp : f->path);
+	if (!rsync_set_metadata_at(sess, newdev,
+	    newdev && temp != NULL ? TMPDIR_FD : p->rootfd, f,
+	    newdev && temp != NULL ? temp : f->path)) {
+		if (temp != NULL)
+			(void)unlinkat(TMPDIR_FD, temp, 0);
+		free(temp);
+		return -1;
+	}
 
 	if (newdev && temp != NULL) {
 		if (move_file(TMPDIR_FD, temp, p->rootfd, f->path, 1, 0) == -1) {
@@ -590,6 +608,9 @@ pre_fifo(struct upload *p, struct sess *sess)
 	} else {
 		LOG3("%s: updating fifo", f->path);
 
+		if (!bx_rsync_meta_compare(sess, p->rootfd, f, f->path,
+		    &f->iflags))
+			return -1;
 		f->iflags |= itemize_changes(sess, &st, f);
 	}
 
@@ -599,8 +620,14 @@ pre_fifo(struct upload *p, struct sess *sess)
 	if (sess->opts->dry_run)
 		return 0;
 
-	rsync_set_metadata_at(sess, newfifo, TMPDIR_FD, f,
-	    newfifo && temp != NULL ? temp : f->path);
+	if (!rsync_set_metadata_at(sess, newfifo,
+	    newfifo && temp != NULL ? TMPDIR_FD : p->rootfd, f,
+	    newfifo && temp != NULL ? temp : f->path)) {
+		if (temp != NULL)
+			(void)unlinkat(TMPDIR_FD, temp, 0);
+		free(temp);
+		return -1;
+	}
 
 	if (newfifo && temp != NULL) {
 		if (move_file(TMPDIR_FD, temp, p->rootfd, f->path, 1, 0) == -1) {
@@ -695,14 +722,23 @@ pre_sock(struct upload *p, struct sess *sess)
 	} else {
 		LOG3("%s: updating sock", f->path);
 
+		if (!bx_rsync_meta_compare(sess, p->rootfd, f, f->path,
+		    &f->iflags))
+			return -1;
 		f->iflags |= itemize_changes(sess, &st, f);
 	}
 
 	if (sess->opts->dry_run)
 		return 0;
 
-	rsync_set_metadata_at(sess, newsock, TMPDIR_FD, f,
-		newsock && temp != NULL ? temp : f->path);
+	if (!rsync_set_metadata_at(sess, newsock,
+	    newsock && temp != NULL ? TMPDIR_FD : p->rootfd, f,
+	    newsock && temp != NULL ? temp : f->path)) {
+		if (temp != NULL)
+			(void)unlinkat(TMPDIR_FD, temp, 0);
+		free(temp);
+		return -1;
+	}
 
 	if (newsock && temp != NULL) {
 		if (move_file(TMPDIR_FD, temp, p->rootfd, f->path, 1, 0) == -1) {
@@ -1070,6 +1106,9 @@ pre_dir(struct upload *p, struct sess *sess)
 		if ((f->iflags & IFLAG_NEW) == 0) {
 			LOG3("%s: updating directory", f->path);
 
+			if (!bx_rsync_meta_compare(sess, p->rootfd, f, f->path,
+			    &f->iflags))
+				return -1;
 			f->iflags |= itemize_changes(sess, &st, f);
 		}
 
@@ -1134,7 +1173,7 @@ post_dir(struct sess *sess, const struct upload *u, size_t idx)
 
 	/* We already warned about the directory in pre_process_dir(). */
 
-	if (!sess->opts->recursive)
+	if (!sess->opts->recursive && !sess->opts->dirs)
 		return 1;
 	if (sess->opts->dry_run)
 		return 1;
@@ -1259,7 +1298,7 @@ check_file(int rootfd, struct flist *f, struct stat *st,
 				return 0;
 			}
 
-			if (sess->opts->hard_links) {
+			if (sess->opts->hard_links && hl != NULL) {
 				const struct flist *leader;
 				struct stat lst;
 
@@ -1337,7 +1376,7 @@ check_file(int rootfd, struct flist *f, struct stat *st,
 		return 4;
 	}
 
-	if (sess->opts->hard_links) {
+	if (sess->opts->hard_links && hl != NULL) {
 		const struct flist *leader;
 		struct stat lst;
 
@@ -1392,6 +1431,11 @@ check_file(int rootfd, struct flist *f, struct stat *st,
 	}
 
 	f->iflags |= itemize_changes(sess, st, f);
+	if (!bx_rsync_meta_compare(sess, rootfd, f, path, &f->iflags))
+		return -1;
+	/* Replace linked inodes rather than changing an unrelated snapshot. */
+	if (st->st_nlink > 1 && (f->iflags & (IFLAG_ACL | IFLAG_XATTR)))
+		return 2;
 
 	if (sess->role->append) {
 		if (st->st_size >= f->st.size) {
@@ -1454,7 +1498,7 @@ check_file(int rootfd, struct flist *f, struct stat *st,
 static int
 pre_file_check_altdir(struct sess *sess, const struct upload *p,
     const char **matchdir, struct stat *st, const char *root,
-    struct flist *f, const struct hardlinks *const hl, int rc,
+    struct flist *f, int rc,
     int basemode, int *savedfd, bool is_partialdir)
 {
 	int32_t saved_iflags = f->iflags;
@@ -1468,7 +1512,14 @@ pre_file_check_altdir(struct sess *sess, const struct upload *p,
 	}
 
 	f->iflags = 0;
-	x = check_file(dfd, f, st, sess, hl, is_partialdir);
+	/* Alternate files are bases, not members of the destination link group. */
+	x = check_file(dfd, f, st, sess, NULL, is_partialdir);
+	if (x == -1) {
+		close(dfd);
+		return -1;
+	}
+	if (x == 0 && (f->iflags & (IFLAG_ACL | IFLAG_XATTR)))
+		x = 1;
 	if (x == 0 && is_partialdir) {
 		/*
 		 * For --partial-dir, we don't want to dirty up check_file()
@@ -1479,7 +1530,7 @@ pre_file_check_altdir(struct sess *sess, const struct upload *p,
 		x = 1;
 	} else if (x == 0) {
 		/* found a match */
-		if (rc >= 0) {
+		if (rc >= 0 && !sess->opts->dry_run) {
 			/* found better match, delete file in rootfd */
 			if (unlinkat(p->rootfd, f->path, 0) == -1 &&
 			    errno != ENOENT) {
@@ -1495,14 +1546,20 @@ pre_file_check_altdir(struct sess *sess, const struct upload *p,
 		case BASE_MODE_COPY:
 			LOG3("%s: copying: up to date in %s",
 			    f->path, root);
-			copy_file(p->rootfd, root, f);
-			rsync_set_metadata_at(sess, 1, p->rootfd, f, f->path);
 			f->iflags |= IFLAG_LOCAL_CHANGE;
+			if (sess->opts->dry_run)
+				break;
+			copy_file(p->rootfd, root, f);
+			if (!rsync_set_metadata_at(sess, 1, p->rootfd, f, f->path)) {
+				close(dfd);
+				return -1;
+			}
 			break;
 		case BASE_MODE_LINK:
 			LOG3("%s: hardlinking: up to date in %s",
 			    f->path, root);
-			if (linkat(dfd, f->path, p->rootfd, f->path, 0) == -1) {
+			if (!sess->opts->dry_run &&
+			    linkat(dfd, f->path, p->rootfd, f->path, 0) == -1) {
 				/*
 				 * GNU rsync falls back to copy here.
 				 * I think it is more correct to
@@ -1540,6 +1597,8 @@ pre_file_check_altdir(struct sess *sess, const struct upload *p,
 			/* Don't close() it. */
 			dfd = -1;
 		}
+		if (dfd != -1)
+			close(dfd);
 		return 1;
 	}
 
@@ -1726,10 +1785,8 @@ pre_file(struct upload *p, int *filefd, off_t *size,
 	*filefd = -1;
 
 	rc = check_file(p->rootfd, f, &st, sess, hl, false);
-	if (rc == -1) {
-		sess->total_errors++;
-		return 0;
-	}
+	if (rc == -1)
+		return -1;
 	if (rc == 4) {
 		f->flstate |= FLIST_SKIPPED;
 		return 0;
@@ -1803,6 +1860,8 @@ pre_file(struct upload *p, int *filefd, off_t *size,
 		}
 
 		if (failed) {
+			if (sess->opts->bx_protocol && rc == 0)
+				return -1;
 			if (errno != EACCES && errno != EPERM) {
 				ERRX1("rsync_set_metadata");
 				return -1;
@@ -1839,7 +1898,7 @@ fixed:
 		file_partial_dir = download_partial_path(sess, f, partial_path,
 		    sizeof(partial_path));
 		ret = pre_file_check_altdir(sess, p, &partialdir,
-		    &st, file_partial_dir, f, hl, rc, BASE_MODE_COPY, &pdfd,
+		    &st, file_partial_dir, f, rc, BASE_MODE_COPY, &pdfd,
 		    true);
 
 		if (ret <= 0)
@@ -1851,10 +1910,13 @@ fixed:
 		}
 	}
 
-	/* check alternative locations for better match */
-	for (i = 0; sess->opts->basedir[i] != NULL; i++) {
+	/*
+	 * Stage alternate data only for a missing destination.  copy_file()
+	 * truncates its target, which may still link to an older snapshot.
+	 */
+	for (i = 0; rc == 3 && sess->opts->basedir[i] != NULL; i++) {
 		ret = pre_file_check_altdir(sess, p, &matchdir, &st,
-		    sess->opts->basedir[i], f, hl, rc,
+		    sess->opts->basedir[i], f, rc,
 		    sess->opts->alt_base_mode, NULL, false);
 
 		if (ret <= 0) {
@@ -1867,7 +1929,7 @@ fixed:
 	/*
 	 * partialdir is a special case, we'll work on it from there.
 	 */
-	if (matchdir != NULL && partialdir == NULL) {
+	if (matchdir != NULL && partialdir == NULL && !dry_run) {
 		assert(pdfd == -1);
 		/* copy match from basedir into root as a start point */
 		copy_file(p->rootfd, matchdir, f);
@@ -2058,6 +2120,8 @@ upload_ack_complete(struct upload *p, struct sess *sess, int fdout)
 
 	assert(p->state != UPLOAD_WRITE);
 	if (p->nextack == p->flsz || !sess->opts->remove_source)
+		return;
+	if (sess->opts->bx_protocol && !sess->metadata_complete)
 		return;
 
 	/*
@@ -2393,6 +2457,7 @@ rsync_uploader(struct upload *u, struct sess *sess, int revents,
 			if ((IFLAG_HLINK_FOLLOWS & u->fl[u->idx].iflags) != 0) {
 				/* vstring len byte */
 				u->bufsz += sizeof(int8_t);
+				linklen = 0;
 				if (u->fl[u->idx].link != NULL) {
 					linklen = strlen(u->fl[u->idx].link);
 					if (linklen > 0x7f) {
@@ -2684,7 +2749,8 @@ rsync_uploader_tail(struct upload *u, struct sess *sess)
 
 
 	if ((!sess->opts->preserve_times &&
-	    !sess->opts->preserve_perms) || sess->opts->list_only)
+	    !sess->opts->preserve_perms && !sess->opts->preserve_acls &&
+	    !sess->opts->preserve_xattrs) || sess->opts->list_only)
 		return 1;
 
 	LOG3("fixing up directory times and permissions");

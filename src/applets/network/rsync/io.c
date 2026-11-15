@@ -898,7 +898,8 @@ io_buffer_buf(void *buf, size_t *bufpos, size_t buflen, const void *val,
 {
 
 	assert(*bufpos + valsz <= buflen);
-	memcpy(buf + *bufpos, val, valsz);
+	if (valsz != 0)
+		memcpy(buf + *bufpos, val, valsz);
 	*bufpos += valsz;
 }
 

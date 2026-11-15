@@ -2,7 +2,8 @@ include Makefile.configure
 
 CPPFLAGS += -I. -I../../..
 
-OBJS	   = batch.o \
+OBJS	   = metadata.o \
+	     batch.o \
 	     blocks.o \
 	     cleanup.o \
 	     client.o \

@@ -37,6 +37,7 @@
 #include <unistd.h>
 
 #include "extern.h"
+#include "metadata.h"
 
 enum	pfdt {
 	PFD_SENDER_IN = 0, /* input from the sender */
@@ -111,7 +112,7 @@ rsync_set_metadata(struct sess *sess, int newfile,
 
 	/*
 	 * Conditionally adjust identifiers.
-	 * If we have an EPERM, report it but continue on: this just
+	 * In standard mode, report EPERM but continue on: this just
 	 * means that we're mapping into an unknown (or disallowed)
 	 * group identifier.
 	 */
@@ -128,7 +129,7 @@ rsync_set_metadata(struct sess *sess, int newfile,
 
 	if (uid != (uid_t)-1 || gid != (gid_t)-1) {
 		if (fchown(fd, uid, gid) == -1) {
-			if (errno != EPERM) {
+			if (errno != EPERM || sess->opts->bx_protocol) {
 				ERR("%s: fchown", path);
 				return 0;
 			}
@@ -138,6 +139,9 @@ rsync_set_metadata(struct sess *sess, int newfile,
 		} else
 			LOG4("%s: updated uid and/or gid", f->path);
 	}
+
+	if (!bx_rsync_meta_apply(sess, fd, -1, f, path, 1))
+		return 0;
 
 	/* Conditionally adjust file permissions. */
 
@@ -160,7 +164,7 @@ rsync_set_metadata(struct sess *sess, int newfile,
 		}
 	}
 
-	return 1;
+	return bx_rsync_meta_apply(sess, fd, -1, f, path, 0);
 }
 
 int
@@ -205,7 +209,7 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 
 	/*
 	 * Conditionally adjust identifiers.
-	 * If we have an EPERM, report it but continue on: this just
+	 * In standard mode, report EPERM but continue on: this just
 	 * means that we're mapping into an unknown (or disallowed)
 	 * group identifier.
 	 */
@@ -222,7 +226,7 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 
 	if (uid != (uid_t)-1 || gid != (gid_t)-1) {
 		if (fchownat(rootfd, path, uid, gid, AT_SYMLINK_NOFOLLOW) == -1) {
-			if (errno != EPERM) {
+			if (errno != EPERM || sess->opts->bx_protocol) {
 				int save = errno;
 
 				ERR("%s: fchownat", path);
@@ -235,6 +239,9 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 		} else
 			LOG4("%s: updated uid and/or gid", f->path);
 	}
+
+	if (!bx_rsync_meta_apply(sess, -1, rootfd, f, path, 1))
+		return 0;
 
 	/* Conditionally adjust file permissions. */
 
@@ -265,7 +272,7 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 		}
 	}
 
-	return 1;
+	return bx_rsync_meta_apply(sess, -1, rootfd, f, path, 0);
 }
 
 struct info_for_hardlink {
@@ -1128,6 +1135,11 @@ rsync_receiver(struct sess *sess, struct cleanup_ctx *cleanup_ctx,
 	if (!rsync_uploader_tail(ul, sess)) {
 		ERRX1("rsync_uploader_tail");
 		goto out;
+	}
+
+	if (sess->opts->bx_protocol && sess->total_errors == 0) {
+		sess->metadata_complete = 1;
+		upload_ack_complete(ul, sess, fdout);
 	}
 
 	/* Process server statistics and say good-bye. */

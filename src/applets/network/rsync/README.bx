@@ -27,7 +27,7 @@ Local changes to Apple's files:
   ALLPERMS.
 - Apple-private tracing is optional when its SDK header is unavailable.
 
-This is openrsync (protocol 29), not a GNU rsync CLI clone. In particular,
-Apple's macOS metadata handling does not implement Linux ACL/xattr behavior.
+This is openrsync, not a GNU rsync CLI clone. The private protocol extension
+is documented in bx-tests/docs/rsync-protocol-29.5.md.
 The bx executable is still Linux-only due to its fetch subsystem; building
 the standalone openrsync on a Unix host does not remove that restriction.

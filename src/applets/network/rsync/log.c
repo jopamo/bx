@@ -893,6 +893,10 @@ printf_doformat(const char *fmt, int *rval, struct sess *sess,
 				buf[7] = '.';
 
 			buf[8] = '.';
+			if (sess->opts->bx_protocol) {
+				buf[9] = ifl & IFLAG_ACL ? 'a' : '.';
+				buf[10] = ifl & IFLAG_XATTR ? 'x' : '.';
+			}
 
 			if (ifl & IFLAG_MISSING_DATA || ifl & IFLAG_NEW) {
 				char c;
@@ -904,6 +908,8 @@ printf_doformat(const char *fmt, int *rval, struct sess *sess,
 				buf[2] = c; buf[3] = c; buf[4] = c;
 				buf[5] = c; buf[6] = c; buf[7] = c;
 				buf[8] = c;
+				if (sess->opts->bx_protocol)
+					buf[9] = buf[10] = c;
 			} else {
 				int i;
 

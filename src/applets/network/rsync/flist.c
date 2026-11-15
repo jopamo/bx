@@ -41,6 +41,7 @@
 #include <unistd.h>
 
 #include "extern.h"
+#include "metadata.h"
 
 /*
  * These flags are part of the rsync protocol.
@@ -757,6 +758,9 @@ flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
 			ERRX1("platform sent");
 			goto out;
 		}
+		if (!bx_rsync_meta_send(sess, fdout, f, &uids, &uidsz,
+		    &gids, &gidsz))
+			goto out;
 	}
 
 	/* Signal end of file list. */
@@ -768,7 +772,8 @@ flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
 
 	/* Conditionally write identifier lists. */
 
-	if (sess->opts->preserve_uids && sess->opts->numeric_ids != NIDS_FULL) {
+	if ((sess->opts->preserve_uids || sess->opts->preserve_acls) &&
+	    sess->opts->numeric_ids != NIDS_FULL) {
 		/* Account for "stealth" --numeric-ids, don't always send it. */
 		if (!sess->opts->numeric_ids)
 			sendidsz = uidsz;
@@ -781,7 +786,8 @@ flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
 		}
 	}
 
-	if (sess->opts->preserve_gids && sess->opts->numeric_ids != NIDS_FULL) {
+	if ((sess->opts->preserve_gids || sess->opts->preserve_acls) &&
+	    sess->opts->numeric_ids != NIDS_FULL) {
 		/* Account for "stealth" --numeric-ids, don't always send it. */
 		if (!sess->opts->numeric_ids)
 			sendidsz = gidsz;
@@ -1682,11 +1688,14 @@ flist_recv(struct sess *sess, int fdin, int fdout, struct flist **flp, size_t *s
 				goto out;
 			}
 		}
+		if (!bx_rsync_meta_recv(sess, fdin, ff))
+			goto out;
 	}
 
 	/* Conditionally read the user/group list. */
 
-	if (sess->opts->preserve_uids && sess->opts->numeric_ids != NIDS_FULL) {
+	if ((sess->opts->preserve_uids || sess->opts->preserve_acls) &&
+	    sess->opts->numeric_ids != NIDS_FULL) {
 		if (!idents_recv(sess, fdin, &uids, &uidsz)) {
 			ERRX1("idents_recv");
 			goto out;
@@ -1694,7 +1703,8 @@ flist_recv(struct sess *sess, int fdin, int fdout, struct flist **flp, size_t *s
 		LOG3("received uid list: %zu", uidsz);
 	}
 
-	if (sess->opts->preserve_gids && sess->opts->numeric_ids != NIDS_FULL) {
+	if ((sess->opts->preserve_gids || sess->opts->preserve_acls) &&
+	    sess->opts->numeric_ids != NIDS_FULL) {
 		if (!idents_recv(sess, fdin, &gids, &gidsz)) {
 			ERRX1("idents_recv");
 			goto out;
@@ -1738,15 +1748,22 @@ flist_recv(struct sess *sess, int fdin, int fdout, struct flist **flp, size_t *s
 
 	/* Conditionally remap and reassign identifiers. */
 
-	if (sess->opts->preserve_uids && !sess->opts->numeric_ids) {
+	if ((sess->opts->preserve_uids || sess->opts->preserve_acls) &&
+	    !sess->opts->numeric_ids) {
 		idents_remap(sess, 0, uids, uidsz);
-		idents_assign_uid(sess, fl, flsz, uids, uidsz);
+		if (sess->opts->preserve_uids)
+			idents_assign_uid(sess, fl, flsz, uids, uidsz);
 	}
 
-	if (sess->opts->preserve_gids && !sess->opts->numeric_ids) {
+	if ((sess->opts->preserve_gids || sess->opts->preserve_acls) &&
+	    !sess->opts->numeric_ids) {
 		idents_remap(sess, 1, gids, gidsz);
-		idents_assign_gid(sess, fl, flsz, gids, gidsz);
+		if (sess->opts->preserve_gids)
+			idents_assign_gid(sess, fl, flsz, gids, gidsz);
 	}
+
+	if (!bx_rsync_meta_remap(sess, uids, uidsz, gids, gidsz))
+		goto out;
 
 	if (sess->opts->list_only)
 		flist_output(sess, fl, flsz);
@@ -3039,10 +3056,11 @@ flist_gen_dels(struct sess *sess, const char *root, struct flist **fl,
 		goto out;
 	}
 
-	if (protocol_newsort) {
-		qsort(*fl, *sz, sizeof(struct flist), flist_cmp29);
-	} else {
-		qsort(*fl, *sz, sizeof(struct flist), flist_dir_cmp);
+	if (*sz > 1) {
+		if (protocol_newsort)
+			qsort(*fl, *sz, sizeof(struct flist), flist_cmp29);
+		else
+			qsort(*fl, *sz, sizeof(struct flist), flist_dir_cmp);
 	}
 	rc = 1;
 out:

@@ -239,6 +239,14 @@ fargs_cmdline(struct sess *sess, const struct fargs *f, size_t *skip)
 		addargs(&args, "--delete-excluded");
 	if (sess->opts->numeric_ids == NIDS_FULL)
 		addargs(&args, "--numeric-ids");
+	if (sess->opts->bx_protocol)
+		addargs(&args, "--bx-protocol=29.5");
+	if (sess->opts->preserve_acls)
+		addargs(&args, "-A");
+	if (sess->opts->preserve_acls && !sess->opts->preserve_perms)
+		addargs(&args, "--no-perms");
+	if (sess->opts->preserve_xattrs)
+		addargs(&args, "-X");
 	if (sess->opts->preserve_gids)
 		addargs(&args, "-g");
 	if (sess->opts->preserve_links)

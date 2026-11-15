@@ -1964,6 +1964,12 @@ again:
 	if (p->fd < 0 || sess->opts->dry_run)
 		goto done;
 
+	/* Refuse publication if the temporary inode cannot retain metadata. */
+	if (sess->opts->bx_protocol &&
+	    !rsync_set_metadata(sess, (f->iflags & IFLAG_NEW) != 0,
+	    p->fd, f, f->path))
+		goto out;
+
 	if (sess->opts->backup) {
 		if (fstatat(p->rootfd, f->path, &st2, 0) == -1) {
 			/*

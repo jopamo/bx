@@ -46,6 +46,7 @@
 #endif
 
 #include "extern.h"
+#include "metadata.h"
 
 #define	RSYNC_LISTEN_BACKLOG	5
 
@@ -1138,6 +1139,11 @@ rsync_socket(struct cleanup_ctx *cleanup_ctx, const struct opts *opts,
 
 	if (sess.rver < sess.lver) {
 		sess.protocol = sess.rver;
+	}
+
+	if (!bx_rsync_meta_negotiate(&sess, sd, sd)) {
+		rc = 2;
+		goto out;
 	}
 
 	if (sess.opts->write_batch != NULL && (rc = batch_open(&sess)) != 0) {

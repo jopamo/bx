@@ -28,6 +28,7 @@
 #endif
 
 #include "extern.h"
+#include "metadata.h"
 
 static int
 fcntl_nonblock(int fd)
@@ -116,6 +117,11 @@ rsync_server(struct cleanup_ctx *cleanup_ctx, const struct opts *opts,
 
 	if (sess.rver < sess.lver) {
 		sess.protocol = sess.rver;
+	}
+
+	if (!bx_rsync_meta_negotiate(&sess, fdin, fdout)) {
+		rc = 2;
+		goto out;
 	}
 
 	sess.mplex_writes = 1;

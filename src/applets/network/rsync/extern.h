@@ -421,6 +421,7 @@ struct	flist {
 	struct flstat	 st; /* file information */
 	char		*link; /* symlink target, hlink name, topdir, or NULL */
 	unsigned char    md[MD4_DIGEST_LENGTH]; /* MD4 hash for --checksum */
+	struct bx_rsync_meta *metadata; /* Owned by the receiving session */
 	int32_t		 iflags; /* Itemize flags */
 	enum name_basis	 basis; /* name basis */
 	enum fmode	 fmode; /* Sender/receiver */
@@ -480,6 +481,9 @@ struct	opts {
 	int		 server;		/* --server */
 	int		 daemon;		/* --daemon (fake) */
 	int		 protocol;		/* --protocol */
+	int		 bx_protocol;		/* bx protocol 29.5 */
+	int		 preserve_acls;		/* -A */
+	int		 preserve_xattrs;	/* -X */
 	int		 append;		/* --append */
 	int		 checksum;		/* -c --checksum */
 	int		 checksum_seed;		/* --checksum-seed */
@@ -747,6 +751,10 @@ struct	sess {
 	bool		   err_del_limit; /* --max-delete limit exceeded */
 	bool		   lreceiver; /* Receiver is local */
 	int		   protocol; /* negotiated protocol version */
+	unsigned int	   metadata_flags; /* Agreed 29.5 metadata scope */
+	int		   metadata_complete; /* Finalization permits source removal */
+	size_t		   metadata_bytes;
+	struct bx_rsync_meta *metadata_pool;
 	char              *token_buf; /* used for protocol token processing */
 	size_t             token_bufsz; /* used for protocol token processing */
 	char              *token_cbuf; /* used for protocol token processing */

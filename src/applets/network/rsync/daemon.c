@@ -50,6 +50,7 @@
 #include <sys/param.h>
 
 #include "extern.h"
+#include "metadata.h"
 #include "daemon.h"
 
 #ifdef __APPLE__
@@ -213,6 +214,9 @@ daemon_finish_handshake(struct sess *sess)
 		ERR("io_write_int");
 		return 0;
 	}
+
+	if (!bx_rsync_meta_negotiate(sess, role->role.client, role->role.client))
+		return 0;
 
 	if (sess->opts != NULL && sess->opts->sender &&
 	    sess->opts->remove_source && !sess->opts->read_batch) {
@@ -1355,6 +1359,7 @@ done:
 		free(cargv[i]);
 	free(cargv);
 
+	bx_rsync_meta_cleanup(sess);
 	return 0;
 
 fail:
@@ -1372,6 +1377,7 @@ fail:
 		free(cargv[i]);
 	free(cargv);
 
+	bx_rsync_meta_cleanup(sess);
 	return ERR_IPC;
 }
 

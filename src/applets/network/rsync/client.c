@@ -29,6 +29,7 @@
 #endif
 
 #include "extern.h"
+#include "metadata.h"
 
 /*
  * Print time as hh:mm:ss
@@ -175,6 +176,11 @@ rsync_client(struct cleanup_ctx *cleanup_ctx, const struct opts *opts,
 
 	if (sess.rver < sess.lver) {
 		sess.protocol = sess.rver;
+	}
+
+	if (!bx_rsync_meta_negotiate(&sess, fd, fd)) {
+		rc = 2;
+		goto out;
 	}
 
 	LOG3("client detected client version %d, server version %d, "

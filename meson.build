@@ -1617,6 +1617,7 @@ rsync_config = custom_target(
 
 rsync_sources = files(
   'src/applets/network/rsync/main.c',
+  'src/applets/network/rsync/metadata.c',
   'src/applets/network/rsync/sbuf.c',
   'src/applets/network/rsync/mode.c',
   'src/applets/network/rsync/humanize.c',
