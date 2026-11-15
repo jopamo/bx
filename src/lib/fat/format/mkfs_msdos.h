@@ -69,6 +69,10 @@ ALLOPTS
 	uint32_t volume_id_set:1;
 	uint32_t media_descriptor_set:1;
 	uint32_t hidden_sectors_set:1;
+	bool dos_compat;
+	uint8_t drive_number;
+	uint64_t size_bytes;
+	uint64_t offset_sectors;
 };
 
 int mkfs_msdos(const char *, const char *, const struct msdos_options *);

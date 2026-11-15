@@ -1340,11 +1340,13 @@ checklost(struct fat_descriptor *fat)
 			}
 		}
 		if (boot->FSNext != 0xffffffffU &&
-		    (boot->FSNext >= boot->NumClusters ||
-		    (boot->NumFree && fat_get_cl_next(fat, boot->FSNext) != CLUST_FREE))) {
+		    (boot->FSNext < CLUST_FIRST || boot->FSNext >= boot->NumClusters ||
+		    (require_free_hint && boot->NumFree &&
+		    fat_get_cl_next(fat, boot->FSNext) != CLUST_FREE))) {
 			pwarn("Next free cluster in FSInfo block (%u) %s\n",
 			      boot->FSNext,
-			      (boot->FSNext >= boot->NumClusters) ? "invalid" : "not free");
+			      (boot->FSNext < CLUST_FIRST ||
+			      boot->FSNext >= boot->NumClusters) ? "invalid" : "not free");
 			if (ask(1, "Fix"))
 				for (head = CLUST_FIRST; head < boot->NumClusters; head++)
 					if (fat_get_cl_next(fat, head) == CLUST_FREE) {

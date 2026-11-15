@@ -6,6 +6,7 @@
 #define alwaysno bx_fat_alwaysno
 #define alwaysyes bx_fat_alwaysyes
 #define ask bx_fat_ask
+#define boot_only bx_fat_boot_only
 #define checkchain bx_fat_checkchain
 #define checkdirty bx_fat_checkdirty
 #define checkfilesys bx_fat_checkfilesys
@@ -30,6 +31,7 @@
 #define rdonly bx_fat_rdonly
 #define readboot bx_fat_readboot
 #define readfat bx_fat_readfat
+#define require_free_hint bx_fat_require_free_hint
 #define reconnect bx_fat_reconnect
 #define releasefat bx_fat_releasefat
 #define resetDosDirSection bx_fat_resetDosDirSection

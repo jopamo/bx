@@ -45,7 +45,7 @@ __RCSID("$NetBSD: check.c,v 1.14 2006/06/05 16:51:18 christos Exp $");
 #include "fsutil.h"
 
 int
-checkfilesys(const char *fname)
+checkfilesys(const char *fname, bool dos_compat)
 {
 	int dosfs;
 	struct bootblock boot;
@@ -60,9 +60,9 @@ checkfilesys(const char *fname)
 	if (!preen)
 		printf("** %s", fname);
 
-	dosfs = bx_fat_open(fname, !rdonly, 0);
-	if (dosfs < 0 && !rdonly) {
-		dosfs = bx_fat_open(fname, false, 0);
+	dosfs = bx_fat_open(fname, !rdonly, 0, dos_compat);
+	if (dosfs < 0 && !rdonly && !dos_compat) {
+		dosfs = bx_fat_open(fname, false, 0, false);
 		if (dosfs >= 0)
 			pwarn(" (NO WRITE)\n");
 		else if (!preen)
@@ -90,6 +90,10 @@ checkfilesys(const char *fname)
 		pfatal("Filesystem size exceeds media\n");
 		close(dosfs);
 		return 8;
+	}
+	if (boot_only) {
+		ret = 0;
+		goto out;
 	}
 
 	if (skipclean && preen && checkdirty(dosfs, &boot)) {

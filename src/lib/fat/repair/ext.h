@@ -47,6 +47,8 @@ extern int preen;	/* we are preening */
 extern int rdonly;	/* device is opened read only (supersedes above) */
 extern int skipclean;	/* skip clean file systems if preening */
 extern int allow_mmap;  /* allow the use of mmap() */
+extern int boot_only;
+extern int require_free_hint;
 
 /*
  * function declarations
@@ -63,7 +65,7 @@ int checkdirty(int, struct bootblock *);
 /*
  * Check file system given as arg
  */
-int checkfilesys(const char *);
+int checkfilesys(const char *, bool);
 
 /*
  * Return values of various functions

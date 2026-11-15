@@ -212,9 +212,9 @@ static void infohandler(int);
 
 static ssize_t getchunksize(void);
 static int getstdfmt(const char *, struct bpb *);
-static int getdiskinfo(int, const char *, const char *, int, struct bpb *);
+static int getdiskinfo(int, const char *, const char *, struct msdos_options *, struct bpb *);
 static void print_bpb(struct bpb *);
-static void mklabel(u_int8_t *, const char *);
+static void mklabel(u_int8_t *, const char *, bool);
 static int oklabel(const char *);
 static void setstr(u_int8_t *, const char *, size_t);
 
@@ -237,9 +237,8 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
     const char *bname;
     ssize_t n;
     time_t now;
-    u_int fat, bss, rds, cls, dir, lsn, x, x1, x2;
-    u_int extra_res, alignment, alignto, saved_x, attempts=0;
-    bool set_res, set_spf, set_spc;
+    u_int fat, bss, rds, cls, dir, lsn, x, x1;
+    bool set_res, set_spf;
     int fd, fd1, rv;
     struct msdos_options o = *op;
     ssize_t chunksize;
@@ -260,14 +259,10 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
         warnx("create (-C) is incompatible with -N");
         goto done;
     }
-    fd = bx_fat_open(fname, !o.no_create, o.create_size);
+    fd = bx_fat_open(fname, !o.no_create, o.create_size, o.dos_compat);
     if (fd == -1) {
         warn("%s", fname);
         goto done;
-    }
-    if (o.offset && o.offset != lseek(fd, o.offset, SEEK_SET)) {
-	warnx("cannot seek to %jd", (intmax_t)o.offset);
-	goto done;
     }
     memset(&bpb, 0, sizeof(bpb));
     if (o.floppy) {
@@ -289,14 +284,31 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
     if (o.hidden_sectors_set)
 	bpb.bpbHiddenSecs = o.hidden_sectors;
     {
-	if (getdiskinfo(fd, fname, dtype, o.hidden_sectors_set, &bpb) == -1)
+	if (getdiskinfo(fd, fname, dtype, &o, &bpb) == -1)
 		goto done;
-        if (o.offset % bpb.bpbBytesPerSec != 0 ||
-            (uint64_t)o.offset / bpb.bpbBytesPerSec >= bpb.bpbHugeSectors) {
+        if (!o.dos_compat && (o.offset % bpb.bpbBytesPerSec != 0 ||
+            (uint64_t)o.offset / bpb.bpbBytesPerSec >= bpb.bpbHugeSectors)) {
             warnx("offset outside filesystem or not sector aligned");
             goto done;
         }
-        bpb.bpbHugeSectors -= (o.offset / bpb.bpbBytesPerSec);
+        if (!o.dos_compat)
+            bpb.bpbHugeSectors -= (o.offset / bpb.bpbBytesPerSec);
+        if (o.offset && lseek(fd, o.offset, SEEK_SET) != o.offset) {
+            warn("cannot seek to filesystem offset");
+            goto done;
+        }
+        uint64_t volume_bytes = (uint64_t)bpb.bpbHugeSectors * bpb.bpbBytesPerSec;
+        if (o.dos_compat && !o.fat_type && volume_bytes >= 512ULL * 1024 * 1024)
+            o.fat_type = 32;
+        if (o.dos_compat && o.fat_type == 32) {
+            unsigned cluster_bytes = volume_bytes <= 260ULL * 1024 * 1024 ? 512 :
+                volume_bytes <= 8ULL * 1024 * 1024 * 1024 ? 4096 :
+                volume_bytes <= 16ULL * 1024 * 1024 * 1024 ? 8192 :
+                volume_bytes <= 32ULL * 1024 * 1024 * 1024 ? 16384 : 32768;
+            bpb.bpbSecPerClust = MAX(1, cluster_bytes / bpb.bpbBytesPerSec);
+            if (!o.backup_sector)
+                o.backup_sector = 6;
+        }
 	if (bpb.bpbSecPerClust == 0) {	/* set defaults */
 	    if (bpb.bpbHugeSectors <= 6000)	/* about 3MB -> 512 bytes */
 		bpb.bpbSecPerClust = 1;
@@ -465,95 +477,79 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 	}
 	if (bpb.bpbBackup != MAXU16 && x <= bpb.bpbBackup)
 	    x = bpb.bpbBackup + 1;
+        if (o.dos_compat && bpb.bpbBackup != MAXU16) {
+            if (bpb.bpbBackup > MAXU16 - 3 || bpb.bpbBackup < 3) {
+                warnx("backup boot region overlaps primary or exceeds reserved range");
+                goto done;
+            }
+            x = MAX(x, bpb.bpbBackup + 3);
+        }
     }
 
-    extra_res = 0;
-    alignment = 0;
-    set_res = (bpb.bpbResSectors == 0);
+    set_res = (bpb.bpbResSectors == 0 || o.dos_compat);
     set_spf = (bpb.bpbBigFATsecs == 0);
-    set_spc = (bpb.bpbSecPerClust == 0);
-    saved_x = x;
-
-    /*
-     * Attempt to align the root directory to cluster if o.align is set.
-     * This is done by padding with reserved blocks. Note that this can
-     * cause other factors to change, which can in turn change the alignment.
-     * This should take at most 2 iterations, as increasing the reserved
-     * amount may cause the FAT size to decrease by 1, requiring another
-     * bpbFATs reserved blocks. If bpbSecPerClust changes, it will
-     * be half of its previous size, and thus will not throw off alignment.
-     */
-    do {
-	x = saved_x;
-	if (set_res)
-	    bpb.bpbResSectors = ((fat == 32) ?
-		MAX(x, MAX(16384 / bpb.bpbBytesPerSec, 4)) : x) + extra_res;
-	else if (bpb.bpbResSectors < x) {
-	    warnx("too few reserved sectors (need %d have %d)", x,
-		bpb.bpbResSectors);
-	    goto done;
-	}
-	if (fat != 32 && !bpb.bpbRootDirEnts)
-	    bpb.bpbRootDirEnts = DEFRDE;
-	rds = howmany(bpb.bpbRootDirEnts,
-	    bpb.bpbBytesPerSec / sizeof(struct de));
-	if (set_spc) {
-	    for (bpb.bpbSecPerClust = howmany(fat == 16 ? DEFBLK16 :
-		    DEFBLK, bpb.bpbBytesPerSec);
-		bpb.bpbSecPerClust < MAXSPC && (bpb.bpbResSectors +
-		    howmany((RESFTE + maxcls(fat)) * (fat / BPN),
-			bpb.bpbBytesPerSec * NPB) * bpb.bpbFATs +
-		    rds +
-		    (u_int64_t) (maxcls(fat) + 1) * bpb.bpbSecPerClust) <=
-		    bpb.bpbHugeSectors;
-		bpb.bpbSecPerClust <<= 1)
-		    continue;
-
-	}
-	if (fat != 32 && bpb.bpbBigFATsecs > MAXU16) {
-	    warnx("too many sectors/FAT for FAT12/16");
-	    goto done;
-	}
-	x1 = bpb.bpbResSectors + rds;
-	x = bpb.bpbBigFATsecs ? bpb.bpbBigFATsecs : 1;
-	if (x1 + (u_int64_t)x * bpb.bpbFATs > bpb.bpbHugeSectors) {
-	    warnx("meta data exceeds file system size");
-	    goto done;
-	}
-	x1 += x * bpb.bpbFATs;
-	x = (u_int64_t)(bpb.bpbHugeSectors - x1) * bpb.bpbBytesPerSec * NPB /
-	    (bpb.bpbSecPerClust * bpb.bpbBytesPerSec * NPB +
-	    fat / BPN * bpb.bpbFATs);
-	x2 = howmany((RESFTE + MIN(x, maxcls(fat))) * (fat / BPN),
-	    bpb.bpbBytesPerSec * NPB);
-	if (set_spf) {
-	    if (bpb.bpbBigFATsecs == 0)
-		bpb.bpbBigFATsecs = x2;
-	    x1 += (bpb.bpbBigFATsecs - 1) * bpb.bpbFATs;
-	}
-	if (set_res) {
-	    alignto = bpb.bpbSecPerClust;
-	    if (alignto > 1) {
-		/* align data clusters */
-		alignment = (bpb.bpbResSectors + bpb.bpbBigFATsecs * bpb.bpbFATs + rds) %
-		    alignto;
-		if (alignment != 0)
-		    extra_res += alignto - alignment;
-	    }
-	}
-	attempts++;
-    } while (alignment != 0 && attempts < 2);
-    if (o.align && alignment != 0)
-	warnx("warning: Alignment failed.");
-
-    cls = (bpb.bpbHugeSectors - x1) / bpb.bpbSecPerClust;
-    x = (u_int64_t)bpb.bpbBigFATsecs * bpb.bpbBytesPerSec * NPB / (fat / BPN) -
-	RESFTE;
-    if (cls > x)
-	cls = x;
-    if (bpb.bpbBigFATsecs < x2)
-	warnx("warning: sectors/FAT limits file system to %u clusters",
-	      cls);
+    if (set_res)
+        bpb.bpbResSectors = MAX(o.reserved_sectors, fat == 32 ?
+            MAX(x, o.dos_compat ? 32 : MAX(16384 / bpb.bpbBytesPerSec, 4)) : x);
+    else if (bpb.bpbResSectors < x) {
+        warnx("too few reserved sectors");
+        goto done;
+    }
+    if (fat != 32 && !bpb.bpbRootDirEnts)
+        bpb.bpbRootDirEnts = DEFRDE;
+    rds = howmany(bpb.bpbRootDirEnts, bpb.bpbBytesPerSec / sizeof(struct de));
+    if (o.dos_compat && o.align) {
+        bpb.bpbResSectors = roundup(bpb.bpbResSectors, bpb.bpbSecPerClust);
+        rds = roundup(rds, bpb.bpbSecPerClust);
+        uint64_t entries = (uint64_t)rds * bpb.bpbBytesPerSec / sizeof(struct de);
+        if (entries > MAXU16) {
+            warnx("aligned root directory exceeds FAT entry limit");
+            goto done;
+        }
+        bpb.bpbRootDirEnts = entries;
+    }
+    uint64_t base = (uint64_t)bpb.bpbResSectors + rds;
+    if (base >= bpb.bpbHugeSectors) {
+        warnx("metadata exceeds filesystem size");
+        goto done;
+    }
+    if (set_spf) {
+        uint64_t estimate = (bpb.bpbHugeSectors - base) * bpb.bpbBytesPerSec * 8 /
+            ((uint64_t)bpb.bpbSecPerClust * bpb.bpbBytesPerSec * 8 + fat * bpb.bpbFATs);
+        bpb.bpbBigFATsecs = howmany((estimate + RESFTE) * fat,
+            (uint64_t)bpb.bpbBytesPerSec * 8);
+    }
+    /* Growing the FAT or reserved area only reduces the number of data clusters.
+     * Recompute from the final layout, including the two reserved FAT entries. */
+    for (;;) {
+        if (o.dos_compat && o.align)
+            bpb.bpbBigFATsecs = roundup(bpb.bpbBigFATsecs, bpb.bpbSecPerClust);
+        uint64_t first = (uint64_t)bpb.bpbResSectors + rds +
+            (uint64_t)bpb.bpbBigFATsecs * bpb.bpbFATs;
+        if (first >= bpb.bpbHugeSectors || bpb.bpbResSectors > MAXU16 ||
+            (fat != 32 && bpb.bpbBigFATsecs > MAXU16)) {
+            warnx("FAT metadata exceeds filesystem limits");
+            goto done;
+        }
+        if (set_res && (!o.dos_compat || o.align)) {
+            unsigned remainder = first % bpb.bpbSecPerClust;
+            if (remainder) {
+                bpb.bpbResSectors += bpb.bpbSecPerClust - remainder;
+                continue;
+            }
+        }
+        x1 = first;
+        cls = (bpb.bpbHugeSectors - x1) / bpb.bpbSecPerClust;
+        uint64_t needed = howmany(((uint64_t)cls + RESFTE) * fat,
+            (uint64_t)bpb.bpbBytesPerSec * 8);
+        if (needed <= bpb.bpbBigFATsecs)
+            break;
+        if (!set_spf) {
+            warnx("FAT cannot hold the declared data clusters");
+            goto done;
+        }
+        bpb.bpbBigFATsecs = needed;
+    }
     if (cls < mincls(fat)) {
 	warnx("%u clusters too few clusters for FAT%u, need %u", cls, fat,
 	    mincls(fat));
@@ -561,7 +557,7 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
     }
     if (cls > maxcls(fat)) {
 	cls = maxcls(fat);
-	bpb.bpbHugeSectors = x1 + (cls + 1) * bpb.bpbSecPerClust - 1;
+	bpb.bpbHugeSectors = x1 + cls * bpb.bpbSecPerClust;
 	warnx("warning: FAT type limits file system to %u sectors",
 	      bpb.bpbHugeSectors);
     }
@@ -667,11 +663,13 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 		    mk2(bsxbpb->bpbFSVers, 0);
 		    mk4(bsxbpb->bpbRootClust, bpb.bpbRootClust);
 		    mk2(bsxbpb->bpbFSInfo, bpb.bpbFSInfo);
-		    mk2(bsxbpb->bpbBackup, bpb.bpbBackup);
+		    mk2(bsxbpb->bpbBackup, o.dos_compat && bpb.bpbBackup == MAXU16 ? 0 : bpb.bpbBackup);
 		    x1 += sizeof(struct bsxbpb);
 		}
 		bsx = (struct bsx *)(img + x1);
 		mk1(bsx->exBootSignature, 0x29);
+                if (o.dos_compat)
+                    mk1(bsx->exDriveNumber, o.drive_number);
 		if (o.volume_id_set)
 		    x = o.volume_id;
 		else
@@ -683,7 +681,7 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 			 ((u_int)tm->tm_hour << 8 |
 			  (u_int)tm->tm_min));
 		mk4(bsx->exVolumeID, x);
-		mklabel(bsx->exVolumeLabel, o.volume_label ? o.volume_label : "NO NAME");
+		mklabel(bsx->exVolumeLabel, o.volume_label ? o.volume_label : "NO NAME", !o.dos_compat);
 		snprintf(buf, sizeof(buf), "FAT%u", fat);
 		setstr(bsx->exFileSysType, buf, sizeof(bsx->exFileSysType));
 		if (!o.bootstrap) {
@@ -703,9 +701,12 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 			 lsn == bpb.bpbBackup + bpb.bpbFSInfo))) {
 		mk4(img, 0x41615252);
 		mk4(img + MINBPS - 28, 0x61417272);
-		mk4(img + MINBPS - 24, 0xffffffff);
-		mk4(img + MINBPS - 20, 0xffffffff);
+		mk4(img + MINBPS - 24, o.dos_compat ? cls - 1 : 0xffffffff);
+		mk4(img + MINBPS - 20, o.dos_compat ? 3 : 0xffffffff);
 		mk2(img + MINBPS - 2, DOSMAGIC);
+            } else if (o.dos_compat && fat == 32 &&
+                       (lsn == 2 || (bpb.bpbBackup != MAXU16 && lsn == bpb.bpbBackup + 2))) {
+                mk2(img + MINBPS - 2, DOSMAGIC);
 	    } else if (lsn >= bpb.bpbResSectors && lsn < dir &&
 		       !((lsn - bpb.bpbResSectors) %
 			 (bpb.bpbFATsecs ? bpb.bpbFATsecs :
@@ -715,7 +716,7 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 		    mk1(img[x], fat == 32 && x % 4 == 3 ? 0x0f : 0xff);
 	    } else if (lsn == dir && o.volume_label) {
 		de = (struct de *)img;
-		mklabel(de->deName, o.volume_label);
+		mklabel(de->deName, o.volume_label, !o.dos_compat);
 		mk1(de->deAttributes, 050);
 		x = (u_int)tm->tm_hour << 11 |
 		    (u_int)tm->tm_min << 5 |
@@ -798,13 +799,12 @@ getstdfmt(const char *fmt, struct bpb *bpb)
 }
 
 static int
-getdiskinfo(int fd, const char *fname, const char *dtype, int oflag,
+getdiskinfo(int fd, const char *fname, const char *dtype, struct msdos_options *o,
             struct bpb *bpb)
 {
     uint64_t bytes, sectors;
     unsigned sector_size;
 
-    (void)oflag;
     if (dtype != NULL) {
         warnx("disk-type database lookup is not supported");
         return -1;
@@ -821,6 +821,21 @@ getdiskinfo(int fd, const char *fname, const char *dtype, int oflag,
         return -1;
     }
     sectors = bytes / bpb->bpbBytesPerSec;
+    if (o->dos_compat) {
+        if (o->offset_sectors > (uint64_t)INT64_MAX / bpb->bpbBytesPerSec ||
+            o->offset_sectors >= sectors) {
+            warnx("offset outside media");
+            return -1;
+        }
+        o->offset = o->offset_sectors * bpb->bpbBytesPerSec;
+        sectors -= o->offset_sectors;
+        uint64_t requested = o->size_bytes ? o->size_bytes / bpb->bpbBytesPerSec : sectors;
+        if (!requested || requested > sectors || requested > UINT32_MAX) {
+            warnx("filesystem size exceeds media or FAT sector count");
+            return -1;
+        }
+        bpb->bpbHugeSectors = requested;
+    }
     if (!bpb->bpbHugeSectors) {
         if (sectors > UINT32_MAX) {
             warnx("media too large for FAT sector count");
@@ -890,12 +905,14 @@ oklabel(const char *src)
  * Make a volume label.
  */
 static void
-mklabel(u_int8_t *dest, const char *src)
+mklabel(u_int8_t *dest, const char *src, bool uppercase)
 {
     int c, i;
 
     for (i = 0; i < 11; i++) {
-	c = *src ? toupper((unsigned char)*src++) : ' ';
+	c = *src ? (unsigned char)*src++ : ' ';
+        if (uppercase)
+            c = toupper(c);
 	*dest++ = !i && c == '\xe5' ? 5 : c;
     }
 }

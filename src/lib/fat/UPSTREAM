@@ -17,7 +17,16 @@ The adapter shares retrying I/O with bx, bounds declared media sizes, checks
 flush/close errors, and requires exclusive Linux block-device opens. Other
 device backends return ENOTSUP; regular images use POSIX I/O.
 
-The command syntax is FreeBSD's, not dosfstools'. -C refuses an existing path.
-Relative image paths are not rewritten beneath /dev. Disk-type database
-lookup is unsupported. Formatting can set labels; standalone labeling is not
-implemented.
+newfs_msdos and fsck_msdosfs retain FreeBSD syntax. The mkfs.fat/fsck.fat
+aliases use separate dosfstools-style option parsers, including EFI-oriented
+FAT32 defaults. Unsupported options fail before opening the target. -C refuses
+an existing path. Compatibility aliases follow symlinks without dropping the
+exclusive block-device claim.
+
+The layout calculation includes reserved FAT entries and computes the free
+count from the final aligned geometry. The checker bounds data clusters by
+FAT capacity and checks the standard FSInfo signature fields.
+
+Relative paths are not rewritten beneath /dev. Disk-type database lookup is
+unsupported. Formatting can set ASCII labels; standalone labeling and full
+dosfstools repair-policy/output compatibility are not implemented.

@@ -8,8 +8,8 @@
 
 /* create_size > 0 creates a new regular file, never truncates an existing one.
  * Linux block devices are held exclusively until close. Other device types
- * are rejected before data I/O. */
-int bx_fat_open(const char *path, bool writable, off_t create_size);
+ * are rejected before data I/O. Following aliases does not relax that claim. */
+int bx_fat_open(const char *path, bool writable, off_t create_size, bool follow_symlinks);
 int bx_fat_geometry(int fd, uint64_t *bytes, unsigned *sector_size);
 ssize_t bx_fat_read(int fd, void *buffer, size_t size);
 ssize_t bx_fat_write(int fd, const void *buffer, size_t size);

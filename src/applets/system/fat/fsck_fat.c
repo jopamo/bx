@@ -38,6 +38,8 @@ __RCSID("$NetBSD: main.c,v 1.10 1997/10/01 02:18:14 enami Exp $");
 #include <unistd.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <getopt.h>
+#include <strings.h>
 
 #include "lib/fat/repair/fsutil.h"
 #include "lib/fat/repair/ext.h"
@@ -49,6 +51,83 @@ int preen;		/* set when preening */
 int rdonly;		/* device is opened read only (supersedes above) */
 int skipclean;		/* skip clean file systems if preening */
 int allow_mmap;		/* Allow the use of mmap(), if possible */
+int boot_only;
+int require_free_hint;
+
+static bool dos_mode;
+static bool automatic;
+static bool detected;
+
+static void
+dos_help(void)
+{
+	puts("usage: fsck.fat [OPTIONS] DEVICE\n"
+	     "  -n        non-interactive read-only check\n"
+	     "  -a,-p,-y  automatic repair using conservative BSD repair choices\n"
+	     "  -r        interactive repair (default)\n"
+	     "  -b        read-only boot-sector check\n"
+	     "  -v        verbose output\n"
+	     "  -V        verify with a second read-only pass\n"
+	     "  --help    show help\n"
+	     "Unsupported recovery/variant options fail before opening DEVICE.\n"
+	     "BSD options and exit statuses: fsck_msdosfs.");
+}
+
+static int
+dos_check(int argc, char **argv)
+{
+	enum { HELP = 256, VARIANT };
+	static const struct option options[] = {
+		{"help", no_argument, NULL, HELP},
+		{"variant", required_argument, NULL, VARIANT},
+		{NULL, 0, NULL, 0}
+	};
+	int ch, mode = 0;
+	bool verify = false;
+
+	while ((ch = getopt_long(argc, argv, "abnprvyV", options, NULL)) != -1) {
+		int next = 0;
+		switch (ch) {
+		case 'n': next = 1; break;
+		case 'b': next = 1; boot_only = 1; break;
+		case 'a': case 'p': case 'y': next = 2; break;
+		case 'r': next = 3; break;
+		case 'v': break;
+		case 'V': verify = true; break;
+		case HELP: dos_help(); return 0;
+		case VARIANT:
+			if (!strcasecmp(optarg, "standard"))
+				break;
+			/* fall through */
+		default:
+			fprintf(stderr, "unsupported option; target not opened (use --help)\n");
+			return 2;
+		}
+		if (next) {
+			if (mode && mode != next) {
+				fprintf(stderr, "conflicting check/repair modes\n");
+				return 2;
+			}
+			mode = next;
+		}
+	}
+	if (argc - optind != 1) {
+		dos_help();
+		return 2;
+	}
+	alwaysno = mode == 1;
+	automatic = mode == 2;
+	require_free_hint = 0;
+	skipclean = 0;
+	setcdevname(argv[optind], 0);
+	int result = checkfilesys(argv[optind], true);
+	if (verify && result == 0) {
+		alwaysno = 1;
+		automatic = false;
+		result = checkfilesys(argv[optind], true);
+	}
+	return result != 0 || detected ? 1 : 0;
+}
 
 static void usage(void) __dead2;
 
@@ -57,8 +136,8 @@ usage(void)
 {
 
 	fprintf(stderr, "%s\n%s\n",
-	    "usage: fsck.fat -p [-f] filesystem ...",
-	    "       fsck.fat [-ny] filesystem ...");
+	    "usage: fsck_msdosfs -p [-f] filesystem ...",
+	    "       fsck_msdosfs [-ny] filesystem ...");
 	exit(1);
 }
 
@@ -70,6 +149,12 @@ bx_fsck_fat_main(int argc, char **argv)
 
 	skipclean = 1;
 	allow_mmap = 1;
+	require_free_hint = 1;
+	const char *name = strrchr(argv[0], '/');
+	name = name ? name + 1 : argv[0];
+	dos_mode = strcmp(name, "fsck_msdosfs") != 0;
+	if (dos_mode)
+		return dos_check(argc, argv);
 	while ((ch = getopt(argc, argv, "BCfFnpyM")) != -1) {
 		switch (ch) {
 		case 'B': /* for fsck_ffs compatibility */
@@ -118,7 +203,7 @@ bx_fsck_fat_main(int argc, char **argv)
 
 	while (--argc >= 0) {
 		setcdevname(*argv, preen);
-		erg = checkfilesys(*argv++);
+		erg = checkfilesys(*argv++, false);
 		if (erg > ret)
 			ret = erg;
 	}
@@ -135,6 +220,11 @@ ask(int def, const char *fmt, ...)
 
 	char prompt[256];
 	int c;
+
+	if (dos_mode)
+		detected = true;
+	if (automatic && !rdonly && !alwaysno)
+		return def;
 
 	if (alwaysyes || alwaysno || rdonly)
 		def = (alwaysyes && !rdonly && !alwaysno);

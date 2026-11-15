@@ -449,6 +449,17 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "mkdosfs",
+      "main": "bx_mkfs_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "mkfs.msdos",
       "main": "bx_mkfs_fat_main",
       "capabilities": [
@@ -483,6 +494,18 @@
     },
     {
       "name": "fsck.fat",
+      "main": "bx_fsck_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "dosfsck",
       "main": "bx_fsck_fat_main",
       "capabilities": [
         "filesystem-read",

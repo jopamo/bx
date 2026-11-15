@@ -16,10 +16,12 @@ _Static_assert(sizeof(off_t) >= 8, "FAT I/O requires 64-bit offsets");
 #include <sys/ioctl.h>
 #endif
 
-int bx_fat_open(const char *path, bool writable, off_t create_size)
+int bx_fat_open(const char *path, bool writable, off_t create_size, bool follow_symlinks)
 {
     struct stat st;
-    int flags = (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
+    int flags = (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC | O_NONBLOCK;
+    if (!follow_symlinks)
+        flags |= O_NOFOLLOW;
     if (create_size < 0 || (create_size && !writable)) {
         errno = EINVAL;
         return -1;

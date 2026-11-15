@@ -40,6 +40,7 @@
 
 #include "lib/fat/format/mkfs_msdos.h"
 #include "applets.h"
+#include "dos.h"
 
 #define	argto1(arg, lo, msg)  argtou(arg, lo, 0xff, msg)
 #define	argto2(arg, lo, msg)  argtou(arg, lo, 0xffff, msg)
@@ -73,6 +74,10 @@ get_tstamp(const char *b)
 int
 bx_mkfs_fat_main(int argc, char *argv[])
 {
+    const char *name = strrchr(argv[0], '/');
+    name = name ? name + 1 : argv[0];
+    if (strcmp(name, "newfs_msdos"))
+        return bx_fat_mkfs_dos(argc, argv);
     static const char opts[] = "@:NAB:C:F:I:L:O:S:a:b:c:e:f:h:i:k:m:n:o:r:s:T:u:";
     struct msdos_options o;
     const char *fname, *dtype;
@@ -263,7 +268,7 @@ static void
 usage(void)
 {
     fprintf(stderr,
-	    "usage: %s [ -options ] special [disktype]\n", "mkfs.fat");
+	    "usage: newfs_msdos [ -options ] special [disktype]\n");
     fprintf(stderr, "where the options are:\n");
 static struct {
     char o;

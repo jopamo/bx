@@ -206,11 +206,7 @@ readboot(int dosfs, struct bootblock *boot)
 		    || fsinfo[0x1fc]
 		    || fsinfo[0x1fd]
 		    || fsinfo[0x1fe] != 0x55
-		    || fsinfo[0x1ff] != 0xaa
-		    || fsinfo[0x3fc]
-		    || fsinfo[0x3fd]
-		    || fsinfo[0x3fe] != 0x55
-		    || fsinfo[0x3ff] != 0xaa) {
+		    || fsinfo[0x1ff] != 0xaa) {
 			pwarn("Invalid signature in fsinfo block\n");
 			if (ask(0, "Fix")) {
 				memcpy(fsinfo, "RRaA", 4);
@@ -218,9 +214,6 @@ readboot(int dosfs, struct bootblock *boot)
 				fsinfo[0x1fc] = fsinfo[0x1fd] = 0;
 				fsinfo[0x1fe] = 0x55;
 				fsinfo[0x1ff] = 0xaa;
-				fsinfo[0x3fc] = fsinfo[0x3fd] = 0;
-				fsinfo[0x3fe] = 0x55;
-				fsinfo[0x3ff] = 0xaa;
 				if (lseek(dosfs, boot->bpbFSInfo *
 				    boot->bpbBytesPerSec, SEEK_SET)
 				    != boot->bpbFSInfo * boot->bpbBytesPerSec
@@ -294,19 +287,21 @@ readboot(int dosfs, struct bootblock *boot)
 		return FSFATAL;
 	}
 
+	uint64_t entries;
 	switch (boot->ClustMask) {
 	case CLUST32_MASK:
-		boot->NumFatEntries = (boot->FATsecs * boot->bpbBytesPerSec) / 4;
+		entries = ((uint64_t)boot->FATsecs * boot->bpbBytesPerSec) / 4;
 		break;
 	case CLUST16_MASK:
-		boot->NumFatEntries = (boot->FATsecs * boot->bpbBytesPerSec) / 2;
+		entries = ((uint64_t)boot->FATsecs * boot->bpbBytesPerSec) / 2;
 		break;
 	default:
-		boot->NumFatEntries = (boot->FATsecs * boot->bpbBytesPerSec * 2) / 3;
+		entries = ((uint64_t)boot->FATsecs * boot->bpbBytesPerSec * 2) / 3;
 		break;
 	}
 
-	if (boot->NumFatEntries < boot->NumClusters) {
+	boot->NumFatEntries = entries > UINT32_MAX ? UINT32_MAX : entries;
+	if (entries < (uint64_t)boot->NumClusters + CLUST_FIRST) {
 		pfatal("FAT size too small, %u entries won't fit into %u sectors\n",
 		       boot->NumClusters, boot->FATsecs);
 		return FSFATAL;
