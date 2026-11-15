@@ -1,6 +1,6 @@
 include Makefile.configure
 
-CPPFLAGS += -I. -I../..
+CPPFLAGS += -I. -I../../..
 
 OBJS	   = batch.o \
 	     blocks.o \
@@ -41,17 +41,7 @@ OBJS	   = batch.o \
 	     symlinks.o \
 	     uploader.o
 
-ZLIBOBJS      = zlib/adler32.o \
-		zlib/compress.o \
-		zlib/crc32.o \
-		zlib/deflate.o \
-		zlib/inffast.o \
-		zlib/inflate.o \
-		zlib/inftrees.o \
-		zlib/trees.o \
-		zlib/zutil.o
-
-ALLOBJS	   = $(OBJS) $(ZLIBOBJS) \
+ALLOBJS	   = $(OBJS) \
 	     main.o
 all: openrsync
 
@@ -63,28 +53,30 @@ debug: CFLAGS += -O0 -g3
 debug: openrsync
 
 openrsync: $(ALLOBJS)
-	$(CC) $(LDFLAGS) -o $@ $(ALLOBJS) -lm $(LDADD_BSD) $(LDADD_LIB_SOCKET) $(LDADD_SCAN_SCALED) $(LDADD_B64_NTOP) $(LDADD_CRYPT)
+	$(CC) $(LDFLAGS) -o $@ $(ALLOBJS) -lm -lz $(LDADD_BSD) $(LDADD_LIB_SOCKET) $(LDADD_SCAN_SCALED) $(LDADD_B64_NTOP) $(LDADD_CRYPT)
 
-bx_rsync_sbuf.o: ../../applets/network/rsync/sbuf.c portable_sbuf.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../applets/network/rsync/sbuf.c
+sender.o downloader.o: compression.h
 
-bx_text_buffer.o: ../../lib/text_buffer.c ../../lib/text_buffer.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/text_buffer.c
+bx_rsync_sbuf.o: sbuf.c portable_sbuf.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ sbuf.c
 
-bx_open_resolve.o: ../../lib/open_resolve.c ../../lib/open_resolve.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../lib/open_resolve.c
+bx_text_buffer.o: ../../../lib/text_buffer.c ../../../lib/text_buffer.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../../lib/text_buffer.c
 
-bx_rsync_mode.o: ../../applets/network/rsync/mode.c ../../lib/file_info_fmt.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../applets/network/rsync/mode.c
+bx_open_resolve.o: ../../../lib/open_resolve.c ../../../lib/open_resolve.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../../lib/open_resolve.c
 
-bx_file_info_fmt.o: ../../lib/file_info_fmt.c ../../lib/file_info_fmt.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/file_info_fmt.c
+bx_rsync_mode.o: mode.c ../../../lib/file_info_fmt.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ mode.c
 
-bx_rsync_humanize.o: ../../applets/network/rsync/humanize.c portable_util.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../applets/network/rsync/humanize.c
+bx_file_info_fmt.o: ../../../lib/file_info_fmt.c ../../../lib/file_info_fmt.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../../lib/file_info_fmt.c
 
-bx_size_parse.o: ../../lib/size_parse.c ../../lib/size_parse.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/size_parse.c
+bx_rsync_humanize.o: humanize.c portable_util.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ humanize.c
+
+bx_size_parse.o: ../../../lib/size_parse.c ../../../lib/size_parse.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../../lib/size_parse.c
 
 install: all
 	mkdir -p $(DESTDIR)$(BINDIR)

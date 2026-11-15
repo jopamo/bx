@@ -43,9 +43,10 @@
 #endif
 
 #include "extern.h"
-#include "zlib/zlib.h"
+#include <zlib.h>
 
 #ifdef BX_RSYNC_APPLET
+#include "dispatch/applets.h"
 #include "bx/self_exec.h"
 extern char **environ;
 #endif
@@ -1968,7 +1969,11 @@ child_exited(pid_t pid, int st)
 }
 
 int
+#ifdef BX_RSYNC_APPLET
+bx_rsync_main(int argc, char *argv[])
+#else
 main(int argc, char *argv[])
+#endif
 {
 	pid_t		 child;
 	int		 fds[2], sd = -1, rc, rc2, st, i;

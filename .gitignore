@@ -1,5 +1,8 @@
 *.md
 !/README.md
+!/src/applets/network/rsync/LICENSE.md
+!/src/applets/network/rsync/README.md
+!/src/applets/network/rsync/TODO.md
 tests/__*
 __pycache__/
 *.py[cod]

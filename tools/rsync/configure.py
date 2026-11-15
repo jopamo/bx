@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate openrsync's feature header without changing vendored sources.
+"""Generate rsync's feature header without changing the source tree.
 
 Apple's configure checks compile and link, but do not run target binaries.
-Thus the same probes work with Meson's cross compiler as well as natively.
+The same probes work with Meson's host and cross compilers.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def main() -> int:
     env["CC"] = " ".join(sys.argv[3:])
 
     # Oconfigure uses feature_probes.c and writes config.h, Makefile.configure, and
-    # temporary probe files. Keep them out of the vendored source tree.
+    # temporary probe files. Keep them out of the source tree.
     with tempfile.TemporaryDirectory(prefix="bx-openrsync-config-") as workdir:
         shutil.copyfile(
             configure.parent / "feature_probes.c", Path(workdir) / "feature_probes.c"

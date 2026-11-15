@@ -40,7 +40,7 @@
 #include <unistd.h>
 #include <limits.h>
 
-#include "zlib/zlib.h"
+#include "compression.h"
 #include "md4.h"
 
 #include "extern.h"
@@ -992,12 +992,11 @@ decompress_reinit(void)
 }
 
 static enum protocol_token_result
-protocol_token_ff_compress(struct sess *sess, struct download *p, size_t tok)
+protocol_token_ff_compress(struct download *p, size_t tok)
 {
-	char		*buf = NULL, *dbuf = NULL;
-	size_t		 sz, clen, rlen;
+	char		*buf = NULL;
+	size_t		 sz;
 	off_t		 off;
-	unsigned char	 hdr[5];
 	int		 res;
 
 	if (tok >= p->blk.blksz) {
@@ -1039,64 +1038,12 @@ protocol_token_ff_compress(struct sess *sess, struct download *p, size_t tok)
 		return TOKEN_ERROR;
 	}
 
-	dbuf = sess->token_dbuf;
-	if (sess->token_dbufsz < MAX_CHUNK_BUF) {
-		dbuf = malloc(MAX_CHUNK_BUF);
-		if (dbuf == NULL) {
-			ERRX1("malloc");
-			fmap_untrap(p->map);
-			return TOKEN_ERROR;
-		}
-
-		free(sess->token_dbuf);
-		sess->token_dbuf = dbuf;
-		sess->token_dbufsz = MAX_CHUNK_BUF;
-	}
-
-	dectx.avail_in = 0;
-	rlen = sz;
-	clen = 0;
-	hdr[0] = '\0';
-	res = Z_OK;
-	while (res == Z_OK) {
-		if (dectx.avail_in == 0) {
-			if (clen == 0) {
-				/* Provide a stored-block header */
-				clen = rlen;
-				if (clen > 0xffff) {
-					clen = 0xffff;
-				}
-				hdr[1] = clen;
-				hdr[2] = clen >> 8;
-				hdr[3] = ~hdr[1];
-				hdr[4] = ~hdr[2];
-				dectx.next_in = (Bytef *)hdr;
-				dectx.avail_in = 5;
-			} else {
-				dectx.next_in = (Bytef *)buf;
-				dectx.avail_in = (uInt)clen;
-				rlen -= clen;
-				clen = 0;
-			}
-		}
-		dectx.next_out = (Bytef *)dbuf;
-		dectx.avail_out = MAX_CHUNK_BUF;
-
-		res = inflate(&dectx, Z_SYNC_FLUSH);
-
-		if (res != Z_OK) {
-			fmap_untrap(p->map);
-			ERRX("inflate ff res=%d", res);
-			if (dectx.msg) {
-				ERRX("inflate error: %s", dectx.msg);
-			}
-			return TOKEN_ERROR;
-		}
-		if (dectx.avail_out == 0) {
-			continue;
-		} else if (rlen == 0) {
-			break;
-		}
+	res = bx_rsync_match_history(&dectx, (const Bytef *)buf, sz,
+	    inflateSetDictionary);
+	if (res != Z_OK) {
+		fmap_untrap(p->map);
+		ERRX("inflateSetDictionary res=%d", res);
+		return TOKEN_ERROR;
 	}
 
 	fmap_untrap(p->map);
@@ -1183,7 +1130,7 @@ protocol_token_ff(struct sess *sess, struct download *p, size_t tok)
 		return TOKEN_ERROR;
 	}
 	if (sess->opts->compress) {
-		if (protocol_token_ff_compress(sess, p, tok) == TOKEN_ERROR) {
+		if (protocol_token_ff_compress(p, tok) == TOKEN_ERROR) {
 			ERRX1("protocol_token_ff_compress");
 			return TOKEN_ERROR;
 		}

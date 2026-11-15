@@ -3,8 +3,8 @@ Commit: 13eacd7e9a204b236310dab23682f6354ecc69bd (rsync-184)
 Directory: openrsync/
 License: ISC and the other notices retained in the source and LICENSE.md.
 
-The original program is built as a static library in bx. The applet entry
-point is src/applets/network/rsync/rsync.c. The Meson build runs Apple's
+The rsync implementation is built as a static library in bx. The applet entry
+point is bx_rsync_main in main.c. The Meson build runs Apple's
 compile/link-only configure probes out of tree; no generated header is kept
 in the repository. The standalone Makefile uses shared bx sources.
 
@@ -17,9 +17,11 @@ Local changes to Apple's files:
   platforms without a suitable primitive return ENOTSUP.
 - The bx applet re-executes its own verified executable descriptor for
   local transfers. Remote transfers still default to the remote rsync.
-- All nonlocal symbols in this pinned source are namespaced in bx to avoid
-  clashes with other imported libraries. The bundled rsync-modified zlib is
-  also namespaced and linked for protocol-compatible compressed deltas.
+- Nonlocal symbols are namespaced in bx to avoid clashes with other libraries.
+- Compression uses the shared system zlib dependency. Matched blocks update
+  the raw-deflate dictionaries with deflateSetDictionary and
+  inflateSetDictionary, without passing matched data through the codec.
+  Both retain protocol 29's repeated-prefix history for large matched blocks.
 - The generated FTS fallback declarations are inside the config header guard.
 - The metadata permission mask uses the standard mode bits on systems without
   ALLPERMS.

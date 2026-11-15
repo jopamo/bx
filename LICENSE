@@ -29,8 +29,7 @@ areas include:
   src/lib/fetch/COPYING.Mira
 - src/lib/manual/ — mandoc/OpenBSD-derived code under the terms collected in
   src/lib/manual/COPYING.mandoc
-- src/vendor/openrsync/ — ISC and other retained notices; its zlib directory
-  carries the zlib license in zlib.h
+- src/applets/network/rsync/ — ISC and other retained notices
 
 Subtree README/COPYING/LICENSE files and per-file headers control when they
 differ from this top-level default.

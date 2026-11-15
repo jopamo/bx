@@ -34,7 +34,7 @@
 #include <unistd.h>
 #include <limits.h>
 
-#include "zlib/zlib.h"
+#include "compression.h"
 #include "md4.h"
 
 #include "extern.h"
@@ -198,8 +198,8 @@ static int
 token_ff_compressed(struct sess *sess, struct send_up *up, size_t tok,
 	struct flist *fl)
 {
-	char		*buf = NULL, *cbuf = NULL;
-	size_t		 sz, clen, rlen;
+	char		*buf = NULL;
+	size_t		 sz;
 	off_t		 off;
 	int		 res;
 
@@ -225,46 +225,22 @@ token_ff_compressed(struct sess *sess, struct send_up *up, size_t tok,
 	}
 	buf = fmap_data(up->stat.map, off, sz);
 
-	cbuf = sess->token_cbuf;
-	if (sess->token_cbufsz < MAX_CHUNK_BUF) {
-		cbuf = malloc(MAX_CHUNK_BUF);
-		if (cbuf == NULL) {
-			ERRX1("malloc");
-			fmap_untrap(up->stat.map);
-			return 0;
-		}
-
-		free(sess->token_cbuf);
-		sess->token_cbuf = cbuf;
-		sess->token_cbufsz = MAX_CHUNK_BUF;
-	}
-
 	if (!compress_reinit(sess)) {
 		ERRX1("compress_reinit");
 		fmap_untrap(up->stat.map);
 		return 0;
 	}
 
-	cctx.avail_in = 0;
-	rlen = sz;
-	clen = 0;
-	while (rlen > 0) {
-		clen = rlen;
-		if (clen > MAX_CHUNK) {
-			clen = MAX_CHUNK;
-		}
-		rlen -= clen;
-		cctx.next_in = (Bytef *)buf;
-		cctx.avail_in = (uInt)clen;
-		cctx.next_out = (Bytef *)cbuf;
-		cctx.avail_out = TOKEN_MAX_DATA;
-		res = deflate(&cctx, Z_INSERT_ONLY);
-		if (res != Z_OK || cctx.avail_in != 0) {
-			fmap_untrap(up->stat.map);
-			ERRX("deflate ff res=%d", res);
-			return 0;
-		}
-		buf += clen;
+	/*
+	 * Literal runs end with Z_SYNC_FLUSH. At that raw-deflate boundary,
+	 * append matched bytes to the dictionary without emitting them.
+	 */
+	res = bx_rsync_match_history(&cctx, (const Bytef *)buf, sz,
+	    deflateSetDictionary);
+	if (res != Z_OK) {
+		fmap_untrap(up->stat.map);
+		ERRX("deflateSetDictionary res=%d", res);
+		return 0;
 	}
 
 	fmap_untrap(up->stat.map);
@@ -424,8 +400,8 @@ send_up_fsm_compressed(struct sess *sess, size_t *phase,
 		io_lowbuffer_int(sess, *wb,
 			&pos, *wbsz, -(up->stat.curtok + 1));
 
-		token_ff_compressed(sess, up, -(up->stat.curtok + 1), fl);
-		return 1;
+		return token_ff_compressed(sess, up,
+		    -(up->stat.curtok + 1), fl);
 	case BLKSTAT_HASH:
 		/*
 		 * The hash following transmission of all file contents.
