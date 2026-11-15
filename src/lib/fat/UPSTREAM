@@ -1,0 +1,23 @@
+FreeBSD src
+https://github.com/freebsd/freebsd-src
+revision: 3c6fd437b1824caeddb5f0d4570d43cf0c999c14
+
+format/: sbin/newfs_msdos/mkfs_msdos.[ch]
+repair/: sbin/fsck_msdosfs/{boot,check,dir,fat}.c, dosfs.h, ext.h
+repair/fsutil.[ch]: diagnostic subset of sbin/fsck/fsutil.[ch]
+../../applets/system/fat/: sbin/newfs_msdos/newfs_msdos.c and
+                         sbin/fsck_msdosfs/main.c
+
+Original per-file notices remain authoritative: BSD-2-Clause, except
+fsutil.c (BSD-3-Clause). bx adaptation files are BSD-2-Clause.
+
+The formatter and checker retain separate algorithms and process-owned state.
+Their entry points are exec-only and their internal symbols are bx-prefixed.
+The adapter shares retrying I/O with bx, bounds declared media sizes, checks
+flush/close errors, and requires exclusive Linux block-device opens. Other
+device backends return ENOTSUP; regular images use POSIX I/O.
+
+The command syntax is FreeBSD's, not dosfstools'. -C refuses an existing path.
+Relative image paths are not rewritten beneath /dev. Disk-type database
+lookup is unsupported. Formatting can set labels; standalone labeling is not
+implemented.

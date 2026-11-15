@@ -1675,6 +1675,8 @@ rsync_lib = static_library(
 )
 bx_deps += rsync_support_deps
 
+subdir('src/lib/fat')
+
 bx_markdown_lib = static_library(
   'bx_markdown',
   files('src/lib/markdown/writer.c'),
@@ -1796,6 +1798,7 @@ bx_exe = executable('bx',
     manual_lib,
     bx_zip_lib,
     rsync_lib,
+    fat_lib,
   ],
   link_args : bx_link_args,
   install : true,

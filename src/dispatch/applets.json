@@ -438,6 +438,98 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "mkfs.fat",
+      "main": "bx_mkfs_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "mkfs.msdos",
+      "main": "bx_mkfs_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "mkfs.vfat",
+      "main": "bx_mkfs_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "newfs_msdos",
+      "main": "bx_mkfs_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "fsck.fat",
+      "main": "bx_fsck_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "fsck.msdos",
+      "main": "bx_fsck_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "fsck.vfat",
+      "main": "bx_fsck_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "fsck_msdosfs",
+      "main": "bx_fsck_fat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "mount",
       "main": "bx_mount_main",
       "capabilities": [

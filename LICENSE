@@ -30,6 +30,8 @@ areas include:
 - src/lib/manual/ — mandoc/OpenBSD-derived code under the terms collected in
   src/lib/manual/COPYING.mandoc
 - src/applets/network/rsync/ — ISC and other retained notices
+- src/lib/fat/ and src/applets/system/fat/ — FreeBSD FAT utilities under
+  BSD-2-Clause, with BSD-3-Clause checker diagnostics
 
 Subtree README/COPYING/LICENSE files and per-file headers control when they
 differ from this top-level default.
