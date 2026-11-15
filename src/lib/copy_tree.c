@@ -765,7 +765,9 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     }
     have_opened_dest_stat = true;
     if (!ctx->options->attributes_only) {
-        if (S_ISREG(opened_dest_stat.st_mode) && ftruncate(dest_fd, 0) != 0) {
+        if (S_ISREG(opened_dest_stat.st_mode) &&
+            (!created_destination_from_scratch || opened_dest_stat.st_size != 0) &&
+            ftruncate(dest_fd, 0) != 0) {
             bx_perror_path(ctx->diag, dest_path);
             goto fail;
         }
