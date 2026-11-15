@@ -1077,10 +1077,6 @@ rsync_receiver(struct sess *sess, struct cleanup_ctx *cleanup_ctx,
 				if (phase == max_phase + 1)
 					break;
 
-				if (sess->opts->hard_links && phase == 2 &&
-				    !sess->opts->dry_run)
-					make_hardlinks(sess, fl, flsz, &hls, dfd);
-
 				LOG3("%s: receiver ready for phase %d data (%zu to redo)",
 				    root, phase + 1, download_needs_redo(dl));
 
@@ -1098,6 +1094,10 @@ rsync_receiver(struct sess *sess, struct cleanup_ctx *cleanup_ctx,
 	}
 
 	assert(phase == max_phase + 1);
+
+	/* Delayed updates may replace a hardlink group's leader in the last phase. */
+	if (sess->opts->hard_links && !sess->opts->dry_run)
+		make_hardlinks(sess, fl, flsz, &hls, dfd);
 
 	/*
 	 * Following transfers, we'll take care of --delete-after.
