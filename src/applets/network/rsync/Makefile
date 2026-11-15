@@ -8,6 +8,8 @@ OBJS	   = batch.o \
 	     client.o \
 	     compats.o \
 	     copy.o \
+	     bx_copy_stream.o \
+	     bx_xreadwrite.o \
 	     daemon.o \
 	     daemon_cfg.o \
 	     daemon_misc.o \
@@ -56,6 +58,12 @@ openrsync: $(ALLOBJS)
 	$(CC) $(LDFLAGS) -o $@ $(ALLOBJS) -lm -lz $(LDADD_BSD) $(LDADD_LIB_SOCKET) $(LDADD_SCAN_SCALED) $(LDADD_B64_NTOP) $(LDADD_CRYPT)
 
 sender.o downloader.o: compression.h
+
+bx_copy_stream.o: ../../../lib/copy_stream.c ../../../lib/copy_data.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../../lib/copy_stream.c
+
+bx_xreadwrite.o: ../../../lib/xreadwrite.c ../../../lib/xreadwrite.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../../lib/xreadwrite.c
 
 bx_rsync_sbuf.o: sbuf.c portable_sbuf.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ sbuf.c

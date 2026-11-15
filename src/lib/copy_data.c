@@ -5,19 +5,9 @@
 #include <sys/stat.h>
 #include <linux/fs.h>
 #include <errno.h>
-#include <string.h>
 
 #include "copy_data.h"
 #include "lib/fd_ops.h"
-#include "lib/xreadwrite.h"
-
-static bool is_all_zeros(const char* buf, size_t size) {
-    for (size_t i = 0; i < size; i++) {
-        if (buf[i] != 0)
-            return false;
-    }
-    return true;
-}
 
 static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
     if (errnum == EINVAL || errnum == ENOTSUP || errnum == ENOSYS) {
@@ -29,71 +19,6 @@ static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
     }
 #endif
     return false;
-}
-
-static int bx_copy_data_buffered(int src_fd, int dest_fd, enum bx_sparse_mode sparse_mode) {
-    char buffer[65536];
-    off_t last_write_end = 0;
-    bool sparse_detected = false;
-
-    while (true) {
-        ssize_t nread = bx_xread(src_fd, buffer, sizeof(buffer));
-        if (nread == 0) {
-            if (sparse_detected) {
-                if (ftruncate(dest_fd, last_write_end) != 0) {
-                    return BX_COPY_DATA_WRITE_ERROR;
-                }
-            }
-            return BX_COPY_DATA_SUCCESS;
-        }
-        if (nread < 0) {
-            return BX_COPY_DATA_READ_ERROR;
-        }
-
-        bool all_zeros = false;
-        if (sparse_mode != BX_SPARSE_NEVER) {
-            all_zeros = is_all_zeros(buffer, (size_t)nread);
-        }
-
-        if (all_zeros && (sparse_mode == BX_SPARSE_ALWAYS || nread == sizeof(buffer))) {
-            if (lseek(dest_fd, nread, SEEK_CUR) < 0) {
-                return BX_COPY_DATA_WRITE_ERROR;
-            }
-            last_write_end += nread;
-            sparse_detected = true;
-        }
-        else {
-            if (!bx_xwrite_all(dest_fd, buffer, (size_t)nread)) {
-                return BX_COPY_DATA_WRITE_ERROR;
-            }
-            last_write_end += nread;
-        }
-    }
-}
-
-static int bx_copy_data_copy_range(int src_fd, int dest_fd, off_t length) {
-    char buffer[65536];
-    off_t remaining = length;
-
-    while (remaining > 0) {
-        size_t chunk = sizeof(buffer);
-        if ((off_t)chunk > remaining) {
-            chunk = (size_t)remaining;
-        }
-
-        ssize_t nread = bx_xread(src_fd, buffer, chunk);
-        if (nread <= 0) {
-            return BX_COPY_DATA_READ_ERROR;
-        }
-
-        if (!bx_xwrite_all(dest_fd, buffer, (size_t)nread)) {
-            return BX_COPY_DATA_WRITE_ERROR;
-        }
-
-        remaining -= nread;
-    }
-
-    return BX_COPY_DATA_SUCCESS;
 }
 
 static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) {
@@ -152,7 +77,7 @@ static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) 
             return BX_COPY_DATA_WRITE_ERROR;
         }
 
-        int copy_res = bx_copy_data_copy_range(src_fd, dest_fd, hole_offset - data_offset);
+        int copy_res = bx_copy_data_buffered(src_fd, dest_fd, hole_offset - data_offset, BX_SPARSE_NEVER);
         if (copy_res != BX_COPY_DATA_SUCCESS) {
             *handled_out = true;
             return copy_res;
@@ -198,8 +123,8 @@ int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options* opt
         if (handled || res != BX_COPY_DATA_SUCCESS) {
             return res;
         }
-        return bx_copy_data_buffered(src_fd, dest_fd, BX_SPARSE_NEVER);
+        return bx_copy_data_buffered(src_fd, dest_fd, -1, BX_SPARSE_NEVER);
     }
 
-    return bx_copy_data_buffered(src_fd, dest_fd, sparse_mode);
+    return bx_copy_data_buffered(src_fd, dest_fd, -1, sparse_mode);
 }

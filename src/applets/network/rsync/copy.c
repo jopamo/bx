@@ -31,12 +31,11 @@
 #include <unistd.h>
 
 #include "extern.h"
+#include "lib/copy_data.h"
 
 #ifndef MAX
 #define	MAX(a,b)	(((a)>(b))?(a):(b))
 #endif
-
-#define _MAXBSIZE (64 * 1024)
 
 /*
  * We're using AT_RESOLVE_BENEATH in a couple of places just for some additional
@@ -314,24 +313,8 @@ is_unsafe_link(const char *link, const char *src, const char *root)
 static int
 copy_internal(int fromfd, int tofd)
 {
-	char buf[_MAXBSIZE];
-	ssize_t r, w;
-
-	while ((r = read(fromfd, buf, sizeof(buf))) > 0) {
-		if (iszerobuf(buf, sizeof(buf))) {
-			if (lseek(tofd, r, SEEK_CUR) == -1)
-				return -1;
-		} else {
-			w = write(tofd, buf, r);
-			if (r != w || w == -1)
-				return -1;
-		}
-	}
-	if (r == -1)
-		return -1;
-	if (ftruncate(tofd, lseek(tofd, 0, SEEK_CUR)) == -1)
-		return -1;
-	return 0;
+	return bx_copy_data_buffered(fromfd, tofd, -1, BX_SPARSE_ALWAYS) ==
+	    BX_COPY_DATA_SUCCESS ? 0 : -1;
 }
 
 /*
