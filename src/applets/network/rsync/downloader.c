@@ -44,6 +44,7 @@
 #include "md4.h"
 
 #include "extern.h"
+#include "lib/xreadwrite.h"
 
 #ifndef ACCESSPERMS
 #define ACCESSPERMS	(S_IRWXU|S_IRWXG|S_IRWXO)
@@ -521,18 +522,8 @@ static bool
 downloader_write(struct sess *sess, struct download *p,
     const char *buf, size_t sz)
 {
-	ssize_t ssz;
-
-retry:
-	ssz = write(p->fd, buf, sz);
-	if (ssz == -1) {
-		if (errno == EINTR)
-			goto retry;
-
+	if (!bx_xwrite_all(p->fd, buf, sz)) {
 		ERR("%s: write", p->fname);
-		return false;
-	} else if ((size_t)ssz != sz) {
-		ERRX("%s: short write", p->fname);
 		return false;
 	}
 
@@ -542,10 +533,15 @@ retry:
 static bool
 buf_flush_holes(struct sess *sess, struct download *p)
 {
+	off_t pos;
+
 	if (p->holestart == -1)
 		return true;
 
-	if (lseek(p->fd, p->fdpos, SEEK_SET) == -1) {
+	do {
+		pos = lseek(p->fd, p->fdpos, SEEK_SET);
+	} while (pos == -1 && errno == EINTR);
+	if (pos == -1) {
 		ERR("%s: lseek", p->fname);
 		return false;
 	}
@@ -606,8 +602,8 @@ buf_copy_chunk(struct sess *sess, struct download *p,
 		if (p->holestart == -1)
 			p->holestart = p->fdpos;
 	} else {
-		if (p->holestart != -1)
-			buf_flush_holes(sess, p);
+		if (p->holestart != -1 && !buf_flush_holes(sess, p))
+			return false;
 		if (!downloader_write(sess, p, writebuf, clipsz))
 			return false;
 	}
@@ -710,8 +706,11 @@ buf_copy(const char *buf, size_t sz, struct download *p, struct sess *sess)
 
 		origsz = *pwritesz;
 		while (*pwritesz != 0) {
-			if (!buf_copy_chunk(sess, p, &writebuf, pwritesz))
+			if (!buf_copy_chunk(sess, p, &writebuf, pwritesz)) {
+				/* Cleanup must not replay a partially written buffer. */
+				p->obufsz = 0;
 				return 0;
+			}
 
 			/* Confirm that our math isn't off somewhere. */
 			assert(*pwritesz <= origsz);
@@ -724,8 +723,8 @@ buf_copy(const char *buf, size_t sz, struct download *p, struct sess *sess)
 	 * If the caller is explicitly trying to flush the buffer, then we want
 	 * to go ahead and advance past any remaining holes in the file.
 	 */
-	if (buf == NULL && p->holestart != -1)
-		buf_flush_holes(sess, p);
+	if (buf == NULL && !buf_flush_holes(sess, p))
+		return 0;
 
 	return 1;
 }
@@ -1938,6 +1937,22 @@ again:
 	}
 
 	/*
+	 * Finish trailing holes and in-place size changes before backup or
+	 * publication can mutate the destination pathname.
+	 */
+	if (p->fd >= 0 && !sess->opts->dry_run) {
+		int res;
+
+		do {
+			res = ftruncate(p->fd, p->fdpos);
+		} while (res == -1 && errno == EINTR);
+		if (res == -1) {
+			ERR("%s: ftruncate", f->path);
+			goto out;
+		}
+	}
+
+	/*
 	 * Once we successfully transfer it, unmark it for redo so that we don't
 	 * erroneously clean it up later.
 	 */
@@ -2080,14 +2095,6 @@ again:
 		usethis = f->path;
 	}
 
-	/*
-	 * For --inplace, we should adjust it down to the correct
-	 * size.  For fresh files, we may have had a hole at the end of the
-	 * file that we wouldn't have written after; thus, the size ends up
-	 * being incorrect.
-	 */
-	if (ftruncate(p->fd, p->fdpos) == -1)
-		ERR("%s: ftruncate", f->path);
 	if (!download_is_inplace(sess, p, false)) {
 		int fromfd;
 
