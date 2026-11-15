@@ -442,17 +442,8 @@ static char* bx_copy_required_self_copy_child(struct bx_copy_context* ctx, const
     return component;
 }
 
-static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_copy_context* ctx) {
+static void bx_copy_data_diagnose(struct bx_copy_context* ctx, int res) {
     struct bx_diag_ctx* diag = ctx->diag;
-    const struct bx_copy_options* options = ctx->options;
-    struct bx_copy_data_options data_opts;
-    data_opts.sparse_mode = options->sparse_mode;
-    data_opts.reflink_mode = options->reflink_mode;
-
-    int res = bx_copy_data_with_buffer(src_fd, dest_fd, &data_opts, &ctx->buffer);
-    if (res == BX_COPY_DATA_SUCCESS) {
-        return res;
-    }
     if (res == BX_COPY_DATA_READ_ERROR) {
         bx_perror_path(diag, "read");
     }
@@ -465,6 +456,15 @@ static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_copy_context
     else if (res == BX_COPY_DATA_RANGE_ERROR) {
         bx_perror_path(diag, "copy_file_range");
     }
+}
+
+static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_copy_context* ctx) {
+    struct bx_copy_data_options data_opts = {
+        .sparse_mode = ctx->options->sparse_mode,
+        .reflink_mode = ctx->options->reflink_mode,
+    };
+    int res = bx_copy_data_with_buffer(src_fd, dest_fd, &data_opts, &ctx->buffer);
+    bx_copy_data_diagnose(ctx, res);
     return res;
 }
 
@@ -641,6 +641,75 @@ static bool bx_copy_cleanup_failed_created_destination(struct bx_copy_context* c
     return true;
 }
 
+static bool bx_copy_finish_regular_file(struct bx_copy_context* ctx,
+                                        const char* src_path, const char* dest_path,
+                                        const struct stat* src_stat,
+                                        const struct stat* recorded_dest,
+                                        int* src_fd, int* dest_fd) {
+    if (!bx_copy_apply_fd_attrs(ctx, *src_fd, *dest_fd, src_stat))
+        return false;
+    struct stat link_dest;
+    if (bx_copy_should_track_link_entry(ctx, src_stat) && !S_ISLNK(recorded_dest->st_mode)) {
+        if (fstat(*dest_fd, &link_dest) != 0) {
+            bx_perror_path(ctx->diag, dest_path);
+            return false;
+        }
+        recorded_dest = &link_dest;
+    }
+    if (!bx_fd_close(dest_fd, dest_path, ctx->diag))
+        return false;
+    if (*src_fd >= 0 && !bx_fd_close(src_fd, src_path, ctx->diag))
+        return false;
+    if (!bx_copy_add_link_entry(ctx, src_stat, dest_path, recorded_dest))
+        return false;
+    bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
+    return true;
+}
+
+struct bx_copy_pending_file {
+    struct bx_copy_job job;
+    char* src_path;
+    char* dest_path;
+    struct stat src_stat;
+    struct stat dest_stat;
+};
+
+static bool bx_copy_finish_pending_file(struct bx_copy_job* job, void* owner) {
+    struct bx_copy_pending_file* file = (struct bx_copy_pending_file*)job;
+    struct bx_copy_context* ctx = owner;
+    bool ok = job->result == BX_COPY_DATA_SUCCESS;
+
+    if (ok) {
+        ok = bx_copy_finish_regular_file(ctx, file->src_path, file->dest_path,
+                                         &file->src_stat, &file->dest_stat,
+                                         &job->src_fd, &job->dest_fd);
+    }
+    else {
+        errno = job->error;
+        bx_copy_data_diagnose(ctx, job->result);
+    }
+    bx_fd_cleanup(&job->src_fd);
+    bx_fd_cleanup(&job->dest_fd);
+    if (job->result == BX_COPY_DATA_REFLINK_FAILED)
+        (void)bx_copy_cleanup_failed_created_destination(ctx, file->dest_path, &file->dest_stat);
+    free(file->src_path);
+    free(file->dest_path);
+    free(file);
+    return ok;
+}
+
+static int bx_copy_open_file(struct bx_copy_context* ctx, const char* path,
+                             int flags, mode_t mode, struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_cloexec(path, flags, mode);
+    if (fd < 0 && ctx->queue != NULL && (errno == EMFILE || errno == ENFILE)) {
+        (void)bx_copy_queue_drain(ctx->queue);
+        fd = bx_fd_open_cloexec(path, flags, mode);
+    }
+    if (fd < 0 && diag != NULL)
+        bx_perror_path(diag, path);
+    return fd;
+}
+
 static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat, bool open_source_for_attributes_only) {
     enum {
         BX_COPY_REGULAR_PRE_DEST_OPEN = 0,
@@ -654,8 +723,6 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     const struct stat* overwrite_stat = NULL;
     char* backup_path = NULL;
     bool created_destination_from_scratch = false;
-    struct stat link_dest_stat;
-    bool have_link_dest_stat = false;
     struct stat opened_dest_stat;
     bool have_opened_dest_stat = false;
     mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
@@ -663,6 +730,16 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_perror_path(ctx->diag, dest_path);
         return false;
+    }
+
+    if (ctx->queue != NULL && dest_state.exists_lstat) {
+        /* Existing entries can alias a pending destination or source. Recheck
+         * after the barrier before making any overwrite decision. */
+        (void)bx_copy_queue_drain(ctx->queue);
+        if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
+            bx_perror_path(ctx->diag, dest_path);
+            return false;
+        }
     }
 
     if (dest_state.exists_stat && bx_same_file(src_stat, &dest_state.st)) {
@@ -716,7 +793,7 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     }
 
     if (!ctx->options->attributes_only || open_source_for_attributes_only || (ctx->options->preserve_mask & (BX_PRESERVE_XATTR | BX_PRESERVE_MODE)) != 0u) {
-        src_fd = bx_fd_open_read(src_path, ctx->diag);
+        src_fd = bx_copy_open_file(ctx, src_path, O_RDONLY, 0, ctx->diag);
         if (src_fd < 0) {
             goto fail;
         }
@@ -737,12 +814,12 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     /* Opening must not mutate an inode before its identity is checked. */
     int dest_open_flags = O_CREAT | (created_destination_from_scratch ? O_EXCL : 0);
 
-    dest_fd = bx_fd_open_write(dest_path, dest_open_flags, create_mode, (ctx->options->force && dest_state.exists_lstat) ? NULL : ctx->diag);
+    dest_fd = bx_copy_open_file(ctx, dest_path, O_WRONLY | dest_open_flags, create_mode, (ctx->options->force && dest_state.exists_lstat) ? NULL : ctx->diag);
     if (dest_fd < 0 && ctx->options->force && dest_state.exists_lstat) {
         if (bx_copy_unlink_existing_file(ctx, dest_path)) {
             memset(&dest_state, 0, sizeof(dest_state));
             created_destination_from_scratch = true;
-            dest_fd = bx_fd_open_write(dest_path, O_CREAT | O_EXCL, create_mode, ctx->diag);
+            dest_fd = bx_copy_open_file(ctx, dest_path, O_WRONLY | O_CREAT | O_EXCL, create_mode, ctx->diag);
         }
     }
     if (dest_fd < 0) {
@@ -766,6 +843,33 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
         goto fail;
     }
     have_opened_dest_stat = true;
+    if (ctx->queue != NULL && !ctx->top_level_file && created_destination_from_scratch &&
+        S_ISREG(opened_dest_stat.st_mode) && opened_dest_stat.st_size == 0 &&
+        S_ISREG(src_stat->st_mode) && !ctx->options->attributes_only &&
+        !bx_copy_should_track_link_entry(ctx, src_stat)) {
+        struct bx_copy_pending_file* file = calloc(1, sizeof(*file));
+        if (file != NULL) {
+            file->src_path = strdup(src_path);
+            file->dest_path = strdup(dest_path);
+            if (file->src_path != NULL && file->dest_path != NULL) {
+                file->src_stat = *src_stat;
+                file->dest_stat = opened_dest_stat;
+                file->job = (struct bx_copy_job){
+                    .src_fd = src_fd,
+                    .dest_fd = dest_fd,
+                    .dest_dev = opened_dest_stat.st_dev,
+                    .dest_ino = opened_dest_stat.st_ino,
+                    .owner = ctx,
+                    .finish = bx_copy_finish_pending_file,
+                };
+                if (bx_copy_queue_submit(ctx->queue, &file->job))
+                    return true;
+            }
+            free(file->src_path);
+            free(file->dest_path);
+            free(file);
+        }
+    }
     if (!ctx->options->attributes_only) {
         if (S_ISREG(opened_dest_stat.st_mode) &&
             (!created_destination_from_scratch || opened_dest_stat.st_size != 0) &&
@@ -779,37 +883,11 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
         }
     }
     stage = BX_COPY_REGULAR_DATA_COPIED;
-    if (!bx_copy_apply_fd_attrs(ctx, src_fd, dest_fd, src_stat)) {
+    const struct stat* recorded_dest =
+        dest_state.exists_lstat && S_ISLNK(dest_state.lst.st_mode) ? &dest_state.lst : &opened_dest_stat;
+    if (!bx_copy_finish_regular_file(ctx, src_path, dest_path, src_stat,
+                                     recorded_dest, &src_fd, &dest_fd))
         goto fail;
-    }
-    if (bx_copy_should_track_link_entry(ctx, src_stat)) {
-        if (dest_state.exists_lstat && S_ISLNK(dest_state.lst.st_mode)) {
-            /* Repeated links name the selected destination entry, even when
-             * that entry is a symlink through which we copied the data. */
-            link_dest_stat = dest_state.lst;
-        }
-        else if (fstat(dest_fd, &link_dest_stat) != 0) {
-            bx_perror_path(ctx->diag, dest_path);
-            goto fail;
-        }
-        have_link_dest_stat = true;
-    }
-
-    if (!bx_fd_close(&dest_fd, dest_path, ctx->diag)) {
-        goto fail;
-    }
-
-    if (src_fd >= 0 && !bx_fd_close(&src_fd, src_path, ctx->diag)) {
-        goto fail;
-    }
-
-    const struct stat* recorded_dest = have_link_dest_stat ? &link_dest_stat :
-        (dest_state.exists_lstat && S_ISLNK(dest_state.lst.st_mode) ? &dest_state.lst : &opened_dest_stat);
-    if (!bx_copy_add_link_entry(ctx, src_stat, dest_path, recorded_dest)) {
-        free(backup_path);
-        return false;
-    }
-    bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     free(backup_path);
     return true;
 
@@ -1509,6 +1587,8 @@ static bool bx_copy_directory(struct bx_copy_context* ctx, const char* src_path,
     free(required_child);
 
 finish:
+    if (!bx_copy_queue_drain(ctx->queue))
+        ok = false;
     if (dir != NULL) {
         if (closedir(dir) != 0) {
             bx_perror_path(ctx->diag, src_path);
@@ -1570,6 +1650,22 @@ static bool bx_copy_path_selected(struct bx_copy_context* ctx,
 
     if (!top_level && ctx->options->one_file_system && src_lstat.st_dev != ctx->source_root_dev) {
         return true;
+    }
+
+    if (ctx->queue != NULL && (!S_ISREG(src_lstat.st_mode) || src_lstat.st_nlink > 1 ||
+        bx_copy_queue_has_destination(ctx->queue, src_lstat.st_dev, src_lstat.st_ino))) {
+        (void)bx_copy_queue_drain(ctx->queue);
+        /* A source may name a destination completed by the barrier. */
+        struct stat refreshed;
+        if (lstat(src_path, &refreshed) != 0) {
+            bx_perror_path(ctx->diag, src_path);
+            return false;
+        }
+        if (!bx_same_file(&src_lstat, &refreshed)) {
+            bx_diag(ctx->diag, "source '%s' changed during copy", src_path);
+            return false;
+        }
+        src_lstat = refreshed;
     }
 
     source_is_symlink = S_ISLNK(src_lstat.st_mode);
@@ -1681,5 +1777,21 @@ finish:
 }
 
 bool bx_copy_path(struct bx_copy_context* ctx, const char* src_path, const char* source_operand, const char* dest_path, bool top_level) {
-    return bx_copy_path_selected(ctx, src_path, source_operand, dest_path, top_level, NULL);
+    const struct bx_copy_options* options = ctx->options;
+    if (options->workers > 1 && options->recursive && !options->move_mode &&
+        !options->interactive && !options->verbose && !options->debug &&
+        !options->attributes_only && !options->hard_link && !options->symbolic_link &&
+        ctx->backup_params.mode == BX_BACKUP_NONE) {
+        struct bx_copy_data_options data_options = {
+            .sparse_mode = options->sparse_mode,
+            .reflink_mode = options->reflink_mode,
+        };
+        ctx->queue = bx_copy_queue_create(options->workers, &data_options);
+    }
+    bool ok = bx_copy_path_selected(ctx, src_path, source_operand, dest_path, top_level, NULL);
+    if (!bx_copy_queue_drain(ctx->queue))
+        ok = false;
+    bx_copy_queue_destroy(ctx->queue);
+    ctx->queue = NULL;
+    return ok;
 }

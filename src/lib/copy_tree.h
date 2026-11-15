@@ -7,6 +7,7 @@
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
 #include "lib/copy_data.h"
+#include "lib/copy_queue.h"
 #include "lib/dir_cycle.h"
 #include "lib/overwrite_ops.h"
 
@@ -46,6 +47,7 @@ struct bx_copy_options {
     enum bx_update_mode update_mode;
 
     unsigned preserve_mask;
+    unsigned workers;
 };
 
 struct bx_link_entry {
@@ -64,6 +66,8 @@ struct bx_parent_attr_entry {
 };
 
 struct bx_copy_context {
+    /* Coordinator-owned. Workers borrow only verified fds and data options;
+     * they never access traversal, hardlink, overwrite, or diagnostic state. */
     const struct bx_copy_options* options;
     struct bx_diag_ctx* diag;
     struct bx_backup_params backup_params;
@@ -74,6 +78,8 @@ struct bx_copy_context {
     struct bx_parent_attr_entry* parent_attrs;
     struct bx_written_dest* written;
     struct bx_copy_buffer buffer;
+    /* Drained before directory finalization and destroyed before path return. */
+    struct bx_copy_queue* queue;
 
     bool dest_root_active;
     dev_t dest_root_dev;

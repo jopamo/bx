@@ -366,6 +366,7 @@ bx_lib_sources = [
   'src/lib/color.c',
   'src/lib/child_runner.c',
   'src/lib/copy_data.c',
+  'src/lib/copy_queue.c',
   'src/lib/copy_stream.c',
   'src/lib/copy_metadata.c',
   'src/lib/file_metadata.c',

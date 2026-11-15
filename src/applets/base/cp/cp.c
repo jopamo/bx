@@ -44,6 +44,7 @@ enum bx_cp_longopt {
     BX_CP_OPT_SPARSE,
     BX_CP_OPT_STRIP_TRAILING_SLASHES,
     BX_CP_OPT_UPDATE,
+    BX_CP_OPT_JOBS,
 };
 
 static void bx_cp_print_help(FILE* stream, const char* progname) {
@@ -59,6 +60,7 @@ static void bx_cp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -d                         same as --no-dereference --preserve=links\n");
     fprintf(stream, "  -f, --force                remove destination and retry on open/link failures\n");
     fprintf(stream, "  -H                         follow command-line symbolic links in SOURCE\n");
+    fprintf(stream, "      --jobs=N               use 1..8 workers for independent recursive file data (default 2)\n");
     fprintf(stream, "  -L, --dereference          always follow symbolic links in SOURCE\n");
     fprintf(stream, "  -P, --no-dereference       never follow symbolic links in SOURCE\n");
     fprintf(stream, "  -l, --link                 hard link files instead of copying\n");
@@ -108,6 +110,7 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
         {"debug", no_argument, NULL, BX_CP_OPT_DEBUG},
         {"force", no_argument, NULL, 'f'},
         {"interactive", no_argument, NULL, 'i'},
+        {"jobs", required_argument, NULL, BX_CP_OPT_JOBS},
         {"dereference", no_argument, NULL, 'L'},
         {"no-dereference", no_argument, NULL, 'P'},
         {"keep-directory-symlink", no_argument, NULL, BX_CP_OPT_KEEP_DIRECTORY_SYMLINK},
@@ -141,6 +144,7 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
     options->copy.reflink_mode = BX_REFLINK_NEVER;
     options->copy.mode_policy = BX_MODE_POLICY_DEFAULT;
     options->copy.update_mode = BX_UPDATE_ALL;
+    options->copy.workers = 2;
 
     diag->progname = options->progname;
 
@@ -154,6 +158,13 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
         }
 
         switch (c) {
+            case BX_CP_OPT_JOBS:
+                if (optarg[0] < '1' || optarg[0] > '0' + (int)BX_COPY_MAX_WORKERS || optarg[1] != '\0') {
+                    bx_diag(diag, "invalid --jobs value '%s' (expected 1..8)", optarg);
+                    return false;
+                }
+                options->copy.workers = (unsigned)(optarg[0] - '0');
+                break;
             case 1:
                 options->show_help = true;
                 break;
