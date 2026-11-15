@@ -24,7 +24,7 @@ OBJS	   = batch.o \
 	     mkpath.o \
 	     mktemp.o \
 	     platform.o \
-	     portable_open.o \
+	     bx_open_resolve.o \
 	     bx_rsync_sbuf.o \
 	     bx_text_buffer.o \
 	     portable_util.o \
@@ -68,6 +68,9 @@ bx_rsync_sbuf.o: ../../applets/network/rsync/sbuf.c portable_sbuf.h
 
 bx_text_buffer.o: ../../lib/text_buffer.c ../../lib/text_buffer.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/text_buffer.c
+
+bx_open_resolve.o: ../../lib/open_resolve.c ../../lib/open_resolve.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../lib/open_resolve.c
 
 install: all
 	mkdir -p $(DESTDIR)$(BINDIR)

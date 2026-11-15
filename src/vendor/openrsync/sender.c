@@ -38,7 +38,7 @@
 #include "md4.h"
 
 #include "extern.h"
-#include "portable_open.h"
+#include "lib/open_resolve.h"
 
 #define PHASE_MAX	2
 
@@ -1906,7 +1906,7 @@ rsync_sender(struct sess *sess, int fdin,
 				up.stat.fd = (*nextfl->open)(sess, nextfl,
 				    oflags);
 			} else if (confine_open) {
-				up.stat.fd = bx_rsync_open_beneath(dirfd, opath,
+				up.stat.fd = bx_open_beneath(dirfd, opath,
 				    oflags);
 			} else {
 				up.stat.fd = openat(dirfd, opath, oflags, 0);

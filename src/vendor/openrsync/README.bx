@@ -12,9 +12,8 @@ Local changes to Apple's files:
 - Shared bx text buffers for sbuf storage, and portable human-readable
   formatting outside FreeBSD.
 - Portable getopt reset, socket lengths, FTS and queue handling.
-- Confined opens: Linux openat2, FreeBSD O_RESOLVE_BENEATH, otherwise a
-  symlink-rejecting openat walk. The portable walk does not offer the native
-  syscall's atomic confinement guarantee against concurrent directory renames.
+- Confined opens use the shared bx resolution primitive on Linux and FreeBSD;
+  platforms without a suitable primitive return ENOTSUP.
 - The bx applet re-executes its own verified executable descriptor for
   local transfers. Remote transfers still default to the remote rsync.
 - All nonlocal symbols in this pinned source are namespaced in bx to avoid

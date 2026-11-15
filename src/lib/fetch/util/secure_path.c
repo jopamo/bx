@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "lib/fetch/secure_path.h"
 #include "lib/fd_ops.h"
+#include "lib/open_resolve.h"
 #include "lib/path_ops.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -9,7 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 static int secure_path_fail_errno(int error_number) {
@@ -26,17 +26,7 @@ static int secure_path_fail_parent(int error_number, int dirfd, char* walk, char
 }
 
 static int secure_path_openat(int dirfd, const char* path, int flags, mode_t mode, unsigned long long resolve) {
-    if (!path) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    struct open_how how = {
-        .flags = (unsigned long long)flags,
-        .mode = (unsigned long long)mode,
-        .resolve = resolve,
-    };
-    return (int)syscall(SYS_openat2, dirfd, path, &how, sizeof(how));
+    return bx_openat_resolve(dirfd, path, flags, mode, resolve);
 }
 
 int bx_fetch_secure_path_open_leaf(int dirfd, const char* path, int flags, mode_t mode) {
