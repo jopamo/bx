@@ -122,7 +122,7 @@ mktemp_internalat(int pfd, char *path, int slen, enum tmpmode mode,
 #if HAVE_ARC4RANDOM
 			arc4random_buf(rbuf, sizeof(rbuf));
 #else
-			for (i = 0; i < sizeof(rbuf); i++)
+			for (i = 0; i < nitems(rbuf); i++)
 				rbuf[i] = random();
 #endif
 
