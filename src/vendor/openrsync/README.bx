@@ -11,6 +11,7 @@ in the repository. The standalone Makefile uses shared bx sources.
 Local changes to Apple's files:
 - Shared bx text buffers for sbuf storage, and portable human-readable
   formatting outside FreeBSD.
+- Shared bx permission formatting, retaining rsync's trailing space.
 - Portable getopt reset, socket lengths, FTS and queue handling.
 - Confined opens use the shared bx resolution primitive on Linux and FreeBSD;
   platforms without a suitable primitive return ENOTSUP.

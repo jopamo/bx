@@ -27,6 +27,8 @@ OBJS	   = batch.o \
 	     bx_open_resolve.o \
 	     bx_rsync_sbuf.o \
 	     bx_text_buffer.o \
+	     bx_rsync_mode.o \
+	     bx_file_info_fmt.o \
 	     portable_util.o \
 	     receiver.o \
 	     rmatch.o \
@@ -35,7 +37,6 @@ OBJS	   = batch.o \
 	     server.o \
 	     session.o \
 	     socket.o \
-	     strmode.o \
 	     symlinks.o \
 	     uploader.o
 
@@ -71,6 +72,12 @@ bx_text_buffer.o: ../../lib/text_buffer.c ../../lib/text_buffer.h
 
 bx_open_resolve.o: ../../lib/open_resolve.c ../../lib/open_resolve.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../lib/open_resolve.c
+
+bx_rsync_mode.o: ../../applets/network/rsync/mode.c ../../lib/file_info_fmt.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../applets/network/rsync/mode.c
+
+bx_file_info_fmt.o: ../../lib/file_info_fmt.c ../../lib/file_info_fmt.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/file_info_fmt.c
 
 install: all
 	mkdir -p $(DESTDIR)$(BINDIR)

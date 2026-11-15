@@ -1283,7 +1283,7 @@ sess_is_inplace(struct sess *sess)
 
 struct sbuf;
 void log_format_init(struct sess *sess);
-void our_strmode(mode_t mode, char *p);
+void bx_rsync_format_mode(mode_t mode, char out[STRMODE_BUFSZ]);
 int print_7_or_8_bit(const struct sess *sess, const char *fmt, const char *s,
     struct sbuf *);
 int log_item_impl(enum log_type, struct sess *sess, const struct flist *f);

@@ -21,6 +21,10 @@ char bx_file_mode_type_char(mode_t mode) {
     if (S_ISSOCK(mode))
         return 's';
 #endif
+#ifdef S_IFWHT
+    if ((mode & S_IFMT) == S_IFWHT)
+        return 'w';
+#endif
     return '?';
 }
 

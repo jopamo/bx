@@ -744,7 +744,7 @@ printf_doformat(const char *fmt, int *rval, struct sess *sess,
 		/* Print mode human-readable */
 
 		if (sbuf != NULL) {
-			our_strmode(fl->st.mode, buf);
+			bx_rsync_format_mode(fl->st.mode, buf);
 			widthstring[l + 1] = 's';
 			widthstring[l + 2] = '\0';
 			sbuf_printf(sbuf, widthstring, buf);

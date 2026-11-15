@@ -1565,6 +1565,7 @@ rsync_config = custom_target(
 rsync_sources = files(
   'src/applets/network/rsync/rsync.c',
   'src/applets/network/rsync/sbuf.c',
+  'src/applets/network/rsync/mode.c',
   'src/vendor/openrsync/batch.c',
   'src/vendor/openrsync/blocks.c',
   'src/vendor/openrsync/cleanup.c',
@@ -1595,7 +1596,6 @@ rsync_sources = files(
   'src/vendor/openrsync/server.c',
   'src/vendor/openrsync/session.c',
   'src/vendor/openrsync/socket.c',
-  'src/vendor/openrsync/strmode.c',
   'src/vendor/openrsync/symlinks.c',
   'src/vendor/openrsync/uploader.c',
   'src/vendor/openrsync/zlib/adler32.c',

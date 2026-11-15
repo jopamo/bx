@@ -1300,7 +1300,7 @@ flist_output_one(const struct sess *sess, struct flist *fl)
 	if (sess->opts->preserve_links && S_ISLNK(fl->st.mode))
 		linkdest = fl->link;
 
-	our_strmode(fl->st.mode, modebuf);
+	bx_rsync_format_mode(fl->st.mode, modebuf);
 
 	strftime(timebuf, sizeof(timebuf) - 1, "%Y/%m/%d %H:%M:%S",
 	    localtime(&fl->st.mtime));

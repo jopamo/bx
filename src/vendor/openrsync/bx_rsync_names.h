@@ -190,7 +190,6 @@
 #define mktemplate bx_rsync_vendor_mktemplate
 #define move_file bx_rsync_vendor_move_file
 #define num_hl bx_rsync_vendor_num_hl
-#define our_strmode bx_rsync_vendor_our_strmode
 #define parse_file bx_rsync_vendor_parse_file
 #define parse_rule bx_rsync_vendor_parse_rule
 #define parse_rule_words bx_rsync_vendor_parse_rule_words
