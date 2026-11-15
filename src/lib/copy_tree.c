@@ -442,12 +442,14 @@ static char* bx_copy_required_self_copy_child(struct bx_copy_context* ctx, const
     return component;
 }
 
-static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_diag_ctx* diag, const struct bx_copy_options* options) {
+static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_copy_context* ctx) {
+    struct bx_diag_ctx* diag = ctx->diag;
+    const struct bx_copy_options* options = ctx->options;
     struct bx_copy_data_options data_opts;
     data_opts.sparse_mode = options->sparse_mode;
     data_opts.reflink_mode = options->reflink_mode;
 
-    int res = bx_copy_data(src_fd, dest_fd, &data_opts);
+    int res = bx_copy_data_with_buffer(src_fd, dest_fd, &data_opts, &ctx->buffer);
     if (res == BX_COPY_DATA_SUCCESS) {
         return res;
     }
@@ -771,7 +773,7 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
             bx_perror_path(ctx->diag, dest_path);
             goto fail;
         }
-        copy_res = bx_copy_data_internal(src_fd, dest_fd, ctx->diag, ctx->options);
+        copy_res = bx_copy_data_internal(src_fd, dest_fd, ctx);
         if (copy_res != BX_COPY_DATA_SUCCESS) {
             goto fail;
         }

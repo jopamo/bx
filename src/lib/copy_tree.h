@@ -73,6 +73,7 @@ struct bx_copy_context {
     struct bx_dir_stack* source_dirs;
     struct bx_parent_attr_entry* parent_attrs;
     struct bx_written_dest* written;
+    struct bx_copy_buffer buffer;
 
     bool dest_root_active;
     dev_t dest_root_dev;

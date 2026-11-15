@@ -373,6 +373,7 @@ static void bx_mv_reset_cross_device_copy_call_state(struct bx_mv_context* ctx) 
 static void bx_mv_free_cross_device_copy_context(struct bx_mv_context* ctx) {
     bx_mv_reset_cross_device_copy_call_state(ctx);
     bx_copy_free_links(&ctx->cross_device_copy_ctx);
+    bx_copy_buffer_release(&ctx->cross_device_copy_ctx.buffer);
 }
 
 static bool bx_mv_should_skip_existing(const struct bx_mv_options* options,
