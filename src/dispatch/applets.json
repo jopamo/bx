@@ -808,6 +808,20 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "rsync",
+      "main": "bx_rsync_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "child-execution",
+        "network-access",
+        "raw-output"
+      ],
+      "self_dispatch": true,
+      "execution_class": "exec-only"
+    },
+    {
       "name": "traceroute",
       "main": "bx_traceroute_main",
       "capabilities": [

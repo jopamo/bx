@@ -1,0 +1,26 @@
+Source: https://github.com/apple-oss-distributions/rsync
+Commit: 13eacd7e9a204b236310dab23682f6354ecc69bd (rsync-184)
+Directory: openrsync/
+License: ISC and the other notices retained in the source and LICENSE.md.
+
+The original program is built as a static library in bx. The applet entry
+point is src/applets/network/rsync/rsync.c. The Meson build runs Apple's
+compile/link-only configure probes out of tree; no generated header is kept
+in the repository. Upstream's Makefile also remains usable independently.
+
+Local changes to Apple's files:
+- Portable sbuf and human-readable formatting outside FreeBSD.
+- Portable getopt reset, socket lengths, FTS and queue handling.
+- Confined opens: Linux openat2, FreeBSD O_RESOLVE_BENEATH, otherwise a
+  symlink-rejecting openat walk. The portable walk does not offer the native
+  syscall's atomic confinement guarantee against concurrent directory renames.
+- The bx applet re-executes its own verified executable descriptor for
+  local transfers. Remote transfers still default to the remote rsync.
+- All nonlocal symbols in this pinned source are namespaced in bx to avoid
+  clashes with other imported libraries. The bundled zlib is not linked into bx.
+- Apple-private tracing is optional when its SDK header is unavailable.
+
+This is openrsync (protocol 29), not a GNU rsync CLI clone. In particular,
+Apple's macOS metadata handling does not implement Linux ACL/xattr behavior.
+The bx executable is still Linux-only due to its fetch subsystem; building
+the standalone openrsync on a Unix host does not remove that restriction.

@@ -1,0 +1,390 @@
+/* Keep upstream compatibility symbols private to the rsync applet. */
+#ifndef BX_RSYNC_NAMES_H
+#define BX_RSYNC_NAMES_H
+
+/* Private names for all nonlocal symbols in the pinned Apple source. */
+#define MD4_Final bx_rsync_vendor_MD4_Final
+#define MD4_Init bx_rsync_vendor_MD4_Init
+#define MD4_Update bx_rsync_vendor_MD4_Update
+#define addargs bx_rsync_vendor_addargs
+#define alt_base_mode bx_rsync_vendor_alt_base_mode
+#define backup_file bx_rsync_vendor_backup_file
+#define backup_to_dir bx_rsync_vendor_backup_to_dir
+#define batch_close bx_rsync_vendor_batch_close
+#define batch_open bx_rsync_vendor_batch_open
+#define blk_match bx_rsync_vendor_blk_match
+#define blk_recv bx_rsync_vendor_blk_recv
+#define blk_recv_ack bx_rsync_vendor_blk_recv_ack
+#define blk_send bx_rsync_vendor_blk_send
+#define blk_send_ack bx_rsync_vendor_blk_send_ack
+#define blkhash_alloc bx_rsync_vendor_blkhash_alloc
+#define blkhash_free bx_rsync_vendor_blkhash_free
+#define blkhash_set bx_rsync_vendor_blkhash_set
+#define cfg_foreach_module bx_rsync_vendor_cfg_foreach_module
+#define cfg_free bx_rsync_vendor_cfg_free
+#define cfg_has_param bx_rsync_vendor_cfg_has_param
+#define cfg_is_valid_module bx_rsync_vendor_cfg_is_valid_module
+#define cfg_param_bool bx_rsync_vendor_cfg_param_bool
+#define cfg_param_int bx_rsync_vendor_cfg_param_int
+#define cfg_param_long bx_rsync_vendor_cfg_param_long
+#define cfg_param_str bx_rsync_vendor_cfg_param_str
+#define cfg_parse bx_rsync_vendor_cfg_parse
+#define check_file_mode bx_rsync_vendor_check_file_mode
+#define chmod_parse bx_rsync_vendor_chmod_parse
+#define cleanup_filesfrom bx_rsync_vendor_cleanup_filesfrom
+#define cleanup_hold bx_rsync_vendor_cleanup_hold
+#define cleanup_init bx_rsync_vendor_cleanup_init
+#define cleanup_release bx_rsync_vendor_cleanup_release
+#define cleanup_run bx_rsync_vendor_cleanup_run
+#define cleanup_set_args bx_rsync_vendor_cleanup_set_args
+#define cleanup_set_child bx_rsync_vendor_cleanup_set_child
+#define cleanup_set_download bx_rsync_vendor_cleanup_set_download
+#define cleanup_set_session bx_rsync_vendor_cleanup_set_session
+#define copy_file bx_rsync_vendor_copy_file
+#define daemon_apply_chmod bx_rsync_vendor_daemon_apply_chmod
+#define daemon_apply_chrootopts bx_rsync_vendor_daemon_apply_chrootopts
+#define daemon_apply_ignoreopts bx_rsync_vendor_daemon_apply_ignoreopts
+#define daemon_apply_xferlog bx_rsync_vendor_daemon_apply_xferlog
+#define daemon_chuser bx_rsync_vendor_daemon_chuser
+#define daemon_chuser_setup bx_rsync_vendor_daemon_chuser_setup
+#define daemon_client_error bx_rsync_vendor_daemon_client_error
+#define daemon_configure_filters bx_rsync_vendor_daemon_configure_filters
+#define daemon_connection_allowed bx_rsync_vendor_daemon_connection_allowed
+#define daemon_connection_limited bx_rsync_vendor_daemon_connection_limited
+#define daemon_do_execcmds bx_rsync_vendor_daemon_do_execcmds
+#define daemon_fill_hostinfo bx_rsync_vendor_daemon_fill_hostinfo
+#define daemon_finish_handshake bx_rsync_vendor_daemon_finish_handshake
+#define daemon_finish_prexfer bx_rsync_vendor_daemon_finish_prexfer
+#define daemon_install_symlink_filter bx_rsync_vendor_daemon_install_symlink_filter
+#define daemon_limit_verbosity bx_rsync_vendor_daemon_limit_verbosity
+#define daemon_normalize_path bx_rsync_vendor_daemon_normalize_path
+#define daemon_normalize_paths bx_rsync_vendor_daemon_normalize_paths
+#define daemon_open_logfile bx_rsync_vendor_daemon_open_logfile
+#define daemon_operation_allowed bx_rsync_vendor_daemon_operation_allowed
+#define daemon_parse_refuse bx_rsync_vendor_daemon_parse_refuse
+#define daemon_setup_logfile bx_rsync_vendor_daemon_setup_logfile
+#define delayed_renames bx_rsync_vendor_delayed_renames
+#define download_alloc bx_rsync_vendor_download_alloc
+#define download_free bx_rsync_vendor_download_free
+#define download_interrupted bx_rsync_vendor_download_interrupted
+#define download_needs_redo bx_rsync_vendor_download_needs_redo
+#define download_partial_filepath bx_rsync_vendor_download_partial_filepath
+#define download_partial_path bx_rsync_vendor_download_partial_path
+#define fargs_cmdline bx_rsync_vendor_fargs_cmdline
+#define find_hl bx_rsync_vendor_find_hl
+#define find_hl_impl bx_rsync_vendor_find_hl_impl
+#define fl_atindex bx_rsync_vendor_fl_atindex
+#define fl_curridx bx_rsync_vendor_fl_curridx
+#define fl_init bx_rsync_vendor_fl_init
+#define fl_new bx_rsync_vendor_fl_new
+#define fl_new_index bx_rsync_vendor_fl_new_index
+#define fl_pop bx_rsync_vendor_fl_pop
+#define fl_print bx_rsync_vendor_fl_print
+#define flist_add_del bx_rsync_vendor_flist_add_del
+#define flist_cmp29 bx_rsync_vendor_flist_cmp29
+#define flist_del bx_rsync_vendor_flist_del
+#define flist_dir_cmp bx_rsync_vendor_flist_dir_cmp
+#define flist_free bx_rsync_vendor_flist_free
+#define flist_fts_check bx_rsync_vendor_flist_fts_check
+#define flist_gen bx_rsync_vendor_flist_gen
+#define flist_gen_dels bx_rsync_vendor_flist_gen_dels
+#define flist_recv bx_rsync_vendor_flist_recv
+#define flist_send bx_rsync_vendor_flist_send
+#define fmap_access_valid bx_rsync_vendor_fmap_access_valid
+#define fmap_close bx_rsync_vendor_fmap_close
+#define fmap_data bx_rsync_vendor_fmap_data
+#define fmap_open bx_rsync_vendor_fmap_open
+#define fmap_size bx_rsync_vendor_fmap_size
+#define fmap_type bx_rsync_vendor_fmap_type
+#define freeargs bx_rsync_vendor_freeargs
+#define froot_acquire bx_rsync_vendor_froot_acquire
+#define froot_release bx_rsync_vendor_froot_release
+#define getarg bx_rsync_vendor_getarg
+#define hash_fast bx_rsync_vendor_hash_fast
+#define hash_file bx_rsync_vendor_hash_file
+#define hash_file_by_path bx_rsync_vendor_hash_file_by_path
+#define hash_fmap bx_rsync_vendor_hash_fmap
+#define hash_fmap_chunks bx_rsync_vendor_hash_fmap_chunks
+#define hash_slow bx_rsync_vendor_hash_slow
+#define idents_add bx_rsync_vendor_idents_add
+#define idents_assign_gid bx_rsync_vendor_idents_assign_gid
+#define idents_assign_uid bx_rsync_vendor_idents_assign_uid
+#define idents_free bx_rsync_vendor_idents_free
+#define idents_recv bx_rsync_vendor_idents_recv
+#define idents_remap bx_rsync_vendor_idents_remap
+#define idents_send bx_rsync_vendor_idents_send
+#define iflags_decode bx_rsync_vendor_iflags_decode
+#define io_buffer_buf bx_rsync_vendor_io_buffer_buf
+#define io_buffer_byte bx_rsync_vendor_io_buffer_byte
+#define io_buffer_int bx_rsync_vendor_io_buffer_int
+#define io_buffer_short bx_rsync_vendor_io_buffer_short
+#define io_buffer_vstring bx_rsync_vendor_io_buffer_vstring
+#define io_data_written bx_rsync_vendor_io_data_written
+#define io_lowbuffer_alloc bx_rsync_vendor_io_lowbuffer_alloc
+#define io_lowbuffer_alloc_safe bx_rsync_vendor_io_lowbuffer_alloc_safe
+#define io_lowbuffer_buf bx_rsync_vendor_io_lowbuffer_buf
+#define io_lowbuffer_byte bx_rsync_vendor_io_lowbuffer_byte
+#define io_lowbuffer_int bx_rsync_vendor_io_lowbuffer_int
+#define io_lowbuffer_short bx_rsync_vendor_io_lowbuffer_short
+#define io_lowbuffer_vstring bx_rsync_vendor_io_lowbuffer_vstring
+#define io_read_buf bx_rsync_vendor_io_read_buf
+#define io_read_byte bx_rsync_vendor_io_read_byte
+#define io_read_check bx_rsync_vendor_io_read_check
+#define io_read_close bx_rsync_vendor_io_read_close
+#define io_read_flush bx_rsync_vendor_io_read_flush
+#define io_read_int bx_rsync_vendor_io_read_int
+#define io_read_line bx_rsync_vendor_io_read_line
+#define io_read_long bx_rsync_vendor_io_read_long
+#define io_read_short bx_rsync_vendor_io_read_short
+#define io_read_size bx_rsync_vendor_io_read_size
+#define io_read_uint bx_rsync_vendor_io_read_uint
+#define io_read_ulong bx_rsync_vendor_io_read_ulong
+#define io_read_ushort bx_rsync_vendor_io_read_ushort
+#define io_read_vstring bx_rsync_vendor_io_read_vstring
+#define io_register_handler bx_rsync_vendor_io_register_handler
+#define io_unbuffer_buf bx_rsync_vendor_io_unbuffer_buf
+#define io_unbuffer_int bx_rsync_vendor_io_unbuffer_int
+#define io_unbuffer_size bx_rsync_vendor_io_unbuffer_size
+#define io_write_blocking bx_rsync_vendor_io_write_blocking
+#define io_write_buf bx_rsync_vendor_io_write_buf
+#define io_write_buf_tagged bx_rsync_vendor_io_write_buf_tagged
+#define io_write_buf_tagged_safe bx_rsync_vendor_io_write_buf_tagged_safe
+#define io_write_byte bx_rsync_vendor_io_write_byte
+#define io_write_int bx_rsync_vendor_io_write_int
+#define io_write_int_tagged bx_rsync_vendor_io_write_int_tagged
+#define io_write_line bx_rsync_vendor_io_write_line
+#define io_write_long bx_rsync_vendor_io_write_long
+#define io_write_short bx_rsync_vendor_io_write_short
+#define io_write_uint bx_rsync_vendor_io_write_uint
+#define io_write_ulong bx_rsync_vendor_io_write_ulong
+#define io_write_ushort bx_rsync_vendor_io_write_ushort
+#define io_write_vstring bx_rsync_vendor_io_write_vstring
+#define iobuf_alloc bx_rsync_vendor_iobuf_alloc
+#define iobuf_eof bx_rsync_vendor_iobuf_eof
+#define iobuf_fill bx_rsync_vendor_iobuf_fill
+#define iobuf_free bx_rsync_vendor_iobuf_free
+#define iobuf_get_readsz bx_rsync_vendor_iobuf_get_readsz
+#define iobuf_peek_int bx_rsync_vendor_iobuf_peek_int
+#define iobuf_read_buf bx_rsync_vendor_iobuf_read_buf
+#define iobuf_read_byte bx_rsync_vendor_iobuf_read_byte
+#define iobuf_read_int bx_rsync_vendor_iobuf_read_int
+#define iobuf_read_short bx_rsync_vendor_iobuf_read_short
+#define iobuf_read_size bx_rsync_vendor_iobuf_read_size
+#define iobuf_read_ushort bx_rsync_vendor_iobuf_read_ushort
+#define iobuf_read_vstring bx_rsync_vendor_iobuf_read_vstring
+#define iobuf_seen_eof bx_rsync_vendor_iobuf_seen_eof
+#define is_unsafe_link bx_rsync_vendor_is_unsafe_link
+#define iszerobuf bx_rsync_vendor_iszerobuf
+#define log_format_init bx_rsync_vendor_log_format_init
+#define log_item bx_rsync_vendor_log_item
+#define log_item_impl bx_rsync_vendor_log_item_impl
+#define make_safe_link bx_rsync_vendor_make_safe_link
+#define mkpath bx_rsync_vendor_mkpath
+#define mkpathat bx_rsync_vendor_mkpathat
+#define mksock bx_rsync_vendor_mksock
+#define mkstempat bx_rsync_vendor_mkstempat
+#define mkstempfifoat bx_rsync_vendor_mkstempfifoat
+#define mkstemplinkat bx_rsync_vendor_mkstemplinkat
+#define mkstempnodat bx_rsync_vendor_mkstempnodat
+#define mkstempsock bx_rsync_vendor_mkstempsock
+#define mktemplate bx_rsync_vendor_mktemplate
+#define move_file bx_rsync_vendor_move_file
+#define num_hl bx_rsync_vendor_num_hl
+#define our_strmode bx_rsync_vendor_our_strmode
+#define parse_file bx_rsync_vendor_parse_file
+#define parse_rule bx_rsync_vendor_parse_rule
+#define parse_rule_words bx_rsync_vendor_parse_rule_words
+#define platform_finish_transfer bx_rsync_vendor_platform_finish_transfer
+#define platform_flist_entry_received bx_rsync_vendor_platform_flist_entry_received
+#define platform_flist_modify bx_rsync_vendor_platform_flist_modify
+#define platform_flist_received bx_rsync_vendor_platform_flist_received
+#define platform_move_file bx_rsync_vendor_platform_move_file
+#define print_7_or_8_bit bx_rsync_vendor_print_7_or_8_bit
+#define print_filesfrom bx_rsync_vendor_print_filesfrom
+#define read_filesfrom bx_rsync_vendor_read_filesfrom
+#define recv_rules bx_rsync_vendor_recv_rules
+#define rmatch bx_rsync_vendor_rmatch
+#define rsync_batch bx_rsync_vendor_rsync_batch
+#define rsync_client bx_rsync_vendor_rsync_client
+#define rsync_connect bx_rsync_vendor_rsync_connect
+#define rsync_daemon bx_rsync_vendor_rsync_daemon
+#define rsync_downloader bx_rsync_vendor_rsync_downloader
+#define rsync_err bx_rsync_vendor_rsync_err
+#define rsync_errx bx_rsync_vendor_rsync_errx
+#define rsync_errx1 bx_rsync_vendor_rsync_errx1
+#define rsync_getopt bx_rsync_vendor_rsync_getopt
+#define rsync_humanize bx_rsync_vendor_rsync_humanize
+#define rsync_is_socket bx_rsync_vendor_rsync_is_socket
+#define rsync_listen bx_rsync_vendor_rsync_listen
+#define rsync_log bx_rsync_vendor_rsync_log
+#define rsync_log_tag bx_rsync_vendor_rsync_log_tag
+#define rsync_lopts bx_rsync_vendor_rsync_lopts
+#define rsync_password_hash bx_rsync_vendor_rsync_password_hash
+#define rsync_progress bx_rsync_vendor_rsync_progress
+#define rsync_receiver bx_rsync_vendor_rsync_receiver
+#define rsync_sender bx_rsync_vendor_rsync_sender
+#define rsync_server bx_rsync_vendor_rsync_server
+#define rsync_set_logfacility bx_rsync_vendor_rsync_set_logfacility
+#define rsync_set_logfile bx_rsync_vendor_rsync_set_logfile
+#define rsync_set_metadata bx_rsync_vendor_rsync_set_metadata
+#define rsync_set_metadata_at bx_rsync_vendor_rsync_set_metadata_at
+#define rsync_setsockopts bx_rsync_vendor_rsync_setsockopts
+#define rsync_shopts bx_rsync_vendor_rsync_shopts
+#define rsync_socket bx_rsync_vendor_rsync_socket
+#define rsync_uploader bx_rsync_vendor_rsync_uploader
+#define rsync_uploader_tail bx_rsync_vendor_rsync_uploader_tail
+#define rsync_warn bx_rsync_vendor_rsync_warn
+#define rsync_warnx bx_rsync_vendor_rsync_warnx
+#define rsync_warnx1 bx_rsync_vendor_rsync_warnx1
+#define rules_base bx_rsync_vendor_rules_base
+#define rules_dir_pop bx_rsync_vendor_rules_dir_pop
+#define rules_dir_push bx_rsync_vendor_rules_dir_push
+#define rules_export bx_rsync_vendor_rules_export
+#define rules_match bx_rsync_vendor_rules_match
+#define scan_scaled_def bx_rsync_vendor_scan_scaled_def
+#define send_iflags bx_rsync_vendor_send_iflags
+#define send_rules bx_rsync_vendor_send_rules
+#define sess_cleanup bx_rsync_vendor_sess_cleanup
+#define sess_stats_recv bx_rsync_vendor_sess_stats_recv
+#define sess_stats_send bx_rsync_vendor_sess_stats_send
+#define symlink_read bx_rsync_vendor_symlink_read
+#define symlinkat_read bx_rsync_vendor_symlinkat_read
+#define upload_ack_complete bx_rsync_vendor_upload_ack_complete
+#define upload_alloc bx_rsync_vendor_upload_alloc
+#define upload_del bx_rsync_vendor_upload_del
+#define upload_free bx_rsync_vendor_upload_free
+#define upload_next_phase bx_rsync_vendor_upload_next_phase
+
+#define cleanup_ctx bx_rsync_cleanup_ctx
+#define commands bx_rsync_commands
+#define facilities bx_rsync_facilities
+#define flg bx_rsync_flg
+#define fmap_signal_env bx_rsync_fmap_signal_env
+#define fmap_trapped bx_rsync_fmap_trapped
+#define fmap_trapped_prev bx_rsync_fmap_trapped_prev
+#define modifiers bx_rsync_modifiers
+#define poll_contimeout bx_rsync_poll_contimeout
+#define poll_timeout bx_rsync_poll_timeout
+#define quiet bx_rsync_quiet
+#define syslog_trace bx_rsync_syslog_trace
+#define verbose bx_rsync_verbose
+
+#if !HAVE_ERR
+#define err bx_rsync_compat_err
+#define errc bx_rsync_compat_errc
+#define errx bx_rsync_compat_errx
+#define verr bx_rsync_compat_verr
+#define verrc bx_rsync_compat_verrc
+#define verrx bx_rsync_compat_verrx
+#define warn bx_rsync_compat_warn
+#define warnc bx_rsync_compat_warnc
+#define warnx bx_rsync_compat_warnx
+#define vwarn bx_rsync_compat_vwarn
+#define vwarnc bx_rsync_compat_vwarnc
+#define vwarnx bx_rsync_compat_vwarnx
+#endif
+#if !HAVE_B64_NTOP
+#define b64_ntop bx_rsync_compat_b64_ntop
+#define b64_pton bx_rsync_compat_b64_pton
+#endif
+#if !HAVE_DAEMON
+#define daemon bx_rsync_compat_daemon
+#endif
+#if !HAVE_EXPLICIT_BZERO
+#define explicit_bzero bx_rsync_compat_explicit_bzero
+#endif
+#if !HAVE_FTS
+#define fts_children bx_rsync_compat_fts_children
+#define fts_close bx_rsync_compat_fts_close
+#define fts_open bx_rsync_compat_fts_open
+#define fts_read bx_rsync_compat_fts_read
+#define fts_set bx_rsync_compat_fts_set
+#endif
+#if !HAVE_GETPROGNAME
+#define getprogname bx_rsync_compat_getprogname
+#endif
+#if !HAVE_MD5
+#define MD5End bx_rsync_compat_MD5End
+#define MD5Final bx_rsync_compat_MD5Final
+#define MD5Init bx_rsync_compat_MD5Init
+#define MD5Pad bx_rsync_compat_MD5Pad
+#define MD5Transform bx_rsync_compat_MD5Transform
+#define MD5Update bx_rsync_compat_MD5Update
+#endif
+#if !HAVE_MEMMEM
+#define memmem bx_rsync_compat_memmem
+#endif
+#if !HAVE_MEMRCHR
+#define memrchr bx_rsync_compat_memrchr
+#endif
+#if !HAVE_MKFIFOAT
+#define mkfifoat bx_rsync_compat_mkfifoat
+#endif
+#if !HAVE_MKNODAT
+#define mknodat bx_rsync_compat_mknodat
+#endif
+#if !HAVE_READPASSPHRASE
+#define readpassphrase bx_rsync_compat_readpassphrase
+#endif
+#if !HAVE_REALLOCARRAY
+#define reallocarray bx_rsync_compat_reallocarray
+#endif
+#if !HAVE_RECALLOCARRAY
+#define recallocarray bx_rsync_compat_recallocarray
+#endif
+#if !HAVE_SCAN_SCALED
+#define fmt_scaled bx_rsync_compat_fmt_scaled
+#define scan_scaled bx_rsync_compat_scan_scaled
+#endif
+#if !HAVE_SETRESGID
+#define setresgid bx_rsync_compat_setresgid
+#endif
+#if !HAVE_SETRESUID
+#define setresuid bx_rsync_compat_setresuid
+#endif
+#if !HAVE_SHA2
+#define SHA256Data bx_rsync_compat_SHA256Data
+#define SHA256End bx_rsync_compat_SHA256End
+#define SHA256File bx_rsync_compat_SHA256File
+#define SHA256FileChunk bx_rsync_compat_SHA256FileChunk
+#define SHA256Final bx_rsync_compat_SHA256Final
+#define SHA256Init bx_rsync_compat_SHA256Init
+#define SHA256Pad bx_rsync_compat_SHA256Pad
+#define SHA256Transform bx_rsync_compat_SHA256Transform
+#define SHA256Update bx_rsync_compat_SHA256Update
+#define SHA384Data bx_rsync_compat_SHA384Data
+#define SHA384End bx_rsync_compat_SHA384End
+#define SHA384File bx_rsync_compat_SHA384File
+#define SHA384FileChunk bx_rsync_compat_SHA384FileChunk
+#define SHA384Final bx_rsync_compat_SHA384Final
+#define SHA384Init bx_rsync_compat_SHA384Init
+#define SHA384Pad bx_rsync_compat_SHA384Pad
+#define SHA384Transform bx_rsync_compat_SHA384Transform
+#define SHA384Update bx_rsync_compat_SHA384Update
+#define SHA512Data bx_rsync_compat_SHA512Data
+#define SHA512End bx_rsync_compat_SHA512End
+#define SHA512File bx_rsync_compat_SHA512File
+#define SHA512FileChunk bx_rsync_compat_SHA512FileChunk
+#define SHA512Final bx_rsync_compat_SHA512Final
+#define SHA512Init bx_rsync_compat_SHA512Init
+#define SHA512Pad bx_rsync_compat_SHA512Pad
+#define SHA512Transform bx_rsync_compat_SHA512Transform
+#define SHA512Update bx_rsync_compat_SHA512Update
+#endif
+#if !HAVE_STRLCAT
+#define strlcat bx_rsync_compat_strlcat
+#endif
+#if !HAVE_STRLCPY
+#define strlcpy bx_rsync_compat_strlcpy
+#endif
+#if !HAVE_STRNDUP
+#define strndup bx_rsync_compat_strndup
+#endif
+#if !HAVE_STRNLEN
+#define strnlen bx_rsync_compat_strnlen
+#endif
+#if !HAVE_STRTONUM
+#define strtonum bx_rsync_compat_strtonum
+#endif
+
+#endif

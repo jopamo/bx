@@ -80,6 +80,7 @@ int bx_nc_main(int argc, char** argv);
 int bx_socat_main(int argc, char** argv);
 int bx_mira_main(int argc, char** argv);
 int bx_wget_main(int argc, char** argv);
+int bx_rsync_main(int argc, char** argv);
 int bx_expr_main(int argc, char** argv);
 int bx_fold_main(int argc, char** argv);
 int bx_fmt_main(int argc, char** argv);
