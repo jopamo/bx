@@ -276,22 +276,6 @@ main(void)
 	return c == -1;
 }
 #endif /* TEST_LIB_SOCKET */
-#if TEST_MD5
-#include <sys/types.h>
-#include <md5.h>
-
-int main(void)
-{
-	MD5_CTX ctx;
-	char result[MD5_DIGEST_STRING_LENGTH];
-
-	MD5Init(&ctx);
-	MD5Update(&ctx, (const unsigned char *)"abcd", 4);
-	MD5End(&ctx, result);
-
-	return 0;
-}
-#endif /* TEST_MD5 */
 #if TEST_MEMMEM
 #define _GNU_SOURCE
 #include <string.h>
@@ -500,22 +484,6 @@ main(void)
 	return setresuid(-1, -1, -1) == -1;
 }
 #endif /* TEST_SETRESUID */
-#if TEST_SHA2
-#include <sys/types.h>
-#include <sha2.h>
-
-int main(void)
-{
-	SHA2_CTX ctx;
-	char result[SHA256_DIGEST_STRING_LENGTH];
-
-	SHA256Init(&ctx);
-	SHA256Update(&ctx, (const unsigned char *)"abcd", 4);
-	SHA256End(&ctx, result);
-
-	return 0;
-}
-#endif /* TEST_SHA2 */
 #if TEST_SOCK_NONBLOCK
 /*
  * Linux doesn't (always?) have this.

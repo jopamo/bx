@@ -1609,8 +1609,8 @@ rsync_sources = files(
   'src/vendor/openrsync/zlib/zutil.c',
 )
 
-rsync_support_deps = [zlib_dep]
-foreach libname : ['resolv', 'crypt', 'md', 'socket', 'nsl', 'util', 'sbuf']
+rsync_support_deps = []
+foreach libname : ['resolv', 'crypt', 'socket', 'nsl', 'util', 'sbuf']
   optional_lib = cc.find_library(libname, required : false, static : use_static_binary)
   if optional_lib.found()
     rsync_support_deps += [optional_lib]

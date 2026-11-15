@@ -56,7 +56,6 @@
 #define HAVE_GETPROGNAME 1
 #define HAVE_INFTIM 0
 #define HAVE_LANDLOCK 0
-#define HAVE_MD5 0
 #define HAVE_MEMMEM 1
 #define HAVE_MEMRCHR 0
 #define HAVE_MEMSET_S 1
@@ -74,8 +73,6 @@
 #define HAVE_SECCOMP_FILTER 0
 #define HAVE_SETRESGID 0
 #define HAVE_SETRESUID 0
-#define HAVE_SHA2 0
-#define HAVE_SHA2_H 0
 #define HAVE_SOCK_NONBLOCK 0
 #define HAVE_STRLCAT 1
 #define HAVE_STRLCPY 1
@@ -125,7 +122,6 @@
 #define HAVE_GETPROGNAME 1
 #define HAVE_INFTIM 1
 #define HAVE_LANDLOCK 0
-#define HAVE_MD5 1
 #define HAVE_MEMMEM 1
 #define HAVE_MEMRCHR 1
 #define HAVE_MEMSET_S 1
@@ -143,8 +139,6 @@
 #define HAVE_SECCOMP_FILTER 0
 #define HAVE_SETRESGID 1
 #define HAVE_SETRESUID 1
-#define HAVE_SHA2 0
-#define HAVE_SHA2_H 0
 #define HAVE_SOCK_NONBLOCK 1
 #define HAVE_STRLCAT 1
 #define HAVE_STRLCPY 1
@@ -192,86 +186,6 @@
 # warning Please e-mail the maintainers with your OS.
 # define COMPAT_ENDIAN_H <endian.h>
 #endif
-
-#ifdef __APPLE__
-/*
- * Compatibility for md4(3).
- */
-#define MD5_BLOCK_LENGTH 64
-#define MD5_DIGEST_LENGTH 16
-#define MD5_DIGEST_STRING_LENGTH (MD5_DIGEST_LENGTH * 2 + 1)
-
-typedef struct MD5Context {
-	uint32_t state[4];
-	uint64_t count;
-	uint8_t buffer[MD5_BLOCK_LENGTH];
-} MD5_CTX;
-
-extern void MD5Init(MD5_CTX *);
-extern void MD5Update(MD5_CTX *, const uint8_t *, size_t);
-extern void MD5Pad(MD5_CTX *);
-extern void MD5Transform(uint32_t [4], const uint8_t [MD5_BLOCK_LENGTH]);
-extern char *MD5End(MD5_CTX *, char *);
-extern void MD5Final(uint8_t [MD5_DIGEST_LENGTH], MD5_CTX *);
-#endif
-
-/*
- * Compatibility for sha2(3).
- */
-
-/*** SHA-256/384/512 Various Length Definitions ***********************/
-#define SHA256_BLOCK_LENGTH		64
-#define SHA256_DIGEST_LENGTH		32
-#define SHA256_DIGEST_STRING_LENGTH	(SHA256_DIGEST_LENGTH * 2 + 1)
-#define SHA384_BLOCK_LENGTH		128
-#define SHA384_DIGEST_LENGTH		48
-#define SHA384_DIGEST_STRING_LENGTH	(SHA384_DIGEST_LENGTH * 2 + 1)
-#define SHA512_BLOCK_LENGTH		128
-#define SHA512_DIGEST_LENGTH		64
-#define SHA512_DIGEST_STRING_LENGTH	(SHA512_DIGEST_LENGTH * 2 + 1)
-#define SHA512_256_BLOCK_LENGTH		128
-#define SHA512_256_DIGEST_LENGTH	32
-#define SHA512_256_DIGEST_STRING_LENGTH	(SHA512_256_DIGEST_LENGTH * 2 + 1)
-
-/*** SHA-224/256/384/512 Context Structure *******************************/
-typedef struct _SHA2_CTX {
-	union {
-		uint32_t	st32[8];
-		uint64_t	st64[8];
-	} state;
-	uint64_t	bitcount[2];
-	uint8_t		buffer[SHA512_BLOCK_LENGTH];
-} SHA2_CTX;
-
-void SHA256Init(SHA2_CTX *);
-void SHA256Transform(uint32_t state[8], const uint8_t [SHA256_BLOCK_LENGTH]);
-void SHA256Update(SHA2_CTX *, const uint8_t *, size_t);
-void SHA256Pad(SHA2_CTX *);
-void SHA256Final(uint8_t [SHA256_DIGEST_LENGTH], SHA2_CTX *);
-char *SHA256End(SHA2_CTX *, char *);
-char *SHA256File(const char *, char *);
-char *SHA256FileChunk(const char *, char *, off_t, off_t);
-char *SHA256Data(const uint8_t *, size_t, char *);
-
-void SHA384Init(SHA2_CTX *);
-void SHA384Transform(uint64_t state[8], const uint8_t [SHA384_BLOCK_LENGTH]);
-void SHA384Update(SHA2_CTX *, const uint8_t *, size_t);
-void SHA384Pad(SHA2_CTX *);
-void SHA384Final(uint8_t [SHA384_DIGEST_LENGTH], SHA2_CTX *);
-char *SHA384End(SHA2_CTX *, char *);
-char *SHA384File(const char *, char *);
-char *SHA384FileChunk(const char *, char *, off_t, off_t);
-char *SHA384Data(const uint8_t *, size_t, char *);
-
-void SHA512Init(SHA2_CTX *);
-void SHA512Transform(uint64_t state[8], const uint8_t [SHA512_BLOCK_LENGTH]);
-void SHA512Update(SHA2_CTX *, const uint8_t *, size_t);
-void SHA512Pad(SHA2_CTX *);
-void SHA512Final(uint8_t [SHA512_DIGEST_LENGTH], SHA2_CTX *);
-char *SHA512End(SHA2_CTX *, char *);
-char *SHA512File(const char *, char *);
-char *SHA512FileChunk(const char *, char *, off_t, off_t);
-char *SHA512Data(const uint8_t *, size_t, char *);
 
 #ifdef __APPLE__
 /*

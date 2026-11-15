@@ -302,14 +302,6 @@
 #if !HAVE_GETPROGNAME
 #define getprogname bx_rsync_compat_getprogname
 #endif
-#if !HAVE_MD5
-#define MD5End bx_rsync_compat_MD5End
-#define MD5Final bx_rsync_compat_MD5Final
-#define MD5Init bx_rsync_compat_MD5Init
-#define MD5Pad bx_rsync_compat_MD5Pad
-#define MD5Transform bx_rsync_compat_MD5Transform
-#define MD5Update bx_rsync_compat_MD5Update
-#endif
 #if !HAVE_MEMMEM
 #define memmem bx_rsync_compat_memmem
 #endif
@@ -340,35 +332,6 @@
 #endif
 #if !HAVE_SETRESUID
 #define setresuid bx_rsync_compat_setresuid
-#endif
-#if !HAVE_SHA2
-#define SHA256Data bx_rsync_compat_SHA256Data
-#define SHA256End bx_rsync_compat_SHA256End
-#define SHA256File bx_rsync_compat_SHA256File
-#define SHA256FileChunk bx_rsync_compat_SHA256FileChunk
-#define SHA256Final bx_rsync_compat_SHA256Final
-#define SHA256Init bx_rsync_compat_SHA256Init
-#define SHA256Pad bx_rsync_compat_SHA256Pad
-#define SHA256Transform bx_rsync_compat_SHA256Transform
-#define SHA256Update bx_rsync_compat_SHA256Update
-#define SHA384Data bx_rsync_compat_SHA384Data
-#define SHA384End bx_rsync_compat_SHA384End
-#define SHA384File bx_rsync_compat_SHA384File
-#define SHA384FileChunk bx_rsync_compat_SHA384FileChunk
-#define SHA384Final bx_rsync_compat_SHA384Final
-#define SHA384Init bx_rsync_compat_SHA384Init
-#define SHA384Pad bx_rsync_compat_SHA384Pad
-#define SHA384Transform bx_rsync_compat_SHA384Transform
-#define SHA384Update bx_rsync_compat_SHA384Update
-#define SHA512Data bx_rsync_compat_SHA512Data
-#define SHA512End bx_rsync_compat_SHA512End
-#define SHA512File bx_rsync_compat_SHA512File
-#define SHA512FileChunk bx_rsync_compat_SHA512FileChunk
-#define SHA512Final bx_rsync_compat_SHA512Final
-#define SHA512Init bx_rsync_compat_SHA512Init
-#define SHA512Pad bx_rsync_compat_SHA512Pad
-#define SHA512Transform bx_rsync_compat_SHA512Transform
-#define SHA512Update bx_rsync_compat_SHA512Update
 #endif
 #if !HAVE_STRLCAT
 #define strlcat bx_rsync_compat_strlcat
