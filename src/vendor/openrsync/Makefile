@@ -29,7 +29,8 @@ OBJS	   = batch.o \
 	     bx_text_buffer.o \
 	     bx_rsync_mode.o \
 	     bx_file_info_fmt.o \
-	     portable_util.o \
+	     bx_rsync_humanize.o \
+	     bx_size_parse.o \
 	     receiver.o \
 	     rmatch.o \
 	     rules.o \
@@ -78,6 +79,12 @@ bx_rsync_mode.o: ../../applets/network/rsync/mode.c ../../lib/file_info_fmt.h
 
 bx_file_info_fmt.o: ../../lib/file_info_fmt.c ../../lib/file_info_fmt.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/file_info_fmt.c
+
+bx_rsync_humanize.o: ../../applets/network/rsync/humanize.c portable_util.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ ../../applets/network/rsync/humanize.c
+
+bx_size_parse.o: ../../lib/size_parse.c ../../lib/size_parse.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -include config.h -c -o $@ ../../lib/size_parse.c
 
 install: all
 	mkdir -p $(DESTDIR)$(BINDIR)

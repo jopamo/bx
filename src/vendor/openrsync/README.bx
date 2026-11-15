@@ -9,7 +9,7 @@ compile/link-only configure probes out of tree; no generated header is kept
 in the repository. The standalone Makefile uses shared bx sources.
 
 Local changes to Apple's files:
-- Shared bx text buffers for sbuf storage, and portable human-readable
+- Shared bx text buffers for sbuf storage and unit labels for human-readable
   formatting outside FreeBSD.
 - Shared bx permission formatting, retaining rsync's trailing space.
 - Portable getopt reset, socket lengths, FTS and queue handling.
