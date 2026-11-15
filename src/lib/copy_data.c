@@ -1,22 +1,12 @@
-#define _GNU_SOURCE
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
 
-#ifdef __linux__
-#include <sys/ioctl.h>
-#include <linux/fs.h>
-#endif
-
 #include "copy_data.h"
+#include "copy_platform.h"
 #include "lib/fd_ops.h"
-
-#ifndef BX_HAVE_COPY_FILE_RANGE
-#define BX_HAVE_COPY_FILE_RANGE 0
-#endif
 
 static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
     if (errnum == EINVAL || errnum == ENOTSUP || errnum == ENOSYS) {
@@ -32,10 +22,9 @@ static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
 
 static int bx_copy_data_copy_range(int src_fd, int dest_fd, off_t length, bool* use_copy_range,
     struct bx_copy_buffer* buffer) {
-#if BX_HAVE_COPY_FILE_RANGE
     while (*use_copy_range && length > 0) {
         size_t chunk = length > 1024 * 1024 * 1024 ? 1024 * 1024 * 1024 : (size_t)length;
-        ssize_t copied = copy_file_range(src_fd, NULL, dest_fd, NULL, chunk, 0);
+        ssize_t copied = bx_copy_file_range(src_fd, dest_fd, chunk);
         if (copied > 0) {
             length -= copied;
             continue;
@@ -51,9 +40,6 @@ static int bx_copy_data_copy_range(int src_fd, int dest_fd, off_t length, bool* 
          * offloading for each remaining extent. Verify zero returns by read. */
         *use_copy_range = false;
     }
-#else
-    (void)use_copy_range;
-#endif
     return bx_copy_data_buffered_with_buffer(src_fd, dest_fd, length, BX_SPARSE_NEVER, buffer);
 }
 
@@ -160,14 +146,12 @@ int bx_copy_data_with_buffer(int src_fd, int dest_fd, const struct bx_copy_data_
         (opts->reflink_mode == BX_REFLINK_AUTO && sparse_mode == BX_SPARSE_AUTO)) {
         int cloned = -1;
         errno = EOPNOTSUPP;
-#ifdef __linux__
         if (sparse_mode == BX_SPARSE_AUTO &&
             S_ISREG(src_stat.st_mode) && S_ISREG(dest_stat.st_mode)) {
             do {
-                cloned = ioctl(dest_fd, FICLONE, src_fd);
+                cloned = bx_copy_clone_file(src_fd, dest_fd);
             } while (cloned < 0 && errno == EINTR);
         }
-#endif
         if (cloned == 0)
             return BX_COPY_DATA_SUCCESS;
         if (opts->reflink_mode == BX_REFLINK_ALWAYS ||

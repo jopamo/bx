@@ -198,7 +198,7 @@ bx_link_args = bx_static_link_args + bx_build_id_link_args + host_driver_werror_
 have_copy_file_range = cc.links(
   '''
   #define _GNU_SOURCE
-  #define _POSIX_C_SOURCE 200809L
+  #undef _POSIX_C_SOURCE
   #include <unistd.h>
   int main(void) {
     ssize_t (*copy_range)(int, off_t *, int, off_t *, size_t, unsigned int) = copy_file_range;
@@ -209,8 +209,37 @@ have_copy_file_range = cc.links(
   werror : true,
   name : 'copy_file_range declaration and linkage',
 )
+have_seek_data_hole = cc.links(
+  '''
+  #define _GNU_SOURCE
+  #undef _POSIX_C_SOURCE
+  #include <unistd.h>
+  int main(void) {
+    return lseek(-1, 0, SEEK_DATA) != lseek(-1, 0, SEEK_HOLE);
+  }
+  ''',
+  args : bx_static_link_args,
+  werror : true,
+  name : 'SEEK_DATA and SEEK_HOLE',
+)
+bx_copy_clone_source = 'src/lib/copy_clone_none.c'
+if host_machine.system() == 'linux' and cc.links(
+  '''
+  #include <sys/ioctl.h>
+  #include <linux/fs.h>
+  int main(void) {
+    return ioctl(-1, FICLONE, -1);
+  }
+  ''',
+  args : bx_static_link_args,
+  werror : true,
+  name : 'FICLONE ioctl',
+)
+  bx_copy_clone_source = 'src/lib/copy_clone_linux.c'
+endif
 add_project_arguments(
   '-DBX_HAVE_COPY_FILE_RANGE=' + (have_copy_file_range ? '1' : '0'),
+  '-DBX_HAVE_SEEK_DATA_HOLE=' + (have_seek_data_hole ? '1' : '0'),
   language : 'c',
 )
 
@@ -366,6 +395,8 @@ bx_lib_sources = [
   'src/lib/color.c',
   'src/lib/child_runner.c',
   'src/lib/copy_data.c',
+  bx_copy_clone_source,
+  'src/lib/copy_range.c',
   'src/lib/copy_queue.c',
   'src/lib/copy_stream.c',
   'src/lib/copy_metadata.c',
@@ -378,6 +409,7 @@ bx_lib_sources = [
   'src/lib/daemon_ops.c',
   'src/lib/env_ops.c',
   'src/lib/fd_ops.c',
+  'src/lib/fd_extents.c',
   'src/lib/open_resolve.c',
   'src/lib/fd_transaction.c',
   'src/lib/fault_injection.c',
