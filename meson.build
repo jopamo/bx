@@ -1546,6 +1546,82 @@ endif
 
 bx_include_dirs = include_directories('src', 'src/dispatch', 'src/applets/base/bc/include')
 
+# Apple openrsync keeps its upstream feature probes.  They compile and link
+# test programs but do not execute them, so cross compilers also work.
+rsync_config = custom_target(
+  'openrsync-feature-config',
+  input : files('src/vendor/openrsync/configure'),
+  output : 'openrsync-feature-config.h',
+  command : [
+    python3,
+    files('tools/rsync/configure.py'),
+    '@INPUT@',
+    '@OUTPUT@',
+  ] + cc.cmd_array(),
+  depend_files : files('src/vendor/openrsync/tests.c'),
+)
+
+rsync_sources = files(
+  'src/applets/network/rsync/rsync.c',
+  'src/vendor/openrsync/batch.c',
+  'src/vendor/openrsync/blocks.c',
+  'src/vendor/openrsync/cleanup.c',
+  'src/vendor/openrsync/client.c',
+  'src/vendor/openrsync/compats.c',
+  'src/vendor/openrsync/copy.c',
+  'src/vendor/openrsync/daemon.c',
+  'src/vendor/openrsync/daemon_cfg.c',
+  'src/vendor/openrsync/daemon_misc.c',
+  'src/vendor/openrsync/downloader.c',
+  'src/vendor/openrsync/fargs.c',
+  'src/vendor/openrsync/flist.c',
+  'src/vendor/openrsync/fmap.c',
+  'src/vendor/openrsync/hash.c',
+  'src/vendor/openrsync/ids.c',
+  'src/vendor/openrsync/io.c',
+  'src/vendor/openrsync/log.c',
+  'src/vendor/openrsync/md4.c',
+  'src/vendor/openrsync/misc.c',
+  'src/vendor/openrsync/mkpath.c',
+  'src/vendor/openrsync/mktemp.c',
+  'src/vendor/openrsync/platform.c',
+  'src/vendor/openrsync/portable_open.c',
+  'src/vendor/openrsync/portable_sbuf.c',
+  'src/vendor/openrsync/portable_util.c',
+  'src/vendor/openrsync/receiver.c',
+  'src/vendor/openrsync/rmatch.c',
+  'src/vendor/openrsync/rules.c',
+  'src/vendor/openrsync/sender.c',
+  'src/vendor/openrsync/server.c',
+  'src/vendor/openrsync/session.c',
+  'src/vendor/openrsync/socket.c',
+  'src/vendor/openrsync/strmode.c',
+  'src/vendor/openrsync/symlinks.c',
+  'src/vendor/openrsync/uploader.c',
+)
+
+rsync_support_deps = [zlib_dep]
+foreach libname : ['resolv', 'crypt', 'md', 'socket', 'nsl', 'util', 'sbuf']
+  optional_lib = cc.find_library(libname, required : false, static : use_static_binary)
+  if optional_lib.found()
+    rsync_support_deps += [optional_lib]
+  endif
+endforeach
+
+rsync_vendor_lib = static_library(
+  'bx_rsync_vendor',
+  rsync_sources + [rsync_config],
+  c_args : [
+    '-DBX_RSYNC_APPLET=1',
+    '-include',
+    join_paths(meson.current_build_dir(), 'openrsync-feature-config.h'),
+  ],
+  include_directories : [bx_include_dirs, include_directories('src/vendor/openrsync')],
+  dependencies : rsync_support_deps,
+  override_options : ['werror=false', 'warning_level=0'],
+)
+bx_deps += rsync_support_deps
+
 bx_markdown_lib = static_library(
   'bx_markdown',
   files('src/lib/markdown/writer.c'),
@@ -1666,6 +1742,7 @@ bx_exe = executable('bx',
     jq_lib,
     manual_lib,
     bx_zip_lib,
+    rsync_vendor_lib,
   ],
   link_args : bx_link_args,
   install : true,
