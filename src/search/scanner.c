@@ -45,6 +45,23 @@ static size_t bx_search_scanner_find_last_delimiter(const struct bx_search_scann
     return (size_t)(hit - scanner->buf) + 1u;
 }
 
+static bool bx_search_scanner_records_within_limit(const struct bx_search_scanner *scanner) {
+    size_t start = 0u;
+
+    if (scanner->record_limit == 0u)
+        return true;
+    while (scanner->len - start > scanner->record_limit) {
+        /* Skip a window of complete records, not just its first delimiter. */
+        const unsigned char *hit = memrchr(scanner->buf + start,
+                                           (unsigned char)scanner->delimiter,
+                                           scanner->record_limit);
+        if (!hit)
+            return false;
+        start = (size_t)(hit - scanner->buf) + 1u;
+    }
+    return true;
+}
+
 static size_t bx_search_scanner_count_delimiters(const unsigned char *buf,
                                                  size_t len,
                                                  unsigned char delimiter) {
@@ -173,15 +190,15 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
             }
         }
 
+        if (!bx_search_scanner_records_within_limit(scanner)) {
+            scanner->errnum = EOVERFLOW;
+            return false;
+        }
+
         size_t complete_len = bx_search_scanner_find_last_delimiter(scanner);
         if (complete_len > 0u) {
             scanner->scan_len = complete_len;
             return true;
-        }
-
-        if (scanner->record_limit > 0u && scanner->len > scanner->record_limit) {
-            scanner->errnum = EOVERFLOW;
-            return false;
         }
 
         if (scanner->eof) {
