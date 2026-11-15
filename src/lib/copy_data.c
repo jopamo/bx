@@ -1,10 +1,15 @@
+#define _GNU_SOURCE
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <linux/fs.h>
 #include <errno.h>
+
+#ifdef __linux__
+#include <sys/ioctl.h>
+#include <linux/fs.h>
+#endif
 
 #include "copy_data.h"
 #include "lib/fd_ops.h"
@@ -21,7 +26,33 @@ static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
     return false;
 }
 
-static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) {
+static int bx_copy_data_copy_range(int src_fd, int dest_fd, off_t length, bool* use_copy_range) {
+#ifdef __linux__
+    while (*use_copy_range && length > 0) {
+        size_t chunk = length > 1024 * 1024 * 1024 ? 1024 * 1024 * 1024 : (size_t)length;
+        ssize_t copied = copy_file_range(src_fd, NULL, dest_fd, NULL, chunk, 0);
+        if (copied > 0) {
+            length -= copied;
+            continue;
+        }
+        if (copied < 0) {
+            if (errno == EINTR)
+                continue;
+            if (errno != ENOSYS && errno != EXDEV && errno != EINVAL &&
+                errno != EOPNOTSUPP && errno != ENOTSUP && errno != EPERM)
+                return BX_COPY_DATA_RANGE_ERROR;
+        }
+        /* Keep offsets after partial progress; do not retry unsupported
+         * offloading for each remaining extent. Verify zero returns by read. */
+        *use_copy_range = false;
+    }
+#else
+    (void)use_copy_range;
+#endif
+    return bx_copy_data_buffered(src_fd, dest_fd, length, BX_SPARSE_NEVER);
+}
+
+static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool use_copy_range, bool* handled_out) {
     struct stat src_stat;
     off_t offset = 0;
     bool preserved_hole = false;
@@ -77,7 +108,7 @@ static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) 
             return BX_COPY_DATA_WRITE_ERROR;
         }
 
-        int copy_res = bx_copy_data_buffered(src_fd, dest_fd, hole_offset - data_offset, BX_SPARSE_NEVER);
+        int copy_res = bx_copy_data_copy_range(src_fd, dest_fd, hole_offset - data_offset, &use_copy_range);
         if (copy_res != BX_COPY_DATA_SUCCESS) {
             *handled_out = true;
             return copy_res;
@@ -99,9 +130,13 @@ int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options* opt
     enum bx_sparse_mode sparse_mode = opts->sparse_mode;
 
     if (opts->reflink_mode != BX_REFLINK_NEVER) {
+#ifdef __linux__
         if (ioctl(dest_fd, FICLONE, src_fd) == 0) {
             return BX_COPY_DATA_SUCCESS;
         }
+#else
+        errno = ENOTSUP;
+#endif
         if (opts->reflink_mode == BX_REFLINK_ALWAYS) {
             return BX_COPY_DATA_REFLINK_FAILED;
         }
@@ -119,7 +154,9 @@ int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options* opt
 
     if (sparse_mode == BX_SPARSE_AUTO) {
         bool handled = false;
-        int res = bx_copy_data_sparse_auto(src_fd, dest_fd, &handled);
+        /* copy_file_range may clone extents, so --reflink=never bypasses it. */
+        int res = bx_copy_data_sparse_auto(src_fd, dest_fd,
+            opts->reflink_mode != BX_REFLINK_NEVER, &handled);
         if (handled || res != BX_COPY_DATA_SUCCESS) {
             return res;
         }

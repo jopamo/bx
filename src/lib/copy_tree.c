@@ -460,6 +460,9 @@ static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_diag_ctx* di
     else if (res == BX_COPY_DATA_REFLINK_FAILED) {
         bx_diag(diag, "failed to clone '%s'", "destination");
     }
+    else if (res == BX_COPY_DATA_RANGE_ERROR) {
+        bx_perror_path(diag, "copy_file_range");
+    }
     return res;
 }
 

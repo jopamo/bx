@@ -8,6 +8,7 @@ enum bx_copy_data_result {
     BX_COPY_DATA_READ_ERROR = -1,
     BX_COPY_DATA_WRITE_ERROR = -2,
     BX_COPY_DATA_REFLINK_FAILED = -3,
+    BX_COPY_DATA_RANGE_ERROR = -4,
 };
 
 enum bx_sparse_mode {
