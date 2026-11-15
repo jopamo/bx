@@ -1249,6 +1249,8 @@ rsync_sender(struct sess *sess, int fdin,
 	up.stat.fd = -1;
 	up.stat.map = NULL;
 	up.stat.blktab = blkhash_alloc();
+	if (up.stat.blktab == NULL)
+		goto out;
 
 	/*
 	 * Client sends zero-length exclusions if deleting, unless we're
@@ -1778,7 +1780,8 @@ rsync_sender(struct sess *sess, int fdin,
 
 			/* Hash our blocks. */
 
-			blkhash_set(up.stat.blktab, up.cur->blks);
+			if (!blkhash_set(up.stat.blktab, up.cur->blks))
+				goto out;
 
 			/*
 			 * End of phase: enable channel to receiver.

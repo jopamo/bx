@@ -50,19 +50,16 @@ TAILQ_HEAD(blkhashq, blkhash);
  */
 struct	blktab {
 	struct blkhashq	*q; /* entries in the hashtable */
-	size_t		 qsz; /* size of the hashtable */
+	size_t		 qsz; /* active buckets, always a power of two */
+	size_t		 qmax; /* allocated buckets */
 	struct blkhash	*blks; /* pre-allocated hashtable entries */
 };
 
-/*
- * This is the number of buckets in the hashtable.
- * Use the same that GPL rsync uses.
- * (It should be dynamic?)
- */
-#define	BLKTAB_SZ	  65536
+#define	BLKTAB_MIN	  256
+#define	BLKTAB_MAX	  65536
 
 /*
- * Initialise an empty hashtable with BLKTAB_SZ entries in it.
+ * Initialise an empty hashtable with BLKTAB_MIN buckets.
  * Populate it for each file with blkhash_set.
  * When we've processed all files, call blkhash_free.
  * Returns NULL on allocation failure.
@@ -76,7 +73,7 @@ blkhash_alloc(void)
 		ERR("calloc");
 		return NULL;
 	}
-	p->qsz = BLKTAB_SZ;
+	p->qsz = p->qmax = BLKTAB_MIN;
 	p->q = calloc(p->qsz, sizeof(struct blkhashq));
 	if (p->q == NULL) {
 		ERR("calloc");
@@ -94,33 +91,45 @@ blkhash_alloc(void)
 int
 blkhash_set(struct blktab *p, const struct blkset *bset)
 {
-	size_t	 i, idx;
+	size_t		 i, idx, qsz;
+	struct blkhashq	*q;
+	struct blkhash	*blks;
 
-	if (bset == NULL || bset->blksz == 0)
+	/* Append and whole-file transfers do not look up receiver blocks. */
+	if (bset == NULL || bset->blksz == 0 || bset->blks == NULL)
 		return 1;
+
+	/* Keep short chains without clearing the maximum table for tiny files. */
+	for (qsz = BLKTAB_MIN;
+	    qsz < BLKTAB_MAX && qsz / 2 < bset->blksz; qsz *= 2)
+		continue;
+	if (qsz > p->qmax) {
+		q = reallocarray(p->q, qsz, sizeof(*q));
+		if (q == NULL) {
+			ERR("reallocarray buckets");
+			return 0;
+		}
+		p->q = q;
+		p->qmax = qsz;
+	}
+	p->qsz = qsz;
 
 	/* Wipe clean the table. */
 
 	for (i = 0; i < p->qsz; i++)
 		TAILQ_INIT(&p->q[i]);
 
-	/* bset->blks will be NULL in append mode */
-
-	if (bset->blks == NULL)
-		return 1;
-
 	/* Fill in the hashtable. */
 
-	if (bset->blksz == 0)
-		return 1;
-	p->blks = reallocarray(p->blks, bset->blksz, sizeof(struct blkhash));
-	if (p->blks == NULL) {
+	blks = reallocarray(p->blks, bset->blksz, sizeof(*blks));
+	if (blks == NULL) {
 		ERR("reallocarray 3 %ld * %ld bytes", bset->blksz, sizeof(struct blkhash));
 		return 0;
 	}
+	p->blks = blks;
 	for (i = 0; i < bset->blksz; i++) {
 		p->blks[i].blk = &bset->blks[i];
-		idx = bset->blks[i].chksum_short % p->qsz;
+		idx = bset->blks[i].chksum_short & (p->qsz - 1);
 		assert(idx < p->qsz);
 		TAILQ_INSERT_TAIL(&p->q[idx], &p->blks[i], entries);
 	}
@@ -135,6 +144,8 @@ void
 blkhash_free(struct blktab *p)
 {
 
+	if (p == NULL)
+		return;
 	free(p->blks);
 	free(p->q);
 	free(p);
@@ -219,7 +230,7 @@ blk_find(struct sess *sess, struct blkstat *st,
 	 * The slow hash is computed only once.
 	 */
 
-	q = &st->blktab->q[fhash % st->blktab->qsz];
+	q = &st->blktab->q[fhash & (st->blktab->qsz - 1)];
 
 	TAILQ_FOREACH(ent, q, entries) {
 		if (fhash != ent->blk->chksum_short ||
