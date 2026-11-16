@@ -15,6 +15,8 @@ int bx_rsync_meta_recv(struct sess *, int, struct flist *);
 int bx_rsync_meta_remap(struct sess *, const struct ident *, size_t,
     const struct ident *, size_t);
 void bx_rsync_meta_cleanup(struct sess *);
+/* Return an owned descriptor for the destination inode. */
+int bx_rsync_meta_pin(int, const struct flist *, const char *);
 int bx_rsync_meta_apply(struct sess *, int, int, const struct flist *,
     const char *, int);
 int bx_rsync_meta_compare(struct sess *, int, const struct flist *,

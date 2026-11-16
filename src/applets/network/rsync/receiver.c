@@ -167,9 +167,9 @@ rsync_set_metadata(struct sess *sess, int newfile,
 	return bx_rsync_meta_apply(sess, fd, -1, f, path, 0);
 }
 
-int
-rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
-	const struct flist *f, const char *path)
+static int
+set_metadata_at(struct sess *sess, int newfile, int rootfd,
+	const struct flist *f, const char *path, int pinned)
 {
 	uid_t		 uid = (uid_t)-1;
 	gid_t		 gid = (gid_t)-1;
@@ -177,6 +177,7 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	struct timespec	 ts[2];
 	struct stat      st;
 	bool		 pres_exec;
+	int		 flags = pinned == -1 ? AT_SYMLINK_NOFOLLOW : 0;
 
 	if (sess->opts->dry_run || (f->flstate & FLIST_SKIP_METADATA) != 0)
 		return 1;
@@ -185,9 +186,15 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	    (sess->opts->preserve_executability && !sess->opts->preserve_perms);
 
 	if (pres_exec || sess->opts->ign_non_exist) {
-		if (fstatat(rootfd, f->path, &st, AT_SYMLINK_NOFOLLOW) == -1)
+		int rc = pinned == -1 ?
+		    fstatat(rootfd, f->path, &st, AT_SYMLINK_NOFOLLOW) :
+		    fstat(pinned, &st);
+		if (rc == -1) {
 			if (errno == ENOENT)
 				return 1;
+			ERR("%s: stat metadata target", path);
+			return 0;
+		}
 	}
 
 	/* Conditionally adjust file modification time. */
@@ -197,7 +204,7 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 		ts[0].tv_nsec = UTIME_NOW;
 		ts[1].tv_sec = f->st.mtime;
 		ts[1].tv_nsec = 0;
-		if (utimensat(rootfd, path, ts, AT_SYMLINK_NOFOLLOW) == -1) {
+		if (utimensat(rootfd, path, ts, flags) == -1) {
 			int save = errno;
 
 			ERR("%s: utimensat (2)", path);
@@ -225,7 +232,7 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	mode = f->st.mode;
 
 	if (uid != (uid_t)-1 || gid != (gid_t)-1) {
-		if (fchownat(rootfd, path, uid, gid, AT_SYMLINK_NOFOLLOW) == -1) {
+		if (fchownat(rootfd, path, uid, gid, flags) == -1) {
 			if (errno != EPERM || sess->opts->bx_protocol) {
 				int save = errno;
 
@@ -240,14 +247,14 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 			LOG4("%s: updated uid and/or gid", f->path);
 	}
 
-	if (!bx_rsync_meta_apply(sess, -1, rootfd, f, path, 1))
+	if (!bx_rsync_meta_apply(sess, pinned, rootfd, f, path, 1))
 		return 0;
 
 	/* Conditionally adjust file permissions. */
 
 	if (newfile || sess->opts->preserve_perms) {
-		if (mode != 0) {
-			if (fchmodat(rootfd, path, mode, AT_SYMLINK_NOFOLLOW) == -1) {
+		if (mode != 0 && !(pinned != -1 && S_ISLNK(f->st.mode))) {
+			if (fchmodat(rootfd, path, mode, flags) == -1) {
 				if (!(S_ISLNK(f->st.mode) && errno == EOPNOTSUPP)) {
 					int save = errno;
 
@@ -261,7 +268,7 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	} else if (pres_exec) {
 		mode = preserve_executability_check(mode, st.st_mode);
 		if (mode != 0) {
-			if (fchmodat(rootfd, path, mode, AT_SYMLINK_NOFOLLOW) == -1) {
+			if (fchmodat(rootfd, path, mode, flags) == -1) {
 				int save = errno;
 
 				ERR("%s: fchmodat", path);
@@ -272,7 +279,50 @@ rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
 		}
 	}
 
-	return bx_rsync_meta_apply(sess, -1, rootfd, f, path, 0);
+	return bx_rsync_meta_apply(sess, pinned, rootfd, f, path, 0);
+}
+
+int
+rsync_set_metadata_at(struct sess *sess, int newfile, int rootfd,
+	const struct flist *f, const char *path)
+{
+	char procpath[64];
+	struct stat pinned_st, current_st;
+	int fd, rc, saved;
+
+	if (!sess->opts->bx_protocol || sess->opts->dry_run ||
+	    (f->flstate & FLIST_SKIP_METADATA) != 0)
+		return set_metadata_at(sess, newfile, rootfd, f, path, -1);
+	fd = bx_rsync_meta_pin(rootfd, f, path);
+	if (fd == -1) {
+		if (sess->opts->ign_non_exist && errno == ENOENT)
+			return 1;
+		ERR("%s: pin metadata target", path);
+		return 0;
+	}
+	/* All metadata passes must refer to the same inode, including symlinks. */
+	(void)snprintf(procpath, sizeof(procpath), "/proc/self/fd/%d", fd);
+	rc = set_metadata_at(sess, newfile, AT_FDCWD, f, procpath, fd);
+	if (rc) {
+		int current = bx_rsync_meta_pin(rootfd, f, path);
+		rc = current != -1 && fstat(fd, &pinned_st) == 0 &&
+		    fstat(current, &current_st) == 0;
+		if (rc && (pinned_st.st_dev != current_st.st_dev ||
+		    pinned_st.st_ino != current_st.st_ino)) {
+			errno = ESTALE;
+			rc = 0;
+		}
+		saved = errno;
+		if (current != -1)
+			close(current);
+		errno = saved;
+		if (!rc)
+			ERR("%s: metadata target changed", path);
+	}
+	saved = errno;
+	close(fd);
+	errno = saved;
+	return rc;
 }
 
 struct info_for_hardlink {

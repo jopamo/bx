@@ -266,13 +266,12 @@ meta_add(struct bx_rsync_meta *m, const char *name, size_t size)
 
 #ifdef __linux__
 /*
- * Pin non-symlinks with O_PATH; using the proc descriptor avoids opening
- * devices and FIFOs for I/O. For symlinks, pin the parent and use l*xattr:
- * the last path component must never be followed.
+ * Pin every inode with O_PATH. A proc descriptor lookup reaches the pinned
+ * inode, including a symlink itself, without resolving its target or looking
+ * up its old name again. Devices and FIFOs are not opened for I/O.
  */
 struct meta_file {
 	int fd;
-	int parent;
 	int symlink;
 	char path[PATH_MAX];
 };
@@ -283,8 +282,6 @@ file_close(struct meta_file *f)
 	int saved = errno;
 	if (f->fd != -1)
 		close(f->fd);
-	if (f->parent != -1)
-		close(f->parent);
 	errno = saved;
 }
 
@@ -293,12 +290,18 @@ file_open(struct meta_file *out, int fd, int root, const char *path,
     mode_t mode, int source)
 {
 	struct stat st;
-	char *parent, *leaf;
 	int n;
 
 	memset(out, 0, sizeof(*out));
-	out->fd = out->parent = -1;
+	out->fd = -1;
 	if (fd != -1) {
+		if (fstat(fd, &st) == -1)
+			return 0;
+		if ((st.st_mode & S_IFMT) != (mode & S_IFMT)) {
+			errno = ESTALE;
+			return 0;
+		}
+		out->symlink = S_ISLNK(st.st_mode);
 		n = snprintf(out->path, sizeof(out->path), "/proc/self/fd/%d", fd);
 		return n > 0 && (size_t)n < sizeof(out->path);
 	}
@@ -316,30 +319,7 @@ file_open(struct meta_file *out, int fd, int root, const char *path,
 		goto fail;
 	}
 	out->symlink = S_ISLNK(st.st_mode);
-	if (!out->symlink) {
-		n = snprintf(out->path, sizeof(out->path), "/proc/self/fd/%d", out->fd);
-		return n > 0 && (size_t)n < sizeof(out->path);
-	}
-	parent = strdup(path);
-	if (parent == NULL)
-		goto fail;
-	leaf = strrchr(parent, '/');
-	if (leaf != NULL) {
-		*leaf++ = '\0';
-		out->parent = source ?
-		    openat(root, *parent ? parent : "/", O_PATH | O_DIRECTORY | O_CLOEXEC) :
-		    bx_openat_resolve(root, *parent ? parent : ".",
-		    O_PATH | O_DIRECTORY | O_CLOEXEC, 0,
-		    RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS);
-	} else {
-		leaf = parent;
-		out->parent = openat(root, ".", O_PATH | O_DIRECTORY | O_CLOEXEC);
-	}
-	n = snprintf(out->path, sizeof(out->path), "/proc/self/fd/%d/%s",
-	    out->parent, leaf);
-	free(parent);
-	if (out->parent == -1)
-		goto fail;
+	n = snprintf(out->path, sizeof(out->path), "/proc/self/fd/%d", out->fd);
 	if (n < 0 || (size_t)n >= sizeof(out->path)) {
 		errno = ENAMETOOLONG;
 		goto fail;
@@ -353,8 +333,7 @@ fail:
 static ssize_t
 attr_get(const struct meta_file *f, const char *name, void *buf, size_t size)
 {
-	return f->symlink ? lgetxattr(f->path, name, buf, size) :
-	    getxattr(f->path, name, buf, size);
+	return getxattr(f->path, name, buf, size);
 }
 
 static int
@@ -362,8 +341,7 @@ meta_capture(struct bx_rsync_meta *m, const struct meta_file *f,
     unsigned int flags, mode_t mode)
 {
 	char *names;
-	ssize_t n = f->symlink ? llistxattr(f->path, NULL, 0) :
-	    listxattr(f->path, NULL, 0);
+	ssize_t n = listxattr(f->path, NULL, 0);
 
 	if (n == -1 && (errno == ENOTSUP || errno == EOPNOTSUPP))
 		return 1;
@@ -378,8 +356,7 @@ meta_capture(struct bx_rsync_meta *m, const struct meta_file *f,
 	names = malloc((size_t)n);
 	if (names == NULL)
 		return 0;
-	n = f->symlink ? llistxattr(f->path, names, (size_t)n) :
-	    listxattr(f->path, names, (size_t)n);
+	n = listxattr(f->path, names, (size_t)n);
 	if (n == -1)
 		goto fail;
 	for (size_t i = 0; i < (size_t)n;) {
@@ -399,8 +376,10 @@ meta_capture(struct bx_rsync_meta *m, const struct meta_file *f,
 		if (size == -1 || !meta_add(m, name, (size_t)size))
 			goto fail;
 		a = &m->attrs[m->count - 1];
-		if (attr_get(f, name, a->value, a->size) != size) {
-			errno = ESTALE;
+		ssize_t got = attr_get(f, name, a->value, a->size);
+		if (got != size) {
+			if (got >= 0)
+				errno = ESTALE;
 			goto fail;
 		}
 		if (!acl_valid(a, mode)) {
@@ -432,8 +411,7 @@ meta_restore(const struct bx_rsync_meta *wanted, const struct bx_rsync_meta *hav
 		const struct meta_attr *a = &have->attrs[i];
 		if (is_acl(a->name) != acls || meta_find(wanted, a->name) != NULL)
 			continue;
-		int rc = file->symlink ? lremovexattr(file->path, a->name) :
-		    removexattr(file->path, a->name);
+		int rc = removexattr(file->path, a->name);
 		if (rc == -1 && errno != ENODATA)
 			return 0;
 	}
@@ -442,9 +420,7 @@ meta_restore(const struct bx_rsync_meta *wanted, const struct bx_rsync_meta *hav
 		if (is_acl(a->name) != acls ||
 		    attr_equal(a, meta_find(have, a->name)))
 			continue;
-		int rc = file->symlink ? lsetxattr(file->path, a->name,
-		    a->value, a->size, 0) :
-		    setxattr(file->path, a->name, a->value, a->size, 0);
+		int rc = setxattr(file->path, a->name, a->value, a->size, 0);
 		if (rc == -1)
 			return 0;
 	}
@@ -453,6 +429,23 @@ meta_restore(const struct bx_rsync_meta *wanted, const struct bx_rsync_meta *hav
 
 
 #endif
+
+int
+bx_rsync_meta_pin(int root, const struct flist *f, const char *path)
+{
+#ifdef __linux__
+	struct meta_file file;
+	if (!file_open(&file, -1, root, path, f->st.mode, 0))
+		return -1;
+	return file.fd;
+#else
+	(void)root;
+	(void)f;
+	(void)path;
+	errno = ENOTSUP;
+	return -1;
+#endif
+}
 
 int
 bx_rsync_meta_send(struct sess *sess, int fd, const struct flist *f,
