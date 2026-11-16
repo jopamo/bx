@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lib/mount_identity.h"
+#include "lib/statx_compat.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -15,7 +16,7 @@ static bool bx_mount_identity_read_path(int fd, const char* name, int flags, str
     struct statx extended;
     if (statx(fd, name, flags, STATX_MNT_ID, &extended) == 0) {
         if (extended.stx_mask & STATX_MNT_ID) {
-            identity->mount = extended.stx_mnt_id;
+            identity->mount = bx_statx_mount_id(&extended);
             identity->has_mount = true;
         }
     }

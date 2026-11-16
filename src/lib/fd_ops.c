@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <poll.h>
 #include <limits.h>
+#include <linux/fs.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/stat.h>

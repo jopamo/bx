@@ -2,6 +2,9 @@
 #define BX_COMMON_STATX_COMPAT_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -30,6 +33,22 @@
 #define STATX_BASIC_STATS 0
 #define STATX_BTIME 0
 #define STATX_ALL 0
+#endif
+
+#ifndef STATX_MNT_ID
+#define STATX_MNT_ID 0x1000U
+static inline uint64_t bx_statx_mount_id(const struct statx* result) {
+    /* Older libc declarations leave the Linux mount-ID slot as padding. */
+    _Static_assert(offsetof(struct statx, stx_dev_minor) == 0x8c && sizeof(struct statx) >= 0x98,
+                   "statx mount ID requires the Linux ABI layout");
+    uint64_t mount;
+    memcpy(&mount, (const unsigned char*)result + 0x90, sizeof(mount));
+    return mount;
+}
+#else
+static inline uint64_t bx_statx_mount_id(const struct statx* result) {
+    return result->stx_mnt_id;
+}
 #endif
 
 extern int bx_statx_flags;
