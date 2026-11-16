@@ -1117,6 +1117,16 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
         int found = strcmp(leaf, ".") == 0 ? fstat(parent, &existing) : bx_fd_fstatat_child_nofollow(parent, leaf, &existing);
         if (found != 0 && errno != ENOENT)
             goto fail;
+        if (found == 0 && S_ISREG(existing.st_mode)) {
+            uint64_t order;
+            if (bx_inode_ledger_lookup(&hardlinks->materialized, &existing, &order, NULL)) {
+                const struct bx_file_restore* pending = &dirs->entries[order - 1u].restore;
+                /* Later group payloads change the inode's mtime before
+                 * deferred restoration. Compare the recorded mtime. */
+                if (pending->set_mtime)
+                    existing.st_mtim = pending->mtime;
+            }
+        }
         if (found == 0 && !(S_ISDIR(existing.st_mode) && entry->kind == BX_CPIO_KIND_DIR) &&
             existing.st_mtim.tv_sec >= entry->mtime.tv_sec) {
             if (fprintf(stderr, "%s: '%s' not created: newer or same age version exists\n", diag->progname, entry->name) < 0)
