@@ -1782,6 +1782,28 @@ stdbuf_preload = shared_module(
 
 sources += files('src/applets/network/knock/knock.c')
 
+pigz_lib = static_library('bx-pigz',
+  'src/applets/archive/pigz/pigz.c',
+  'src/applets/archive/pigz/yarn.c',
+  'src/applets/archive/pigz/try.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/blocksplitter.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/cache.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/deflate.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/hash.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/katajainen.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/lz77.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/squeeze.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/symbols.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/tree.c',
+  'src/applets/archive/pigz/zopfli/src/zopfli/util.c',
+  include_directories : bx_include_dirs,
+  dependencies : [zlib_dep, threads_dep],
+  c_args : [
+    '-include', meson.current_source_dir() / 'src/applets/archive/pigz/namespace.h',
+    '-Wno-shadow', '-Wno-missing-prototypes', '-Wno-unused-but-set-variable',
+  ],
+)
+
 bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
@@ -1802,6 +1824,7 @@ bx_exe = executable('bx',
     bx_zip_lib,
     rsync_lib,
     fat_lib,
+    pigz_lib,
   ],
   link_args : bx_link_args,
   install : true,

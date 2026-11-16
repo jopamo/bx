@@ -1398,6 +1398,56 @@
         "network-access"
       ],
       "execution_class": "exec-only"
+    },
+    {
+      "name": "pigz",
+      "main": "bx_pigz_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "unpigz",
+      "main": "bx_pigz_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "gzip",
+      "main": "bx_pigz_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "gunzip",
+      "main": "bx_pigz_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "zcat",
+      "main": "bx_pigz_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ],
+      "execution_class": "exec-only"
     }
   ],
   "capability_flags": [

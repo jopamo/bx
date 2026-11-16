@@ -34,6 +34,9 @@ areas include:
 - src/lib/fat/ and src/applets/system/fat/ — FreeBSD FAT utilities under
   BSD-2-Clause, with BSD-3-Clause checker diagnostics
 
+- src/applets/archive/pigz/ — Zlib license, with bundled Zopfli under
+  Apache-2.0 (see zopfli/COPYING and retained per-file notices)
+
 Subtree README/COPYING/LICENSE files and per-file headers control when they
 differ from this top-level default.
 
