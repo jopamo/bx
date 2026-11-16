@@ -611,7 +611,8 @@ static bool bx_cpio_build_archive(struct bx_archive_spool* archive, int source_r
                     if (emitted[j] || group_map != map) {
                         continue;
                     }
-                    if (!bx_cpio_emit_one_fs_entry(archive, source_root_fd, group_entry, map->synthetic_ino, options, j != i && options->format != BX_CPIO_FORMAT_BIN, diag)) {
+                    bool defer_payload = j != i && (options->format == BX_CPIO_FORMAT_NEWC || options->format == BX_CPIO_FORMAT_CRC);
+                    if (!bx_cpio_emit_one_fs_entry(archive, source_root_fd, group_entry, map->synthetic_ino, options, defer_payload, diag)) {
                         free(emitted);
                         bx_cpio_inode_maps_free(&maps);
                         bx_archive_fs_list_free(&files);
