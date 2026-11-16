@@ -30,6 +30,7 @@ struct bx_archive_temp_signal_slot {
     int signo;
     struct sigaction previous;
     bool have_previous;
+    bool preserve_ignore;
 };
 
 static struct bx_archive_temp_signal_slot bx_archive_temp_signal_slots[] = {
@@ -41,6 +42,9 @@ static struct bx_archive_temp_signal_slot bx_archive_temp_signal_slots[] = {
 #endif
 #ifdef SIGTERM
     {.signo = SIGTERM},
+#endif
+#ifdef SIGXFSZ
+    {.signo = SIGXFSZ, .preserve_ignore = true},
 #endif
 };
 
@@ -145,7 +149,10 @@ bool bx_archive_temp_install_signal_cleanup(void) {
     action.sa_flags = 0;
 
     for (i = 0u; i < (sizeof(bx_archive_temp_signal_slots) / sizeof(bx_archive_temp_signal_slots[0])); i++) {
-        if (sigaction(bx_archive_temp_signal_slots[i].signo, &action, &bx_archive_temp_signal_slots[i].previous) != 0) {
+        struct bx_archive_temp_signal_slot* slot = &bx_archive_temp_signal_slots[i];
+        if (sigaction(slot->signo, NULL, &slot->previous) != 0 ||
+            (!(slot->preserve_ignore && slot->previous.sa_handler == SIG_IGN) &&
+             sigaction(slot->signo, &action, NULL) != 0)) {
             int error = errno;
             while (i > 0u) {
                 i--;
