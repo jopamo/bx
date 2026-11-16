@@ -655,29 +655,30 @@ cleardirty(struct fat_descriptor *fat)
 	if (boot->ClustMask != CLUST16_MASK && boot->ClustMask != CLUST32_MASK)
 		return 0;
 
-	off = boot->bpbResSectors;
-	off *= boot->bpbBytesPerSec;
-
 	buffer = malloc(len = boot->bpbBytesPerSec);
 	if (buffer == NULL) {
 		perr("No memory for FAT sectors (%zu)", len);
-		return 1;
+		return FSERROR;
 	}
 
-	if ((size_t)bx_fat_pread(fd, buffer, len, off) != len) {
-		perr("Unable to read FAT");
-		goto err;
-	}
+	for (unsigned i = 0; i < boot->bpbFATs; i++) {
+		off = ((off_t)boot->bpbResSectors + (off_t)i * boot->FATsecs) *
+		    boot->bpbBytesPerSec;
+		if ((size_t)bx_fat_pread(fd, buffer, len, off) != len) {
+			perr("Unable to read FAT %u", i);
+			goto err;
+		}
 
-	if (boot->ClustMask == CLUST16_MASK) {
-		buffer[3] |= 0x80;
-	} else {
-		buffer[7] |= 0x08;
-	}
+		if (boot->ClustMask == CLUST16_MASK) {
+			buffer[3] |= 0x80;
+		} else {
+			buffer[7] |= 0x08;
+		}
 
-	if ((size_t)bx_fat_pwrite(fd, buffer, len, off) != len) {
-		perr("Unable to write FAT");
-		goto err;
+		if ((size_t)bx_fat_pwrite(fd, buffer, len, off) != len) {
+			perr("Unable to write FAT %u", i);
+			goto err;
+		}
 	}
 
 	ret = FSOK;
