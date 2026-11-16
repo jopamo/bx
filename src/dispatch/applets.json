@@ -1390,6 +1390,14 @@
         "child-execution"
       ],
       "execution_class": "exec-only"
+    },
+    {
+      "name": "knock",
+      "main": "bx_knock_main",
+      "capabilities": [
+        "network-access"
+      ],
+      "execution_class": "exec-only"
     }
   ],
   "capability_flags": [

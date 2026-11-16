@@ -29,6 +29,7 @@ areas include:
   src/lib/fetch/COPYING.Mira
 - src/lib/manual/ — mandoc/OpenBSD-derived code under the terms collected in
   src/lib/manual/COPYING.mandoc
+- src/applets/network/knock/ — GPL-2.0-or-later, derived from knock 0.8
 - src/applets/network/rsync/ — ISC and other retained notices
 - src/lib/fat/ and src/applets/system/fat/ — FreeBSD FAT utilities under
   BSD-2-Clause, with BSD-3-Clause checker diagnostics

@@ -1780,6 +1780,8 @@ stdbuf_preload = shared_module(
   install_dir : stdbuf_install_subdir,
 )
 
+sources += files('src/applets/network/knock/knock.c')
+
 bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,

@@ -1,6 +1,8 @@
 #ifndef BX_APPLETS_H
 #define BX_APPLETS_H
 
+int bx_knock_main(int argc, char **argv);
+
 int bx_mkfs_fat_main(int argc, char** argv);
 int bx_fsck_fat_main(int argc, char** argv);
 
