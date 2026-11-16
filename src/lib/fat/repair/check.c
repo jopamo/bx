@@ -83,14 +83,6 @@ checkfilesys(const char *fname, bool dos_compat)
 		return 8;
 	}
 
-	uint64_t bytes;
-	unsigned sector_size;
-	if (bx_fat_geometry(dosfs, &bytes, &sector_size) < 0 ||
-	    (uint64_t)boot.NumSectors * boot.bpbBytesPerSec > bytes) {
-		pfatal("Filesystem size exceeds media\n");
-		close(dosfs);
-		return 8;
-	}
 	if (boot_only) {
 		ret = 0;
 		goto out;

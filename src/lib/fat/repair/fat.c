@@ -560,6 +560,13 @@ valid_cl(struct fat_descriptor *fat, cl_t cl)
 	return (cl >= CLUST_FIRST && cl < boot->NumClusters);
 }
 
+static off_t
+fat_offset(const struct bootblock *boot, unsigned index)
+{
+	return ((off_t)boot->bpbResSectors + (off_t)index * boot->FATsecs) *
+	    boot->bpbBytesPerSec;
+}
+
 /*
  * The first 2 FAT entries contain pseudo-cluster numbers with the following
  * layout:
@@ -577,6 +584,7 @@ valid_cl(struct fat_descriptor *fat, cl_t cl)
  * h = hard error flag (1 = ok; 0 = I/O error)
  * x = any value ok
  */
+
 int
 checkdirty(int fs, struct bootblock *boot)
 {
@@ -588,8 +596,7 @@ checkdirty(int fs, struct bootblock *boot)
 	if (boot->ClustMask != CLUST16_MASK && boot->ClustMask != CLUST32_MASK)
 		return 0;
 
-	off = boot->bpbResSectors;
-	off *= boot->bpbBytesPerSec;
+	off = fat_offset(boot, boot->ValidFat < 0 ? 0 : boot->ValidFat);
 
 	buffer = malloc(len = boot->bpbBytesPerSec);
 	if (buffer == NULL) {
@@ -662,8 +669,9 @@ cleardirty(struct fat_descriptor *fat)
 	}
 
 	for (unsigned i = 0; i < boot->bpbFATs; i++) {
-		off = ((off_t)boot->bpbResSectors + (off_t)i * boot->FATsecs) *
-		    boot->bpbBytesPerSec;
+		if (boot->ValidFat >= 0 && i != (unsigned)boot->ValidFat)
+			continue;
+		off = fat_offset(boot, i);
 		if ((size_t)bx_fat_pread(fd, buffer, len, off) != len) {
 			perr("Unable to read FAT %u", i);
 			goto err;
@@ -703,10 +711,9 @@ _readfat(struct fat_descriptor *fat)
 
 	boot = boot_of_(fat);
 	fd = fd_of_(fat);
-	fat->fatsize = boot->FATsecs * boot->bpbBytesPerSec;
+	fat->fatsize = (size_t)boot->FATsecs * boot->bpbBytesPerSec;
 
-	off = boot->bpbResSectors;
-	off *= boot->bpbBytesPerSec;
+	off = fat_offset(boot, boot->ValidFat < 0 ? 0 : boot->ValidFat);
 
 	fat->is_mmapped = false;
 	fat->use_cache = false;
@@ -736,7 +743,7 @@ _readfat(struct fat_descriptor *fat)
 		readsize = fat32_cache_size;
 		fat->use_cache = true;
 
-		fat->fat32_offset = boot->bpbResSectors * boot->bpbBytesPerSec;
+		fat->fat32_offset = off;
 		fat->fat32_lastaddr = fat->fatsize & ~(fat32_cache_chunk_size);
 	} else {
 		readsize = fat->fatsize;
@@ -1169,8 +1176,7 @@ copyfat(struct fat_descriptor *fat, int n)
 	rwsize = fat32_cache_size;
 
 	src_off = fat->fat32_offset;
-	dst_off = boot->bpbResSectors + n * boot->FATsecs;
-	dst_off *= boot->bpbBytesPerSec;
+	dst_off = fat_offset(boot, n);
 
 	for (i = 0; i < blobs;
 	    i++, src_off += fat32_cache_size, dst_off += fat32_cache_size) {
@@ -1229,7 +1235,7 @@ writefat(struct fat_descriptor *fat)
 			return (ret);
 
 		/* Update backup copies of FAT, error is not fatal */
-		for (i = 1; i < boot->bpbFATs; i++) {
+		for (i = 1; boot->ValidFat < 0 && i < boot->bpbFATs; i++) {
 			if (copyfat(fat, i) != FSOK)
 				ret = FSERROR;
 		}
@@ -1237,8 +1243,11 @@ writefat(struct fat_descriptor *fat)
 		writesz = fat->fatsize;
 
 		for (i = fat->is_mmapped ? 1 : 0; i < boot->bpbFATs; i++) {
-			dst_base = boot->bpbResSectors + i * boot->FATsecs;
-			dst_base *= boot->bpbBytesPerSec;
+			if (fat->is_mmapped && boot->ValidFat >= 0)
+				break;
+			if (boot->ValidFat >= 0 && i != (unsigned)boot->ValidFat)
+				continue;
+			dst_base = fat_offset(boot, i);
 			if ((lseek(fd, dst_base, SEEK_SET) != dst_base ||
 			    (size_t)bx_fat_write(fd, fat->fatbuf, writesz) != writesz) &&
 			    ret == FSOK) {

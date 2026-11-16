@@ -48,7 +48,7 @@ int
 readboot(int dosfs, struct bootblock *boot)
 {
 	u_char block[DOSBOOTBLOCKSIZE];
-	u_char fsinfo[2 * DOSBOOTBLOCKSIZE];
+	u_char fsinfo[DOSBOOTBLOCKSIZE];
 	int ret = FSOK;
 
 	if ((size_t)bx_fat_read(dosfs, block, sizeof block) != sizeof block) {
@@ -162,6 +162,10 @@ readboot(int dosfs, struct bootblock *boot)
 
 		if (block[40] & 0x80)
 			boot->ValidFat = block[40] & 0x0f;
+		if (boot->ValidFat >= (int)boot->bpbFATs) {
+			pfatal("Active FAT index exceeds FAT count");
+			return FSFATAL;
+		}
 
 		/* FAT32 version, bail out if not 0.0 */
 		if (block[42] || block[43]) {
@@ -184,7 +188,9 @@ readboot(int dosfs, struct bootblock *boot)
 		boot->bpbBackup = block[50] + (block[51] << 8);
 
 		/* Check basic parameters */
-		if (boot->bpbFSInfo == 0) {
+		if (boot->bpbFSInfo == 0 ||
+		    (boot->bpbFSInfo != 0xffff &&
+		    boot->bpbFSInfo >= boot->bpbResSectors)) {
 			/*
 			 * Either the BIOS Parameter Block has been corrupted,
 			 * or this is not a FAT32 filesystem, most likely an
@@ -193,43 +199,8 @@ readboot(int dosfs, struct bootblock *boot)
 			pfatal("Invalid FAT32 Extended BIOS Parameter Block");
 			return FSFATAL;
 		}
-
-		/* Read in and verify the FSInfo block */
-		if (lseek(dosfs, boot->bpbFSInfo * boot->bpbBytesPerSec,
-		    SEEK_SET) != boot->bpbFSInfo * boot->bpbBytesPerSec
-		    || bx_fat_read(dosfs, fsinfo, sizeof fsinfo) != sizeof fsinfo) {
-			perr("could not read fsinfo block");
-			return FSFATAL;
-		}
-		if (memcmp(fsinfo, "RRaA", 4)
-		    || memcmp(fsinfo + 0x1e4, "rrAa", 4)
-		    || fsinfo[0x1fc]
-		    || fsinfo[0x1fd]
-		    || fsinfo[0x1fe] != 0x55
-		    || fsinfo[0x1ff] != 0xaa) {
-			pwarn("Invalid signature in fsinfo block\n");
-			if (ask(0, "Fix")) {
-				memcpy(fsinfo, "RRaA", 4);
-				memcpy(fsinfo + 0x1e4, "rrAa", 4);
-				fsinfo[0x1fc] = fsinfo[0x1fd] = 0;
-				fsinfo[0x1fe] = 0x55;
-				fsinfo[0x1ff] = 0xaa;
-				if (lseek(dosfs, boot->bpbFSInfo *
-				    boot->bpbBytesPerSec, SEEK_SET)
-				    != boot->bpbFSInfo * boot->bpbBytesPerSec
-				    || bx_fat_write(dosfs, fsinfo, sizeof fsinfo)
-				    != sizeof fsinfo) {
-					perr("Unable to write bpbFSInfo");
-					return FSFATAL;
-				}
-				ret = FSBOOTMOD;
-			} else
-				boot->bpbFSInfo = 0;
-		} else {
-			/* We appear to have a valid FSInfo block, decode */
-			boot->FSFree = le32dec(&fsinfo[0x1e8]);
-			boot->FSNext = le32dec(&fsinfo[0x1ec]);
-		}
+		if (boot->bpbFSInfo == 0xffff)
+			boot->bpbFSInfo = 0;
 	} else {
 		/* !FAT32: FAT12/FAT16 */
 		boot->FATsecs = boot->bpbFATsmall;
@@ -241,15 +212,15 @@ readboot(int dosfs, struct bootblock *boot)
 		return FSFATAL;
 	}
 
-	boot->FirstCluster = (boot->bpbRootDirEnts * 32 +
+	uint64_t first = (boot->bpbRootDirEnts * 32 +
 	    boot->bpbBytesPerSec - 1) / boot->bpbBytesPerSec +
-	    boot->bpbResSectors + boot->bpbFATs * boot->FATsecs;
+	    boot->bpbResSectors + (uint64_t)boot->bpbFATs * boot->FATsecs;
 
-	if (boot->FirstCluster + boot->bpbSecPerClust > boot->NumSectors) {
-		pfatal("Cluster offset too large (%u clusters)\n",
-		    boot->FirstCluster);
+	if (first + boot->bpbSecPerClust > boot->NumSectors) {
+		pfatal("Data cluster offset exceeds filesystem size\n");
 		return FSFATAL;
 	}
+	boot->FirstCluster = first;
 
 	/*
 	 * The number of clusters is derived from available data sectors,
@@ -264,7 +235,7 @@ readboot(int dosfs, struct bootblock *boot)
 			    boot->NumClusters);
 			return FSFATAL;
 		}
-		if (boot->NumClusters < (CLUST_RSRVD & CLUST16_MASK)) {
+		if (boot->NumClusters < 65525) {
 			pfatal("Filesystem too small (%u clusters) for FAT32 partition",
 			    boot->NumClusters);
 			return FSFATAL;
@@ -272,14 +243,14 @@ readboot(int dosfs, struct bootblock *boot)
 		boot->ClustMask = CLUST32_MASK;
 
 		if (boot->bpbRootClust < CLUST_FIRST ||
-		    boot->bpbRootClust >= boot->NumClusters) {
+		    boot->bpbRootClust >= boot->NumClusters + CLUST_FIRST) {
 			pfatal("Root directory starts with cluster out of range(%u)",
 			       boot->bpbRootClust);
 			return FSFATAL;
 		}
-	} else if (boot->NumClusters < (CLUST_RSRVD&CLUST12_MASK)) {
+	} else if (boot->NumClusters < 4085) {
 		boot->ClustMask = CLUST12_MASK;
-	} else if (boot->NumClusters < (CLUST_RSRVD&CLUST16_MASK)) {
+	} else if (boot->NumClusters < 65525) {
 		boot->ClustMask = CLUST16_MASK;
 	} else {
 		pfatal("Filesystem too big (%u clusters) for non-FAT32 partition",
@@ -316,6 +287,58 @@ readboot(int dosfs, struct bootblock *boot)
 
 	boot->ClusterSize = boot->bpbBytesPerSec * boot->bpbSecPerClust;
 
+	uint64_t bytes;
+	unsigned sector_size;
+	if (bx_fat_geometry(dosfs, &bytes, &sector_size) < 0 ||
+	    (uint64_t)boot->NumSectors * boot->bpbBytesPerSec > bytes) {
+		pfatal("Filesystem size exceeds media\n");
+		return FSFATAL;
+	}
+	if ((uint64_t)boot->FATsecs * boot->bpbBytesPerSec > SIZE_MAX) {
+		pfatal("FAT size exceeds addressable memory\n");
+		return FSFATAL;
+	}
+
+	if (boot->bpbFSInfo) {
+		size_t len = boot->bpbBytesPerSec;
+		/* Read in and verify the FSInfo block */
+		if (lseek(dosfs, boot->bpbFSInfo * boot->bpbBytesPerSec,
+		    SEEK_SET) != boot->bpbFSInfo * boot->bpbBytesPerSec
+		    || bx_fat_read(dosfs, fsinfo, len) != (ssize_t)len) {
+			perr("could not read fsinfo block");
+			return FSFATAL;
+		}
+		if (memcmp(fsinfo, "RRaA", 4)
+		    || memcmp(fsinfo + 0x1e4, "rrAa", 4)
+		    || fsinfo[0x1fc]
+		    || fsinfo[0x1fd]
+		    || fsinfo[0x1fe] != 0x55
+		    || fsinfo[0x1ff] != 0xaa) {
+			pwarn("Invalid signature in fsinfo block\n");
+			if (ask(0, "Fix")) {
+				memcpy(fsinfo, "RRaA", 4);
+				memcpy(fsinfo + 0x1e4, "rrAa", 4);
+				fsinfo[0x1fc] = fsinfo[0x1fd] = 0;
+				fsinfo[0x1fe] = 0x55;
+				fsinfo[0x1ff] = 0xaa;
+				if (lseek(dosfs, boot->bpbFSInfo *
+				    boot->bpbBytesPerSec, SEEK_SET)
+				    != boot->bpbFSInfo * boot->bpbBytesPerSec
+				    || bx_fat_write(dosfs, fsinfo, len)
+				    != (ssize_t)len) {
+					perr("Unable to write bpbFSInfo");
+					return FSFATAL;
+				}
+				ret = FSBOOTMOD;
+			} else
+				boot->bpbFSInfo = 0;
+		}
+		if (boot->bpbFSInfo) {
+			boot->FSFree = le32dec(&fsinfo[0x1e8]);
+			boot->FSNext = le32dec(&fsinfo[0x1ec]);
+		}
+	}
+
 	boot->NumFiles = 1;
 	boot->NumFree = 0;
 
@@ -325,11 +348,12 @@ readboot(int dosfs, struct bootblock *boot)
 int
 writefsinfo(int dosfs, struct bootblock *boot)
 {
-	u_char fsinfo[2 * DOSBOOTBLOCKSIZE];
+	u_char fsinfo[DOSBOOTBLOCKSIZE];
+	size_t len = boot->bpbBytesPerSec;
 
 	if (lseek(dosfs, boot->bpbFSInfo * boot->bpbBytesPerSec, SEEK_SET)
 	    != boot->bpbFSInfo * boot->bpbBytesPerSec
-	    || bx_fat_read(dosfs, fsinfo, sizeof fsinfo) != sizeof fsinfo) {
+	    || bx_fat_read(dosfs, fsinfo, len) != (ssize_t)len) {
 		perr("could not read fsinfo block");
 		return FSFATAL;
 	}
@@ -343,8 +367,7 @@ writefsinfo(int dosfs, struct bootblock *boot)
 	fsinfo[0x1ef] = (u_char)(boot->FSNext >> 24);
 	if (lseek(dosfs, boot->bpbFSInfo * boot->bpbBytesPerSec, SEEK_SET)
 	    != boot->bpbFSInfo * boot->bpbBytesPerSec
-	    || bx_fat_write(dosfs, fsinfo, sizeof fsinfo)
-	    != sizeof fsinfo) {
+	    || bx_fat_write(dosfs, fsinfo, len) != (ssize_t)len) {
 		perr("Unable to write bpbFSInfo");
 		return FSFATAL;
 	}

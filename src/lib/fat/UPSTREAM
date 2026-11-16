@@ -26,6 +26,9 @@ exclusive block-device claim.
 The layout calculation includes reserved FAT entries and computes the free
 count from the final aligned geometry. The checker bounds data clusters by
 FAT capacity and checks the standard FSInfo signature fields.
+Geometry and media bounds are validated before FSInfo repair. FSInfo I/O
+covers one filesystem sector. Non-mirrored FAT32 volumes use the selected
+active FAT without updating inactive copies.
 
 Relative paths are not rewritten beneath /dev. Disk-type database lookup is
 unsupported. Formatting can set ASCII labels; standalone labeling and full
