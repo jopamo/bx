@@ -1448,6 +1448,16 @@
         "recursive-traversal"
       ],
       "execution_class": "exec-only"
+    },
+    {
+      "name": "symlinks",
+      "main": "bx_symlinks_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ],
+      "execution_class": "exec-only"
     }
   ],
   "capability_flags": [

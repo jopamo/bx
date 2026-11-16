@@ -1804,6 +1804,8 @@ pigz_lib = static_library('bx-pigz',
   ],
 )
 
+sources += files('src/applets/filesystem/symlinks/symlinks.c')
+
 bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
