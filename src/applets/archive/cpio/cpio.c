@@ -44,10 +44,6 @@ int bx_cpio_main(int argc, char** argv) {
         return handled;
     }
 
-    if (!bx_archive_temp_install_signal_cleanup()) {
-        fprintf(stderr, "%s: failed to install archive temp signal cleanup\n", bx_cli_progname(argc > 0 ? argv[0] : NULL, "cpio"));
-        return 2;
-    }
     int rc = bx_cpio_run(argc, argv);
     int pending_signal = bx_archive_temp_pending_signal();
     if (pending_signal) {

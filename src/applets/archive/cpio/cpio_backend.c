@@ -2010,6 +2010,22 @@ int bx_cpio_run(int argc, char** argv) {
     uintmax_t copied_bytes = 0;
     if (!bx_cpio_parse_options(&options, argc, argv, &diag))
         return 2;
+    /* Check caller-owned streams before internal opens can reuse their numbers. */
+    bool reads_stdin = options.mode != BX_CPIO_MODE_COPY_IN || options.archive_path == NULL;
+    bool writes_stdout = options.list || options.to_stdout ||
+        (options.mode == BX_CPIO_MODE_COPY_OUT && options.archive_path == NULL);
+    if (reads_stdin && fcntl(STDIN_FILENO, F_GETFD) < 0) {
+        bx_diag(&diag, "read error: %s", strerror(errno));
+        return 2;
+    }
+    if (writes_stdout && fcntl(STDOUT_FILENO, F_GETFD) < 0) {
+        bx_diag(&diag, "write error: %s", strerror(errno));
+        return 2;
+    }
+    if (!bx_archive_temp_install_signal_cleanup()) {
+        bx_diag(&diag, "failed to install archive temp signal cleanup");
+        return 2;
+    }
     int rc = bx_cpio_execute(options, argc, argv, diag, &copied_bytes);
     if (rc == 0 && !options.quiet) {
         uintmax_t blocks = copied_bytes / 512u + (copied_bytes % 512u != 0);
