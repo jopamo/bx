@@ -764,7 +764,7 @@ readDosDirSection(struct fat_descriptor *fat, struct dosDirEntry *dir)
 			if (k < 0 || dirent.name[k] != '\0')
 				k++;
 			if (dirent.name[0] == SLOT_E5)
-				dirent.name[0] = 0xe5;
+				dirent.name[0] = (char)0xe5;
 
 			if (dirent.flags & ATTR_VOLUME) {
 				if (vallfn || invlfn) {
