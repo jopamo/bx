@@ -1,7 +1,10 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
+#include <grp.h>
 #include <inttypes.h>
 #include <linux/fs.h>
+#include <pwd.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -22,6 +25,7 @@
 #include "lib/cli_common.h"
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
+#include "lib/file_info_fmt.h"
 #include "lib/id_parse.h"
 #include "lib/inode_ledger.h"
 #include "lib/mode_parse.h"
@@ -65,6 +69,7 @@ struct bx_cpio_options {
     const char* pass_dir;
     bool list;
     bool quiet;
+    bool verbose;
     bool create_dirs;
     bool format_explicit;
     bool null_input;
@@ -469,7 +474,15 @@ static bool bx_cpio_build_fs_list(struct bx_archive_fs_list* list, int source_ro
             bx_diag(diag, "%s: %s", names[i], strerror(errno));
             return false;
         }
-        bool ok = bx_archive_fs_add_path_filtered(list, source_root_fd, resolved ? resolved : names[i], names[i], false, false, bx_cpio_include_source, NULL, NULL, NULL, diag);
+        const char* archive_name = names[i];
+        while (archive_name[0] == '.' && archive_name[1] == '/') {
+            archive_name = bx_path_strip_dot_slash_prefix_ptr(archive_name);
+            while (*archive_name == '/')
+                archive_name++;
+        }
+        if (!*archive_name)
+            archive_name = ".";
+        bool ok = bx_archive_fs_add_path_filtered(list, source_root_fd, resolved ? resolved : names[i], archive_name, false, false, bx_cpio_include_source, NULL, NULL, NULL, diag);
         free(resolved);
         if (!ok)
             return false;
@@ -485,6 +498,15 @@ static void bx_cpio_count_inodes(const struct bx_archive_fs_list* list,
         struct bx_cpio_inode_map* map = bx_cpio_get_inode_map(maps, entry->st.st_dev, entry->st.st_ino);
         map->total_count++;
     }
+}
+
+static bool bx_cpio_report_name(const char* prefix, const char* name, struct bx_diag_ctx* diag) {
+    const char* separator = prefix && *prefix && prefix[strlen(prefix) - 1] != '/' ? "/" : "";
+    if (fprintf(stderr, "%s%s%s\n", prefix ? prefix : "", separator, name) < 0 || fflush(stderr) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
@@ -571,7 +593,7 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
         return false;
     }
-    return true;
+    return !options->verbose || bx_cpio_report_name(NULL, entry->archive_path, diag);
 }
 
 static bool bx_cpio_build_archive(struct bx_archive_spool* archive, int source_root_fd, const struct bx_cpio_options* options, char** names, size_t name_count, struct bx_diag_ctx* diag) {
@@ -1091,7 +1113,7 @@ static bool bx_cpio_entry_selected(const struct bx_cpio_options* options,
         return true;
     }
     for (i = options->operand_index; i < argc; i++) {
-        if (strcmp(argv[i], name) == 0) {
+        if (fnmatch(argv[i], name, 0) == 0) {
             return true;
         }
     }
@@ -1415,6 +1437,45 @@ done:
     return ok;
 }
 
+static bool bx_cpio_list_identity(struct bx_line_writer* writer, const char* name, uintmax_t id) {
+    char number[32];
+    if (!name) {
+        snprintf(number, sizeof(number), "%" PRIuMAX, id);
+        name = number;
+    }
+    size_t length = strlen(name);
+    if (length > 8)
+        length = 8;
+    return bx_line_writer_write(writer, name, length) &&
+        bx_line_writer_write(writer, "        ", 8 - length) &&
+        bx_line_writer_putc(writer, ' ');
+}
+
+static bool bx_cpio_list_verbose(struct bx_line_writer* writer, const struct bx_cpio_entry* entry) {
+    char mode[11], timestamp[32], field[128];
+    bx_file_mode_to_string(entry->mode, mode);
+    bx_file_format_ls_timestamp(entry->mtime.tv_sec, timestamp);
+    snprintf(field, sizeof(field), "%s %3" PRIuMAX " ", mode, (uintmax_t)entry->nlink);
+    if (!bx_line_writer_puts(writer, field))
+        return false;
+    struct passwd* user = getpwuid(entry->uid);
+    if (!bx_cpio_list_identity(writer, user ? user->pw_name : NULL, entry->uid))
+        return false;
+    struct group* group = getgrgid(entry->gid);
+    if (!bx_cpio_list_identity(writer, group ? group->gr_name : NULL, entry->gid))
+        return false;
+    if (entry->kind == BX_CPIO_KIND_CHAR || entry->kind == BX_CPIO_KIND_BLOCK)
+        snprintf(field, sizeof(field), "%3" PRIuMAX ",%4" PRIuMAX " %s ",
+            (uintmax_t)major(entry->rdev), (uintmax_t)minor(entry->rdev), timestamp);
+    else
+        snprintf(field, sizeof(field), "%8zu %s ", entry->size, timestamp);
+    return bx_line_writer_puts(writer, field) &&
+        bx_line_writer_puts(writer, entry->name) &&
+        (entry->kind != BX_CPIO_KIND_SYMLINK ||
+            (bx_line_writer_puts(writer, " -> ") && bx_line_writer_puts(writer, entry->link_target))) &&
+        bx_line_writer_putc(writer, '\n');
+}
+
 static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, const struct bx_cpio_options* options, int argc, char** argv, struct bx_diag_ctx* diag) {
     struct bx_archive_pending_metadata dirs = {.path_policy = BX_DIR_PATH_NO_MOUNT_CROSSING};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
@@ -1454,7 +1515,8 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
         }
         bool ok = true;
         if (options->list) {
-            ok = bx_line_writer_put_line(&list_writer, entry->name);
+            ok = options->verbose ? bx_cpio_list_verbose(&list_writer, entry) :
+                bx_line_writer_put_line(&list_writer, entry->name);
         }
         else if (options->to_stdout) {
             if (entry->kind == BX_CPIO_KIND_REG) {
@@ -1470,6 +1532,11 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
                 status = 2;
                 break;
             }
+        }
+        if (ok && options->verbose && !options->list &&
+            !bx_cpio_report_name(NULL, entry->name, diag)) {
+            status = 2;
+            break;
         }
         if (!ok) {
             bx_diag(diag, "write error: %s", strerror(errno));
@@ -1659,6 +1726,8 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         bx_file_metadata_free(&restore.metadata);
         if (ok && copied)
             *copied_bytes += bytes;
+        if (ok && copied && options->verbose)
+            ok = bx_cpio_report_name(options->pass_dir, entry.name, diag);
         bx_fd_cleanup(&source.fd);
         if (!ok) {
             status = 2;
@@ -1730,6 +1799,8 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
             arg = "-L";
         else if (strcmp(arg, "--unconditional") == 0)
             arg = "-u";
+        else if (strcmp(arg, "--verbose") == 0)
+            arg = "-v";
         if (strncmp(arg, "--", 2u) == 0) {
             const char* value = strchr(arg, '=');
             size_t name_len = value ? (size_t)(value - arg) : strlen(arg);
@@ -1803,6 +1874,7 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                         break;
                     }
                     case 't': options->list = true; break;
+                    case 'v': options->verbose = true; break;
                     case 'd':
                         options->create_dirs = true;
                         break;
@@ -1901,8 +1973,8 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
         invalid = "--no-preserve-owner requires filesystem extraction or -p";
     else if (options->create_dirs && !filesystem_copy)
         invalid = "-d requires filesystem extraction or -p";
-    else if (options->preserve_mtime && !filesystem_copy)
-        invalid = "-m requires filesystem extraction or -p";
+    else if (options->preserve_mtime && options->mode == BX_CPIO_MODE_COPY_OUT)
+        invalid = "-m requires -i or -p";
     else if (options->sparse && !filesystem_copy)
         invalid = "--sparse requires filesystem extraction or -p";
     else if (owner_override && !filesystem_copy && options->mode != BX_CPIO_MODE_COPY_OUT)

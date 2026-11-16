@@ -15,6 +15,7 @@ static void bx_cpio_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -i, --extract         extract files from an archive\n");
     fprintf(stream, "  -p, --pass-through    pass files through to a target directory\n");
     fprintf(stream, "  -t, --list            list archive members (implies -i)\n");
+    fprintf(stream, "  -v, --verbose         show detailed listings or copied file names\n");
     fprintf(stream, "  -d, --make-directories  create leading directories as needed\n");
     fprintf(stream, "  -m, --preserve-modification-time  preserve mtime during filesystem copy\n");
     fprintf(stream, "  -0, --null            read NUL-terminated input names (-o or -p)\n");
