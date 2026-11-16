@@ -50,6 +50,7 @@ int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownersh
             return -1;
     }
     input->fd = fd;
+    input->relay_pending = 0;
     input->type = st.st_mode & S_IFMT;
     input->owned = ownership != BX_FD_INPUT_BORROWED;
     return 0;
@@ -59,6 +60,7 @@ void bx_fd_input_close(struct bx_fd_input* input) {
     int error = errno;
     bx_fd_cleanup(&input->relay[0]);
     bx_fd_cleanup(&input->relay[1]);
+    input->relay_pending = 0;
     if (input->owned)
         bx_fd_cleanup(&input->fd);
     input->fd = -1;
@@ -84,10 +86,17 @@ static ssize_t bx_fd_input_attempt(struct bx_fd_input* input, void* data, size_t
         return read(input->fd, data, len);
     if (input->relay[0] < 0 && pipe2(input->relay, O_CLOEXEC | O_NONBLOCK) != 0)
         return -1;
-    ssize_t count = splice(input->fd, NULL, input->relay[1], NULL, len, SPLICE_F_NONBLOCK);
-    if (count <= 0)
-        return count;
-    return read(input->relay[0], data, (size_t)count);
+    if (input->relay_pending == 0) {
+        ssize_t count = splice(input->fd, NULL, input->relay[1], NULL, len, SPLICE_F_NONBLOCK);
+        if (count <= 0)
+            return count;
+        input->relay_pending = (size_t)count;
+    }
+    size_t length = len < input->relay_pending ? len : input->relay_pending;
+    ssize_t count = read(input->relay[0], data, length);
+    if (count > 0)
+        input->relay_pending -= (size_t)count;
+    return count;
 }
 
 ssize_t bx_fd_input_read(struct bx_fd_input* input, void* data, size_t len, int cancel_fd) {
@@ -104,7 +113,7 @@ ssize_t bx_fd_input_read(struct bx_fd_input* input, void* data, size_t len, int 
         if (errno != EAGAIN && errno != EWOULDBLOCK)
             return -1;
         struct pollfd waits[2] = {
-            {.fd = input->fd, .events = POLLIN},
+            {.fd = input->relay_pending ? input->relay[0] : input->fd, .events = POLLIN},
             {.fd = cancel_fd, .events = POLLIN},
         };
         if (poll(waits, 2, -1) < 0)

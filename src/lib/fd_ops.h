@@ -77,6 +77,7 @@ enum bx_fd_input_ownership {
 struct bx_fd_input {
     int fd;
     int relay[2];
+    size_t relay_pending;
     mode_t type;
     bool owned; /* Descriptor lifetime only; duplicates still borrow shared flags. */
 };
