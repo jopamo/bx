@@ -70,12 +70,18 @@ void bx_fd_input_close(struct bx_fd_input* input) {
 static int bx_fd_input_cancelled(int cancel_fd) {
     if (cancel_fd < 0)
         return 0;
+    int saved_errno = errno;
     struct pollfd wake = {.fd = cancel_fd, .events = POLLIN};
-    int result = poll(&wake, 1, 0);
+    int result;
+    do {
+        result = poll(&wake, 1, 0);
+    } while (result < 0 && errno == EINTR);
     if (result > 0) {
         errno = wake.revents & POLLIN ? EINTR : EBADF;
         return -1;
     }
+    if (result == 0)
+        errno = saved_errno;
     return result;
 }
 
@@ -110,14 +116,19 @@ ssize_t bx_fd_input_read(struct bx_fd_input* input, void* data, size_t len, int 
         ssize_t count = bx_fd_input_attempt(input, data, len);
         if (count >= 0)
             return bx_fd_input_cancelled(cancel_fd) == 0 ? count : -1;
+        if (errno == EINTR)
+            continue;
         if (errno != EAGAIN && errno != EWOULDBLOCK)
             return -1;
         struct pollfd waits[2] = {
             {.fd = input->relay_pending ? input->relay[0] : input->fd, .events = POLLIN},
             {.fd = cancel_fd, .events = POLLIN},
         };
-        if (poll(waits, 2, -1) < 0)
+        if (poll(waits, 2, -1) < 0) {
+            if (errno == EINTR)
+                continue;
             return -1;
+        }
         if (waits[1].revents) {
             errno = waits[1].revents & POLLIN ? EINTR : EBADF;
             return -1;
@@ -138,10 +149,14 @@ ssize_t bx_fd_input_pread(struct bx_fd_input* input, void* data, size_t len, off
         return 0;
     if (len > (size_t)SSIZE_MAX)
         len = (size_t)SSIZE_MAX;
-    if (bx_fd_input_cancelled(cancel_fd) != 0)
-        return -1;
-    ssize_t count = pread(input->fd, data, len, offset);
-    return bx_fd_input_cancelled(cancel_fd) == 0 ? count : -1;
+    while (true) {
+        if (bx_fd_input_cancelled(cancel_fd) != 0)
+            return -1;
+        ssize_t count = pread(input->fd, data, len, offset);
+        if (count < 0 && errno == EINTR)
+            continue;
+        return bx_fd_input_cancelled(cancel_fd) == 0 ? count : -1;
+    }
 }
 
 void bx_fd_staged_file_discard(struct bx_fd_staged_file* stage) {

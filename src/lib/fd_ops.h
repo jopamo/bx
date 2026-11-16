@@ -91,6 +91,7 @@ struct bx_fd_input {
  * flag changes. Initialization failure leaves the source with its caller. */
 int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownership ownership);
 /* cancel_fd is a persistent, readable-on-cancellation notification, or -1.
+ * Retry interrupted syscalls unless cancellation is readable.
  * Pipe reads use a private nonblocking relay; socket reads use MSG_DONTWAIT.
  * Readiness is never followed by a potentially blocking shared-stream read.
  * Regular-file reads do not promise bounded storage latency. */
