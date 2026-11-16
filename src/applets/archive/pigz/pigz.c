@@ -540,6 +540,7 @@ local struct {
     char *outf;             // output file name (allocated)
     char *final;            // destination while outf names a private candidate
     int replace;            // explicit overwrite permission
+    int out_owned;          // this process owns the temporary name
     int verbosity;          // 0 = quiet, 1 = normal, 2 = verbose, 3 = trace
     int headis;             // 1 to store name, 2 to store date, 3 both
     int pipeout;            // write output to stdout even if file
@@ -932,7 +933,7 @@ local void cut_short(int sig) {
     if (sig == SIGINT) {
         Trace(("termination by user"));
     }
-    if (g.final != NULL && g.outf != NULL) {
+    if (g.out_owned) {
         unlink(g.outf);
         RELEASE(g.outf);
         g.outd = -1;
@@ -4167,6 +4168,7 @@ local void process(char *path) {
         memcpy(g.outf, g.final, dirlen);
         strcpy(g.outf + dirlen, ".bx-pigz-XXXXXX");
         g.outd = mkstemp(g.outf);
+        g.out_owned = g.outd >= 0;
 
         // if some other error, give up
         if (g.outd < 0)
@@ -4195,7 +4197,9 @@ local void process(char *path) {
             if (g.outd != -1 && g.outd != 1) {
                 close(g.outd);
                 g.outd = -1;
-                unlink(g.outf);
+                if (unlink(g.outf))
+                    throw(errno, "cannot remove %s (%s)", g.outf, strerror(errno));
+                g.out_owned = 0;
                 RELEASE(g.outf);
             }
         }
@@ -4227,8 +4231,9 @@ local void process(char *path) {
         // Publish only complete output. link() keeps no-overwrite atomic.
         if (g.replace ? rename(g.outf, g.final) : link(g.outf, g.final))
             throw(errno, "cannot publish %s (%s)", g.final, strerror(errno));
-        if (!g.replace)
-            unlink(g.outf);
+        if (!g.replace && unlink(g.outf))
+            throw(errno, "cannot remove %s (%s)", g.outf, strerror(errno));
+        g.out_owned = 0;
         if (g.ind != 0 && !g.keep) {
             struct stat now;
             if (lstat(g.inf, &now) || now.st_dev != st.st_dev ||
@@ -4633,6 +4638,7 @@ int bx_pigz_main(int argc, char **argv) {
         g.alias = "-";
         g.outf = NULL;
         g.final = NULL;
+        g.out_owned = 0;
         g.outd = -1;
         g.first = 1;
         g.hname = NULL;
