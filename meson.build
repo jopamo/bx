@@ -1806,6 +1806,8 @@ pigz_lib = static_library('bx-pigz',
 
 sources += files('src/applets/filesystem/symlinks/symlinks.c')
 
+sources += files('src/applets/text/crunch/crunch.c')
+
 bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
@@ -1905,3 +1907,7 @@ if get_option('install_ls_colors')
     install_mode : 'rw-r--r--'
   )
 endif
+
+install_data('src/applets/text/crunch/charset.lst',
+  install_dir : get_option('datadir') / 'crunch',
+)

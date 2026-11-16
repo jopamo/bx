@@ -1458,6 +1458,15 @@
         "recursive-traversal"
       ],
       "execution_class": "exec-only"
+    },
+    {
+      "name": "crunch",
+      "main": "bx_crunch_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ],
+      "execution_class": "exec-only"
     }
   ],
   "capability_flags": [
