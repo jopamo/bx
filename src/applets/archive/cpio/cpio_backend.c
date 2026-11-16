@@ -1457,9 +1457,7 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
             ok = bx_line_writer_put_line(&list_writer, entry->name);
         }
         else if (options->to_stdout) {
-            if (entry->kind == BX_CPIO_KIND_SYMLINK)
-                ok = bx_xwrite_all(STDOUT_FILENO, entry->link_target, strlen(entry->link_target));
-            else if (entry->kind == BX_CPIO_KIND_REG) {
+            if (entry->kind == BX_CPIO_KIND_REG) {
                 if (!bx_cpio_write_payload(STDOUT_FILENO, entry, false, diag)) {
                     status = 2;
                     break;
