@@ -92,6 +92,54 @@ idents_assign_uid(struct sess *sess, struct flist *fl, size_t flsz,
 }
 
 /*
+ * Apply receiver group permissions after name mapping, including numeric IDs.
+ * Unprivileged receivers without --super skip groups they do not belong to.
+ */
+int
+bx_rsync_filter_gids(const struct sess *sess, struct flist *fl, size_t flsz)
+{
+	gid_t *groups = NULL, egid;
+	int count, n;
+
+	if (!sess->opts->preserve_gids ||
+	    sess->opts->supermode == SMODE_ON ||
+	    (sess->opts->supermode == SMODE_UNSET && geteuid() == 0))
+		return 1;
+
+	count = getgroups(0, NULL);
+	if (count == -1) {
+		ERR("getgroups");
+		return 0;
+	}
+	if (count > 0) {
+		groups = calloc((size_t)count, sizeof(*groups));
+		if (groups == NULL) {
+			ERR("calloc");
+			return 0;
+		}
+		n = getgroups(count, groups);
+		if (n == -1) {
+			ERR("getgroups");
+			free(groups);
+			return 0;
+		}
+		count = n;
+	}
+	egid = getegid();
+	for (size_t i = 0; i < flsz; i++) {
+		if (fl[i].st.gid == egid)
+			continue;
+		for (n = 0; n < count; n++)
+			if (fl[i].st.gid == groups[n])
+				break;
+		if (n == count)
+			fl[i].st.gid = (gid_t)-1;
+	}
+	free(groups);
+	return 1;
+}
+
+/*
  * Given a list of identifiers from the remote host, fill in our local
  * identifiers of the same names.
  * Use the remote numeric identifier if we can't find the identifier OR the

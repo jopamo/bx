@@ -1261,6 +1261,7 @@ void		 idents_assign_gid(struct sess *, struct flist *, size_t,
 void		 idents_assign_uid(struct sess *, struct flist *, size_t,
 		    const struct ident *, size_t);
 void		 idents_free(struct ident *, size_t);
+int		 bx_rsync_filter_gids(const struct sess *, struct flist *, size_t);
 int		 idents_recv(struct sess *, int, struct ident **, size_t *);
 void		 idents_remap(struct sess *, int, struct ident *, size_t);
 int		 idents_send(struct sess *, int, const struct ident *, size_t);

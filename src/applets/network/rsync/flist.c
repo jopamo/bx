@@ -1762,6 +1762,9 @@ flist_recv(struct sess *sess, int fdin, int fdout, struct flist **flp, size_t *s
 			idents_assign_gid(sess, fl, flsz, gids, gidsz);
 	}
 
+	if (!bx_rsync_filter_gids(sess, fl, flsz))
+		goto out;
+
 	if (!bx_rsync_meta_remap(sess, uids, uidsz, gids, gidsz))
 		goto out;
 

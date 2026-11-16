@@ -152,7 +152,7 @@ itemize_changes(const struct sess *sess, const struct stat *st, const struct fli
 		iflags |= IFLAG_OWNER;
 
 	if (sess->opts->preserve_gids && st->st_gid != f->st.gid &&
-	    f->st.gid != (gid_t)(-1) && (superuser || getegid() == f->st.gid))
+	    f->st.gid != (gid_t)(-1))
 		iflags |= IFLAG_GROUP;
 
 	return iflags;
