@@ -15,6 +15,7 @@
 #include <sys/ioctl.h>
 #include <sys/xattr.h>
 #include <sys/syscall.h>
+#include <asm/unistd.h>
 #include <unistd.h>
 
 #include "bx/libbx.h"
