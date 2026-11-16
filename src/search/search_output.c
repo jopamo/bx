@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -51,6 +52,64 @@ static FILE *bx_search_null_stream(void) {
     return stream ? stream : stderr;
 }
 
+struct bx_search_capture {
+    FILE *buffer;
+    struct bx_search_output_ctx *owner;
+};
+
+static ssize_t bx_search_capture_write(void *cookie, const char *data, size_t len) {
+    struct bx_search_capture *capture = cookie;
+
+    if (capture->owner->capture_failed) {
+        errno = ENOMEM;
+        return 0;
+    }
+    if (len > (size_t)SSIZE_MAX) {
+        capture->owner->capture_failed = true;
+        errno = EOVERFLOW;
+        return 0;
+    }
+    /* A memstream can short-write without setting its stream error flag. */
+    if (fwrite(data, 1u, len, capture->buffer) != len) {
+        capture->owner->capture_failed = true;
+        return 0;
+    }
+    return (ssize_t)len;
+}
+
+static int bx_search_capture_close(void *cookie) {
+    struct bx_search_capture *capture = cookie;
+    int status = fclose(capture->buffer);
+
+    if (status != 0)
+        capture->owner->capture_failed = true;
+    free(capture);
+    return status;
+}
+
+static FILE *bx_search_capture_open(struct bx_search_output_ctx *owner,
+                                    char **buf, size_t *len) {
+    struct bx_search_capture *capture = malloc(sizeof(*capture));
+    cookie_io_functions_t io = {
+        .write = bx_search_capture_write,
+        .close = bx_search_capture_close,
+    };
+    FILE *stream;
+
+    if (!capture)
+        return NULL;
+    capture->owner = owner;
+    capture->buffer = open_memstream(buf, len);
+    if (!capture->buffer) {
+        free(capture);
+        return NULL;
+    }
+    stream = fopencookie(capture, "w", io);
+    if (!stream)
+        bx_search_capture_close(capture);
+    return stream;
+}
+
 struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_ctx *ctx) {
     struct bx_search_output_ctx *previous = current_output_ctx;
 
@@ -62,26 +121,33 @@ void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous) {
     current_output_ctx = previous;
 }
 
-static void bx_search_output_ctx_close_capture(FILE **stream, size_t *len) {
+static bool bx_search_output_ctx_close_capture(FILE **stream, size_t *len) {
     FILE *open_stream;
+    bool ok;
 
     if (stream == NULL || *stream == NULL)
-        return;
+        return true;
 
     open_stream = *stream;
     *stream = NULL;
-    if (fclose(open_stream) == 0 && len != NULL)
+    ok = !ferror(open_stream);
+    if (fclose(open_stream) != 0)
+        ok = false;
+    if (ok && len != NULL)
         bx_output_alloc_counter_note_alloc(*len + 1u);
+    return ok;
 }
 
 void bx_search_output_ctx_close_captures(struct bx_search_output_ctx *ctx) {
     if (ctx == NULL)
         return;
 
-    if (ctx->capture_out_buf != NULL && ctx->capture_out_len != NULL)
-        bx_search_output_ctx_close_capture(&ctx->out, ctx->capture_out_len);
-    if (ctx->capture_err_buf != NULL && ctx->capture_err_len != NULL)
-        bx_search_output_ctx_close_capture(&ctx->err, ctx->capture_err_len);
+    if (ctx->capture_out_buf != NULL && ctx->capture_out_len != NULL &&
+        !bx_search_output_ctx_close_capture(&ctx->out, ctx->capture_out_len))
+        ctx->capture_failed = true;
+    if (ctx->capture_err_buf != NULL && ctx->capture_err_len != NULL &&
+        !bx_search_output_ctx_close_capture(&ctx->err, ctx->capture_err_len))
+        ctx->capture_failed = true;
 }
 
 int bx_search_compute_offset_width_from_stat(const struct stat *st,
@@ -112,8 +178,9 @@ void bx_search_output_set_offset_width(int width) {
 FILE *bx_search_output_stream(void) {
     if (current_output_ctx && !current_output_ctx->out &&
         current_output_ctx->capture_out_buf && current_output_ctx->capture_out_len) {
-        current_output_ctx->out = open_memstream(current_output_ctx->capture_out_buf,
-                                                 current_output_ctx->capture_out_len);
+        current_output_ctx->out = bx_search_capture_open(current_output_ctx,
+                                                         current_output_ctx->capture_out_buf,
+                                                         current_output_ctx->capture_out_len);
         if (current_output_ctx->out)
             bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
         else
@@ -127,8 +194,9 @@ FILE *bx_search_output_stream(void) {
 static FILE *bx_search_error_stream(void) {
     if (current_output_ctx && !current_output_ctx->err &&
         current_output_ctx->capture_err_buf && current_output_ctx->capture_err_len) {
-        current_output_ctx->err = open_memstream(current_output_ctx->capture_err_buf,
-                                                 current_output_ctx->capture_err_len);
+        current_output_ctx->err = bx_search_capture_open(current_output_ctx,
+                                                         current_output_ctx->capture_err_buf,
+                                                         current_output_ctx->capture_err_len);
         if (current_output_ctx->err)
             bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
         else
