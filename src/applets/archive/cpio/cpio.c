@@ -19,7 +19,7 @@ static void bx_cpio_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -m, --preserve-modification-time  preserve mtime during filesystem copy\n");
     fprintf(stream, "  -0, --null            read NUL-terminated input names (-o or -p)\n");
     fprintf(stream, "  -F, --file=ARCHIVE    use ARCHIVE instead of standard input/output (-o or -i)\n");
-    fprintf(stream, "  -H, --format=FORMAT   create or require newc or odc format (-o or -i)\n");
+    fprintf(stream, "  -H, --format=FORMAT   create or require newc, odc, crc, or bin format (-o or -i)\n");
     fprintf(stream, "  -L, --dereference     follow selected source symlinks (-o or -p)\n");
     fprintf(stream, "  -u, --unconditional   replace existing files regardless of age\n");
     fprintf(stream, "  -R, --owner=USER[:GROUP]  override ownership (-o, extraction, or -p)\n");

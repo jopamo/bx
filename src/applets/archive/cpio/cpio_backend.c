@@ -31,6 +31,7 @@
 
 #define BX_CPIO_NEWC_HEADER_LEN 110u
 #define BX_CPIO_ODC_HEADER_LEN 76u
+#define BX_CPIO_BIN_HEADER_LEN 26u
 #define BX_CPIO_NAME_INPUT_BYTE_LIMIT (256u * 1024u * 1024u)
 #define BX_CPIO_MEMBER_METADATA_BYTE_LIMIT (256u * 1024u * 1024u)
 
@@ -44,6 +45,8 @@ enum bx_cpio_mode {
 enum bx_cpio_format {
     BX_CPIO_FORMAT_NEWC = 0,
     BX_CPIO_FORMAT_ODC,
+    BX_CPIO_FORMAT_CRC,
+    BX_CPIO_FORMAT_BIN,
 };
 
 enum bx_cpio_kind {
@@ -310,7 +313,32 @@ static bool bx_cpio_write_payload(int fd, const struct bx_cpio_entry* entry, boo
     return bx_cpio_finish_source(entry->source, (uintmax_t)copied, diag);
 }
 
-static bool bx_cpio_emit_newc_header(struct bx_archive_spool* archive,
+static const char* bx_cpio_format_name(enum bx_cpio_format format) {
+    switch (format) {
+        case BX_CPIO_FORMAT_NEWC: return "newc";
+        case BX_CPIO_FORMAT_ODC: return "odc";
+        case BX_CPIO_FORMAT_CRC: return "crc";
+        case BX_CPIO_FORMAT_BIN: return "bin";
+    }
+    return "unknown";
+}
+
+static bool bx_cpio_checksum(const struct bx_archive_spool* archive, uintmax_t offset, uintmax_t size, uint32_t* sum, struct bx_diag_ctx* diag) {
+    unsigned char buffer[65536];
+    *sum = 0;
+    while (size) {
+        size_t count = size < sizeof(buffer) ? (size_t)size : sizeof(buffer);
+        if (!bx_archive_spool_read_at(archive, offset, buffer, count, diag))
+            return false;
+        for (size_t i = 0; i < count; i++)
+            *sum += buffer[i];
+        offset += count;
+        size -= count;
+    }
+    return true;
+}
+
+static bool bx_cpio_emit_newc_header(struct bx_archive_spool* archive, bool crc,
                                      const char* name,
                                      uintmax_t ino,
                                      mode_t mode,
@@ -333,6 +361,8 @@ static bool bx_cpio_emit_newc_header(struct bx_archive_spool* archive,
         errno = EOVERFLOW;
         return false;
     }
+    if (crc)
+        header[5] = '2';
     if (!bx_archive_spool_append(archive, header, BX_CPIO_NEWC_HEADER_LEN) || !bx_archive_spool_append(archive, name, namesize)) {
         return false;
     }
@@ -371,6 +401,35 @@ static bool bx_cpio_emit_odc_header(struct bx_archive_spool* archive,
         return false;
     }
     return true;
+}
+
+static bool bx_cpio_emit_bin_header(struct bx_archive_spool* archive,
+                                    const char* name, uintmax_t ino, mode_t mode,
+                                    uid_t uid, gid_t gid, nlink_t nlink,
+                                    struct timespec mtime, dev_t device, dev_t rdev,
+                                    uintmax_t size) {
+    unsigned char header[BX_CPIO_BIN_HEADER_LEN];
+    size_t namesize;
+    if (mtime.tv_sec < 0 || (uintmax_t)mtime.tv_sec > UINT32_MAX || size > UINT32_MAX ||
+        !bx_checked_size_add(strlen(name), 1u, &namesize) ||
+        major(device) > 255u || minor(device) > 255u || major(rdev) > 255u || minor(rdev) > 255u) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    const uintmax_t fields[] = {070707, (major(device) << 8) | minor(device), ino, mode, uid, gid, nlink,
+        (major(rdev) << 8) | minor(rdev), (uintmax_t)mtime.tv_sec >> 16, (uintmax_t)mtime.tv_sec & UINT16_MAX,
+        namesize, size >> 16, size & UINT16_MAX};
+    for (size_t i = 0; i < 13; i++) {
+        if (fields[i] > UINT16_MAX) {
+            errno = EOVERFLOW;
+            return false;
+        }
+        /* Emit little-endian words; 32-bit fields store the high word first. */
+        header[2 * i] = (unsigned char)fields[i];
+        header[2 * i + 1] = (unsigned char)(fields[i] >> 8);
+    }
+    return bx_archive_spool_append(archive, header, sizeof(header)) &&
+        bx_archive_spool_append(archive, name, namesize) && bx_archive_spool_append_zeros(archive, archive->len % 2u);
 }
 
 static bool bx_cpio_read_name_list(const struct bx_cpio_options* options,
@@ -445,7 +504,7 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
     dev_t rdev = S_ISCHR(mode) || S_ISBLK(mode) ? entry->st.st_rdev : 0;
     const unsigned char* payload = NULL;
     uintmax_t size = 0u;
-    uintmax_t wide_limit = options->format == BX_CPIO_FORMAT_NEWC ? UINT32_MAX : UINT64_C(077777777777);
+    uintmax_t wide_limit = options->format == BX_CPIO_FORMAT_ODC ? UINT64_C(077777777777) : UINT32_MAX;
 
     if (strcmp(entry->archive_path, "TRAILER!!!") == 0) {
         bx_diag(diag, "%s: reserved cpio trailer name", entry->archive_path);
@@ -471,18 +530,19 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
         size = 0u;
     }
 
-    if (options->format == BX_CPIO_FORMAT_NEWC) {
-        if (!bx_cpio_emit_newc_header(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size)) {
-            bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
-            return false;
-        }
+    uintmax_t header_offset = archive->len;
+    bool header_ok;
+    if (options->format == BX_CPIO_FORMAT_BIN)
+        header_ok = bx_cpio_emit_bin_header(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size);
+    else if (options->format == BX_CPIO_FORMAT_ODC)
+        header_ok = bx_cpio_emit_odc_header(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size);
+    else
+        header_ok = bx_cpio_emit_newc_header(archive, options->format == BX_CPIO_FORMAT_CRC, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size);
+    if (!header_ok) {
+        bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
+        return false;
     }
-    else {
-        if (!bx_cpio_emit_odc_header(archive, entry->archive_path, archive_ino, mode, uid, gid, nlink, mtime, device, rdev, size)) {
-            bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
-            return false;
-        }
-    }
+    uintmax_t data_offset = archive->len;
 
     if (S_ISREG(mode) && !suppress_data) {
         if (!bx_cpio_append_source(source_root_fd, entry, archive, diag))
@@ -492,7 +552,22 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
         return false;
     }
-    if (options->format == BX_CPIO_FORMAT_NEWC && !bx_archive_spool_append_zeros(archive, (4u - archive->len % 4u) % 4u)) {
+    if (options->format == BX_CPIO_FORMAT_CRC && S_ISREG(mode)) {
+        uint32_t checksum;
+        unsigned char field[8];
+        if (!bx_cpio_checksum(archive, data_offset, size, &checksum, diag))
+            return false;
+        bx_cpio_format_number(field, sizeof(field), checksum, 4);
+        /* Patch only the private spool, never reread a mutable source. */
+        if (bx_fd_lseek(archive->fd, (off_t)(header_offset + 102u), SEEK_SET) < 0 ||
+            !bx_xwrite_all(archive->fd, field, sizeof(field)) ||
+            bx_fd_lseek(archive->fd, (off_t)archive->len, SEEK_SET) < 0) {
+            bx_diag(diag, "archive checksum: %s", strerror(errno));
+            return false;
+        }
+    }
+    size_t alignment = options->format == BX_CPIO_FORMAT_ODC ? 1u : options->format == BX_CPIO_FORMAT_BIN ? 2u : 4u;
+    if (!bx_archive_spool_append_zeros(archive, (alignment - archive->len % alignment) % alignment)) {
         bx_diag(diag, "%s: %s", entry->archive_path, strerror(errno));
         return false;
     }
@@ -536,7 +611,7 @@ static bool bx_cpio_build_archive(struct bx_archive_spool* archive, int source_r
                     if (emitted[j] || group_map != map) {
                         continue;
                     }
-                    if (!bx_cpio_emit_one_fs_entry(archive, source_root_fd, group_entry, map->synthetic_ino, options, j != i, diag)) {
+                    if (!bx_cpio_emit_one_fs_entry(archive, source_root_fd, group_entry, map->synthetic_ino, options, j != i && options->format != BX_CPIO_FORMAT_BIN, diag)) {
                         free(emitted);
                         bx_cpio_inode_maps_free(&maps);
                         bx_archive_fs_list_free(&files);
@@ -557,14 +632,15 @@ static bool bx_cpio_build_archive(struct bx_archive_spool* archive, int source_r
     }
 
     bool finished;
-    if (options->format == BX_CPIO_FORMAT_NEWC) {
-        struct timespec zero = {0, 0};
-        finished = bx_cpio_emit_newc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u) && bx_archive_spool_append_zeros(archive, (512u - archive->len % 512u) % 512u);
-    }
-    else {
-        struct timespec zero = {0, 0};
-        finished = bx_cpio_emit_odc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u) && bx_archive_spool_append_zeros(archive, archive->len % 2u);
-    }
+    struct timespec zero = {0, 0};
+    if (options->format == BX_CPIO_FORMAT_BIN)
+        finished = bx_cpio_emit_bin_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u);
+    else if (options->format == BX_CPIO_FORMAT_ODC)
+        finished = bx_cpio_emit_odc_header(archive, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u);
+    else
+        finished = bx_cpio_emit_newc_header(archive, options->format == BX_CPIO_FORMAT_CRC, "TRAILER!!!", 0u, 0u, 0u, 0u, 1u, zero, 0u, 0u, 0u);
+    size_t alignment = options->format == BX_CPIO_FORMAT_ODC ? 2u : 512u;
+    finished = finished && bx_archive_spool_append_zeros(archive, (alignment - archive->len % alignment) % alignment);
     if (!finished)
         bx_diag(diag, "archive trailer: %s", strerror(errno));
 
@@ -744,7 +820,8 @@ static bool bx_cpio_member_metadata_budget(const struct bx_cpio_entry_list* entr
     return true;
 }
 
-static bool bx_cpio_parse_newc_archive(const struct bx_archive_spool* archive, struct bx_cpio_entry_list* entries, struct bx_diag_ctx* diag) {
+static bool bx_cpio_parse_newc_archive(const struct bx_archive_spool* archive, struct bx_cpio_entry_list* entries, bool crc, struct bx_diag_ctx* diag) {
+    const char* format = crc ? "crc" : "newc";
     uintmax_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_NEWC_HEADER_LEN <= archive->len - pos) {
         unsigned char header[BX_CPIO_NEWC_HEADER_LEN];
@@ -753,42 +830,52 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_spool* archive, s
         uintmax_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor, rdevmajor, rdevminor, check;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
-        if (memcmp(header, "070701", 6u) != 0) {
-            bx_diag(diag, "invalid newc header");
+        if (memcmp(header, crc ? "070702" : "070701", 6u) != 0) {
+            bx_diag(diag, "invalid %s header", format);
             return false;
         }
         if (!bx_cpio_parse_number(header + 6, 8u, 4, &ino) || !bx_cpio_parse_number(header + 14, 8u, 4, &mode) || !bx_cpio_parse_number(header + 22, 8u, 4, &uid) ||
             !bx_cpio_parse_number(header + 30, 8u, 4, &gid) || !bx_cpio_parse_number(header + 38, 8u, 4, &nlink) || !bx_cpio_parse_number(header + 46, 8u, 4, &mtime) ||
             !bx_cpio_parse_number(header + 54, 8u, 4, &size) || !bx_cpio_parse_number(header + 62, 8u, 4, &devmajor) || !bx_cpio_parse_number(header + 70, 8u, 4, &devminor) ||
             !bx_cpio_parse_number(header + 78, 8u, 4, &rdevmajor) || !bx_cpio_parse_number(header + 86, 8u, 4, &rdevminor) || !bx_cpio_parse_number(header + 94, 8u, 4, &namesize) ||
-            !bx_cpio_parse_number(header + 102, 8u, 4, &check) || check != 0 || namesize > SIZE_MAX || size > SIZE_MAX) {
-            bx_diag(diag, "invalid newc header");
+            !bx_cpio_parse_number(header + 102, 8u, 4, &check) || (!crc && check != 0) || namesize > SIZE_MAX || size > SIZE_MAX) {
+            bx_diag(diag, "invalid %s header", format);
             return false;
         }
         pos += BX_CPIO_NEWC_HEADER_LEN;
         struct bx_cpio_member_bounds bounds;
         if (!bx_cpio_member_bounds(archive->len, pos, namesize, size, 4, 4, &bounds)) {
-            bx_diag(diag, "invalid or truncated newc member");
+            bx_diag(diag, "invalid or truncated %s member", format);
             return false;
         }
         bool valid, trailer, name_padding, data_padding;
         if (!bx_cpio_validate_name(archive, pos, namesize, &valid, &trailer, diag))
             return false;
         if (!valid) {
-            bx_diag(diag, "invalid or truncated newc member");
+            bx_diag(diag, "invalid or truncated %s member", format);
             return false;
         }
         if (!bx_cpio_zero_range(archive, pos + namesize, bounds.data_offset - (pos + namesize), &name_padding, diag) ||
             !bx_cpio_zero_range(archive, bounds.data_offset + size, bounds.next_offset - (bounds.data_offset + size), &data_padding, diag))
             return false;
         if (!name_padding || !data_padding) {
-            bx_diag(diag, "invalid newc padding");
+            bx_diag(diag, "invalid %s padding", format);
             return false;
+        }
+        if (crc) {
+            uint32_t checksum = 0;
+            /* GNU crc archives leave symlink and special-file checksums zero. */
+            if (S_ISREG(mode) && !bx_cpio_checksum(archive, bounds.data_offset, size, &checksum, diag))
+                return false;
+            if (checksum != check) {
+                bx_diag(diag, "crc checksum mismatch");
+                return false;
+            }
         }
         if (trailer) {
             if (size == 0)
                 return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
-            bx_diag(diag, "invalid newc trailer");
+            bx_diag(diag, "invalid %s trailer", format);
             return false;
         }
         if (!bx_cpio_decode_metadata(&entry, mode, uid, gid, nlink, mtime, diag))
@@ -817,7 +904,7 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_spool* archive, s
         pos = bounds.next_offset;
         bx_cpio_entry_list_push(entries, &entry, next_bytes);
     }
-    bx_diag(diag, "truncated newc archive");
+    bx_diag(diag, "truncated %s archive", format);
     return false;
 }
 
@@ -890,6 +977,82 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_spool* archive, st
     return false;
 }
 
+static bool bx_cpio_parse_bin_archive(const struct bx_archive_spool* archive, struct bx_cpio_entry_list* entries, struct bx_diag_ctx* diag) {
+    uintmax_t pos = 0u;
+    bool little = false;
+    while (pos <= archive->len && BX_CPIO_BIN_HEADER_LEN <= archive->len - pos) {
+        unsigned char header[BX_CPIO_BIN_HEADER_LEN];
+        if (!bx_archive_spool_read_at(archive, pos, header, sizeof(header), diag))
+            return false;
+        uintmax_t ino, mode, uid, gid, nlink, mtime, namesize, size, device, rdev;
+        struct bx_cpio_entry entry;
+        memset(&entry, 0, sizeof(entry));
+        bool header_little = header[0] == 0xc7 && header[1] == 0x71;
+        if ((!header_little && !(header[0] == 0x71 && header[1] == 0xc7)) || (pos && little != header_little)) {
+            bx_diag(diag, "invalid binary header");
+            return false;
+        }
+        little = header_little;
+        uint32_t words[13];
+        for (size_t i = 0; i < 13; i++)
+            words[i] = little ? (uint32_t)header[2 * i] | (uint32_t)header[2 * i + 1] << 8 :
+                               (uint32_t)header[2 * i] << 8 | (uint32_t)header[2 * i + 1];
+        device = words[1]; ino = words[2]; mode = words[3]; uid = words[4]; gid = words[5];
+        nlink = words[6]; rdev = words[7]; mtime = (words[8] << 16) | words[9];
+        namesize = words[10]; size = (words[11] << 16) | words[12];
+        if (size > SIZE_MAX) {
+            bx_diag(diag, "unrepresentable binary member");
+            return false;
+        }
+        pos += BX_CPIO_BIN_HEADER_LEN;
+        struct bx_cpio_member_bounds bounds;
+        if (!bx_cpio_member_bounds(archive->len, pos, namesize, size, 2, 2, &bounds)) {
+            bx_diag(diag, "invalid or truncated binary member");
+            return false;
+        }
+        bool valid, trailer;
+        if (!bx_cpio_validate_name(archive, pos, namesize, &valid, &trailer, diag))
+            return false;
+        if (!valid) {
+            bx_diag(diag, "invalid or truncated binary member");
+            return false;
+        }
+        if (trailer) {
+            if (size == 0)
+                return bx_cpio_finish_stream(archive, bounds.next_offset, diag);
+            bx_diag(diag, "invalid binary trailer");
+            return false;
+        }
+        if (!bx_cpio_decode_metadata(&entry, mode, uid, gid, nlink, mtime, diag))
+            return false;
+        size_t next_bytes;
+        if (!bx_cpio_member_metadata_budget(entries, entry.mode, namesize, size, &next_bytes, diag))
+            return false;
+        entry.name = xmalloc(namesize);
+        if (!bx_archive_spool_read_at(archive, pos, entry.name, namesize, diag)) {
+            bx_cpio_entry_free(&entry);
+            return false;
+        }
+        pos = bounds.data_offset;
+        entry.ino = (uint32_t)ino;
+        entry.device = device;
+        entry.size = size;
+        if ((S_ISCHR(entry.mode) || S_ISBLK(entry.mode)) && !bx_fd_device_from_numbers(rdev >> 8, rdev & 255u, &entry.rdev)) {
+            bx_diag(diag, "%s: invalid device metadata", entry.name);
+            bx_cpio_entry_free(&entry);
+            return false;
+        }
+        if (!bx_cpio_parse_payload(&entry, archive, pos, diag)) {
+            bx_cpio_entry_free(&entry);
+            return false;
+        }
+        pos = bounds.next_offset;
+        bx_cpio_entry_list_push(entries, &entry, next_bytes);
+    }
+    bx_diag(diag, "truncated binary archive");
+    return false;
+}
+
 static bool bx_cpio_detect_archive_format(const struct bx_archive_spool* archive, enum bx_cpio_format* format_out, struct bx_diag_ctx* diag) {
     if (archive->len < 6u) {
         bx_diag(diag, "empty or truncated archive");
@@ -904,6 +1067,14 @@ static bool bx_cpio_detect_archive_format(const struct bx_archive_spool* archive
     }
     if (memcmp(magic, "070707", 6u) == 0) {
         *format_out = BX_CPIO_FORMAT_ODC;
+        return true;
+    }
+    if (memcmp(magic, "070702", 6u) == 0) {
+        *format_out = BX_CPIO_FORMAT_CRC;
+        return true;
+    }
+    if ((magic[0] == 0xc7 && magic[1] == 0x71) || (magic[0] == 0x71 && magic[1] == 0xc7)) {
+        *format_out = BX_CPIO_FORMAT_BIN;
         return true;
     }
     bx_diag(diag, "unrecognized cpio archive format");
@@ -1513,6 +1684,10 @@ static bool bx_cpio_select_format(struct bx_cpio_options* options, const char* v
         options->format = BX_CPIO_FORMAT_NEWC;
     else if (strcmp(value, "odc") == 0)
         options->format = BX_CPIO_FORMAT_ODC;
+    else if (strcmp(value, "crc") == 0)
+        options->format = BX_CPIO_FORMAT_CRC;
+    else if (strcmp(value, "bin") == 0)
+        options->format = BX_CPIO_FORMAT_BIN;
     else {
         bx_diag(diag, "unsupported format '%s'", value);
         return false;
@@ -1803,19 +1978,20 @@ static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv
             return 2;
         }
         if (options.format_explicit && options.format != input_format) {
-            bx_diag(&diag, "archive does not match requested format '%s'", options.format == BX_CPIO_FORMAT_NEWC ? "newc" : "odc");
+            bx_diag(&diag, "archive does not match requested format '%s'", bx_cpio_format_name(options.format));
             bx_archive_spool_close(&archive, NULL);
             return 2;
         }
-        if (input_format == BX_CPIO_FORMAT_NEWC) {
-            if (!bx_cpio_parse_newc_archive(&archive, &entries, &diag)) {
+        if (input_format == BX_CPIO_FORMAT_NEWC || input_format == BX_CPIO_FORMAT_CRC) {
+            if (!bx_cpio_parse_newc_archive(&archive, &entries, input_format == BX_CPIO_FORMAT_CRC, &diag)) {
                 bx_cpio_entry_list_free(&entries);
                 bx_archive_spool_close(&archive, NULL);
                 return 2;
             }
         }
         else {
-            if (!bx_cpio_parse_odc_archive(&archive, &entries, &diag)) {
+            bool parsed = input_format == BX_CPIO_FORMAT_BIN ? bx_cpio_parse_bin_archive(&archive, &entries, &diag) : bx_cpio_parse_odc_archive(&archive, &entries, &diag);
+            if (!parsed) {
                 bx_cpio_entry_list_free(&entries);
                 bx_archive_spool_close(&archive, NULL);
                 return 2;
