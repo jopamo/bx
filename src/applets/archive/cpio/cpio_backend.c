@@ -70,7 +70,11 @@ struct bx_cpio_options {
     bool sparse;
     bool reproducible;
     bool preserve_all;
+    bool dereference;
+    bool unconditional;
+    bool no_preserve_owner;
     bool owner_override;
+    bool group_override;
     uid_t owner;
     gid_t group;
     int operand_index;
@@ -128,6 +132,8 @@ struct bx_cpio_inode_map_list {
 struct bx_cpio_hardlink_state {
     size_t location;
     uint64_t origin;
+    /* Borrowed copy-in payload, independent of member selection/publication. */
+    const struct bx_cpio_entry* payload;
 };
 
 struct bx_cpio_alias {
@@ -223,28 +229,22 @@ static void bx_cpio_inode_maps_free(struct bx_cpio_inode_map_list* maps) {
 static bool bx_cpio_parse_owner_spec(const char* text,
                                      struct bx_cpio_options* options,
                                      struct bx_diag_ctx* diag) {
-    char* spec = xstrdup(text);
-    char* colon = strchr(spec, ':');
-    uintmax_t owner = 0u;
-    uintmax_t group = 0u;
-
-    if (colon == NULL) {
+    struct bx_id_owner_group parsed;
+    if (!bx_id_parse_owner_group(text, &parsed, diag))
+        return false;
+    const char* colon = strchr(text, ':');
+    if ((!parsed.owner_set && !parsed.group_set) ||
+        (parsed.owner_set && parsed.owner == (uid_t)-1) ||
+        (parsed.group_set && parsed.group == (gid_t)-1) ||
+        (colon && !colon[1] && !parsed.group_set)) {
         bx_diag(diag, "invalid owner spec '%s'", text);
-        free(spec);
         return false;
     }
 
-    *colon = '\0';
-    if (!bx_id_parse_numeric(spec, (uintmax_t)((uid_t)-1) - 1u, &owner) || !bx_id_parse_numeric(colon + 1, (uintmax_t)((gid_t)-1) - 1u, &group)) {
-        bx_diag(diag, "invalid owner spec '%s'", text);
-        free(spec);
-        return false;
-    }
-
-    options->owner = (uid_t)owner;
-    options->group = (gid_t)group;
-    options->owner_override = true;
-    free(spec);
+    options->owner = parsed.owner;
+    options->group = parsed.group;
+    options->owner_override = parsed.owner_set;
+    options->group_override = parsed.group_set;
     return true;
 }
 
@@ -402,12 +402,18 @@ static bool bx_cpio_include_source(const struct bx_archive_fs_visit_entry* entry
     return !S_ISSOCK(entry->st->st_mode);
 }
 
-static bool bx_cpio_build_fs_list(struct bx_archive_fs_list* list, int source_root_fd, char** names, size_t count, struct bx_diag_ctx* diag) {
+static bool bx_cpio_build_fs_list(struct bx_archive_fs_list* list, int source_root_fd, char** names, size_t count, bool dereference, struct bx_diag_ctx* diag) {
     size_t i;
     for (i = 0u; i < count; i++) {
-        if (!bx_archive_fs_add_path_filtered(list, source_root_fd, names[i], names[i], false, false, bx_cpio_include_source, NULL, NULL, NULL, diag)) {
+        char* resolved = dereference ? bx_path_realpath_dup(names[i]) : NULL;
+        if (dereference && !resolved) {
+            bx_diag(diag, "%s: %s", names[i], strerror(errno));
             return false;
         }
+        bool ok = bx_archive_fs_add_path_filtered(list, source_root_fd, resolved ? resolved : names[i], names[i], false, false, bx_cpio_include_source, NULL, NULL, NULL, diag);
+        free(resolved);
+        if (!ok)
+            return false;
     }
     return true;
 }
@@ -431,7 +437,7 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
                                       struct bx_diag_ctx* diag) {
     mode_t mode = entry->st.st_mode;
     uid_t uid = options->owner_override ? options->owner : entry->st.st_uid;
-    gid_t gid = options->owner_override ? options->group : entry->st.st_gid;
+    gid_t gid = options->group_override ? options->group : entry->st.st_gid;
     nlink_t nlink = options->reproducible && S_ISDIR(mode) ? 2u : entry->st.st_nlink;
     struct timespec mtime = entry->st.st_mtim;
     uintmax_t archive_ino = options->reproducible ? ino : entry->st.st_ino;
@@ -451,7 +457,7 @@ static bool bx_cpio_emit_one_fs_entry(struct bx_archive_spool* archive,
     }
     if (options->reproducible) {
         uid = options->owner_override ? options->owner : 0u;
-        gid = options->owner_override ? options->group : 0u;
+        gid = options->group_override ? options->group : 0u;
     }
 
     if (S_ISLNK(mode)) {
@@ -499,7 +505,7 @@ static bool bx_cpio_build_archive(struct bx_archive_spool* archive, int source_r
     bool* emitted = NULL;
     size_t i;
 
-    if (!bx_cpio_build_fs_list(&files, source_root_fd, names, name_count, diag)) {
+    if (!bx_cpio_build_fs_list(&files, source_root_fd, names, name_count, options->dereference, diag)) {
         bx_archive_fs_list_free(&files);
         return false;
     }
@@ -517,7 +523,7 @@ static bool bx_cpio_build_archive(struct bx_archive_spool* archive, int source_r
         if (emitted[i]) {
             continue;
         }
-        if (S_ISREG(entry->st.st_mode) && map->total_count > 1u) {
+        if (S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1u && map->total_count > 1u) {
             map->seen_count++;
             if (map->seen_count < map->total_count) {
                 continue;
@@ -1041,26 +1047,57 @@ done: {
 }
 }
 
+static bool bx_cpio_replace_group_payload(int fd, const struct bx_cpio_entry* entry, bool sparse, struct bx_diag_ctx* diag) {
+    if (bx_fd_ftruncate(fd, 0) != 0 || bx_fd_lseek(fd, 0, SEEK_SET) < 0) {
+        bx_diag(diag, "%s: %s", entry->name, strerror(errno));
+        return false;
+    }
+    return bx_cpio_write_payload(fd, entry, sparse, diag);
+}
+
+static bool bx_cpio_apply_skipped_payload(const struct bx_cpio_entry* entry,
+                                          const struct bx_cpio_options* options,
+                                          int root_fd,
+                                          struct bx_archive_pending_metadata* dirs,
+                                          struct bx_cpio_hardlink_state_list* hardlinks,
+                                          struct bx_cpio_hardlink_state* state,
+                                          struct bx_diag_ctx* diag) {
+    if (!state || !state->origin || !entry->data_len)
+        return true;
+    int fd = bx_cpio_open_live_alias(hardlinks, state, dirs, root_fd, true);
+    if (fd < 0) {
+        bx_diag(diag, "%s: %s", entry->name, strerror(errno));
+        return false;
+    }
+    bool ok = bx_cpio_replace_group_payload(fd, entry, options->sparse, diag);
+    if (!bx_fd_close(&fd, entry->name, ok ? diag : NULL))
+        ok = false;
+    return ok;
+}
+
 static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                                 const struct bx_cpio_options* options,
                                 int root_fd,
                                 struct bx_archive_pending_metadata* dirs,
                                 struct bx_cpio_hardlink_state_list* hardlinks,
                                 struct bx_cpio_hardlink_state* state,
+                                bool* copied,
                                 struct bx_diag_ctx* diag) {
     char* leaf = NULL;
     int parent = -1;
     int fd = -1;
     struct bx_fd_staged_file stage = BX_FD_STAGED_FILE_INIT;
     bool ok = false;
+    bool preserve_owner = !options->no_preserve_owner && geteuid() == 0;
+    *copied = false;
     struct bx_file_restore restore = {
         .mode = entry->mode,
         .mtime = entry->mtime,
         .set_mtime = options->preserve_mtime,
-        .set_owner = options->owner_override,
-        .set_group = options->owner_override,
-        .uid = options->owner,
-        .gid = options->group,
+        .set_owner = options->owner_override || preserve_owner,
+        .set_group = options->group_override || preserve_owner,
+        .uid = options->owner_override ? options->owner : entry->uid,
+        .gid = options->group_override ? options->group : entry->gid,
     };
     if (entry->restore)
         restore = *entry->restore;
@@ -1071,6 +1108,27 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
     parent = bx_dir_path_open_destination_parent(root_fd, entry->name, BX_DIR_PATH_NO_MOUNT_CROSSING, options->create_dirs, 0777, &leaf);
     if (parent < 0)
         goto fail;
+    if (entry->kind != BX_CPIO_KIND_DIR && !bx_fd_at_name_is_child(leaf)) {
+        errno = EINVAL;
+        goto fail;
+    }
+    if (!options->unconditional) {
+        struct stat existing;
+        int found = strcmp(leaf, ".") == 0 ? fstat(parent, &existing) : bx_fd_fstatat_child_nofollow(parent, leaf, &existing);
+        if (found != 0 && errno != ENOENT)
+            goto fail;
+        if (found == 0 && !(S_ISDIR(existing.st_mode) && entry->kind == BX_CPIO_KIND_DIR) &&
+            existing.st_mtim.tv_sec >= entry->mtime.tv_sec) {
+            if (fprintf(stderr, "%s: '%s' not created: newer or same age version exists\n", diag->progname, entry->name) < 0)
+                goto fail;
+            ok = bx_cpio_apply_skipped_payload(entry, options, root_fd, dirs, hardlinks, state, diag);
+            goto done;
+        }
+    }
+    if ((restore.set_owner && restore.uid == (uid_t)-1) || (restore.set_group && restore.gid == (gid_t)-1)) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
     if (entry->kind == BX_CPIO_KIND_DIR) {
         restore.set_mode = true;
         if (strcmp(leaf, ".") == 0) {
@@ -1085,10 +1143,6 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
             goto fail;
     }
     else {
-        if (!bx_fd_at_name_is_child(leaf)) {
-            errno = EINVAL;
-            goto fail;
-        }
         if (state && state->origin) {
             fd = bx_cpio_open_live_alias(hardlinks, state, dirs, root_fd, entry->data_len > 0);
             if (fd < 0)
@@ -1096,9 +1150,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
             /* Published aliases share later payload changes. Keep the inode
              * extractor-owned and writable until every group header ends. */
             if (entry->data_len > 0) {
-                if (bx_fd_ftruncate(fd, 0) != 0 || bx_fd_lseek(fd, 0, SEEK_SET) < 0)
-                    goto fail;
-                if (!bx_cpio_write_payload(fd, entry, options->sparse, diag))
+                if (!bx_cpio_replace_group_payload(fd, entry, options->sparse, diag))
                     goto done;
             }
             restore.mode = options->preserve_all ? entry->mode : entry->mode & ~bx_mode_current_umask();
@@ -1120,7 +1172,8 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 if (!options->preserve_all)
                     restore.mode = stage.mode;
                 restore.set_mode = true;
-                if (!bx_cpio_write_payload(stage.fd, entry, options->sparse, diag))
+                const struct bx_cpio_entry* payload = state && state->payload ? state->payload : entry;
+                if (!bx_cpio_write_payload(stage.fd, payload, options->sparse, diag))
                     goto done;
                 if (!bx_archive_prepare_regular_fd(&restore, stage.fd, entry->name, diag))
                     goto done;
@@ -1166,6 +1219,7 @@ static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
                 goto fail;
         }
     }
+    *copied = true;
     ok = true;
     goto done;
 fail:
@@ -1198,8 +1252,24 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
     }
     for (size_t i = 0; i < entries->len; i++) {
         const struct bx_cpio_entry* entry = &entries->items[i];
-        if (!bx_cpio_entry_selected(options, argc, argv, entry->name))
+        struct bx_cpio_hardlink_state* state = NULL;
+        if (!options->list && !options->to_stdout && entry->kind == BX_CPIO_KIND_REG && entry->nlink > 1) {
+            state = bx_cpio_get_hardlink_state(&hardlinks, entry->device, entry->ino);
+            if (!state) {
+                bx_diag(diag, "%s: %s", entry->name, strerror(errno));
+                status = 2;
+                break;
+            }
+            if (entry->data_len)
+                state->payload = entry;
+        }
+        if (!bx_cpio_entry_selected(options, argc, argv, entry->name)) {
+            if (!bx_cpio_apply_skipped_payload(entry, options, root_fd, &dirs, &hardlinks, state, diag)) {
+                status = 2;
+                break;
+            }
             continue;
+        }
         bool ok = true;
         if (options->list) {
             ok = bx_line_writer_put_line(&list_writer, entry->name);
@@ -1215,16 +1285,8 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, con
             }
         }
         else {
-            struct bx_cpio_hardlink_state* state = NULL;
-            if (entry->kind == BX_CPIO_KIND_REG && entry->nlink > 1) {
-                state = bx_cpio_get_hardlink_state(&hardlinks, entry->device, entry->ino);
-                if (!state) {
-                    bx_diag(diag, "%s: %s", entry->name, strerror(errno));
-                    status = 2;
-                    break;
-                }
-            }
-            if (!bx_cpio_extract_one(entry, options, root_fd, &dirs, &hardlinks, state, diag)) {
+            bool copied;
+            if (!bx_cpio_extract_one(entry, options, root_fd, &dirs, &hardlinks, state, &copied, diag)) {
                 status = 2;
                 break;
             }
@@ -1334,7 +1396,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         bx_diag(diag, ".: %s", strerror(errno));
         goto done;
     }
-    if (!bx_cpio_build_fs_list(&files, source_root_fd, names, name_count, diag))
+    if (!bx_cpio_build_fs_list(&files, source_root_fd, names, name_count, options->dereference, diag))
         goto done;
     root_fd = bx_fd_open_cloexec(options->pass_dir, O_RDONLY | O_DIRECTORY, 0);
     if (root_fd < 0) {
@@ -1347,6 +1409,8 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         struct bx_cpio_entry entry = {
             .name = file->archive_path,
             .mode = file->st.st_mode,
+            .uid = file->st.st_uid,
+            .gid = file->st.st_gid,
             .nlink = file->st.st_nlink,
             .mtime = file->st.st_mtim,
             .ino = file->st.st_ino,
@@ -1405,14 +1469,15 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
         }
         struct bx_file_restore restore = {0};
         bool ok = true;
+        bool copied = false;
         if (options->preserve_all) {
             ok = bx_cpio_capture_restore(source_root_fd, file, source.fd, &restore, diag);
             entry.restore = &restore;
         }
         if (ok)
-            ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, state, diag);
+            ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, state, &copied, diag);
         bx_file_metadata_free(&restore.metadata);
-        if (ok)
+        if (ok && copied)
             *copied_bytes += bytes;
         bx_fd_cleanup(&source.fd);
         if (!ok) {
@@ -1456,7 +1521,7 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
     options->operand_index = argc;
 
     for (i = 1; i < argc; i++) {
-        char* arg = argv[i];
+        const char* arg = argv[i];
         if (arg[0] != '-' || strcmp(arg, "-") == 0) {
             options->operand_index = i;
             break;
@@ -1465,6 +1530,22 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
             options->operand_index = i + 1;
             break;
         }
+        if (strcmp(arg, "--create") == 0)
+            arg = "-o";
+        else if (strcmp(arg, "--extract") == 0)
+            arg = "-i";
+        else if (strcmp(arg, "--pass-through") == 0)
+            arg = "-p";
+        else if (strcmp(arg, "--list") == 0)
+            arg = "-t";
+        else if (strcmp(arg, "--make-directories") == 0)
+            arg = "-d";
+        else if (strcmp(arg, "--preserve-modification-time") == 0)
+            arg = "-m";
+        else if (strcmp(arg, "--dereference") == 0)
+            arg = "-L";
+        else if (strcmp(arg, "--unconditional") == 0)
+            arg = "-u";
         if (strncmp(arg, "--", 2u) == 0) {
             const char* value = strchr(arg, '=');
             size_t name_len = value ? (size_t)(value - arg) : strlen(arg);
@@ -1486,6 +1567,9 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
             else if (strcmp(arg, "--preserve-all") == 0) {
                 options->preserve_all = true;
             }
+            else if (strcmp(arg, "--no-preserve-owner") == 0) {
+                options->no_preserve_owner = true;
+            }
             else if (strncmp(arg, "--file", name_len) == 0 && name_len == 6u) {
                 if (value == NULL && ++i >= argc) {
                     bx_diag(diag, "option '--file' requires an argument");
@@ -1500,6 +1584,14 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                 }
                 value = value ? value + 1 : argv[i];
                 if (!bx_cpio_select_format(options, value, diag))
+                    return false;
+            }
+            else if (strncmp(arg, "--owner", name_len) == 0 && name_len == 7u) {
+                if (value == NULL && ++i >= argc) {
+                    bx_diag(diag, "option '--owner' requires an argument");
+                    return false;
+                }
+                if (!bx_cpio_parse_owner_spec(value ? value + 1 : argv[i], options, diag))
                     return false;
             }
             else {
@@ -1531,6 +1623,8 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                         options->create_dirs = true;
                         break;
                     case 'm': options->preserve_mtime = true; break;
+                    case 'L': options->dereference = true; break;
+                    case 'u': options->unconditional = true; break;
                     case '0': options->null_input = true; break;
                     case 'F':
                         if (*attached != '\0') {
@@ -1586,35 +1680,48 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
     if (options->operand_index == argc) {
         options->operand_index = i;
     }
+    if (options->mode == BX_CPIO_MODE_NONE && options->list)
+        options->mode = BX_CPIO_MODE_COPY_IN;
     if (options->mode == BX_CPIO_MODE_NONE) {
         bx_diag(diag, "must specify one of -i, -o, or -p");
         return false;
     }
     const char* invalid = NULL;
     bool filesystem_copy = options->mode == BX_CPIO_MODE_PASS || (options->mode == BX_CPIO_MODE_COPY_IN && !options->list && !options->to_stdout);
+    bool owner_override = options->owner_override || options->group_override;
     if (options->list && options->mode != BX_CPIO_MODE_COPY_IN)
         invalid = "-t requires -i";
     else if (options->preserve_all && options->mode != BX_CPIO_MODE_PASS)
         invalid = "--preserve-all requires -p";
-    else if (options->preserve_all && options->owner_override)
+    else if (options->preserve_all && owner_override)
         invalid = "--preserve-all cannot be combined with -R";
+    else if (options->no_preserve_owner && owner_override)
+        invalid = "--no-preserve-owner cannot be combined with -R";
+    else if (options->no_preserve_owner && options->preserve_all)
+        invalid = "--no-preserve-owner cannot be combined with --preserve-all";
     else if (options->to_stdout && (options->mode != BX_CPIO_MODE_COPY_IN || options->list))
         invalid = "--to-stdout requires extraction without -t";
-    else if (options->format_explicit && options->mode != BX_CPIO_MODE_COPY_OUT)
-        invalid = "-H/--format requires -o; input format is detected automatically";
+    else if (options->format_explicit && options->mode == BX_CPIO_MODE_PASS)
+        invalid = "-H/--format requires -o or -i";
     else if (options->archive_path && options->mode == BX_CPIO_MODE_PASS)
         invalid = "-F/--file is not supported with -p";
     else if (options->reproducible && options->mode != BX_CPIO_MODE_COPY_OUT)
         invalid = "--reproducible requires -o";
     else if (options->null_input && options->mode == BX_CPIO_MODE_COPY_IN)
         invalid = "-0/--null requires -o or -p";
+    else if (options->dereference && options->mode == BX_CPIO_MODE_COPY_IN)
+        invalid = "-L/--dereference requires -o or -p";
+    else if (options->unconditional && !filesystem_copy)
+        invalid = "-u/--unconditional requires filesystem extraction or -p";
+    else if (options->no_preserve_owner && !filesystem_copy)
+        invalid = "--no-preserve-owner requires filesystem extraction or -p";
     else if (options->create_dirs && !filesystem_copy)
         invalid = "-d requires filesystem extraction or -p";
     else if (options->preserve_mtime && !filesystem_copy)
         invalid = "-m requires filesystem extraction or -p";
     else if (options->sparse && !filesystem_copy)
         invalid = "--sparse requires filesystem extraction or -p";
-    else if (options->owner_override && !filesystem_copy && options->mode != BX_CPIO_MODE_COPY_OUT)
+    else if (owner_override && !filesystem_copy && options->mode != BX_CPIO_MODE_COPY_OUT)
         invalid = "-R requires -o, filesystem extraction, or -p";
     if (invalid) {
         bx_diag(diag, "%s", invalid);
@@ -1682,6 +1789,11 @@ static int bx_cpio_execute(struct bx_cpio_options options, int argc, char** argv
         }
         *copied_bytes = archive.len;
         if (!bx_cpio_detect_archive_format(&archive, &input_format, &diag)) {
+            bx_archive_spool_close(&archive, NULL);
+            return 2;
+        }
+        if (options.format_explicit && options.format != input_format) {
+            bx_diag(&diag, "archive does not match requested format '%s'", options.format == BX_CPIO_FORMAT_NEWC ? "newc" : "odc");
             bx_archive_spool_close(&archive, NULL);
             return 2;
         }
