@@ -460,8 +460,8 @@ static bool bx_metadata_read_acl(char** text, const struct bx_file_metadata_targ
 static ssize_t bx_metadata_list_xattrs(const struct bx_file_metadata_target* target, char* names, size_t size) {
     if (!target->name)
         return flistxattr(target->fd, names, size);
-#ifdef SYS_listxattrat
-    return syscall(SYS_listxattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, names, size);
+#ifdef __NR_listxattrat
+    return syscall(__NR_listxattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, names, size);
 #else
     errno = EOPNOTSUPP;
     return -1;
@@ -471,14 +471,14 @@ static ssize_t bx_metadata_list_xattrs(const struct bx_file_metadata_target* tar
 static ssize_t bx_metadata_get_xattr(const struct bx_file_metadata_target* target, const char* name, void* value, size_t size) {
     if (!target->name)
         return fgetxattr(target->fd, name, value, size);
-#ifdef SYS_getxattrat
+#ifdef __NR_getxattrat
     /* Linux xattr_args ABI, including eight-byte alignment on 32-bit targets. */
     struct {
         _Alignas(8) uint64_t value;
         uint32_t size;
         uint32_t flags;
     } args = {.value = (uintptr_t)value, .size = (uint32_t)size};
-    return syscall(SYS_getxattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, name, &args, sizeof(args));
+    return syscall(__NR_getxattrat, target->fd, target->name, AT_SYMLINK_NOFOLLOW, name, &args, sizeof(args));
 #else
     errno = EOPNOTSUPP;
     return -1;
@@ -806,13 +806,13 @@ bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_
 #endif
     }
     if (restore->metadata.len || (restore->metadata.restore_acls && type != S_IFLNK)) {
-#ifdef SYS_setxattrat
+#ifdef __NR_setxattrat
         struct {
             _Alignas(8) uint64_t value;
             uint32_t size;
             uint32_t flags;
         } args = {0};
-        int rc = (int)syscall(SYS_setxattrat, -1, "leaf", AT_SYMLINK_NOFOLLOW, "user.bx", &args, sizeof(args));
+        int rc = (int)syscall(__NR_setxattrat, -1, "leaf", AT_SYMLINK_NOFOLLOW, "user.bx", &args, sizeof(args));
         if (rc != -1 || errno != EBADF)
             return false;
 #else
@@ -823,13 +823,13 @@ bool bx_file_restore_leaf_supported(const struct bx_file_restore* restore, mode_
     for (size_t i = 0; i < restore->metadata.len; i++) {
         if (bx_file_xattr_classify(restore->metadata.xattrs[i].name) != BX_FILE_XATTR_SELINUX)
             continue;
-#ifdef SYS_getxattrat
+#ifdef __NR_getxattrat
         struct {
             _Alignas(8) uint64_t value;
             uint32_t size;
             uint32_t flags;
         } args = {0};
-        int rc = (int)syscall(SYS_getxattrat, -1, "leaf", AT_SYMLINK_NOFOLLOW, "security.selinux", &args, sizeof(args));
+        int rc = (int)syscall(__NR_getxattrat, -1, "leaf", AT_SYMLINK_NOFOLLOW, "security.selinux", &args, sizeof(args));
         if (rc != -1 || errno != EBADF)
             return false;
 #else
