@@ -158,6 +158,19 @@ itemize_changes(const struct sess *sess, const struct stat *st, const struct fli
 	return iflags;
 }
 
+static int
+metadata_changed(const struct sess *sess, int32_t flags)
+{
+	int32_t mask = IFLAG_ACL | IFLAG_XATTR;
+
+	if (sess->opts->bx_protocol) {
+		mask |= IFLAG_PERMS | IFLAG_OWNER | IFLAG_GROUP;
+		if (sess->opts->preserve_times)
+			mask |= IFLAG_TIME;
+	}
+	return (flags & mask) != 0;
+}
+
 /*
  * Prepare the overall block set's metadata.
  * We always have at least one block.
@@ -1434,7 +1447,7 @@ check_file(int rootfd, struct flist *f, struct stat *st,
 	if (!bx_rsync_meta_compare(sess, rootfd, f, path, &f->iflags))
 		return -1;
 	/* Replace linked inodes rather than changing an unrelated snapshot. */
-	if (st->st_nlink > 1 && (f->iflags & (IFLAG_ACL | IFLAG_XATTR)))
+	if (st->st_nlink > 1 && metadata_changed(sess, f->iflags))
 		return 2;
 
 	if (sess->role->append) {
@@ -1518,7 +1531,7 @@ pre_file_check_altdir(struct sess *sess, const struct upload *p,
 		close(dfd);
 		return -1;
 	}
-	if (x == 0 && (f->iflags & (IFLAG_ACL | IFLAG_XATTR)))
+	if (x == 0 && metadata_changed(sess, f->iflags))
 		x = 1;
 	if (x == 0 && is_partialdir) {
 		/*
