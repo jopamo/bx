@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <wchar.h>
 
 static inline bool ash_character_is_scalar(uint32_t value) {
@@ -20,6 +21,14 @@ static inline size_t ash_character_decode(const char* text, size_t length, mbsta
     }
     *character = (wint_t)decoded;
     return width;
+}
+
+static inline size_t ash_character_width(const char* value, size_t remaining, mbstate_t* state) {
+    if (MB_CUR_MAX == 1u)
+        return 1u;
+    wint_t character;
+    size_t width = ash_character_decode(value, remaining, state, &character);
+    return width == 0u ? 1u : width;
 }
 
 #endif /* BX_APPLETS_SHELL_ASH_CHARACTER_H */

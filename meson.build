@@ -669,6 +669,8 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/ash.c',
   'src/applets/shell/ash/traps.c',
   'src/applets/shell/ash/trap_builtin.c',
+  'src/applets/shell/ash/kill_builtin.c',
+  'src/applets/shell/ash/read_builtin.c',
   'src/applets/shell/ash/applet_command.c',
   'src/applets/shell/ash/ast.c',
   'src/applets/shell/ash/arithmetic.c',

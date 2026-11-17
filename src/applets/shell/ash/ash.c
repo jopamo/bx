@@ -29,11 +29,13 @@
 #include "applets/shell/ash/input_execution.h"
 #include "applets/shell/ash/interactive.h"
 #include "applets/shell/ash/invocation.h"
+#include "applets/shell/ash/kill_builtin.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/locale_state.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/process.h"
 #include "applets/shell/ash/privilege.h"
+#include "applets/shell/ash/read_builtin.h"
 #include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/shopt_builtin.h"
@@ -1246,6 +1248,10 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_builtin_exit(shell, command);
         case ASH_BUILTIN_TRAP:
             return ash_trap_builtin(shell, command);
+        case ASH_BUILTIN_KILL:
+            return ash_kill_builtin(shell, command);
+        case ASH_BUILTIN_READ:
+            return ash_read_builtin(shell, command);
         case ASH_BUILTIN_EXPORT:
             return ash_builtin_export(shell, command);
         case ASH_BUILTIN_READONLY:

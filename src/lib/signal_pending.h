@@ -26,6 +26,8 @@ int bx_signal_pending_take(struct bx_signal_pending* pending, int* number);
  * policy untouched.
  */
 int bx_signal_pending_wait_child(struct bx_signal_pending* pending, pid_t pid, int* number);
+/* Wait for readable input, returning -1/EINTR for a caught signal without consuming it. */
+int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd);
 /* Call only after the fork boundary has reset caught kernel dispositions. */
 void bx_signal_pending_detach_after_fork(struct bx_signal_pending* pending);
 

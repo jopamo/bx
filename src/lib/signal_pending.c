@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdatomic.h>
@@ -135,6 +136,42 @@ int bx_signal_pending_take(struct bx_signal_pending* pending, int* number) {
             *number = 0;
         }
         (void)sigprocmask(SIG_SETMASK, &original_mask, NULL);
+        errno = error;
+        return -1;
+    }
+    return 0;
+}
+
+int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    if (pending != NULL && (pending->count == 0 || atomic_load_explicit(&active, memory_order_relaxed) != pending))
+        pending = NULL;
+    sigset_t original_mask;
+    if (pending != NULL && sigprocmask(SIG_BLOCK, &pending->recorded, &original_mask) < 0)
+        return -1;
+    int error = 0;
+    if (pending != NULL && pending->any) {
+        for (int i = 1; i < NSIG; i++) {
+            if (pending->signals[i]) {
+                error = EINTR;
+                break;
+            }
+        }
+    }
+    struct pollfd input = {.fd = fd, .events = POLLIN};
+    if (error == 0 && ppoll(&input, 1, NULL, pending != NULL ? &original_mask : NULL) < 0)
+        error = errno;
+    if (error == 0 && (input.revents & POLLNVAL) != 0)
+        error = EBADF;
+    if (pending != NULL && sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0) {
+        if (error == 0)
+            error = errno;
+        (void)sigprocmask(SIG_SETMASK, &original_mask, NULL);
+    }
+    if (error != 0) {
         errno = error;
         return -1;
     }
