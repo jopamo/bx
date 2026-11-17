@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -648,6 +650,14 @@ bool ash_import_environment(struct ash_shell* shell) {
 
     if (unsetenv("IFS") != 0 ||
         !ash_var_set(shell, "IFS", " \t\n", false)) {
+        return false;
+    }
+
+    char parent[32];
+    snprintf(parent, sizeof(parent), "%" PRIdMAX, (intmax_t)getppid());
+    if (!ash_var_set(shell, "PPID", parent, false) ||
+        (ash_shell_policy_is_bash(&shell->policy) &&
+         !ash_var_readonly(shell, "PPID", 4u))) {
         return false;
     }
 
