@@ -380,6 +380,19 @@ static char* ash_physical_directory_dup(const char* path) {
     return bx_text_buffer_take(&doubled);
 }
 
+static void ash_trace_words(const struct ash_shell* shell, char* const* words, size_t count) {
+    if (!(shell->options & ASH_SHELL_OPTION_XTRACE) || !count)
+        return;
+    const char* prefix = ash_var_get(shell, "PS4");
+    fputs(prefix ? prefix : "+ ", stderr);
+    for (size_t i = 0; i < count; i++) {
+        if (i)
+            fputc(' ', stderr);
+        fputs(words[i], stderr);
+    }
+    fputc('\n', stderr);
+}
+
 static int ash_apply_command_assignments_shell(struct ash_shell* shell, const struct ash_command* command, bool force_export, int* substitution_status) {
     for (size_t i = 0; i < command->assignment_count; i++) {
         char* text = NULL;
@@ -394,6 +407,7 @@ static int ash_apply_command_assignments_shell(struct ash_shell* shell, const st
             return 1;
         }
 
+        ash_trace_words(shell, &text, 1);
         bool assigned = ash_var_set_with_export(shell, text, name_len, value, force_export);
         free(text);
         if (!assigned) {
@@ -434,6 +448,7 @@ static bool ash_expand_command_assignments(struct ash_shell* shell, const struct
             ash_assignment_values_destroy(values, count);
             return false;
         }
+        ash_trace_words(shell, &text, 1);
         values[count] = text;
     }
     *values_out = values;
@@ -462,6 +477,8 @@ static bool ash_apply_command_assignments_temporary(struct ash_shell* shell, con
         }
         size_t name_length = 0u;
         const char* value = NULL;
+        if (sequential)
+            ash_trace_words(shell, &text, 1);
         bool assigned = ash_parse_assignment(text, &name_length, &value) && ash_var_set_temporary(shell, text, name_length, value, true);
         if (sequential) {
             free(text);
@@ -2115,6 +2132,7 @@ static int ash_execute_ast_simple(
     if (build != ASH_COMMAND_BUILD_OK) {
         return ash_command_build_status(build);
     }
+    ash_trace_words(shell, command.words, command.word_count);
     int status = ash_execute_command(shell, &command);
     ash_command_destroy(&command);
     return status;
@@ -2783,7 +2801,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCefinpPsuv] "
+            "Usage: %s [--standalone-applets] [-aCefinpPsuvx] "
             "[-o option-name] [-c command] [script [arg ...]]\n",
             progname
         );
@@ -2842,11 +2860,13 @@ static void ash_print_help(FILE* stream, const char* progname) {
         fprintf(stream, "               read file instead of ~/.bashrc\n");
         fprintf(stream, "  --norc       do not read ~/.bashrc\n");
     }
+    if (strcmp(progname, "bash") != 0)
+        fprintf(stream, "  -x           trace expanded simple commands to stderr (literal PS4 prefix)\n");
     const char* onecmd = strcmp(progname, "bash") == 0 ? "onecmd, " : "";
     fprintf(stream, "  -o option-name\n");
-    fprintf(stream, "               set allexport, errexit, noclobber, noexec, noglob, nounset, %sphysical, pipefail, or verbose\n", onecmd);
+    fprintf(stream, "               set allexport, errexit, noclobber, noexec, noglob, nounset, %sphysical, pipefail, or %s\n", onecmd, strcmp(progname, "bash") == 0 ? "verbose" : "verbose/xtrace");
     fprintf(stream, "  +o option-name\n");
-    fprintf(stream, "               clear allexport, errexit, noclobber, noexec, noglob, nounset, %sphysical, pipefail, or verbose\n", onecmd);
+    fprintf(stream, "               clear allexport, errexit, noclobber, noexec, noglob, nounset, %sphysical, pipefail, or %s\n", onecmd, strcmp(progname, "bash") == 0 ? "verbose" : "verbose/xtrace");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }

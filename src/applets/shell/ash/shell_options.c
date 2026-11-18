@@ -160,10 +160,10 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
     {
         "xtrace",
         ASH_SHELL_OPTION_XTRACE,
-        0u,
+        ASH_OPTION_INVOCATION_AND_SET,
         'x',
         ASH_OPTION_STATE_STORED,
-        ASH_OPTION_PERSONALITY_ALL,
+        (1u << ASH_SHELL_PERSONALITY_POSIX_SH),
     },
 };
 
