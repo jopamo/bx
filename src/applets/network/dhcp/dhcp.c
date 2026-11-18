@@ -318,6 +318,12 @@ static int bx_dhcp_open_socket(const struct bx_dhcp_options* options, struct bx_
         return -1;
     }
 
+    if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, options->ifname, (socklen_t)(strlen(options->ifname) + 1u)) != 0) {
+        bx_diag(diag, "failed to bind DHCP socket to '%s': %s", options->ifname, strerror(errno));
+        close(fd);
+        return -1;
+    }
+
     struct sockaddr_in bind_addr;
     memset(&bind_addr, 0, sizeof(bind_addr));
     bind_addr.sin_family = AF_INET;
