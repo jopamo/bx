@@ -2237,7 +2237,8 @@ static int ash_pipeline_child_main(void* user_data) {
         }
     }
     context->shell->should_exit = false;
-    context->shell->control = (struct ash_control_state){0};
+    /* The pipeline stage inherits the enclosing function frames and scopes. */
+    context->shell->control = (struct ash_control_state){.function_depth = context->shell->control.function_depth};
     int status = ash_execute_ast(context->shell, context->command);
     return ash_finish_execution(context->shell, status);
 }
