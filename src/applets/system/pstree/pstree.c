@@ -41,7 +41,7 @@ struct bx_pstree_connectors {
 };
 
 static void bx_pstree_print_help(FILE* stream, const char* progname) {
-    fprintf(stream, "Usage: %s [-acglpsStTuZ] [-h | -H PID] [-n | -N TYPE]\n", progname);
+    fprintf(stream, "Usage: %s [-aclpsStTuZ] [-h | -H PID] [-n]\n", progname);
     fprintf(stream, "       %s [-A | -G | -U] [PID | USER]\n", progname);
     fprintf(stream, "Display processes as a tree.\n");
     fprintf(stream, "\n");
@@ -49,14 +49,12 @@ static void bx_pstree_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -A, --ascii             use ASCII line drawing characters\n");
     fprintf(stream, "  -c, --compact-not       accepted for compatibility\n");
     fprintf(stream, "  -C, --color=TYPE        accepted for compatibility\n");
-    fprintf(stream, "  -g, --show-pgids        accepted for compatibility\n");
     fprintf(stream, "  -G, --vt100             use simple line drawing characters\n");
     fprintf(stream, "  -h, --highlight-all     accepted for compatibility\n");
     fprintf(stream, "  -H, --highlight-pid PID select PID\n");
     fprintf(stream, "  -k, --kthreads          accepted for compatibility\n");
     fprintf(stream, "  -l, --long              accepted for compatibility\n");
     fprintf(stream, "  -n, --numeric-sort      sort output by PID\n");
-    fprintf(stream, "  -N, --ns-sort TYPE      accepted for compatibility\n");
     fprintf(stream, "  -p, --show-pids         show PIDs\n");
     fprintf(stream, "  -P, --show-paths        show executable paths when available\n");
     fprintf(stream, "  -s, --show-parents      show parents of the selected process\n");
@@ -79,14 +77,12 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
         {"ascii", no_argument, NULL, 'A'},
         {"compact-not", no_argument, NULL, 'c'},
         {"color", required_argument, NULL, 'C'},
-        {"show-pgids", no_argument, NULL, 'g'},
         {"vt100", no_argument, NULL, 'G'},
         {"highlight-all", no_argument, NULL, 'h'},
         {"highlight-pid", required_argument, NULL, 'H'},
         {"kthreads", no_argument, NULL, 'k'},
         {"long", no_argument, NULL, 'l'},
         {"numeric-sort", no_argument, NULL, 'n'},
-        {"ns-sort", required_argument, NULL, 'N'},
         {"show-pids", no_argument, NULL, 'p'},
         {"show-paths", no_argument, NULL, 'P'},
         {"show-parents", no_argument, NULL, 's'},
@@ -106,7 +102,7 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
     options->charset = BX_PSTREE_CHARSET_ASCII;
     bx_args_getopt_reset();
 
-    while ((c = bx_args_getopt_long(argc, argv, "+aAcC:gGhH:klnN:pPsStTuUZV", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "+aAcC:GhH:klnpPsStTuUZV", long_options, NULL)) != -1) {
         switch (c) {
             case 'a': options->show_args = true; break;
             case 'A':
@@ -125,7 +121,6 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
                 break;
             case 'h':
             case 'c':
-            case 'g':
             case 'k':
             case 'l':
             case 'S':
@@ -135,7 +130,6 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
             case 'Z':
                 break;
             case 'C':
-            case 'N':
                 break;
             case 1:
             case 'V':
