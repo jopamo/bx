@@ -126,7 +126,6 @@ ZContext* zu_context_create(void) {
     ctx->zi_header = true;
     ctx->zi_footer = true;
     ctx->zi_list_entries = true;
-    ctx->zi_decimal_time = false;
     ctx->zi_format_specified = false;
     ctx->zi_header_explicit = false;
     ctx->zi_footer_explicit = false;

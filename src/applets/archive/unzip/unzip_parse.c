@@ -26,37 +26,6 @@ static const char* unzip_parse_tool(const ZContext* ctx) {
 }
 
 /*
- * Convert internal status codes into conventional process exit codes
- * - Keep this mapping stable for scripts
- * - Preserve a distinct code for common error classes where feasible
- */
-/*
- * Centralized compatibility warnings
- * - Keeps option parsing focused on state changes rather than messaging
- * - Groups related warnings so users see a minimal set of actionable notices
- */
-/*
-static void warn_unzip_stub(ZContext* ctx, const char* tool, const char* opt, const char* detail) {
-    char buf[256];
-    const char* msg = detail ? detail : "behavior incomplete";
-    snprintf(buf, sizeof(buf), "%s: %s is stubbed (Info-ZIP parity pending): %s", tool, opt, msg);
-    zu_warn_once(ctx, buf);
-}
-
-static void emit_unzip_stub_warnings(ZContext* ctx, const char* tool_name) {
-    bool used_zipinfo_formatting = ctx->zipinfo_stub_used || (ctx->zipinfo_mode && (ctx->zi_format_specified || ctx->zi_header_explicit || ctx->zi_footer_explicit));
-
-    if (used_zipinfo_formatting) {
-        warn_unzip_stub(ctx, tool_name, "zipinfo formatting flags", "output layout and timestamps may differ from Info-ZIP zipinfo/unzip");
-    }
-
-    if (ctx->used_long_option) {
-        warn_unzip_stub(ctx, tool_name, "long options", "some aliases and negations are not implemented");
-    }
-}
-*/
-
-/*
  * Trace the final effective configuration after parsing
  * - Intended for debugging and regression testing
  * - Shows the derived mode and the high-impact toggles that affect behavior
@@ -120,11 +89,6 @@ static void print_usage(FILE* to, const char* argv0) {
 
     zu_cli_print_section(to, "Zipinfo Mode (-Z)");
     zu_cli_print_opt(to, "-1", "List filenames only (one per line)");
-    zu_cli_print_opt(to, "-2", "List filenames only (allow headers)");
-    zu_cli_print_opt(to, "-s", "Short listing (default)");
-    zu_cli_print_opt(to, "-m", "Medium listing");
-    zu_cli_print_opt(to, "-h", "Force header line");
-    zu_cli_print_opt(to, "-T", "Print decimal timestamps");
 
     zu_cli_print_section(to, "Diagnostics");
     zu_cli_print_opt(to, "--dry-run", "Show operations without writing");
@@ -172,12 +136,6 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
     int positional_seen = 0;
     // Leading '-' in optstring makes getopt_long return 1 for non-option arguments
     while ((opt = bx_args_getopt_long(argc, argv, "-lptd:ovnqvjLi:Xx:hCZ12smMvTz?P:D", long_opts, NULL)) != -1) {
-        // Record whether any long options were used so we can emit a targeted warning
-        // getopt_long does not provide a direct flag for this, so we inspect argv at optind-1
-        if (optind > 0 && optind <= argc && strncmp(argv[optind - 1], "--", 2) == 0) {
-            ctx->used_long_option = true;
-        }
-
         switch (opt) {
             case 'l':
                 // unzip: list only
@@ -315,7 +273,6 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
 
             case '1':
                 // Zipinfo-style names-only mode with no header/footer
-                // Marked as stubbed because formatting parity is pending
                 ctx->zipinfo_mode = true;
                 ctx->list_only = true;
         
@@ -328,90 +285,29 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
                 ctx->zi_footer_explicit = true;
 
                 ctx->zi_list_entries = true;
-                ctx->zipinfo_stub_used = true;
 
                 zu_trace_option(ctx, "-1 names only (quiet)");
                 break;
 
-            case '2':
-                // Zipinfo-style names-only mode that may still allow headers depending on other flags
-                // Marked as stubbed because formatting parity is pending
-                ctx->zipinfo_mode = true;
-                ctx->list_only = true;
-        
-                ctx->zi_format = ZU_ZI_FMT_NAMES;
-                ctx->zi_format_specified = true;
-
-                ctx->zi_list_entries = true;
-                ctx->zipinfo_stub_used = true;
-
-                zu_trace_option(ctx, "-2 names only");
-                break;
-
-            case 's':
-                // Zipinfo short listing selector
-                // Marked stubbed until formatting and timestamps align with Info-ZIP
-                ctx->zipinfo_mode = true;
-                ctx->list_only = true;
-        
-                ctx->zi_format = ZU_ZI_FMT_SHORT;
-                ctx->zi_format_specified = true;
-
-                ctx->zipinfo_stub_used = true;
-                zu_trace_option(ctx, "-s short listing");
-                break;
-
-            case 'm':
-                // Zipinfo medium listing selector
-                // Marked stubbed until formatting and timestamps align with Info-ZIP
-                ctx->zipinfo_mode = true;
-                ctx->list_only = true;
-        
-                ctx->zi_format = ZU_ZI_FMT_MEDIUM;
-                ctx->zi_format_specified = true;
-
-                ctx->zipinfo_stub_used = true;
-                zu_trace_option(ctx, "-m medium listing");
-                break;
-
-            case 'h':
-                // In zipinfo mode, -h forces printing a header line
-                // Outside zipinfo mode, this implementation treats -h as usage for convenience
-                if (ctx->zipinfo_mode) {
-                    ctx->zi_header = true;
-                    ctx->zi_header_explicit = true;
-                    ctx->list_only = true;
-            
-                    ctx->zipinfo_stub_used = true;
-                    zu_trace_option(ctx, "-h show header");
-                }
-                else {
-                    print_usage(stdout, argv[0]);
-                    return ZU_STATUS_USAGE;
-                }
-                break;
-
             case 'M':
-                // Zipinfo pager flag
-                // Currently a no-op placeholder, kept for CLI compatibility
                 ctx->zipinfo_mode = true;
                 ctx->zi_allow_pager = true;
                 ctx->list_only = true;
-        
-                ctx->zipinfo_stub_used = true;
-                zu_trace_option(ctx, "-M pager (noop)");
+                zu_trace_option(ctx, "-M pager");
                 break;
 
+            case 'h':
+                if (!ctx->zipinfo_mode) {
+                    print_usage(stdout, argv[0]);
+                    return ZU_STATUS_USAGE;
+                }
+                /* fall through */
+            case '2':
+            case 's':
+            case 'm':
             case 'T':
-                // Zipinfo decimal timestamp output selector
-                // Marked stubbed until timestamp formatting matches Info-ZIP precisely
-                ctx->zipinfo_mode = true;
-                ctx->zi_decimal_time = true;
-                ctx->list_only = true;
-        
-                ctx->zipinfo_stub_used = true;
-                zu_trace_option(ctx, "-T decimal time");
-                break;
+                zu_cli_error(unzip_parse_tool(ctx), "zipinfo option -%c is not supported", opt);
+                return ZU_STATUS_USAGE;
 
             case 'z':
                 // Show archive comments only

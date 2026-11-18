@@ -467,7 +467,6 @@ static int parse_suffix_list(ZContext* ctx, const char* first, int argc, char** 
  * - Unknown long options currently fall back to usage output
  */
 static int parse_long_option(const char* tok, int argc, char** argv, int* idx, bool* endopts, ZContext* ctx) {
-    ctx->used_long_option = true;
 
     const char* name = tok + 2;
     const char* value = NULL;

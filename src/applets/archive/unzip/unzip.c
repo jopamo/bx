@@ -62,8 +62,6 @@ int bx_unzip_main(int argc, char** argv) {
     // Finalize tool_name used for messaging and compatibility warnings
     tool_name = ctx->zipinfo_mode ? "zipinfo" : "unzip";
 
-    // Warn about known gaps, then print traces of effective options for debugging
-    // emit_unzip_stub_warnings(ctx, tool_name);
     zu_unzip_trace_effective_defaults(ctx);
     zu_cli_emit_option_trace(tool_name, ctx);
 

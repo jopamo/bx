@@ -13,8 +13,7 @@
 
 enum {
     ZU_ZI_FMT_SHORT = 0,
-    ZU_ZI_FMT_MEDIUM,
-    ZU_ZI_FMT_LONG,
+    ZU_ZI_FMT_LONG = 2, /* Keep format numbers stable in option traces. */
     ZU_ZI_FMT_VERBOSE,
     ZU_ZI_FMT_NAMES,
 };
@@ -79,7 +78,6 @@ struct ZContext {
     bool zi_header;
     bool zi_footer;
     bool zi_list_entries;
-    bool zi_decimal_time;
     bool zi_format_specified;
     bool zi_header_explicit;
     bool zi_footer_explicit;
@@ -117,8 +115,6 @@ struct ZContext {
     FILE* log_file;           /* Handle for log file */
     ZU_StrList warnings;      /* Deduplicated warnings emitted during a run */
     ZU_StrList option_events; /* Ordered option trace for diagnostics */
-    bool used_long_option;    /* Track whether a long option was parsed */
-    bool zipinfo_stub_used;   /* Track stubbed zipinfo flags for warnings */
 
     /* Filtering */
     time_t filter_after; /* -t */

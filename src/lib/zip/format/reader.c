@@ -278,23 +278,18 @@ static void zi_format_method(uint16_t method, char* out, size_t len) {
 /*
  * Format DOS date/time fields into zipinfo-compatible timestamps
  *
- * decimal=true produces "YYMMDD.HHMMSS"
- * decimal=false produces a "dd-Mon-yy HH:MM" style output when month is valid
+ * Produces a "dd-Mon-yy HH:MM" style output when month is valid
  */
-static void zi_format_datetime(uint16_t dos_date, uint16_t dos_time, bool decimal, char* out, size_t len) {
+static void zi_format_datetime(uint16_t dos_date, uint16_t dos_time, char* out, size_t len) {
     unsigned year = ((dos_date >> 9) & 0x7f) + 1980;
     unsigned month = (dos_date >> 5) & 0x0f;
     unsigned day = dos_date & 0x1f;
     unsigned hour = (dos_time >> 11) & 0x1f;
     unsigned minute = (dos_time >> 5) & 0x3f;
-    unsigned second = (dos_time & 0x1f) * 2;
 
     static const char* months[] = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
-    if (decimal) {
-        snprintf(out, len, "%02u%02u%02u.%02u%02u%02u", year % 100, month, day, hour, minute, second);
-    }
-    else if (month < sizeof(months) / sizeof(months[0])) {
+    if (month < sizeof(months) / sizeof(months[0])) {
         snprintf(out, len, "%02u-%s-%02u %02u:%02u", day, months[month], year % 100, hour, minute);
     }
     else {
@@ -386,16 +381,11 @@ static int zi_print_entry(const ZContext* ctx, size_t* line_count, const zu_cent
     zi_format_method(hdr->method, method, sizeof(method));
 
     char when[32];
-    zi_format_datetime(hdr->mod_date, hdr->mod_time, ctx->zi_decimal_time, when, sizeof(when));
-
-    double ratio = zi_ratio(comp_size, uncomp_size);
+    zi_format_datetime(hdr->mod_date, hdr->mod_time, when, sizeof(when));
 
     switch (ctx->zi_format) {
         case ZU_ZI_FMT_NAMES:
             return zi_print_line(ctx, line_count, "%s\n", name);
-
-        case ZU_ZI_FMT_MEDIUM:
-            return zi_print_line(ctx, line_count, "%-10s %-10s %10" PRIu64 " %2s %5.0f%% %-4s %s %s\n", perms, creator, uncomp_size, flags, ratio, method, when, name);
 
         case ZU_ZI_FMT_LONG:
         case ZU_ZI_FMT_VERBOSE:
