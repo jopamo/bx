@@ -17,6 +17,7 @@ struct bx_mount_table {
     size_t cap;
 };
 
+char* bx_mount_unescape_field(const char* text);
 bool bx_mount_table_load(struct bx_mount_table* table);
 void bx_mount_table_free(struct bx_mount_table* table);
 const struct bx_mount_entry* bx_mount_table_find_target(const struct bx_mount_table* table, const char* target);

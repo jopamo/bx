@@ -40,7 +40,7 @@ static int bx_mount_parse_octal_escape(const char* text) {
     return value;
 }
 
-static char* bx_mount_unescape_field(const char* text) {
+char* bx_mount_unescape_field(const char* text) {
     size_t len = strlen(text);
     char* out = xmalloc(len + 1);
     size_t j = 0;

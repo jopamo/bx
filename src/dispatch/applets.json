@@ -600,6 +600,16 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "swapoff",
+      "main": "bx_swapoff_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "fuser",
       "main": "bx_fuser_main",
       "capabilities": [
