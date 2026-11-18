@@ -15,6 +15,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/signalfd.h>
+#include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -64,6 +66,8 @@ struct bx_dhcp_options {
     bool show_version;
     const char* ifname;
     const char* script;
+    int stop_fd;
+    sigset_t caller_mask;
     unsigned int timeout_ms;
     unsigned int retries;
     uint16_t server_port;
@@ -96,6 +100,7 @@ enum bx_dhcp_wait_result {
     BX_DHCP_WAIT_MESSAGE = 0,
     BX_DHCP_WAIT_TIMEOUT,
     BX_DHCP_WAIT_ERROR,
+    BX_DHCP_WAIT_STOP,
 };
 
 static const unsigned char bx_dhcp_magic_cookie[4] = {99u, 130u, 83u, 99u};
@@ -175,6 +180,7 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
     };
 
     memset(options, 0, sizeof(*options));
+    options->stop_fd = -1;
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "dhcp");
     options->timeout_ms = BX_DHCP_DEFAULT_TIMEOUT_MS;
     options->retries = BX_DHCP_DEFAULT_RETRIES;
@@ -590,12 +596,8 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd,
     bx_poll_deadline_init(&deadline, timeout_ms);
 
     while (true) {
-        struct pollfd pfd;
-        pfd.fd = fd;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-
-        int poll_rc = bx_poll_deadline_wait(&deadline, &pfd, 1);
+        struct pollfd pfds[] = {{.fd = fd, .events = POLLIN}, {.fd = options->stop_fd, .events = POLLIN}};
+        int poll_rc = bx_poll_deadline_wait(&deadline, pfds, 2);
 
         if (poll_rc < 0) {
             bx_diag(diag, "failed while waiting for DHCP response: %s", strerror(errno));
@@ -605,6 +607,8 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd,
             return BX_DHCP_WAIT_TIMEOUT;
         }
 
+        if (pfds[1].revents)
+            return BX_DHCP_WAIT_STOP;
         unsigned char packet[BX_DHCP_PACKET_MAX_LEN];
         struct sockaddr_in source;
         socklen_t source_len = sizeof(source);
@@ -713,6 +717,8 @@ static bool bx_dhcp_acquire_lease(int fd, const unsigned char hwaddr[6], const s
         if (wait_offer == BX_DHCP_WAIT_TIMEOUT) {
             continue;
         }
+        if (wait_offer == BX_DHCP_WAIT_STOP)
+            return false;
         if (wait_offer == BX_DHCP_WAIT_ERROR) {
             break;
         }
@@ -731,6 +737,8 @@ static bool bx_dhcp_acquire_lease(int fd, const unsigned char hwaddr[6], const s
         if (wait_reply == BX_DHCP_WAIT_TIMEOUT) {
             continue;
         }
+        if (wait_reply == BX_DHCP_WAIT_STOP)
+            return false;
         if (wait_reply == BX_DHCP_WAIT_ERROR) {
             break;
         }
@@ -832,6 +840,8 @@ static bool bx_dhcp_event_addrs(const char* key, const struct bx_dhcp_addresses*
 static int bx_dhcp_exec_script(void* data) {
     const struct bx_dhcp_event* event = data;
     const struct bx_dhcp_message* lease = event->lease;
+    if (sigprocmask(SIG_SETMASK, &event->options->caller_mask, NULL) < 0)
+        return 1;
     if (setenv("interface", event->options->ifname, 1) < 0 || !bx_dhcp_event_addr("ip", lease ? &lease->yiaddr : NULL) ||
         !bx_dhcp_event_addr("subnet", lease && lease->have_subnet_mask ? &lease->subnet_mask : NULL) || !bx_dhcp_event_addrs("router", lease ? &lease->router : NULL) ||
         !bx_dhcp_event_addrs("dns", lease ? &lease->dns : NULL))
@@ -855,15 +865,26 @@ static bool bx_dhcp_notify(const struct bx_dhcp_options* options, const char* na
     return true;
 }
 
-static bool bx_dhcp_sleep_until(uint64_t when, struct bx_diag_ctx* diag) {
-    struct timespec ts = {.tv_sec = (time_t)(when / 1000u), .tv_nsec = (long)((when % 1000u) * 1000000u)};
-    int error;
-    do {
-        error = clock_nanosleep(CLOCK_BOOTTIME, TIMER_ABSTIME, &ts, NULL);
-    } while (error == EINTR);
-    if (error)
-        bx_diag(diag, "lease timer: %s", strerror(error));
-    return error == 0;
+/* A zero deadline waits indefinitely. Any stop signal stays queued until cleanup. */
+static bool bx_dhcp_sleep_until(int stop_fd, uint64_t when, struct bx_diag_ctx* diag) {
+    int timer = -1;
+    if (when) {
+        struct itimerspec spec = {.it_value = {.tv_sec = (time_t)(when / 1000u), .tv_nsec = (long)((when % 1000u) * 1000000u)}};
+        timer = timerfd_create(CLOCK_BOOTTIME, TFD_CLOEXEC);
+        if (timer < 0 || timerfd_settime(timer, TFD_TIMER_ABSTIME, &spec, NULL) < 0) {
+            bx_diag(diag, "lease timer: %s", strerror(errno));
+            if (timer >= 0)
+                close(timer);
+            return false;
+        }
+    }
+    struct pollfd pfds[] = {{.fd = stop_fd, .events = POLLIN}, {.fd = timer, .events = POLLIN}};
+    int rc = bx_poll_retry_eintr(pfds, 2, -1);
+    if (rc < 0)
+        bx_diag(diag, "lease wait: %s", strerror(errno));
+    if (timer >= 0)
+        close(timer);
+    return rc > 0 && !pfds[0].revents && pfds[1].revents == POLLIN;
 }
 
 /* Return to discovery on expiry or NAK. Never extend a deadline without an ACK. */
@@ -889,10 +910,9 @@ static bool bx_dhcp_maintain(int fd, const unsigned char hwaddr[6], const struct
         if (!bx_dhcp_notify(options, event, &lease, diag))
             return false;
         if (lease.lease_time == UINT32_MAX) {
-            for (;;)
-                pause();
+            return bx_dhcp_sleep_until(options->stop_fd, 0, diag);
         }
-        if (!bx_dhcp_sleep_until(start + t1, diag))
+        if (!bx_dhcp_sleep_until(options->stop_fd, start + t1, diag))
             return false;
         uint32_t xid = bx_dhcp_generate_xid();
         unsigned char packet[BX_DHCP_PACKET_MAX_LEN];
@@ -915,6 +935,8 @@ static bool bx_dhcp_maintain(int fd, const unsigned char hwaddr[6], const struct
             struct bx_dhcp_message reply;
             if (bx_dhcp_send_packet(fd, &dest, packet, size, diag)) {
                 enum bx_dhcp_wait_result result = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, &lease, rebind, (int)interval, &reply, diag);
+                if (result == BX_DHCP_WAIT_STOP)
+                    return false;
                 if (result == BX_DHCP_WAIT_MESSAGE) {
                     uint64_t received;
                     if (!bx_dhcp_clock(&received, diag))
@@ -928,9 +950,41 @@ static bool bx_dhcp_maintain(int fd, const unsigned char hwaddr[6], const struct
                     break;
                 }
             }
-            if (!bx_dhcp_sleep_until(now + interval, diag))
+            if (!bx_dhcp_sleep_until(options->stop_fd, now + interval, diag))
                 return false;
         }
+    }
+}
+
+static int bx_dhcp_run(const struct bx_dhcp_options* options, struct bx_diag_ctx* diag) {
+    if (options->script && !bx_dhcp_notify(options, "deconfig", NULL, diag))
+        return 1;
+    for (;;) {
+        diag->exit_status = 0;
+        unsigned char hwaddr[6];
+        struct bx_dhcp_message lease;
+        uint64_t started;
+        int fd = bx_dhcp_get_hwaddr(options->ifname, hwaddr, diag) ? bx_dhcp_open_socket(options, diag) : -1;
+        bool acquired = fd >= 0 && bx_dhcp_acquire_lease(fd, hwaddr, options, &lease, &started, diag);
+        if (!options->script) {
+            if (fd >= 0)
+                close(fd);
+            if (!acquired)
+                return 1;
+            bx_dhcp_print_lease(options, &lease);
+            return 0;
+        }
+        bool retry = !acquired || bx_dhcp_maintain(fd, hwaddr, options, lease, started, diag);
+        if (fd >= 0)
+            close(fd);
+        if (acquired && !bx_dhcp_notify(options, "deconfig", NULL, diag))
+            return 1;
+        struct pollfd stop = {.fd = options->stop_fd, .events = POLLIN};
+        int rc = bx_poll_for_milliseconds(&stop, 1, retry ? (int)options->timeout_ms : 0);
+        if (rc > 0 && stop.revents == POLLIN)
+            return 0;
+        if (!retry || rc < 0)
+            return 1;
     }
 }
 
@@ -958,29 +1012,28 @@ int bx_dhcp_main(int argc, char** argv) {
         return 0;
     }
 
-    if (options.script && !bx_dhcp_notify(&options, "deconfig", NULL, &diag))
+    if (!options.script)
+        return bx_dhcp_run(&options, &diag);
+    sigset_t stop;
+    sigemptyset(&stop);
+    sigaddset(&stop, SIGTERM);
+    sigaddset(&stop, SIGINT);
+    if (sigprocmask(SIG_BLOCK, &stop, &options.caller_mask) < 0) {
+        bx_diag(&diag, "cannot block stop signals: %s", strerror(errno));
         return 1;
-    for (;;) {
-        diag.exit_status = 0;
-        unsigned char hwaddr[6];
-        struct bx_dhcp_message lease;
-        uint64_t started;
-        int fd = bx_dhcp_get_hwaddr(options.ifname, hwaddr, &diag) ? bx_dhcp_open_socket(&options, &diag) : -1;
-        bool acquired = fd >= 0 && bx_dhcp_acquire_lease(fd, hwaddr, &options, &lease, &started, &diag);
-        if (!options.script) {
-            if (fd >= 0)
-                close(fd);
-            if (!acquired)
-                return 1;
-            bx_dhcp_print_lease(&options, &lease);
-            return 0;
-        }
-        bool retry = !acquired || bx_dhcp_maintain(fd, hwaddr, &options, lease, started, &diag);
-        if (fd >= 0)
-            close(fd);
-        if (acquired && !bx_dhcp_notify(&options, "deconfig", NULL, &diag))
-            return 1;
-        if (!retry || bx_poll_for_milliseconds(NULL, 0, (int)options.timeout_ms) < 0)
-            return 1;
     }
+    options.stop_fd = bx_fd_signalfd_cloexec(-1, &stop, SFD_NONBLOCK);
+    int status = 1;
+    if (options.stop_fd >= 0) {
+        status = bx_dhcp_run(&options, &diag);
+        struct signalfd_siginfo info;
+        while (read(options.stop_fd, &info, sizeof(info)) > 0) {
+        }
+        close(options.stop_fd);
+    }
+    else
+        bx_diag(&diag, "cannot monitor stop signals: %s", strerror(errno));
+    if (sigprocmask(SIG_SETMASK, &options.caller_mask, NULL) < 0)
+        return 1;
+    return status;
 }
