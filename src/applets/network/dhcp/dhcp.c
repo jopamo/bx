@@ -561,10 +561,15 @@ static bool bx_dhcp_parse_packet(const unsigned char* packet, size_t packet_len,
     return message_out->message_type != 0u;
 }
 
-static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd, uint32_t xid, unsigned int timeout_ms, struct bx_dhcp_message* message_out, struct bx_diag_ctx* diag) {
+static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd,
+                                                         const struct bx_dhcp_options* options,
+                                                         uint32_t xid,
+                                                         const unsigned char hwaddr[6],
+                                                         const struct bx_dhcp_message* offer,
+                                                         struct bx_dhcp_message* message_out,
+                                                         struct bx_diag_ctx* diag) {
     struct bx_poll_deadline deadline;
-    int poll_timeout =
-        timeout_ms > (unsigned int)INT_MAX ? INT_MAX : (int)timeout_ms;
+    int poll_timeout = options->timeout_ms > (unsigned int)INT_MAX ? INT_MAX : (int)options->timeout_ms;
     bx_poll_deadline_init(&deadline, poll_timeout);
 
     while (true) {
@@ -586,7 +591,7 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd, uint32_t xid, u
         unsigned char packet[BX_DHCP_PACKET_MAX_LEN];
         struct sockaddr_in source;
         socklen_t source_len = sizeof(source);
-        ssize_t recv_len = recvfrom(fd, packet, sizeof(packet), 0, (struct sockaddr*)&source, &source_len);
+        ssize_t recv_len = recvfrom(fd, packet, sizeof(packet), MSG_TRUNC, (struct sockaddr*)&source, &source_len);
         if (recv_len < 0) {
             if (errno == EINTR) {
                 continue;
@@ -594,7 +599,8 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd, uint32_t xid, u
             bx_diag(diag, "failed to read DHCP response: %s", strerror(errno));
             return BX_DHCP_WAIT_ERROR;
         }
-        if (recv_len == 0) {
+        if (recv_len < (ssize_t)BX_DHCP_PACKET_MIN_LEN || (size_t)recv_len > sizeof(packet) || source.sin_port != htons(options->server_port) || packet[0] != 2u || packet[1] != 1u ||
+            packet[2] != 6u || memcmp(packet + 28u, hwaddr, 6u) != 0) {
             continue;
         }
 
@@ -611,6 +617,15 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd, uint32_t xid, u
             message.have_server_id = true;
         }
 
+        if (offer == NULL) {
+            if (message.message_type != BX_DHCP_MESSAGE_OFFER || message.yiaddr.s_addr == INADDR_ANY)
+                continue;
+        }
+        else if (message.server_id.s_addr != offer->server_id.s_addr ||
+                 (message.message_type != BX_DHCP_MESSAGE_NAK &&
+                  (message.message_type != BX_DHCP_MESSAGE_ACK || (message.yiaddr.s_addr != INADDR_ANY && message.yiaddr.s_addr != offer->yiaddr.s_addr)))) {
+            continue;
+        }
         *message_out = message;
         return BX_DHCP_WAIT_MESSAGE;
     }
@@ -699,7 +714,6 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
     }
 
     bool success = false;
-    uint32_t xid = bx_dhcp_generate_xid();
     unsigned char packet[BX_DHCP_PACKET_MAX_LEN];
 
     struct sockaddr_in destination;
@@ -709,6 +723,7 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
     destination.sin_addr = options->server_addr;
 
     for (unsigned int attempt = 0; attempt < options->retries; attempt++) {
+        uint32_t xid = bx_dhcp_generate_xid();
         size_t discover_len = bx_dhcp_build_discover(packet, sizeof(packet), xid, hwaddr);
         if (discover_len == 0u) {
             bx_diag(diag, "internal error: failed to build DHCPDISCOVER");
@@ -719,15 +734,12 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
         }
 
         struct bx_dhcp_message offer;
-        enum bx_dhcp_wait_result wait_offer = bx_dhcp_wait_for_message(fd, xid, options->timeout_ms, &offer, diag);
+        enum bx_dhcp_wait_result wait_offer = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, NULL, &offer, diag);
         if (wait_offer == BX_DHCP_WAIT_TIMEOUT) {
             continue;
         }
         if (wait_offer == BX_DHCP_WAIT_ERROR) {
             break;
-        }
-        if (offer.message_type != BX_DHCP_MESSAGE_OFFER || !offer.have_server_id || offer.yiaddr.s_addr == htonl(INADDR_ANY)) {
-            continue;
         }
 
         size_t request_len = bx_dhcp_build_request(packet, sizeof(packet), xid, hwaddr, &offer.yiaddr, &offer.server_id);
@@ -740,7 +752,7 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
         }
 
         struct bx_dhcp_message reply;
-        enum bx_dhcp_wait_result wait_reply = bx_dhcp_wait_for_message(fd, xid, options->timeout_ms, &reply, diag);
+        enum bx_dhcp_wait_result wait_reply = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, &offer, &reply, diag);
         if (wait_reply == BX_DHCP_WAIT_TIMEOUT) {
             continue;
         }
@@ -748,9 +760,6 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
             break;
         }
         if (reply.message_type == BX_DHCP_MESSAGE_NAK) {
-            continue;
-        }
-        if (reply.message_type != BX_DHCP_MESSAGE_ACK) {
             continue;
         }
 
