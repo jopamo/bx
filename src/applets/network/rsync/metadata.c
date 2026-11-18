@@ -43,6 +43,24 @@ struct bx_rsync_meta {
 	size_t bytes;
 };
 
+static const struct bx_rsync_meta empty_metadata;
+
+/* Account for the receiver's retained records on both peers. */
+static int
+meta_account(struct sess *sess, const struct bx_rsync_meta *m)
+{
+	if (m->count == 0)
+		return 1;
+	size_t cost = sizeof(*m) + m->bytes;
+	if (cost > META_SESSION_MAX - sess->metadata_bytes) {
+		ERRX("BX/29.5 session metadata exceeds %u MiB", META_SESSION_MAX >> 20);
+		errno = E2BIG;
+		return 0;
+	}
+	sess->metadata_bytes += cost;
+	return 1;
+}
+
 static uint32_t
 get32(const unsigned char *p)
 {
@@ -479,11 +497,8 @@ bx_rsync_meta_prepare(struct sess *sess, const struct flist *f,
 	errno = ENOTSUP;
 	goto fail;
 #endif
-	if (m->bytes + sizeof(*m) > META_SESSION_MAX - sess->metadata_bytes) {
-		errno = E2BIG;
+	if (!meta_account(sess, m))
 		goto fail;
-	}
-	sess->metadata_bytes += m->bytes + sizeof(*m);
 	*result = m;
 	return 1;
 fail:
@@ -524,17 +539,21 @@ bx_rsync_meta_send(struct sess *sess, int fd, const struct bx_rsync_meta *m,
 int
 bx_rsync_meta_recv(struct sess *sess, int fd, struct flist *f)
 {
-	struct bx_rsync_meta *m;
+	struct bx_rsync_meta *m = NULL;
 	uint32_t count, len, size;
 	char name[META_NAME_MAX + 1];
 
 	if (!sess->opts->bx_protocol)
 		return 1;
+	if (!io_read_uint(sess, fd, &count) || count > META_COUNT_MAX)
+		goto fail;
+	if (count == 0) {
+		f->metadata = &empty_metadata;
+		return 1;
+	}
 	m = calloc(1, sizeof(*m));
 	if (m == NULL)
 		return 0;
-	if (!io_read_uint(sess, fd, &count) || count > META_COUNT_MAX)
-		goto fail;
 	for (uint32_t i = 0; i < count; i++) {
 		struct meta_attr *a;
 		if (!io_read_uint(sess, fd, &len) || len == 0 || len > META_NAME_MAX ||
@@ -553,9 +572,8 @@ bx_rsync_meta_recv(struct sess *sess, int fd, struct flist *f)
 		if (sess->opts->preserve_perms)
 			acl_set_mode(a, f->st.mode);
 	}
-	if (m->bytes + sizeof(*m) > META_SESSION_MAX - sess->metadata_bytes)
+	if (!meta_account(sess, m))
 		goto fail;
-	sess->metadata_bytes += m->bytes + sizeof(*m);
 	m->next = sess->metadata_pool;
 	sess->metadata_pool = m;
 	f->metadata = m;
