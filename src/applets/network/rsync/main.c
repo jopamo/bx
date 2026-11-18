@@ -2094,7 +2094,7 @@ basedir:
 	 * the protocol (30 and up).
 	 */
 	if (opts.del == DMODE_UNSPECIFIED)
-		opts.del = DMODE_BEFORE;
+		opts.del = opts.bx_protocol ? DMODE_AFTER : DMODE_BEFORE;
 
 	if (opts.write_batch != NULL && opts.read_batch != NULL)
 		err(ERR_SYNTAX,

@@ -561,6 +561,8 @@ make_hardlinks(struct sess *sess, const struct flist *fl, size_t flsz,
 		f = &fl[i];
 		if (f->st.inode == 0 && f->st.device == 0)
 			continue;
+		if (f->flstate & FLIST_FAILED)
+			continue;
 		if ((f->flstate & FLIST_NEED_HLINK) == 0) {
 			if (f->st.device != prev_device) {
 				prev_device = f->st.device;
@@ -575,7 +577,7 @@ make_hardlinks(struct sess *sess, const struct flist *fl, size_t flsz,
 		}
 
 		hl_p = find_hl(f, hl);
-		if (hl_p == NULL)
+		if (hl_p == NULL || (hl_p->flstate & FLIST_FAILED))
 			continue;
 
 		if (unlinkat(rootfd, f->path, 0) == -1 && errno != ENOENT) {
@@ -1121,8 +1123,6 @@ rsync_receiver(struct sess *sess, struct cleanup_ctx *cleanup_ctx,
 				if (!protocol_dlrename ||
 				    phase == PHASE_DLUPDATES) {
 					delayed_renames(sess);
-					free(sess->dlrename);
-					sess->dlrename = NULL;
 				}
 
 				/*
@@ -1151,6 +1151,18 @@ rsync_receiver(struct sess *sess, struct cleanup_ctx *cleanup_ctx,
 	}
 
 	assert(phase == max_phase + 1);
+
+	/* A sender can finish a phase without answering a data request. */
+	if (sess->opts->bx_protocol && !sess->opts->dry_run) {
+		for (i = 0; i < flsz; i++) {
+			if ((fl[i].iflags & IFLAG_TRANSFER) &&
+			    !(fl[i].flstate & (FLIST_SUCCESS | FLIST_FAILED))) {
+				WARNX("%s: requested data not received", fl[i].path);
+				fl[i].flstate |= FLIST_FAILED;
+				sess->total_errors++;
+			}
+		}
+	}
 
 	/* Delayed updates may replace a hardlink group's leader in the last phase. */
 	if (sess->opts->hard_links && !sess->opts->dry_run)
@@ -1207,9 +1219,7 @@ rsync_receiver(struct sess *sess, struct cleanup_ctx *cleanup_ctx,
 	rc = 1;
 out:
 	free(derived_root);
-	delayed_renames(sess);
-	free(sess->dlrename);
-	sess->dlrename = NULL;
+	discard_delayed_renames(sess);
 	upload_free(ul);
 	free(hls.infos);
 

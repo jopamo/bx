@@ -491,6 +491,10 @@ flist_copy_stat(struct flist *f, const struct stat *st)
 	f->st.device = st->st_dev;
 	f->st.inode = st->st_ino;
 	f->st.nlink = st->st_nlink;
+#ifdef __linux__
+	if (f->fmode == FARGS_SENDER)
+		f->source_ctime = st->st_ctim;
+#endif
 }
 
 static void

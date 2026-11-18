@@ -748,6 +748,22 @@ struct dlrename {
 };
 
 void
+discard_delayed_renames(struct sess *sess)
+{
+	struct dlrename *dlr = sess->dlrename;
+
+	if (dlr == NULL)
+		return;
+	for (int i = 0; i < dlr->n; i++) {
+		free(dlr->entries[i].from);
+		free(dlr->entries[i].rmdir);
+	}
+	free(dlr->entries);
+	free(dlr);
+	sess->dlrename = NULL;
+}
+
+void
 delayed_renames(struct sess *sess)
 {
 	int i;
@@ -772,7 +788,7 @@ delayed_renames(struct sess *sess)
 		    dlr->fromfd, curr->from, dlr->tofd, curr->to, 1, 0)) {
 			status = FLIST_FAILED;
 		}
-		if (hl_p != NULL) {
+		if (status == FLIST_SUCCESS && hl_p != NULL) {
 			const char *path = curr->to;
 
 			if (unlinkat(p->rootfd, path, 0) == -1) {
@@ -787,6 +803,7 @@ delayed_renames(struct sess *sess)
 				ERR("linkat");
 				LOG0("Error while delayed hard linking '%s' "
 				    "to '%s' ", hl_p->path, path);
+				status = FLIST_FAILED;
 			}
 
 			hl_p = NULL;
@@ -799,15 +816,10 @@ delayed_renames(struct sess *sess)
 		}
 
 		curr->file->flstate |= status;
-		free(curr->from);
-		free(curr->rmdir);
-		curr->from = NULL;
-		curr->rmdir = NULL;
+		if (status == FLIST_FAILED)
+			sess->total_errors++;
 	}
-	free(dlr->entries);
-	dlr->entries = NULL;
-	free(sess->dlrename);
-	sess->dlrename = NULL;
+	discard_delayed_renames(sess);
 }
 
 /*

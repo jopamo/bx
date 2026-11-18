@@ -428,6 +428,9 @@ struct	flist {
 	union {
 		struct {
 			struct froot	*froot;
+#ifdef __linux__
+			struct timespec source_ctime; /* Local scan, not on the wire */
+#endif
 			platform_open	*open; /* special open() for this entry */
 			platform_flist_sent	*sent; /* notify the platform an entry was sent */
 		};	/* Sender state, not available in the receiver */
@@ -1272,6 +1275,7 @@ int              read_filesfrom(struct sess *sess, const char *basedir);
 void		 cleanup_filesfrom(struct sess *sess);
 void             print_filesfrom(char *const *, int, const char *);
 void		 delayed_renames(struct sess *sess);
+void		 discard_delayed_renames(struct sess *sess);
 
 int		 chmod_parse(const char *arg, struct sess *sess);
 

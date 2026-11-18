@@ -73,6 +73,43 @@ struct	send_up {
 
 TAILQ_HEAD(send_dlq, send_dl);
 
+/* Compare the opened data file with the scan that supplied its metadata. */
+static int
+source_matches(const struct flist *f, const struct stat *st)
+{
+#ifdef __linux__
+	if (f->source_ctime.tv_sec != st->st_ctim.tv_sec ||
+	    f->source_ctime.tv_nsec != st->st_ctim.tv_nsec)
+		return 0;
+#endif
+	return S_ISREG(st->st_mode) && st->st_size == f->st.size &&
+	    st->st_dev == (dev_t)f->st.device && st->st_ino == (ino_t)f->st.inode;
+}
+
+static void
+sender_check_hash(struct sess *sess, struct send_up *up, const struct flist *f,
+    unsigned char *digest)
+{
+	struct stat st;
+
+	if (!up->stat.error && hash_fmap(f->path, up->stat.map,
+	    up->stat.mapsz, digest, sess) != 0) {
+		ERRX1("hash_fmap");
+		sess->total_errors++;
+		up->stat.error = true;
+	}
+	if (!up->stat.error && sess->opts->bx_protocol) {
+		if (fstat(up->stat.fd, &st) == -1)
+			WARN("%s: fstat after reading", f->path);
+		else if (!source_matches(f, &st))
+			WARNX("%s: source changed during transfer", f->path);
+		else
+			return;
+		sess->total_errors++;
+		up->stat.error = true;
+	}
+}
+
 /*
  * We have finished updating the receiver's file with sender data.
  * Deallocate and wipe clean all resources required for that.
@@ -409,13 +446,7 @@ send_up_fsm_compressed(struct sess *sess, size_t *phase,
 		 * finished with the file.
 		 */
 
-		if (!up->stat.error &&
-		    hash_fmap(fl[up->cur->idx].path, up->stat.map,
-		    up->stat.mapsz, fmd, sess) != 0) {
-			ERRX1("hash_fmap");
-			sess->total_errors++;
-			up->stat.error = true;
-		}
+		sender_check_hash(sess, up, &fl[up->cur->idx], fmd);
 
 		if (up->stat.error) {
 			/*
@@ -674,13 +705,7 @@ send_up_fsm(struct sess *sess, size_t *phase,
 		 * This is always followed by the state that we're
 		 * finished with the file.
 		 */
-		if (!up->stat.error &&
-		    hash_fmap(fl[up->cur->idx].path, up->stat.map,
-		    up->stat.mapsz, fmd, sess) != 0) {
-			ERRX1("hash_fmap");
-			sess->total_errors++;
-			up->stat.error = true;
-		}
+		sender_check_hash(sess, up, &fl[up->cur->idx], fmd);
 
 		if (up->stat.error) {
 			/*
@@ -1609,7 +1634,11 @@ rsync_sender(struct sess *sess, int fdin,
 			 * If the file shrank in --append mode, then we should
 			 * avoid touching it entirely.
 			 */
-			if (sess->opts->append && up.cur->blks != NULL &&
+			if (sess->opts->bx_protocol && !source_matches(f, &st)) {
+				WARNX("%s: skipping changed source before transfer", f->path);
+				sess->total_errors++;
+				send_up_reset(&up);
+			} else if (sess->opts->append && up.cur->blks != NULL &&
 			    (off_t)st.st_size < up.cur->blks->size) {
 				WARNX("%s: skipping diminished file",
 				    f->path);
