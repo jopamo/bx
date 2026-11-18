@@ -15,12 +15,14 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/child_runner.h"
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/poll_deadline.h"
@@ -44,6 +46,8 @@
 #define BX_DHCP_OPTION_MESSAGE_TYPE 53u
 #define BX_DHCP_OPTION_SERVER_ID 54u
 #define BX_DHCP_OPTION_PARAMETER_REQUEST_LIST 55u
+#define BX_DHCP_OPTION_T1 58u
+#define BX_DHCP_OPTION_T2 59u
 #define BX_DHCP_OPTION_CLIENT_ID 61u
 #define BX_DHCP_OPTION_PAD 0u
 #define BX_DHCP_OPTION_END 255u
@@ -59,6 +63,7 @@ struct bx_dhcp_options {
     bool show_help;
     bool show_version;
     const char* ifname;
+    const char* script;
     unsigned int timeout_ms;
     unsigned int retries;
     uint16_t server_port;
@@ -80,20 +85,7 @@ struct bx_dhcp_message {
     struct in_addr dns;
     bool have_lease_time;
     uint32_t lease_time;
-};
-
-struct bx_dhcp_lease {
-    struct in_addr address;
-    bool have_server_id;
-    struct in_addr server_id;
-    bool have_subnet_mask;
-    struct in_addr subnet_mask;
-    bool have_router;
-    struct in_addr router;
-    bool have_dns;
-    struct in_addr dns;
-    bool have_lease_time;
-    uint32_t lease_time;
+    uint32_t t1, t2;
 };
 
 enum bx_dhcp_wait_result {
@@ -104,15 +96,16 @@ enum bx_dhcp_wait_result {
 
 static const unsigned char bx_dhcp_magic_cookie[4] = {99u, 130u, 83u, 99u};
 static const unsigned char bx_dhcp_parameter_request_list[] = {
-    BX_DHCP_OPTION_SUBNET_MASK, BX_DHCP_OPTION_ROUTER, BX_DHCP_OPTION_DNS, BX_DHCP_OPTION_LEASE_TIME, BX_DHCP_OPTION_SERVER_ID,
+    BX_DHCP_OPTION_SUBNET_MASK, BX_DHCP_OPTION_ROUTER, BX_DHCP_OPTION_DNS, BX_DHCP_OPTION_LEASE_TIME, BX_DHCP_OPTION_SERVER_ID, BX_DHCP_OPTION_T1, BX_DHCP_OPTION_T2,
 };
 
 static void bx_dhcp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... IFACE\n", progname);
-    fprintf(stream, "Acquire an IPv4 lease with a minimal one-shot DHCP client.\n");
+    fprintf(stream, "Acquire an IPv4 lease. By default, print it and exit.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -i, --interface=IFACE        network interface name\n");
     fprintf(stream, "  -t, --timeout=SECS           response timeout per stage (default: 5)\n");
+    fprintf(stream, "  -s, --script=PATH           maintain the lease in foreground; call PATH on lease changes\n");
     fprintf(stream, "  -r, --retries=COUNT          discovery attempts (default: 3)\n");
     fprintf(stream, "      --server-address=ADDR    server destination address (default: 255.255.255.255)\n");
     fprintf(stream, "      --server-port=PORT       server UDP port (default: 67)\n");
@@ -165,6 +158,7 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
     };
 
     static const struct option long_options[] = {
+        {"script", required_argument, NULL, 's'},
         {"interface", required_argument, NULL, 'i'},
         {"timeout", required_argument, NULL, 't'},
         {"retries", required_argument, NULL, 'r'},
@@ -188,13 +182,20 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
     bx_args_getopt_reset();
 
     while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+:i:t:r:hV", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+:i:t:r:s:hV", long_options, NULL);
         if (c == -1) {
             break;
         }
 
         unsigned int value = 0;
         switch (c) {
+            case 's':
+                options->script = optarg;
+                if (optarg[0] != '/') {
+                    bx_diag(diag, "lease script must be an absolute path");
+                    return false;
+                }
+                break;
             case 'i':
                 options->ifname = optarg;
                 break;
@@ -451,12 +452,14 @@ static size_t bx_dhcp_build_request(unsigned char* packet, size_t capacity, uint
         return 0u;
     }
 
-    if (!bx_dhcp_append_option_addr(packet, capacity, &packet_len, BX_DHCP_OPTION_REQUESTED_IP, requested_ip)) {
-        return 0u;
+    if (server_id != NULL) {
+        if (!bx_dhcp_append_option_addr(packet, capacity, &packet_len, BX_DHCP_OPTION_REQUESTED_IP, requested_ip) ||
+            !bx_dhcp_append_option_addr(packet, capacity, &packet_len, BX_DHCP_OPTION_SERVER_ID, server_id))
+            return 0u;
     }
-
-    if (!bx_dhcp_append_option_addr(packet, capacity, &packet_len, BX_DHCP_OPTION_SERVER_ID, server_id)) {
-        return 0u;
+    else {
+        memset(packet + 10, 0, 2);
+        memcpy(packet + 12, &requested_ip->s_addr, 4);
     }
 
     unsigned char client_id[7];
@@ -543,6 +546,17 @@ static bool bx_dhcp_parse_packet(const unsigned char* packet, size_t packet_len,
                     message_out->have_dns = true;
                 }
                 break;
+            case BX_DHCP_OPTION_T1:
+            case BX_DHCP_OPTION_T2:
+                if (option_len == 4u) {
+                    uint32_t seconds;
+                    memcpy(&seconds, option_data, sizeof(seconds));
+                    if (code == BX_DHCP_OPTION_T1)
+                        message_out->t1 = ntohl(seconds);
+                    else
+                        message_out->t2 = ntohl(seconds);
+                }
+                break;
             case BX_DHCP_OPTION_LEASE_TIME:
                 if (option_len == 4u) {
                     uint32_t lease_time_net;
@@ -566,11 +580,12 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd,
                                                          uint32_t xid,
                                                          const unsigned char hwaddr[6],
                                                          const struct bx_dhcp_message* offer,
+                                                         bool rebinding,
+                                                         int timeout_ms,
                                                          struct bx_dhcp_message* message_out,
                                                          struct bx_diag_ctx* diag) {
     struct bx_poll_deadline deadline;
-    int poll_timeout = options->timeout_ms > (unsigned int)INT_MAX ? INT_MAX : (int)options->timeout_ms;
-    bx_poll_deadline_init(&deadline, poll_timeout);
+    bx_poll_deadline_init(&deadline, timeout_ms);
 
     while (true) {
         struct pollfd pfd;
@@ -621,7 +636,7 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd,
             if (message.message_type != BX_DHCP_MESSAGE_OFFER || message.yiaddr.s_addr == INADDR_ANY)
                 continue;
         }
-        else if (message.server_id.s_addr != offer->server_id.s_addr ||
+        else if ((!rebinding && message.server_id.s_addr != offer->server_id.s_addr) ||
                  (message.message_type != BX_DHCP_MESSAGE_NAK &&
                   (message.message_type != BX_DHCP_MESSAGE_ACK || (message.yiaddr.s_addr != INADDR_ANY && message.yiaddr.s_addr != offer->yiaddr.s_addr)))) {
             continue;
@@ -646,73 +661,35 @@ static bool bx_dhcp_send_packet(int fd, const struct sockaddr_in* destination, c
     return true;
 }
 
-static void bx_dhcp_merge_lease(struct bx_dhcp_lease* lease, const struct bx_dhcp_message* offer, const struct bx_dhcp_message* ack) {
-    memset(lease, 0, sizeof(*lease));
-
-    if (ack->yiaddr.s_addr != htonl(INADDR_ANY)) {
-        lease->address = ack->yiaddr;
+static void bx_dhcp_merge_lease(struct bx_dhcp_message* ack, const struct bx_dhcp_message* offer) {
+    if (ack->yiaddr.s_addr == INADDR_ANY)
+        ack->yiaddr = offer->yiaddr;
+    if (!ack->have_subnet_mask) {
+        ack->subnet_mask = offer->subnet_mask;
+        ack->have_subnet_mask = offer->have_subnet_mask;
     }
-    else {
-        lease->address = offer->yiaddr;
+    if (!ack->have_router) {
+        ack->router = offer->router;
+        ack->have_router = offer->have_router;
     }
-
-    if (ack->have_server_id) {
-        lease->have_server_id = true;
-        lease->server_id = ack->server_id;
-    }
-    else if (offer->have_server_id) {
-        lease->have_server_id = true;
-        lease->server_id = offer->server_id;
-    }
-
-    if (ack->have_subnet_mask) {
-        lease->have_subnet_mask = true;
-        lease->subnet_mask = ack->subnet_mask;
-    }
-    else if (offer->have_subnet_mask) {
-        lease->have_subnet_mask = true;
-        lease->subnet_mask = offer->subnet_mask;
-    }
-
-    if (ack->have_router) {
-        lease->have_router = true;
-        lease->router = ack->router;
-    }
-    else if (offer->have_router) {
-        lease->have_router = true;
-        lease->router = offer->router;
-    }
-
-    if (ack->have_dns) {
-        lease->have_dns = true;
-        lease->dns = ack->dns;
-    }
-    else if (offer->have_dns) {
-        lease->have_dns = true;
-        lease->dns = offer->dns;
-    }
-
-    if (ack->have_lease_time) {
-        lease->have_lease_time = true;
-        lease->lease_time = ack->lease_time;
-    }
-    else if (offer->have_lease_time) {
-        lease->have_lease_time = true;
-        lease->lease_time = offer->lease_time;
+    if (!ack->have_dns) {
+        ack->dns = offer->dns;
+        ack->have_dns = offer->have_dns;
     }
 }
 
-static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct bx_dhcp_lease* lease_out, struct bx_diag_ctx* diag) {
-    unsigned char hwaddr[6];
-    if (!bx_dhcp_get_hwaddr(options->ifname, hwaddr, diag)) {
+static bool bx_dhcp_clock(uint64_t* now, struct bx_diag_ctx* diag) {
+    struct timespec ts;
+    uintmax_t ms;
+    if (clock_gettime(CLOCK_BOOTTIME, &ts) != 0 || !bx_time_timespec_to_milliseconds_uint(&ts, &ms) || ms > UINT64_MAX - (uint64_t)UINT32_MAX * 1000u) {
+        bx_diag(diag, "cannot read lease clock");
         return false;
     }
+    *now = (uint64_t)ms;
+    return true;
+}
 
-    int fd = bx_dhcp_open_socket(options, diag);
-    if (fd < 0) {
-        return false;
-    }
-
+static bool bx_dhcp_acquire_lease(int fd, const unsigned char hwaddr[6], const struct bx_dhcp_options* options, struct bx_dhcp_message* lease_out, uint64_t* started, struct bx_diag_ctx* diag) {
     bool success = false;
     unsigned char packet[BX_DHCP_PACKET_MAX_LEN];
 
@@ -734,7 +711,7 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
         }
 
         struct bx_dhcp_message offer;
-        enum bx_dhcp_wait_result wait_offer = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, NULL, &offer, diag);
+        enum bx_dhcp_wait_result wait_offer = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, NULL, false, (int)options->timeout_ms, &offer, diag);
         if (wait_offer == BX_DHCP_WAIT_TIMEOUT) {
             continue;
         }
@@ -747,12 +724,12 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
             bx_diag(diag, "internal error: failed to build DHCPREQUEST");
             break;
         }
-        if (!bx_dhcp_send_packet(fd, &destination, packet, request_len, diag)) {
+        if (!bx_dhcp_clock(started, diag) || !bx_dhcp_send_packet(fd, &destination, packet, request_len, diag)) {
             break;
         }
 
         struct bx_dhcp_message reply;
-        enum bx_dhcp_wait_result wait_reply = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, &offer, &reply, diag);
+        enum bx_dhcp_wait_result wait_reply = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, &offer, false, (int)options->timeout_ms, &reply, diag);
         if (wait_reply == BX_DHCP_WAIT_TIMEOUT) {
             continue;
         }
@@ -763,12 +740,15 @@ static bool bx_dhcp_acquire_lease(const struct bx_dhcp_options* options, struct 
             continue;
         }
 
-        bx_dhcp_merge_lease(lease_out, &offer, &reply);
+        bx_dhcp_merge_lease(&reply, &offer);
+        if (!reply.have_lease_time && options->script == NULL) {
+            reply.lease_time = offer.lease_time;
+            reply.have_lease_time = offer.have_lease_time;
+        }
+        *lease_out = reply;
         success = true;
         break;
     }
-
-    close(fd);
 
     if (!success && diag->exit_status == 0) {
         bx_diag(diag, "failed to acquire DHCP lease on '%s' after %u attempt(s)", options->ifname, options->retries);
@@ -787,9 +767,9 @@ static void bx_dhcp_format_address(const struct in_addr* addr, char* buffer, siz
     }
 }
 
-static void bx_dhcp_print_lease(const struct bx_dhcp_options* options, const struct bx_dhcp_lease* lease) {
+static void bx_dhcp_print_lease(const struct bx_dhcp_options* options, const struct bx_dhcp_message* lease) {
     char address_text[INET_ADDRSTRLEN];
-    bx_dhcp_format_address(&lease->address, address_text, sizeof(address_text));
+    bx_dhcp_format_address(&lease->yiaddr, address_text, sizeof(address_text));
 
     printf("INTERFACE=%s\n", options->ifname);
     printf("IP=%s\n", address_text);
@@ -823,6 +803,124 @@ static void bx_dhcp_print_lease(const struct bx_dhcp_options* options, const str
     }
 }
 
+struct bx_dhcp_event {
+    const struct bx_dhcp_options* options;
+    const struct bx_dhcp_message* lease;
+    const char* name;
+};
+
+static bool bx_dhcp_event_addr(const char* key, const struct in_addr* address) {
+    char text[INET_ADDRSTRLEN];
+    if (!address)
+        return unsetenv(key) == 0;
+    return inet_ntop(AF_INET, address, text, sizeof(text)) != NULL && setenv(key, text, 1) == 0;
+}
+
+static int bx_dhcp_exec_script(void* data) {
+    const struct bx_dhcp_event* event = data;
+    const struct bx_dhcp_message* lease = event->lease;
+    if (setenv("interface", event->options->ifname, 1) < 0 || !bx_dhcp_event_addr("ip", lease ? &lease->yiaddr : NULL) ||
+        !bx_dhcp_event_addr("subnet", lease && lease->have_subnet_mask ? &lease->subnet_mask : NULL) || !bx_dhcp_event_addr("router", lease && lease->have_router ? &lease->router : NULL) ||
+        !bx_dhcp_event_addr("dns", lease && lease->have_dns ? &lease->dns : NULL))
+        return 1;
+    execl(event->options->script, event->options->script, event->name, (char*)NULL);
+    perror(event->options->script);
+    return 1;
+}
+
+static bool bx_dhcp_notify(const struct bx_dhcp_options* options, const char* name, const struct bx_dhcp_message* lease, struct bx_diag_ctx* diag) {
+    struct bx_dhcp_event event = {options, lease, name};
+    int status;
+    if (bx_child_fork_callback_wait(bx_dhcp_exec_script, &event, BX_CHILD_SIGNALS_RESET_CAUGHT, &status) < 0) {
+        bx_diag(diag, "cannot run %s for %s: %s", options->script, name, strerror(errno));
+        return false;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        bx_diag(diag, "%s failed for %s (status %d)", options->script, name, WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
+        return false;
+    }
+    return true;
+}
+
+static bool bx_dhcp_sleep_until(uint64_t when, struct bx_diag_ctx* diag) {
+    struct timespec ts = {.tv_sec = (time_t)(when / 1000u), .tv_nsec = (long)((when % 1000u) * 1000000u)};
+    int error;
+    do {
+        error = clock_nanosleep(CLOCK_BOOTTIME, TIMER_ABSTIME, &ts, NULL);
+    } while (error == EINTR);
+    if (error)
+        bx_diag(diag, "lease timer: %s", strerror(error));
+    return error == 0;
+}
+
+/* Return to discovery on expiry or NAK. Never extend a deadline without an ACK. */
+static bool bx_dhcp_maintain(int fd, const unsigned char hwaddr[6], const struct bx_dhcp_options* options, struct bx_dhcp_message lease, uint64_t start, struct bx_diag_ctx* diag) {
+    const char* event = "bound";
+    for (;;) {
+        if (!lease.have_lease_time || !lease.lease_time) {
+            bx_diag(diag, "server did not grant a lease duration");
+            return true;
+        }
+        uint64_t duration = (uint64_t)lease.lease_time * 1000u;
+        uint64_t t1 = lease.t1 ? (uint64_t)lease.t1 * 1000u : duration / 2u;
+        uint64_t t2 = lease.t2 ? (uint64_t)lease.t2 * 1000u : duration * 7u / 8u;
+        if (t1 >= t2 || t2 >= duration) {
+            t1 = duration / 2u;
+            t2 = duration * 7u / 8u;
+        }
+        uint64_t now;
+        if (!bx_dhcp_clock(&now, diag))
+            return false;
+        if (lease.lease_time != UINT32_MAX && now >= start + duration)
+            return true;
+        if (!bx_dhcp_notify(options, event, &lease, diag))
+            return false;
+        if (lease.lease_time == UINT32_MAX) {
+            for (;;)
+                pause();
+        }
+        if (!bx_dhcp_sleep_until(start + t1, diag))
+            return false;
+        uint32_t xid = bx_dhcp_generate_xid();
+        unsigned char packet[BX_DHCP_PACKET_MAX_LEN];
+        size_t size = bx_dhcp_build_request(packet, sizeof(packet), xid, hwaddr, &lease.yiaddr, NULL);
+        if (!size) {
+            bx_diag(diag, "cannot build renewal request");
+            return false;
+        }
+        for (;;) {
+            if (!bx_dhcp_clock(&now, diag))
+                return false;
+            if (now >= start + duration)
+                return true;
+            bool rebind = now >= start + t2;
+            uint64_t limit = start + (rebind ? duration : t2);
+            uint64_t interval = limit - now;
+            if (interval > options->timeout_ms)
+                interval = options->timeout_ms;
+            struct sockaddr_in dest = {.sin_family = AF_INET, .sin_port = htons(options->server_port), .sin_addr = rebind ? options->server_addr : lease.server_id};
+            struct bx_dhcp_message reply;
+            if (bx_dhcp_send_packet(fd, &dest, packet, size, diag)) {
+                enum bx_dhcp_wait_result result = bx_dhcp_wait_for_message(fd, options, xid, hwaddr, &lease, rebind, (int)interval, &reply, diag);
+                if (result == BX_DHCP_WAIT_MESSAGE) {
+                    uint64_t received;
+                    if (!bx_dhcp_clock(&received, diag))
+                        return false;
+                    if (received >= start + duration || reply.message_type == BX_DHCP_MESSAGE_NAK)
+                        return true;
+                    bx_dhcp_merge_lease(&reply, &lease);
+                    lease = reply;
+                    start = now;
+                    event = "renew";
+                    break;
+                }
+            }
+            if (!bx_dhcp_sleep_until(now + interval, diag))
+                return false;
+        }
+    }
+}
+
 int bx_dhcp_main(int argc, char** argv) {
     struct bx_dhcp_options options;
     struct bx_diag_ctx diag = {
@@ -847,11 +945,29 @@ int bx_dhcp_main(int argc, char** argv) {
         return 0;
     }
 
-    struct bx_dhcp_lease lease;
-    if (!bx_dhcp_acquire_lease(&options, &lease, &diag)) {
-        return (diag.exit_status != 0) ? diag.exit_status : 1;
+    if (options.script && !bx_dhcp_notify(&options, "deconfig", NULL, &diag))
+        return 1;
+    for (;;) {
+        diag.exit_status = 0;
+        unsigned char hwaddr[6];
+        struct bx_dhcp_message lease;
+        uint64_t started;
+        int fd = bx_dhcp_get_hwaddr(options.ifname, hwaddr, &diag) ? bx_dhcp_open_socket(&options, &diag) : -1;
+        bool acquired = fd >= 0 && bx_dhcp_acquire_lease(fd, hwaddr, &options, &lease, &started, &diag);
+        if (!options.script) {
+            if (fd >= 0)
+                close(fd);
+            if (!acquired)
+                return 1;
+            bx_dhcp_print_lease(&options, &lease);
+            return 0;
+        }
+        bool retry = !acquired || bx_dhcp_maintain(fd, hwaddr, &options, lease, started, &diag);
+        if (fd >= 0)
+            close(fd);
+        if (acquired && !bx_dhcp_notify(&options, "deconfig", NULL, &diag))
+            return 1;
+        if (!retry || bx_poll_for_milliseconds(NULL, 0, (int)options.timeout_ms) < 0)
+            return 1;
     }
-
-    bx_dhcp_print_lease(&options, &lease);
-    return 0;
 }
