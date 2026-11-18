@@ -246,6 +246,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "flock",
+      "main": "bx_flock_main",
+      "capabilities": [
+        "filesystem-write"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "sync",
       "main": "bx_sync_main",
       "capabilities": [
