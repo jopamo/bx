@@ -5,6 +5,8 @@
 #include <getopt.h>
 #include <stdbool.h>
 #include <math.h>
+#include <errno.h>
+#include <float.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/args_common.h"
@@ -52,29 +54,23 @@ static bool seq_emit_range(
     double val = first;
     bool first_out = true;
 
-    if (inc > 0) {
-        while (val <= last + inc / 1000.0) {
-            if (!first_out && !bx_line_writer_puts(writer, separator)) {
-                return false;
-            }
-            if (!seq_emit_number(writer, format, val)) {
-                return false;
-            }
-            first_out = false;
-            val += inc;
+    if (inc > 0 ? first > last : first < last)
+        return true;
+    double bound = last + inc / 1000.0;
+    while (inc > 0 ? val <= bound : val >= bound) {
+        if (!first_out && !bx_line_writer_puts(writer, separator))
+            return false;
+        if (!seq_emit_number(writer, format, val))
+            return false;
+        first_out = false;
+        if (inc > 0 ? val >= last : val <= last)
+            break;
+        double next = val + inc;
+        if (next == val) {
+            fprintf(stderr, "seq: increment too small to advance\n");
+            return false;
         }
-    }
-    else {
-        while (val >= last + inc / 1000.0) {
-            if (!first_out && !bx_line_writer_puts(writer, separator)) {
-                return false;
-            }
-            if (!seq_emit_number(writer, format, val)) {
-                return false;
-            }
-            first_out = false;
-            val += inc;
-        }
+        val = next;
     }
 
     if (first_out) {
@@ -131,24 +127,27 @@ int bx_seq_main(int argc, char** argv) {
         }
     }
 
-    double first = 1, inc = 1, last;
     int num_args = argc - optind;
-    if (num_args == 1) {
-        last = atof(argv[optind]);
-    }
-    else if (num_args == 2) {
-        first = atof(argv[optind]);
-        last = atof(argv[optind + 1]);
-    }
-    else if (num_args == 3) {
-        first = atof(argv[optind]);
-        inc = atof(argv[optind + 1]);
-        last = atof(argv[optind + 2]);
-    }
-    else {
+    if (num_args < 1 || num_args > 3) {
         bx_cli_diag_missing_operand(&diag);
         return 1;
     }
+    double values[3];
+    for (int i = 0; i < num_args; i++) {
+        char* end;
+        const char* arg = argv[optind + i];
+        errno = 0;
+        values[i] = strtod(arg, &end);
+        /* Beyond this boundary, adjacent integer operands can parse alike. */
+        if (end == arg || *end || errno == ERANGE || !isfinite(values[i]) ||
+            fabs(values[i]) >= ldexp(1.0, DBL_MANT_DIG)) {
+            bx_diag(&diag, "invalid or out-of-range number: '%s'", arg);
+            return 1;
+        }
+    }
+    double first = num_args == 1 ? 1 : values[0];
+    double inc = num_args == 3 ? values[1] : 1;
+    double last = values[num_args - 1];
 
     if (inc == 0) {
         bx_diag(&diag, "invalid increment '0'");
@@ -166,6 +165,8 @@ int bx_seq_main(int argc, char** argv) {
     if (format == NULL) {
         if (max_prec > 0)
             snprintf(fmt_buf, sizeof(fmt_buf), "%%.%df", max_prec);
+        else if (trunc(first) == first && trunc(inc) == inc && trunc(last) == last)
+            snprintf(fmt_buf, sizeof(fmt_buf), "%%.0f");
         else
             snprintf(fmt_buf, sizeof(fmt_buf), "%%g");
         format = fmt_buf;
