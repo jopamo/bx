@@ -4,12 +4,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct bx_rsync_meta;
 struct sess;
 struct flist;
 struct ident;
 
 int bx_rsync_meta_negotiate(struct sess *, int, int);
-int bx_rsync_meta_send(struct sess *, int, const struct flist *,
+int bx_rsync_meta_prepare(struct sess *, const struct flist *, struct bx_rsync_meta **);
+void bx_rsync_meta_free(struct bx_rsync_meta *);
+int bx_rsync_meta_send(struct sess *, int, const struct bx_rsync_meta *,
     struct ident **, size_t *, struct ident **, size_t *);
 int bx_rsync_meta_recv(struct sess *, int, struct flist *);
 int bx_rsync_meta_remap(struct sess *, const struct ident *, size_t,

@@ -493,13 +493,13 @@ flist_copy_stat(struct flist *f, const struct stat *st)
 	f->st.nlink = st->st_nlink;
 }
 
-void
-flist_free(struct flist *f, size_t sz)
+static void
+flist_free_entries(struct flist *f, size_t sz)
 {
 	size_t	 i;
 	bool	 sender;
 
-	if (f == NULL)
+	if (sz == 0 || f == NULL)
 		return;
 
 	sender = f->fmode == FARGS_SENDER;
@@ -513,6 +513,12 @@ flist_free(struct flist *f, size_t sz)
 		free(f[i].path);
 		free(f[i].link);
 	}
+}
+
+void
+flist_free(struct flist *f, size_t sz)
+{
+	flist_free_entries(f, sz);
 	free(f);
 }
 
@@ -523,10 +529,12 @@ flist_free(struct flist *f, size_t sz)
  * Return zero on failure, non-zero on success.
  */
 int
-flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
-    size_t flsz)
+flist_send(struct sess *sess, int fdin, int fdout, struct fl *list)
 {
 	size_t		 i, sz, gidsz = 0, uidsz = 0, sendidsz;
+	size_t		 sent = 0;
+	struct flist	*fl = list->flp;
+	struct bx_rsync_meta *meta = NULL;
 	uint16_t	 flag;
 	const struct flist *f;
 	const char	*fn;
@@ -535,11 +543,9 @@ flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
 
 	/* Double-check that we've no pending multiplexed data. */
 
-	LOG3("sending file metadata list: %zu", flsz);
+	LOG3("sending file metadata list: %zu", list->sz);
 
-	sess->sender_flsz = flsz;
-
-	for (i = 0; i < flsz; i++) {
+	for (i = 0; i < list->sz; i++) {
 		f = &fl[i];
 		fn = f->wpath;
 		sz = strlen(f->wpath);
@@ -557,6 +563,22 @@ flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
 		    io_read_check(sess, fdin) &&
 		    !io_read_flush(sess, fdin)) {
 			ERRX1("io_read_flush");
+			goto out;
+		}
+
+		/*
+		 * A record can't be skipped once its first byte is on the wire.
+		 * Don't omit a directory: later records may depend on it.
+		 */
+		if (!bx_rsync_meta_prepare(sess, f, &meta)) {
+			if (!S_ISDIR(f->st.mode) && (errno == ESTALE ||
+			    errno == ENOENT || errno == ENOTDIR ||
+			    errno == ENODATA || errno == ERANGE)) {
+				WARN("%s: skipping changed or vanished source", f->path);
+				sess->total_errors++;
+				continue;
+			}
+			ERR("%s: cannot capture BX/29.5 metadata", f->path);
 			goto out;
 		}
 
@@ -758,10 +780,25 @@ flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
 			ERRX1("platform sent");
 			goto out;
 		}
-		if (!bx_rsync_meta_send(sess, fdout, f, &uids, &uidsz,
-		    &gids, &gidsz))
+		if (!bx_rsync_meta_send(sess, fdout, meta, &uids, &uidsz,
+		    &gids, &gidsz)) {
+			ERRX("%s: cannot send BX/29.5 metadata", f->path);
 			goto out;
+		}
+		bx_rsync_meta_free(meta);
+		meta = NULL;
+
+		/* Requests index emitted records, not the original scan. */
+		if (sent != i) {
+			struct flist skipped = fl[sent];
+			fl[sent] = fl[i];
+			fl[i] = skipped;
+		}
+		sent++;
 	}
+	if (sent < list->sz)
+		flist_free_entries(&fl[sent], list->sz - sent);
+	sess->sender_flsz = list->sz = sent;
 
 	/* Signal end of file list. */
 
@@ -802,6 +839,7 @@ flist_send(struct sess *sess, int fdin, int fdout, const struct flist *fl,
 
 	rc = 1;
 out:
+	bx_rsync_meta_free(meta);
 	idents_free(gids, gidsz);
 	idents_free(uids, uidsz);
 	return rc;

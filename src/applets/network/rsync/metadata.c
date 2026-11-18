@@ -156,8 +156,8 @@ acl_set_mode(struct meta_attr *a, mode_t mode)
 	}
 }
 
-static void
-meta_free(struct bx_rsync_meta *m)
+void
+bx_rsync_meta_free(struct bx_rsync_meta *m)
 {
 	if (m == NULL)
 		return;
@@ -175,7 +175,7 @@ bx_rsync_meta_cleanup(struct sess *sess)
 	while (sess->metadata_pool != NULL) {
 		struct bx_rsync_meta *m = sess->metadata_pool;
 		sess->metadata_pool = m->next;
-		meta_free(m);
+		bx_rsync_meta_free(m);
 	}
 }
 
@@ -448,12 +448,12 @@ bx_rsync_meta_pin(int root, const struct flist *f, const char *path)
 }
 
 int
-bx_rsync_meta_send(struct sess *sess, int fd, const struct flist *f,
-    struct ident **uids, size_t *uidsz, struct ident **gids, size_t *gidsz)
+bx_rsync_meta_prepare(struct sess *sess, const struct flist *f,
+    struct bx_rsync_meta **result)
 {
 	struct bx_rsync_meta *m;
-	int rc = 0;
 
+	*result = NULL;
 	if (!sess->opts->bx_protocol)
 		return 1;
 	m = calloc(1, sizeof(*m));
@@ -462,8 +462,9 @@ bx_rsync_meta_send(struct sess *sess, int fd, const struct flist *f,
 #ifdef __linux__
 	struct meta_file file;
 	struct stat st;
+	int rc = 0;
 	if (!file_open(&file, -1, AT_FDCWD, f->path, f->st.mode, 1))
-		goto out;
+		goto fail;
 	if (fstat(file.fd, &st) != -1) {
 		if (st.st_dev != (dev_t)f->st.device ||
 		    st.st_ino != (ino_t)f->st.inode)
@@ -473,19 +474,31 @@ bx_rsync_meta_send(struct sess *sess, int fd, const struct flist *f,
 	}
 	file_close(&file);
 	if (!rc)
-		goto out;
-	rc = 0;
+		goto fail;
 #else
 	errno = ENOTSUP;
-	goto out;
+	goto fail;
 #endif
 	if (m->bytes + sizeof(*m) > META_SESSION_MAX - sess->metadata_bytes) {
 		errno = E2BIG;
-		goto out;
+		goto fail;
 	}
 	sess->metadata_bytes += m->bytes + sizeof(*m);
+	*result = m;
+	return 1;
+fail:
+	bx_rsync_meta_free(m);
+	return 0;
+}
+
+int
+bx_rsync_meta_send(struct sess *sess, int fd, const struct bx_rsync_meta *m,
+    struct ident **uids, size_t *uidsz, struct ident **gids, size_t *gidsz)
+{
+	if (m == NULL)
+		return 1;
 	if (!io_write_uint(sess, fd, (uint32_t)m->count))
-		goto out;
+		return 0;
 	for (size_t i = 0; i < m->count; i++) {
 		struct meta_attr *a = &m->attrs[i];
 		size_t len = strlen(a->name);
@@ -496,21 +509,16 @@ bx_rsync_meta_send(struct sess *sess, int fd, const struct flist *f,
 				int32_t id = (int32_t)get32(a->value + j + 4);
 				if ((tag == 2 && !idents_add(0, uids, uidsz, id)) ||
 				    (tag == 8 && !idents_add(1, gids, gidsz, id)))
-					goto out;
+					return 0;
 			}
 		}
 		if (!io_write_uint(sess, fd, (uint32_t)len) ||
 		    !io_write_uint(sess, fd, (uint32_t)a->size) ||
 		    !io_write_buf(sess, fd, a->name, len) ||
 		    !io_write_buf(sess, fd, a->value, a->size))
-			goto out;
+			return 0;
 	}
-	rc = 1;
-out:
-	if (!rc)
-		ERR("%s: cannot send BX/29.5 metadata", f->path);
-	meta_free(m);
-	return rc;
+	return 1;
 }
 
 int
@@ -554,7 +562,7 @@ bx_rsync_meta_recv(struct sess *sess, int fd, struct flist *f)
 	return 1;
 fail:
 	ERRX("%s: invalid or oversized BX/29.5 metadata", f->path);
-	meta_free(m);
+	bx_rsync_meta_free(m);
 	return 0;
 }
 
@@ -624,7 +632,7 @@ bx_rsync_meta_apply(struct sess *sess, int fd, int root, const struct flist *f,
 	if (have == NULL)
 		goto fail;
 	if (!file_open(&file, fd, root, path, f->st.mode, 0)) {
-		meta_free(have);
+		bx_rsync_meta_free(have);
 		goto fail;
 	}
 	/* user.* access requires read/write permission even for the owner. */
@@ -646,7 +654,7 @@ bx_rsync_meta_apply(struct sess *sess, int fd, int root, const struct flist *f,
 		errno = saved;
 close_file:
 	file_close(&file);
-	meta_free(have);
+	bx_rsync_meta_free(have);
 	if (rc)
 		return 1;
 #else
@@ -673,7 +681,7 @@ bx_rsync_meta_compare(struct sess *sess, int root, const struct flist *f,
 	if (have == NULL)
 		goto fail;
 	if (!file_open(&file, -1, root, path, f->st.mode, 0)) {
-		meta_free(have);
+		bx_rsync_meta_free(have);
 		goto fail;
 	}
 	rc = meta_capture(have, &file, sess->metadata_flags, f->st.mode);
@@ -687,7 +695,7 @@ bx_rsync_meta_compare(struct sess *sess, int root, const struct flist *f,
 					*flags |= is_acl(a->name) ? IFLAG_ACL : IFLAG_XATTR;
 			}
 	}
-	meta_free(have);
+	bx_rsync_meta_free(have);
 	if (rc)
 		return 1;
 #else

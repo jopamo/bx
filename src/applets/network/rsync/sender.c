@@ -1314,22 +1314,22 @@ rsync_sender(struct sess *sess, int fdin,
 	gettimeofday(&fb_after, NULL);
 	timersub(&fb_after, &fb_before, &tv);
 	sess->flist_build = (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
-	sess->total_files = fl.sz;
 
 	/*
 	 * Then the file list in any mode.
-	 * Finally, the IO error (always zero for us).
+	 * Finally, the I/O error flag used by the receiver to gate deletions.
 	 */
 
 	gettimeofday(&fx_before, NULL);
 	flist_bytes = sess->total_write;
-	if (!flist_send(sess, fdin, fdout, fl.flp, fl.sz)) {
+	if (!flist_send(sess, fdin, fdout, &fl)) {
 		ERRX1("flist_send");
 		goto out;
 	} else if (!io_write_int(sess, fdout, sess->total_errors > 0 ? 1 : 0)) {
 		ERRX1("io_write_int");
 		goto out;
 	}
+	sess->total_files = fl.sz;
 
 	gettimeofday(&fx_after, NULL);
 	timersub(&fx_after, &fx_before, &tv);

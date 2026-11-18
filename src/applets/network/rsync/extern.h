@@ -970,7 +970,7 @@ int	flist_del(struct sess *, int, const struct flist *, size_t);
 int	flist_gen(struct sess *, size_t, char **, struct fl *);
 void	flist_free(struct flist *, size_t);
 int	flist_recv(struct sess *, int, int, struct flist **, size_t *);
-int	flist_send(struct sess *, int, int, const struct flist *, size_t);
+int	flist_send(struct sess *, int, int, struct fl *);
 int	flist_gen_dels(struct sess *, const char *, struct flist **, size_t *,
 	    const struct flist *, size_t);
 int	flist_add_del(struct sess *, const char *, size_t, struct flist **,
