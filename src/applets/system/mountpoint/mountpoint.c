@@ -7,6 +7,7 @@
 
 #include "applets.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
 #include "lib/cli_common.h"
 #include "lib/statx_compat.h"
 #include "lib/mount_table.h"
@@ -83,7 +84,7 @@ static int is_mountpoint(const char* path) {
     }
     else if (errno != ENOSYS && errno != EOPNOTSUPP && errno != EINVAL)
         return -1;
-    int fd = open(path, O_PATH | O_CLOEXEC);
+    int fd = bx_fd_open_cloexec(path, O_PATH, 0);
     if (fd < 0)
         return -1;
     int result = lookup_mount(fd);
