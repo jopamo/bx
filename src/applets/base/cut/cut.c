@@ -6,6 +6,8 @@
 #include <string.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <locale.h>
+#include <wchar.h>
 #include <stdint.h>
 #include <unistd.h>
 
@@ -408,6 +410,29 @@ static bool bx_cut_line_bytes(
     return bx_cut_write_record_delimiter(writer, options, diag);
 }
 
+static bool bx_cut_line_chars(const char* line, size_t len, struct bx_cut_options* options,
+                              struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
+    mbstate_t state = {0};
+    size_t range = 0;
+    for (size_t offset = 0, pos = 1; offset < len; pos++) {
+        size_t width = mbrlen(line + offset, len - offset, &state);
+        if (width == (size_t)-1 || width == (size_t)-2) {
+            /* Preserve an ill-formed byte as one position and resynchronize. */
+            memset(&state, 0, sizeof(state));
+            width = 1;
+        }
+        else if (!width)
+            width = 1;
+        while (range < options->num_ranges && pos > options->ranges[range].end)
+            range++;
+        bool selected = range < options->num_ranges && pos >= options->ranges[range].start;
+        if (selected != options->complement && !bx_cut_write(writer, line + offset, width, diag))
+            return false;
+        offset += width;
+    }
+    return bx_cut_write_record_delimiter(writer, options, diag);
+}
+
 static bool cut_line(
     char* line,
     ssize_t len,
@@ -420,8 +445,9 @@ static bool cut_line(
     }
     size_t content_len = (size_t)len;
 
-    if (options->mode == CUT_MODE_BYTES || options->mode == CUT_MODE_CHARS) {
-        // Character mode is same as byte mode for now (UTF-8 support not implemented)
+    if (options->mode == CUT_MODE_CHARS && MB_CUR_MAX > 1)
+        return bx_cut_line_chars(line, content_len, options, writer, diag);
+    if (options->mode != CUT_MODE_FIELDS) {
         return bx_cut_line_bytes(line, content_len, options, writer, diag);
     }
 
@@ -483,6 +509,12 @@ int bx_cut_main(int argc, char** argv) {
     if (options.show_version) {
         bx_cli_print_version(options.progname);
         return 0;
+    }
+
+    if (options.mode == CUT_MODE_CHARS && !setlocale(LC_CTYPE, "")) {
+        bx_diag(&diag, "cannot select character locale");
+        bx_cut_free_ranges(&options);
+        return 1;
     }
 
     int num_files = argc - first_operand;
