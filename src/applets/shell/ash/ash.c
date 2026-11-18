@@ -3057,7 +3057,7 @@ static int ash_run_invocation(const struct ash_invocation* invocation, const str
     }
     else if (startup == ASH_STARTUP_CONTINUE &&
              invocation->input == ASH_STARTUP_SCRIPT_FILE) {
-        FILE* script = fopen(invocation->script_path, "r");
+        FILE* script = ash_input_open_script(invocation->script_path);
         if (script == NULL) {
             ash_exec_error(&shell, invocation->script_path, errno);
             status = ash_finish_execution(&shell, 1);

@@ -19,6 +19,7 @@
 #include "applets/shell/ash/traps.h"
 #include "applets/shell/ash/variables.h"
 #include "lib/text_buffer.h"
+#include "lib/fd_ops.h"
 
 enum ash_input_boundary {
     ASH_INPUT_BOUNDARY_PHYSICAL_LINE = 0,
@@ -414,6 +415,30 @@ int ash_input_execute_string(
     ash_input_pop(shell);
     shell->exit_trap_defer_depth -= sourced ? 1u : 0u;
     return status;
+}
+
+FILE* ash_input_open_script(const char* path) {
+    int fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
+    if (fd < 0)
+        return NULL;
+    /* Leave the portable shell redirection range (0..9) to the script. */
+    if (fd < 10) {
+        int moved = bx_fd_dup_cloexec_min(fd, 10);
+        int error = errno;
+        close(fd);
+        if (moved < 0) {
+            errno = error;
+            return NULL;
+        }
+        fd = moved;
+    }
+    FILE* stream = fdopen(fd, "r");
+    if (!stream) {
+        int error = errno;
+        close(fd);
+        errno = error;
+    }
+    return stream;
 }
 
 int ash_input_execute_stream(

@@ -10,6 +10,7 @@
 struct ash_shell;
 
 const char* ash_input_default_prompt(void);
+FILE* ash_input_open_script(const char* path);
 
 /*
  * Execute one source as the active top of the context-owned input stack.

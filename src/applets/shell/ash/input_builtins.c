@@ -99,7 +99,7 @@ static FILE* ash_source_open(
 ) {
     *searched_path_out = NULL;
     if (strchr(operand, '/') != NULL) {
-        return fopen(operand, "r");
+        return ash_input_open_script(operand);
     }
 
     const char* path = ash_var_get(shell, "PATH");
@@ -123,7 +123,7 @@ static FILE* ash_source_open(
             return NULL;
         }
 
-        FILE* stream = fopen(candidate, "r");
+        FILE* stream = ash_input_open_script(candidate);
         if (stream != NULL) {
             *searched_path_out = candidate;
             return stream;

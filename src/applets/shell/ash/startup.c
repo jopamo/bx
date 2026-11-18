@@ -91,7 +91,7 @@ static enum ash_startup_file_result ash_startup_execute_file(
     struct ash_shell* shell,
     const char* path
 ) {
-    FILE* stream = fopen(path, "r");
+    FILE* stream = ash_input_open_script(path);
     if (stream == NULL) {
         int error = errno;
         if (error == ENOMEM) {
