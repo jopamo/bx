@@ -71,6 +71,13 @@ struct bx_dhcp_options {
     struct in_addr server_addr;
 };
 
+/* Repeated list options share the packet's total option budget. */
+#define BX_DHCP_MAX_ADDRS ((BX_DHCP_PACKET_MAX_LEN - BX_DHCP_PACKET_MIN_LEN) / sizeof(struct in_addr))
+struct bx_dhcp_addresses {
+    size_t count;
+    struct in_addr values[BX_DHCP_MAX_ADDRS];
+};
+
 struct bx_dhcp_message {
     uint8_t message_type;
     uint32_t xid;
@@ -79,10 +86,7 @@ struct bx_dhcp_message {
     struct in_addr server_id;
     bool have_subnet_mask;
     struct in_addr subnet_mask;
-    bool have_router;
-    struct in_addr router;
-    bool have_dns;
-    struct in_addr dns;
+    struct bx_dhcp_addresses router, dns;
     bool have_lease_time;
     uint32_t lease_time;
     uint32_t t1, t2;
@@ -535,17 +539,15 @@ static bool bx_dhcp_parse_packet(const unsigned char* packet, size_t packet_len,
                 }
                 break;
             case BX_DHCP_OPTION_ROUTER:
-                if (option_len >= 4u) {
-                    memcpy(&message_out->router.s_addr, option_data, 4u);
-                    message_out->have_router = true;
-                }
+            case BX_DHCP_OPTION_DNS: {
+                struct bx_dhcp_addresses* list = code == BX_DHCP_OPTION_ROUTER ? &message_out->router : &message_out->dns;
+                size_t n = option_len / sizeof(struct in_addr);
+                if (!n || option_len % sizeof(struct in_addr) || n > BX_DHCP_MAX_ADDRS - list->count)
+                    return false;
+                memcpy(list->values + list->count, option_data, option_len);
+                list->count += n;
                 break;
-            case BX_DHCP_OPTION_DNS:
-                if (option_len >= 4u) {
-                    memcpy(&message_out->dns.s_addr, option_data, 4u);
-                    message_out->have_dns = true;
-                }
-                break;
+            }
             case BX_DHCP_OPTION_T1:
             case BX_DHCP_OPTION_T2:
                 if (option_len == 4u) {
@@ -668,14 +670,10 @@ static void bx_dhcp_merge_lease(struct bx_dhcp_message* ack, const struct bx_dhc
         ack->subnet_mask = offer->subnet_mask;
         ack->have_subnet_mask = offer->have_subnet_mask;
     }
-    if (!ack->have_router) {
+    if (!ack->router.count)
         ack->router = offer->router;
-        ack->have_router = offer->have_router;
-    }
-    if (!ack->have_dns) {
+    if (!ack->dns.count)
         ack->dns = offer->dns;
-        ack->have_dns = offer->have_dns;
-    }
 }
 
 static bool bx_dhcp_clock(uint64_t* now, struct bx_diag_ctx* diag) {
@@ -786,15 +784,15 @@ static void bx_dhcp_print_lease(const struct bx_dhcp_options* options, const str
         printf("SUBNET=%s\n", subnet_text);
     }
 
-    if (lease->have_router) {
+    if (lease->router.count) {
         char router_text[INET_ADDRSTRLEN];
-        bx_dhcp_format_address(&lease->router, router_text, sizeof(router_text));
+        bx_dhcp_format_address(lease->router.values, router_text, sizeof(router_text));
         printf("ROUTER=%s\n", router_text);
     }
 
-    if (lease->have_dns) {
+    if (lease->dns.count) {
         char dns_text[INET_ADDRSTRLEN];
-        bx_dhcp_format_address(&lease->dns, dns_text, sizeof(dns_text));
+        bx_dhcp_format_address(lease->dns.values, dns_text, sizeof(dns_text));
         printf("DNS=%s\n", dns_text);
     }
 
@@ -816,12 +814,27 @@ static bool bx_dhcp_event_addr(const char* key, const struct in_addr* address) {
     return inet_ntop(AF_INET, address, text, sizeof(text)) != NULL && setenv(key, text, 1) == 0;
 }
 
+static bool bx_dhcp_event_addrs(const char* key, const struct bx_dhcp_addresses* list) {
+    if (!list || !list->count)
+        return unsetenv(key) == 0;
+    char text[BX_DHCP_MAX_ADDRS * INET_ADDRSTRLEN];
+    char* end = text;
+    for (size_t i = 0; i < list->count; ++i) {
+        if (i)
+            *end++ = ' ';
+        if (!inet_ntop(AF_INET, &list->values[i], end, INET_ADDRSTRLEN))
+            return false;
+        end += strlen(end);
+    }
+    return setenv(key, text, 1) == 0;
+}
+
 static int bx_dhcp_exec_script(void* data) {
     const struct bx_dhcp_event* event = data;
     const struct bx_dhcp_message* lease = event->lease;
     if (setenv("interface", event->options->ifname, 1) < 0 || !bx_dhcp_event_addr("ip", lease ? &lease->yiaddr : NULL) ||
-        !bx_dhcp_event_addr("subnet", lease && lease->have_subnet_mask ? &lease->subnet_mask : NULL) || !bx_dhcp_event_addr("router", lease && lease->have_router ? &lease->router : NULL) ||
-        !bx_dhcp_event_addr("dns", lease && lease->have_dns ? &lease->dns : NULL))
+        !bx_dhcp_event_addr("subnet", lease && lease->have_subnet_mask ? &lease->subnet_mask : NULL) || !bx_dhcp_event_addrs("router", lease ? &lease->router : NULL) ||
+        !bx_dhcp_event_addrs("dns", lease ? &lease->dns : NULL))
         return 1;
     execl(event->options->script, event->options->script, event->name, (char*)NULL);
     perror(event->options->script);
