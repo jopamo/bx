@@ -2,11 +2,14 @@
 
 #include <errno.h>
 #include <getopt.h>
+#include <linux/capability.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/reboot.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -18,6 +21,8 @@ struct bx_reboot_options {
     const char* progname;
     const char* action_text;
     int action_command;
+    int init_signal;
+    bool force;
     bool show_help;
     bool show_version;
 };
@@ -25,14 +30,17 @@ struct bx_reboot_options {
 static void bx_reboot_set_action(struct bx_reboot_options* options) {
     options->action_text = "reboot";
     options->action_command = RB_AUTOBOOT;
+    options->init_signal = SIGTERM;
 
     if (strcmp(options->progname, "halt") == 0) {
         options->action_text = "halt";
         options->action_command = RB_HALT_SYSTEM;
+        options->init_signal = SIGUSR1;
     }
     else if (strcmp(options->progname, "poweroff") == 0) {
         options->action_text = "power off";
         options->action_command = RB_POWER_OFF;
+        options->init_signal = SIGUSR2;
     }
 }
 
@@ -48,6 +56,7 @@ static void bx_reboot_print_help(FILE* stream, const char* progname) {
         fprintf(stream, "Request a system reboot.\n");
     }
     fprintf(stream, "\n");
+    fprintf(stream, "  -f, --force    bypass init and request the kernel action directly\n");
     fprintf(stream, "  -h, --help     display this help and exit\n");
     fprintf(stream, "  -V, --version  output version information and exit\n");
 }
@@ -88,12 +97,25 @@ static int bx_reboot_perform(const struct bx_reboot_options* options) {
             break;
     }
 
+    if (!options->force) {
+        /* Signaling init must not grant shutdown to callers without CAP_SYS_BOOT. */
+        struct __user_cap_header_struct header = {.version = _LINUX_CAPABILITY_VERSION_3};
+        struct __user_cap_data_struct caps[_LINUX_CAPABILITY_U32S_3];
+        if (syscall(SYS_capget, &header, caps) < 0)
+            return -1;
+        if (!(caps[CAP_TO_INDEX(CAP_SYS_BOOT)].effective & CAP_TO_MASK(CAP_SYS_BOOT))) {
+            errno = EPERM;
+            return -1;
+        }
+        return kill(1, options->init_signal);
+    }
     sync();
     return reboot(options->action_command);
 }
 
 static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
+        {"force", no_argument, NULL, 'f'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {NULL, 0, NULL, 0},
@@ -107,12 +129,15 @@ static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_opti
     bx_args_getopt_reset();
 
     while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+hV", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+fhV", long_options, NULL);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'f':
+                options->force = true;
+                break;
             case 'h':
                 options->show_help = true;
                 return true;
