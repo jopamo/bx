@@ -392,6 +392,17 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "unshare",
+      "main": "bx_unshare_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution",
+        "privilege-sensitive",
+        "filesystem-write"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "dhcp",
       "main": "bx_dhcp_main",
       "capabilities": [
