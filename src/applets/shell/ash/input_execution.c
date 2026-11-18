@@ -280,6 +280,26 @@ static int ash_input_execute_current(
             extending_logical_input ?
                 &physical_line :
                 &logical_input;
+        if (prompt && ash_trap_signal_wait_readable(shell, fileno(shell->input_stack->source.file.stream)) < 0) {
+            if (errno == EINTR) {
+                char* action = NULL;
+                if (ash_trap_signal_prepare(shell, &action)) {
+                    /* Top-level interactive signal traps are not user-installable. */
+                    assert(action == NULL);
+                    if (ash_control_consume_unit_discard(shell, &status)) {
+                        ash_control_publish_status(shell, status);
+                        ash_input_parser_clear(&parser);
+                        bx_text_buffer_clear(&logical_input);
+                        pending_origin = (struct ash_source_location){0};
+                        fputc('\n', stderr);
+                    }
+                    continue;
+                }
+            }
+            ash_exec_error(shell, "input wait", errno);
+            status = 1;
+            break;
+        }
         ssize_t read_length = ash_input_read_line(
             shell,
             read_buffer

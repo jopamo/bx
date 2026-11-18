@@ -24,6 +24,7 @@ struct ash_signal_traps {
     struct bx_signal_pending* pending;
     bool restore_blocked_child;
     bool restore_child_action;
+    bool interactive_interrupt;
 };
 
 static bool ash_signal_traps_invariants(const struct ash_signal_traps* signals) {
@@ -195,11 +196,20 @@ int ash_traps_enter_signals(struct ash_shell* shell) {
         return errno;
     bool blocked = sigismember(&mask, SIGCHLD) == 1;
     bool auto_reap = current.sa_handler == SIG_IGN || (current.sa_flags & SA_NOCLDWAIT) != 0;
-    if (!blocked && !auto_reap)
+    bool interactive = ash_shell_policy_has(&shell->policy, ASH_SHELL_POLICY_INTERACTIVE);
+    if (!blocked && !auto_reap && !interactive)
         return 0;
     int error = ash_trap_signals_init(shell);
     if (error != 0)
         return error;
+    struct ash_signal_traps* signals = shell->traps->signals;
+    if (interactive && !signals->interactive_interrupt && signals->entries[SIGINT].original.sa_handler == SIG_DFL) {
+        if (signals->pending == NULL && (signals->pending = bx_signal_pending_create()) == NULL)
+            return ENOMEM;
+        if (bx_signal_pending_set(signals->pending, SIGINT, NULL) < 0)
+            return errno;
+        signals->interactive_interrupt = true;
+    }
     if (auto_reap) {
         struct sigaction defaults = {.sa_handler = SIG_DFL};
         sigemptyset(&defaults.sa_mask);
@@ -303,6 +313,10 @@ bool ash_trap_signal_prepare(struct ash_shell* shell, char** action) {
     if (number == 0)
         return true;
     struct ash_signal_trap* entry = &table->signals->entries[number];
+    if (number == SIGINT && table->signals->interactive_interrupt) {
+        ash_control_discard_unit(shell, 128 + SIGINT);
+        return true;
+    }
     assert(entry->enabled && entry->action != NULL);
     *action = strdup(entry->action);
     if (*action == NULL)
@@ -342,6 +356,7 @@ void ash_traps_detach_after_fork(struct ash_shell* shell) {
         if (shell->traps->signals != NULL) {
             struct ash_signal_traps* signals = shell->traps->signals;
             bx_signal_pending_detach_after_fork(signals->pending);
+            signals->interactive_interrupt = false;
             signals->restore_blocked_child = false;
             signals->restore_child_action = false;
             for (int number = 1; number < NSIG; number++) {
@@ -363,7 +378,8 @@ void ash_traps_destroy(struct ash_shell* shell) {
         if (signals != NULL) {
             for (int number = 1; number < NSIG; number++) {
                 struct ash_signal_trap* entry = &signals->entries[number];
-                if (entry->valid && (entry->enabled || entry->ignored) && entry->original.sa_handler != SIG_IGN && bx_signal_pending_set(signals->pending, number, &entry->original) != 0) {
+                bool changed = entry->enabled || entry->ignored || (number == SIGINT && signals->interactive_interrupt);
+                if (entry->valid && changed && entry->original.sa_handler != SIG_IGN && bx_signal_pending_set(signals->pending, number, &entry->original) != 0) {
                     ash_exec_error(shell, "trap reset", errno);
                 }
                 free(entry->action);
