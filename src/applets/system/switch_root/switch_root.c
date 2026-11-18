@@ -1,6 +1,11 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <linux/magic.h>
+#include <linux/openat2.h>
+#include <sys/statfs.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -17,6 +22,9 @@
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/path_ops.h"
+#include "lib/open_resolve.h"
+#include "lib/statx_compat.h"
+#include "lib/fd_ops.h"
 #include "applets/system/switch_root/switch_root.h"
 
 struct bx_switch_root_options {
@@ -116,6 +124,14 @@ static bool bx_switch_root_is_root_path(const char* path) {
 }
 
 static bool bx_switch_root_path_is_mountpoint(const char* path, bool* is_mountpoint_out, struct bx_diag_ctx* diag, const char* label) {
+#ifdef STATX_ATTR_MOUNT_ROOT
+    struct statx info;
+    if (statx(AT_FDCWD, path, 0, STATX_TYPE, &info) == 0 &&
+        (info.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT)) {
+        *is_mountpoint_out = (info.stx_attributes & STATX_ATTR_MOUNT_ROOT) != 0;
+        return true;
+    }
+#endif
     struct stat st;
     if (stat(path, &st) != 0) {
         bx_diag(diag, "cannot stat %s '%s': %s", label, path, strerror(errno));
@@ -311,7 +327,7 @@ static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const 
     }
 
     struct stat target_st;
-    if (stat(target_relpath, &target_st) != 0) {
+    if (lstat(target_relpath, &target_st) != 0) {
         bx_diag(diag, "NEW_ROOT '%s' is missing required directory for '%s': %s", new_root, source_path, strerror(errno));
         return false;
     }
@@ -326,6 +342,89 @@ static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const 
     }
 
     return true;
+}
+
+/* A persistent old root is a supported handoff, not a cleanup target. */
+static int open_initramfs(struct bx_diag_ctx* diag) {
+    struct statfs fs;
+    struct stat marker, old, next;
+    int fd = bx_fd_open_cloexec("/", O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0 || fstatfs(fd, &fs) < 0 || fstat(fd, &old) < 0 || stat(".", &next) < 0) {
+        bx_diag(diag, "skipping old root cleanup: %s", strerror(errno));
+    }
+    else if ((fs.f_type == RAMFS_MAGIC || fs.f_type == TMPFS_MAGIC) && old.st_dev != next.st_dev &&
+             bx_fd_fstatat_child_nofollow(fd, "init", &marker) == 0 && S_ISREG(marker.st_mode) &&
+             marker.st_dev == old.st_dev) {
+        /* A relocated bind of old-root data would still alias the cleanup tree. */
+        for (size_t i = 0; i < sizeof(bx_switch_root_pseudo_mounts) / sizeof(bx_switch_root_pseudo_mounts[0]); i++) {
+            if (stat(bx_switch_root_pseudo_mounts[i].target_relpath, &next) == 0) {
+                if (next.st_dev != old.st_dev)
+                    continue;
+            }
+            else if (errno == ENOENT)
+                continue;
+            bx_diag(diag, "skipping old root cleanup: cannot isolate %s", bx_switch_root_pseudo_mounts[i].source_path);
+            close(fd);
+            return -1;
+        }
+        return fd;
+    }
+    bx_fd_cleanup(&fd);
+    return -1;
+}
+
+/* Consume fd. A retained mount also retains all of its ancestor directories. */
+static bool empty_initramfs(int fd, unsigned depth, struct bx_diag_ctx* diag) {
+    DIR* dir = fdopendir(fd);
+    if (!dir) {
+        bx_diag(diag, "cannot read old root directory: %s", strerror(errno));
+        close(fd);
+        return false;
+    }
+    bool empty = true;
+    for (;;) {
+        errno = 0;
+        struct dirent* entry = readdir(dir);
+        if (!entry) {
+            if (errno) {
+                bx_diag(diag, "cannot scan old root: %s", strerror(errno));
+                empty = false;
+            }
+            break;
+        }
+        const char* name = entry->d_name;
+        if (bx_path_is_dot_or_dotdot(name))
+            continue;
+        int child = bx_openat_resolve(fd, name, O_DIRECTORY | O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0,
+                                      RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS);
+        if (child >= 0) {
+            if (depth == 128) {
+                close(child);
+                bx_diag(diag, "old root directory nesting limit reached at '%s'", name);
+                empty = false;
+                continue;
+            }
+            if (!empty_initramfs(child, depth + 1, diag)) {
+                empty = false;
+                continue;
+            }
+        }
+        else if (errno == EXDEV) {
+            empty = false;
+            continue;
+        }
+        else if (errno != ENOTDIR && errno != ELOOP) {
+            bx_diag(diag, "cannot inspect old root entry '%s': %s", name, strerror(errno));
+            empty = false;
+            break;
+        }
+        if (bx_fd_unlinkat_child(fd, name, child >= 0 ? AT_REMOVEDIR : 0) < 0 && errno != ENOENT) {
+            bx_diag(diag, "cannot remove old root entry '%s': %s", name, strerror(errno));
+            empty = false;
+        }
+    }
+    closedir(dir);
+    return empty;
 }
 
 static int bx_switch_root_exec_init(const struct bx_switch_root_options* options, char** argv, struct bx_diag_ctx* diag) {
@@ -387,21 +486,27 @@ int bx_switch_root_run(int argc, char** argv) {
         }
     }
 
+    int old_fd = open_initramfs(&diag);
     if (mount(".", "/", NULL, MS_MOVE, NULL) != 0) {
         bx_diag(&diag, "cannot move NEW_ROOT '%s' over '/': %s", options.new_root, strerror(errno));
+        bx_fd_cleanup(&old_fd);
         return 1;
     }
 
     if (chroot(".") != 0) {
         bx_diag(&diag, "cannot chroot into NEW_ROOT '%s': %s", options.new_root, strerror(errno));
+        bx_fd_cleanup(&old_fd);
         return 1;
     }
 
     if (chdir("/") != 0) {
         bx_diag(&diag, "cannot change working directory to '/': %s", strerror(errno));
+        bx_fd_cleanup(&old_fd);
         return 1;
     }
 
+    if (old_fd >= 0)
+        (void)empty_initramfs(old_fd, 0, &diag);
     return bx_switch_root_exec_init(&options, argv, &diag);
 }
 
