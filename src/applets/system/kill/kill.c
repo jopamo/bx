@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <linux/magic.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -14,6 +15,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <time.h>
@@ -25,6 +27,10 @@
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/time_parse.h"
+
+#ifndef PID_FS_MAGIC
+#define PID_FS_MAGIC 0x50494446
+#endif
 
 #ifndef SYS_pidfd_open
 #if defined(__x86_64__)
@@ -44,6 +50,7 @@
 
 enum bx_kill_action {
     BX_KILL_ACTION_SEND = 0,
+    BX_KILL_ACTION_PIDFD_ID,
     BX_KILL_ACTION_LIST,
     BX_KILL_ACTION_TABLE,
     BX_KILL_ACTION_PID,
@@ -165,6 +172,7 @@ static void bx_kill_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -l, --list [ARG]             list signals or decode number/mask\n");
     fprintf(stream, "  -L, --table                  list signals with numbers\n");
     fprintf(stream, "  -p, --pid                    print matching PIDs without signaling\n");
+    fprintf(stream, "      --pidfd-id PID           print PID:inode for race-free signaling\n");
     fprintf(stream, "  -a, --all                    match names across all UIDs\n");
     fprintf(stream, "  -r, --require-handler        skip targets with no userspace handler\n");
     fprintf(stream, "  -q, --queue VALUE            use sigqueue(3) with VALUE\n");
@@ -928,6 +936,20 @@ static int bx_kill_wait_pidfd_for_timeout(int pidfd, int milliseconds) {
     }
 }
 
+static bool bx_kill_pidfd_inode(int fd, uintmax_t* inode) {
+    struct statfs fs;
+    struct stat st;
+    if (fstatfs(fd, &fs) < 0 || fstat(fd, &st) < 0)
+        return false;
+    /* Older kernels use a shared anonymous inode, not a process identity. */
+    if (fs.f_type != PID_FS_MAGIC || !st.st_ino) {
+        errno = ENOTSUP;
+        return false;
+    }
+    *inode = st.st_ino;
+    return true;
+}
+
 static bool bx_kill_prepare_pidfd(pid_t pid, uintmax_t expected_inode, int* pidfd_out, struct bx_diag_ctx* diag) {
     int pidfd = bx_kill_pidfd_open(pid);
     if (pidfd < 0) {
@@ -936,13 +958,13 @@ static bool bx_kill_prepare_pidfd(pid_t pid, uintmax_t expected_inode, int* pidf
     }
 
     if (expected_inode != 0) {
-        struct stat st;
-        if (fstat(pidfd, &st) != 0) {
+        uintmax_t actual;
+        if (!bx_kill_pidfd_inode(pidfd, &actual)) {
             bx_diag(diag, "failed to inspect pidfd for %ld: %s", (long)pid, strerror(errno));
             close(pidfd);
             return false;
         }
-        if ((uintmax_t)st.st_ino != expected_inode) {
+        if (actual != expected_inode) {
             bx_diag(diag, "process %ld no longer matches pidfd inode %" PRIuMAX, (long)pid, expected_inode);
             close(pidfd);
             return false;
@@ -1211,6 +1233,11 @@ static bool bx_kill_parse_options(int argc, char** argv, struct bx_kill_options*
             }
             if (strcmp(arg, "--all") == 0) {
                 options->all_uids = true;
+                i++;
+                continue;
+            }
+            if (strcmp(arg, "--pidfd-id") == 0) {
+                options->action = BX_KILL_ACTION_PIDFD_ID;
                 i++;
                 continue;
             }
@@ -1549,7 +1576,26 @@ int bx_kill_main(int argc, char** argv) {
     }
 
     int rc = 0;
-    if (options.action == BX_KILL_ACTION_LIST) {
+    if (options.action == BX_KILL_ACTION_PIDFD_ID) {
+        pid_t pid;
+        if (argc - options.first_operand_index != 1 || !bx_kill_parse_pid_text(argv[options.first_operand_index], &pid) || pid <= 0) {
+            bx_diag(&diag, "--pidfd-id requires one positive PID");
+            rc = 1;
+        }
+        else {
+            int fd = bx_kill_pidfd_open(pid);
+            uintmax_t inode;
+            if (fd < 0 || !bx_kill_pidfd_inode(fd, &inode)) {
+                bx_diag(&diag, "cannot identify process %ld: %s", (long)pid, strerror(errno));
+                rc = 1;
+            }
+            else
+                printf("%ld:%" PRIuMAX "\n", (long)pid, inode);
+            if (fd >= 0)
+                close(fd);
+        }
+    }
+    else if (options.action == BX_KILL_ACTION_LIST) {
         rc = bx_kill_print_list_query(options.list_query, &diag) ? 0 : 1;
     }
     else if (options.action == BX_KILL_ACTION_TABLE) {
