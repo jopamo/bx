@@ -149,20 +149,13 @@
    2.3     3 Mar 2013  Don't complain about missing suffix on stdout
                        Put all global variables in a structure for readability
                        Do not decompress concatenated zlib streams (just gzip)
-                       Add option for compression level 11 to use zopfli
                        Fix handling of junk after compressed data
-   2.3.1   9 Oct 2013  Fix builds of pigzt and pigzn to include zopfli
-                       Add -lm, needed to link log function on some systems
-                       Respect LDFLAGS in Makefile, use CFLAGS consistently
+   2.3.1   9 Oct 2013  Respect LDFLAGS in Makefile, use CFLAGS consistently
                        Add memory allocation tracking
                        Fix casting error in uncompressed length calculation
-                       Update zopfli to Mar 10, 2013 Google state
-                       Support zopfli in single thread case
-                       Add -F, -I, -M, and -O options for zopfli tuning
    2.3.2  24 Jan 2015  Change whereis to which in Makefile for portability
                        Return zero exit code when only warnings are issued
                        Increase speed of unlzw (Unix compress decompression)
-                       Update zopfli to current google state
                        Allow larger maximum blocksize (-b), now 512 MiB
                        Do not require that -d precede -N, -n, -T options
                        Strip any path from header name for -dN or -dNT
@@ -207,7 +200,6 @@
                        Add documentation for environment variables
                        Fix bug when combining -l with -d
                        Exit with status of zero if skipping non .gz files
-                       Permit Huffman only (-H) when not compiling with zopfli
    2.8    19 Aug 2023  Fix version bug when compiling with zlib 1.3
                        Save a modification time only for regular files
                        Write all available uncompressed data on an error
@@ -434,11 +426,6 @@
                         // release(), peek_lock(), free_lock(), yarn_name
 #endif
 
-#ifndef NOZOPFLI
-#  include "zopfli/src/zopfli/deflate.h"    // ZopfliDeflatePart(),
-                                            // ZopfliInitOptions(),
-                                            // ZopfliOptions
-#endif
 
 #include "try.h"        // try, catch, always, throw, drop, punt, ball_t
 
@@ -519,10 +506,9 @@
 // Initial pool counts and sizes -- INBUFS is the limit on the number of input
 // spaces as a function of the number of processors (used to throttle the
 // creation of compression jobs), OUTPOOL is the initial size of the output
-// data buffer, chosen to make resizing of the buffer very unlikely and to
-// allow prepending with a dictionary for use as an input buffer for zopfli.
+// data buffer, chosen to make resizing unlikely.
 #define INBUFS(p) (((p)<<1)+3)
-#define OUTPOOL(s) ((s)+((s)>>4)+DICT)
+#define OUTPOOL(s) ((s)+((s)>>4))
 
 // Input buffer size, and augmentation for re-inserting a central header.
 #define BUF 32768
@@ -560,9 +546,6 @@ local struct {
     int decode;             // 0 to compress, 1 to decompress, 2 to test
     int level;              // compression level
     int strategy;           // compression strategy
-#ifndef NOZOPFLI
-    ZopfliOptions zopts;    // zopfli compression options
-#endif
     int rsync;              // true for rsync blocking
     int procs;              // maximum number of compression threads (>= 1)
     int setdict;            // true to initialize dictionary in each thread
@@ -1709,24 +1692,15 @@ local void compress_thread(void *dummy) {
 
     try {
         z_stream strm;                  // deflate stream
-#ifndef NOZOPFLI
-        struct space *temp = NULL;
-        // get temporary space for zopfli input
-        if (g.level > 9)
-            temp = get_space(&out_pool);
-        else
-#endif
-        {
-            // initialize the deflate stream for this thread
-            strm.zfree = ZFREE;
-            strm.zalloc = ZALLOC;
-            strm.opaque = OPAQUE;
-            ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, g.strategy);
-            if (ret == Z_MEM_ERROR)
-                throw(ENOMEM, "not enough memory");
-            if (ret != Z_OK)
-                throw(EINVAL, "internal error");
-        }
+        // initialize the deflate stream for this thread
+        strm.zfree = ZFREE;
+        strm.zalloc = ZALLOC;
+        strm.opaque = OPAQUE;
+        ret = deflateInit2(&strm, 6, Z_DEFLATED, -15, 8, g.strategy);
+        if (ret == Z_MEM_ERROR)
+            throw(ENOMEM, "not enough memory");
+        if (ret != Z_OK)
+            throw(EINVAL, "internal error");
 
         // keep looking for work
         for (;;) {
@@ -1746,16 +1720,8 @@ local void compress_thread(void *dummy) {
             // if deflateParams() is called immediately after deflateReset(),
             // there is no need to initialize input/output for the stream)
             Trace(("-- compressing #%ld", job->seq));
-#ifndef NOZOPFLI
-            if (g.level <= 9) {
-#endif
-                (void)deflateReset(&strm);
-                (void)deflateParams(&strm, g.level, g.strategy);
-#ifndef NOZOPFLI
-            }
-            else
-                temp->len = 0;
-#endif
+            (void)deflateReset(&strm);
+            (void)deflateParams(&strm, g.level, g.strategy);
 
             // set dictionary if provided, release that input or dictionary
             // buffer (not NULL if g.setdict is true and if this is not the
@@ -1763,32 +1729,15 @@ local void compress_thread(void *dummy) {
             if (job->out != NULL) {
                 len = job->out->len;
                 left = len < DICT ? len : DICT;
-#ifndef NOZOPFLI
-                if (g.level <= 9)
-#endif
-                    deflateSetDictionary(&strm, job->out->buf + (len - left),
-                                         (unsigned)left);
-#ifndef NOZOPFLI
-                else {
-                    memcpy(temp->buf, job->out->buf + (len - left), left);
-                    temp->len = left;
-                }
-#endif
+                deflateSetDictionary(&strm, job->out->buf + (len - left),
+                                     (unsigned)left);
                 drop_space(job->out);
             }
 
             // set up input and output
             job->out = get_space(&out_pool);
-#ifndef NOZOPFLI
-            if (g.level <= 9) {
-#endif
-                strm.next_in = job->in->buf;
-                strm.next_out = job->out->buf;
-#ifndef NOZOPFLI
-            }
-            else
-                memcpy(temp->buf + temp->len, job->in->buf, job->in->len);
-#endif
+            strm.next_in = job->in->buf;
+            strm.next_out = job->out->buf;
 
             // compress each block, either flushing or finishing
             next = job->lens == NULL ? NULL : job->lens->buf;
@@ -1814,97 +1763,49 @@ local void compress_thread(void *dummy) {
                 }
                 left -= len;
 
-#ifndef NOZOPFLI
-                if (g.level <= 9) {
-#endif
-                    // run MAXP2-sized amounts of input through deflate -- this
-                    // loop is needed for those cases where the unsigned type
-                    // is smaller than the size_t type, or when len is close to
-                    // the limit of the size_t type
-                    while (len > MAXP2) {
-                        strm.avail_in = MAXP2;
-                        deflate_engine(&strm, job->out, Z_NO_FLUSH);
-                        len -= MAXP2;
-                    }
+                // run MAXP2-sized amounts of input through deflate -- this
+                // loop is needed for those cases where the unsigned type
+                // is smaller than the size_t type, or when len is close to
+                // the limit of the size_t type
+                while (len > MAXP2) {
+                    strm.avail_in = MAXP2;
+                    deflate_engine(&strm, job->out, Z_NO_FLUSH);
+                    len -= MAXP2;
+                }
 
-                    // run the last piece through deflate -- end on a byte
-                    // boundary, using a sync marker if necessary, or finish
-                    // the deflate stream if this is the last block
-                    strm.avail_in = (unsigned)len;
-                    if (left || job->more) {
+                // run the last piece through deflate -- end on a byte
+                // boundary, using a sync marker if necessary, or finish
+                // the deflate stream if this is the last block
+                strm.avail_in = (unsigned)len;
+                if (left || job->more) {
 #if ZLIB_VERNUM >= 0x1260
-                        if (zlib_vernum() >= 0x1260) {
-                            deflate_engine(&strm, job->out, Z_BLOCK);
+                    if (zlib_vernum() >= 0x1260) {
+                        deflate_engine(&strm, job->out, Z_BLOCK);
 
-                            // add enough empty blocks to get to a byte
-                            // boundary
-                            (void)deflatePending(&strm, Z_NULL, &bits);
-                            if ((bits & 1) || !g.setdict)
-                                deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
-                            else if (bits & 7) {
-                                do {        // add static empty blocks
-                                    bits = deflatePrime(&strm, 10, 2);
-                                    assert(bits == Z_OK);
-                                    (void)deflatePending(&strm, Z_NULL, &bits);
-                                } while (bits & 7);
-                                deflate_engine(&strm, job->out, Z_BLOCK);
-                            }
-                        }
-                        else
-#endif
-                        {
+                        // add enough empty blocks to get to a byte
+                        // boundary
+                        (void)deflatePending(&strm, Z_NULL, &bits);
+                        if ((bits & 1) || !g.setdict)
                             deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+                        else if (bits & 7) {
+                            do {        // add static empty blocks
+                                bits = deflatePrime(&strm, 10, 2);
+                                assert(bits == Z_OK);
+                                (void)deflatePending(&strm, Z_NULL, &bits);
+                            } while (bits & 7);
+                            deflate_engine(&strm, job->out, Z_BLOCK);
                         }
-                        if (!g.setdict)     // two markers when independent
-                            deflate_engine(&strm, job->out, Z_FULL_FLUSH);
                     }
                     else
-                        deflate_engine(&strm, job->out, Z_FINISH);
-#ifndef NOZOPFLI
-                }
-                else {
-                    // compress len bytes using zopfli, end at byte boundary
-                    unsigned char bits, *out;
-                    size_t outsize;
-
-                    out = NULL;
-                    outsize = 0;
-                    bits = 0;
-                    ZopfliDeflatePart(&g.zopts, 2, !(left || job->more),
-                                      temp->buf, temp->len, temp->len + len,
-                                      &bits, &out, &outsize);
-                    assert(job->out->len + outsize + 5 <= job->out->size);
-                    memcpy(job->out->buf + job->out->len, out, outsize);
-                    free(out);
-                    job->out->len += outsize;
-                    if (left || job->more) {
-                        bits &= 7;
-                        if ((bits & 1) || !g.setdict) {
-                            if (bits == 0 || bits > 5)
-                                job->out->buf[job->out->len++] = 0;
-                            job->out->buf[job->out->len++] = 0;
-                            job->out->buf[job->out->len++] = 0;
-                            job->out->buf[job->out->len++] = 0xff;
-                            job->out->buf[job->out->len++] = 0xff;
-                        }
-                        else if (bits) {
-                            do {
-                                job->out->buf[job->out->len - 1] += 2 << bits;
-                                job->out->buf[job->out->len++] = 0;
-                                bits += 2;
-                            } while (bits < 8);
-                        }
-                        if (!g.setdict) {   // two markers when independent
-                            job->out->buf[job->out->len++] = 0;
-                            job->out->buf[job->out->len++] = 0;
-                            job->out->buf[job->out->len++] = 0;
-                            job->out->buf[job->out->len++] = 0xff;
-                            job->out->buf[job->out->len++] = 0xff;
-                        }
-                    }
-                    temp->len += len;
-                }
 #endif
+                    {
+                        deflate_engine(&strm, job->out, Z_SYNC_FLUSH);
+                    }
+                    if (!g.setdict)     // two markers when independent
+                        deflate_engine(&strm, job->out, Z_FULL_FLUSH);
+                }
+                else
+                    deflate_engine(&strm, job->out, Z_FINISH);
             } while (left);
             drop_space(job->lens);
             job->lens = NULL;
@@ -1949,14 +1850,7 @@ local void compress_thread(void *dummy) {
 
         // found job with seq == -1 -- return to join
         release(compress_have);
-#ifndef NOZOPFLI
-        if (g.level > 9)
-            drop_space(temp);
-        else
-#endif
-        {
-            (void)deflateEnd(&strm);
-        }
+        (void)deflateEnd(&strm);
     }
     catch (err) {
         THREADABORT(err);
@@ -2274,7 +2168,6 @@ local void single_compress(int reset) {
     size_t more;                    // amount of data in next[] (0 if eof)
     size_t start;                   // start of data in next[]
     size_t have;                    // bytes in current block for -i
-    size_t hist;                    // offset of permitted history
     int fresh;                      // if true, reset compression history
     unsigned hash;                  // hash for rsyncable
     unsigned char *scan;            // pointer for hash computation
@@ -2305,8 +2198,8 @@ local void single_compress(int reset) {
         int ret;                    // zlib return code
 
         out_size = g.block > MAXP2 ? MAXP2 : (unsigned)g.block;
-        in = alloc(NULL, g.block + DICT);
-        next = alloc(NULL, g.block + DICT);
+        in = alloc(NULL, g.block);
+        next = alloc(NULL, g.block);
         out = alloc(NULL, out_size);
         strm = alloc(NULL, sizeof(z_stream));
         strm->zfree = ZFREE;
@@ -2323,21 +2216,14 @@ local void single_compress(int reset) {
     head = put_header();
 
     // set compression level in case it changed
-#ifndef NOZOPFLI
-    if (g.level <= 9) {
-#endif
-        (void)deflateReset(strm);
-        (void)deflateParams(strm, g.level, g.strategy);
-#ifndef NOZOPFLI
-    }
-#endif
+    (void)deflateReset(strm);
+    (void)deflateParams(strm, g.level, g.strategy);
 
     // do raw deflate and calculate check value
     got = 0;
     more = readn(g.ind, next, g.block);
     ulen = more;
     start = 0;
-    hist = 0;
     clen = 0;
     have = 0;
     check = CHECK(0L, Z_NULL, 0);
@@ -2348,16 +2234,7 @@ local void single_compress(int reset) {
             scan = in;  in = next;  next = scan;
             strm->next_in = in + start;
             got = more;
-            if (g.level > 9) {
-                left = start + more - hist;
-                if (left > DICT)
-                    left = DICT;
-                memcpy(next, in + ((start + more) - left), left);
-                start = left;
-                hist = 0;
-            }
-            else
-                start = 0;
+            start = 0;
             more = readn(g.ind, next + start, g.block);
             ulen += more;
         }
@@ -2376,15 +2253,9 @@ local void single_compress(int reset) {
 
                     // fill in[] with what's left there and as much as possible
                     // from next[] -- set up to continue hash hit search
-                    if (g.level > 9) {
-                        left = (size_t)(strm->next_in - in) - hist;
-                        if (left > DICT)
-                            left = DICT;
-                    }
-                    memmove(in, strm->next_in - left, left + got);
-                    hist = 0;
-                    strm->next_in = in + left;
-                    scan = in + left + got;
+                    memmove(in, strm->next_in, got);
+                    strm->next_in = in;
+                    scan = in + got;
                     left = more > g.block - got ? g.block - got : more;
                     memcpy(scan, next + start, left);
                     got += left;
@@ -2414,107 +2285,50 @@ local void single_compress(int reset) {
             }
         }
 
-#ifndef NOZOPFLI
-        if (g.level <= 9) {
-#endif
-            // clear history if requested
-            if (fresh)
-                (void)deflateReset(strm);
+        // clear history if requested
+        if (fresh)
+            (void)deflateReset(strm);
 
-            // compress MAXP2-size chunks in case unsigned type is small
-            while (got > MAXP2) {
-                strm->avail_in = MAXP2;
-                check = CHECK(check, strm->next_in, strm->avail_in);
-                DEFLATE_WRITE(Z_NO_FLUSH);
-                got -= MAXP2;
-            }
-
-            // compress the remainder, emit a block, finish if end of input
-            strm->avail_in = (unsigned)got;
-            got = left;
+        // compress MAXP2-size chunks in case unsigned type is small
+        while (got > MAXP2) {
+            strm->avail_in = MAXP2;
             check = CHECK(check, strm->next_in, strm->avail_in);
-            if (more || got) {
+            DEFLATE_WRITE(Z_NO_FLUSH);
+            got -= MAXP2;
+        }
+
+        // compress the remainder, emit a block, finish if end of input
+        strm->avail_in = (unsigned)got;
+        got = left;
+        check = CHECK(check, strm->next_in, strm->avail_in);
+        if (more || got) {
 #if ZLIB_VERNUM >= 0x1260
-                if (zlib_vernum() >= 0x1260) {
-                    int bits;
+            if (zlib_vernum() >= 0x1260) {
+                int bits;
 
-                    DEFLATE_WRITE(Z_BLOCK);
-                    (void)deflatePending(strm, Z_NULL, &bits);
-                    if ((bits & 1) || !g.setdict)
-                        DEFLATE_WRITE(Z_SYNC_FLUSH);
-                    else if (bits & 7) {
-                        do {
-                            bits = deflatePrime(strm, 10, 2);
-                            assert(bits == Z_OK);
-                            (void)deflatePending(strm, Z_NULL, &bits);
-                        } while (bits & 7);
-                        DEFLATE_WRITE(Z_NO_FLUSH);
-                    }
-                }
-                else
+                DEFLATE_WRITE(Z_BLOCK);
+                (void)deflatePending(strm, Z_NULL, &bits);
+                if ((bits & 1) || !g.setdict)
                     DEFLATE_WRITE(Z_SYNC_FLUSH);
-#else
+                else if (bits & 7) {
+                    do {
+                        bits = deflatePrime(strm, 10, 2);
+                        assert(bits == Z_OK);
+                        (void)deflatePending(strm, Z_NULL, &bits);
+                    } while (bits & 7);
+                    DEFLATE_WRITE(Z_NO_FLUSH);
+                }
+            }
+            else
                 DEFLATE_WRITE(Z_SYNC_FLUSH);
+#else
+            DEFLATE_WRITE(Z_SYNC_FLUSH);
 #endif
-                if (!g.setdict)             // two markers when independent
-                    DEFLATE_WRITE(Z_FULL_FLUSH);
-            }
-            else
-                DEFLATE_WRITE(Z_FINISH);
-#ifndef NOZOPFLI
+            if (!g.setdict)             // two markers when independent
+                DEFLATE_WRITE(Z_FULL_FLUSH);
         }
-        else {
-            // compress got bytes using zopfli, bring to byte boundary
-            unsigned char bits, *def;
-            size_t size, off;
-
-            // discard history if requested
-            off = (size_t)(strm->next_in - in);
-            if (fresh)
-                hist = off;
-
-            def = NULL;
-            size = 0;
-            bits = 0;
-            ZopfliDeflatePart(&g.zopts, 2, !(more || left),
-                              in + hist, off - hist, (off - hist) + got,
-                              &bits, &def, &size);
-            bits &= 7;
-            if (more || left) {
-                if ((bits & 1) || !g.setdict) {
-                    writen(g.outd, def, size);
-                    if (bits == 0 || bits > 5)
-                        writen(g.outd, (unsigned char *)"\0", 1);
-                    writen(g.outd, (unsigned char *)"\0\0\xff\xff", 4);
-                }
-                else {
-                    assert(size > 0);
-                    writen(g.outd, def, size - 1);
-                    if (bits)
-                        do {
-                            def[size - 1] += 2 << bits;
-                            writen(g.outd, def + size - 1, 1);
-                            def[size - 1] = 0;
-                            bits += 2;
-                        } while (bits < 8);
-                    writen(g.outd, def + size - 1, 1);
-                }
-                if (!g.setdict)             // two markers when independent
-                    writen(g.outd, (unsigned char *)"\0\0\0\xff\xff", 5);
-            }
-            else
-                writen(g.outd, def, size);
-            free(def);
-            while (got > MAXP2) {
-                check = CHECK(check, strm->next_in, MAXP2);
-                strm->next_in += MAXP2;
-                got -= MAXP2;
-            }
-            check = CHECK(check, strm->next_in, (unsigned)got);
-            strm->next_in += got;
-            got = left;
-        }
-#endif
+        else
+            DEFLATE_WRITE(Z_FINISH);
 
         // do until no more input
     } while (more || got);
@@ -4260,11 +4074,7 @@ local char *helptext[] = {
 #endif
 "",
 "Options:",
-#ifdef NOZOPFLI
 "  -0 to -9             Compression level",
-#else
-"  -0 to -9, -11        Compression level (level 11, zopfli, is much slower)",
-#endif
 "  --fast, --best       Compression levels 1 and 9 respectively",
 "  -A, --alias xxx      Use xxx as the name for any --zip entry from stdin",
 "  -b, --blocksize mmm  Set compression block size to mmmK (default 128K)",
@@ -4272,16 +4082,9 @@ local char *helptext[] = {
 "  -C, --comment ccc    Put comment ccc in the gzip or zip header",
 "  -d, --decompress     Decompress the compressed input",
 "  -f, --force          Force overwrite, compress .gz, links, and to terminal",
-#ifndef NOZOPFLI
-"  -F  --first          Do iterations first, before block split for -11",
-#endif
 "  -h, --help           Display a help screen and quit",
 "  -H, --huffman        Use only Huffman coding for compression",
 "  -i, --independent    Compress blocks independently for damage recovery",
-#ifndef NOZOPFLI
-"  -I, --iterations n   Number of iterations for -11 optimization",
-"  -J, --maxsplits n    Maximum number of split blocks for -11",
-#endif
 "  -k, --keep           Do not delete original file after processing",
 "  -K, --zip            Compress to PKWare zip (.zip) single entry format",
 "  -l, --list           List the contents of the compressed input",
@@ -4290,9 +4093,6 @@ local char *helptext[] = {
 "  -M, --time           Store or restore mod time",
 "  -n, --no-name        Do not store or restore file name or mod time",
 "  -N, --name           Store or restore file name and mod time",
-#ifndef NOZOPFLI
-"  -O  --oneblock       Do not split into smaller blocks for -11",
-#endif
 #ifndef NOTHREAD
 "  -p, --processes n    Allow up to n compression threads (default is the",
 "                       number of online processors, or 8 if unknown)",
@@ -4353,15 +4153,6 @@ local int nprocs(int n) {
 local void defaults(void) {
     g.level = Z_DEFAULT_COMPRESSION;
     g.strategy = Z_DEFAULT_STRATEGY;
-#ifndef NOZOPFLI
-    // default zopfli options as set by ZopfliInitOptions():
-    //  verbose = 0
-    //  numiterations = 15
-    //  blocksplitting = 1
-    //  blocksplittinglast = 0
-    //  blocksplittingmax = 15
-    ZopfliInitOptions(&g.zopts);
-#endif
     g.block = 131072UL;             // 128K
     g.shift = x2nmodp(g.block, 3);
 #ifdef NOTHREAD
@@ -4392,9 +4183,6 @@ local char *longopts[][2] = {
     {"LZW", "Z"}, {"lzw", "Z"}, {"alias", "A"}, {"ascii", "a"}, {"best", "9"},
     {"bits", "Z"}, {"blocksize", "b"}, {"decompress", "d"}, {"fast", "1"},
     {"force", "f"}, {"comment", "C"},
-#ifndef NOZOPFLI
-    {"first", "F"}, {"iterations", "I"}, {"maxsplits", "J"}, {"oneblock", "O"},
-#endif
     {"help", "h"}, {"independent", "i"}, {"keep", "k"}, {"license", "L"},
     {"list", "l"}, {"name", "N"}, {"no-name", "n"}, {"no-time", "m"},
     {"processes", "p"}, {"quiet", "q"}, {"recursive", "r"}, {"rsyncable", "R"},
@@ -4432,12 +4220,12 @@ local size_t num(char *arg) {
 
 // Process an argument, return true if it is an option (not a filename)
 local int option(char *arg) {
-    static int get = 0;     // if not zero, look for option parameter
+    static char get = 0;     // if not zero, look for option parameter
     char bad[3] = "-X";     // for error messages (X is replaced)
 
     // if no argument or dash option, check status of get
     if (get && (arg == NULL || *arg == '-')) {
-        bad[1] = "bpSIJAC"[get - 1];
+        bad[1] = get;
         throw(EINVAL, "missing parameter after %s", bad);
     }
     if (arg == NULL)
@@ -4468,10 +4256,10 @@ local int option(char *arg) {
             // if looking for a parameter, don't process more single character
             // options until we have the parameter
             if (get) {
-                if (get == 3)
+                if (get == 'S')
                     throw(EINVAL,
                           "invalid usage: -S must be followed by space");
-                if (get == 7)
+                if (get == 'C')
                     throw(EINVAL,
                           "invalid usage: -C must be followed by space");
                 break;      // allow -*nnn to fall to parameter code
@@ -4482,25 +4270,15 @@ local int option(char *arg) {
             switch (*arg) {
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
+                while (*arg == '0' && arg[1] >= '0' && arg[1] <= '9')
+                    arg++;
+                if (arg[1] >= '0' && arg[1] <= '9')
+                    throw(EINVAL, "only levels 0..9 are allowed");
                 g.level = *arg - '0';
-                while (arg[1] >= '0' && arg[1] <= '9') {
-                    if (g.level && (INT_MAX - (arg[1] - '0')) / g.level < 10)
-                        throw(EINVAL, "only levels 0..9 and 11 are allowed");
-                    g.level = g.level * 10 + *++arg - '0';
-                }
-                if (g.level == 10 || g.level > 11)
-                    throw(EINVAL, "only levels 0..9 and 11 are allowed");
                 break;
-            case 'A':  get = 6;  break;
-            case 'C':  get = 7;  break;
-#ifndef NOZOPFLI
-            case 'F':  g.zopts.blocksplittinglast = 1;  break;
-#endif
+            case 'A':  get = 'A';  break;
+            case 'C':  get = 'C';  break;
             case 'H':  g.strategy = Z_HUFFMAN_ONLY;  break;
-#ifndef NOZOPFLI
-            case 'I':  get = 4;  break;
-            case 'J':  get = 5;  break;
-#endif
             case 'K':  g.form = 2;  g.sufx = ".zip";  break;
             case 'L':
                 puts(VERSION);
@@ -4511,11 +4289,8 @@ local int option(char *arg) {
                 break;          // avoid warning
             case 'M':  g.headis |= 0xa;  break;
             case 'N':  g.headis = 0xf;  break;
-#ifndef NOZOPFLI
-            case 'O':  g.zopts.blocksplitting = 0;  break;
-#endif
             case 'R':  g.rsync = 1;  break;
-            case 'S':  get = 3;  break;
+            case 'S':  get = 'S';  break;
                 // -T defined below as an alternative for -m
             case 'V':
                 puts(VERSION);
@@ -4532,7 +4307,7 @@ local int option(char *arg) {
                 throw(EINVAL, "invalid option: no ascii conversion: %s",
                       bad);
                 break;          // avoid warning
-            case 'b':  get = 1;  break;
+            case 'b':  get = 'b';  break;
             case 'c':  g.pipeout = 1;  break;
             case 'd':  if (!g.decode) g.headis >>= 2;  g.decode = 1;  break;
             case 'f':  g.force = 1;  break;
@@ -4543,7 +4318,7 @@ local int option(char *arg) {
             case 'n':  g.headis = 0;  break;
             case 'T':
             case 'm':  g.headis &= ~0xa;  break;
-            case 'p':  get = 2;  break;
+            case 'p':  get = 'p';  break;
             case 'q':  g.verbosity = 0;  break;
             case 'r':  g.recurse = 1;  break;
             case 't':  g.decode = 2;  break;
@@ -4558,11 +4333,11 @@ local int option(char *arg) {
             return 1;
     }
 
-    // process option parameter for -b, -p, -A, -S, -I, or -J
+    // process option parameter for -b, -p, -A, -S, or -C
     if (get) {
         size_t n;
 
-        if (get == 1) {
+        if (get == 'b') {
             n = num(arg);
             g.block = n << 10;                  // chunk size
 #ifndef NOTHREAD
@@ -4576,7 +4351,7 @@ local int option(char *arg) {
                 g.block > (1UL << 29))          // limited by append_len()
                 throw(EINVAL, "block size too large: %s", arg);
         }
-        else if (get == 2) {
+        else if (get == 'p') {
             n = num(arg);
             g.procs = (int)n;                   // # processes
             if (g.procs < 1)
@@ -4588,20 +4363,14 @@ local int option(char *arg) {
                 throw(EINVAL, "compiled without threads");
 #endif
         }
-        else if (get == 3) {
+        else if (get == 'S') {
             if (*arg == 0)
                 throw(EINVAL, "suffix cannot be empty");
             g.sufx = arg;                       // gz suffix
         }
-#ifndef NOZOPFLI
-        else if (get == 4)
-            g.zopts.numiterations = (int)num(arg);  // optimize iterations
-        else if (get == 5)
-            g.zopts.blocksplittingmax = (int)num(arg);  // max block splits
-        else if (get == 6)
+        else if (get == 'A')
             g.alias = arg;                      // zip name for stdin
-#endif
-        else if (get == 7)
+        else if (get == 'C')
             g.comment = arg;                    // header comment
         get = 0;
         return 1;

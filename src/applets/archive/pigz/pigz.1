@@ -4,7 +4,7 @@ pigz, unpigz \- compress or expand files
 .SH SYNOPSIS
 .ll +8
 .B pigz
-.RB [ " \-cdfhikKlLmMnNqrRtz0..9,11 " ]
+.RB [ " \-cdfhikKlLmMnNqrRtz0..9 " ]
 [
 .B -b
 .I blocksize
@@ -123,9 +123,6 @@ or
 indicates the slowest compression method (best compression).
 .B -0
 is no compression.
-.B \-11
-gives a few percent better compression at a severe cost in execution time,
-using the zopfli algorithm by Jyrki Alakuijala.
 The default is
 .B \-6.
 .TP
@@ -223,20 +220,6 @@ Compress to zlib (.zz) instead of gzip format.
 .TP
 .B --
 All arguments after "--" are treated as file names (for names that start with "-")
-.TP
-These options are unique to the -11 compression level:
-.TP
-.B -F  --first
-Do iterations first, before block split (default is last).
-.TP
-.B -I, --iterations n
-Number of iterations for optimization (default 15).
-.TP
-.B -J, --maxsplits n
-Maximum number of split blocks (default 15).
-.TP
-.B -O  --oneblock
-Do not split into smaller blocks (default is block splitting).
 .SH "COPYRIGHT NOTICE"
 This software is provided 'as-is', without any express or implied
 warranty.  In no event will the author be held liable for any damages
