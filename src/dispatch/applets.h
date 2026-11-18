@@ -35,6 +35,7 @@ int bx_stat_main(int argc, char** argv);
 int bx_df_main(int argc, char** argv);
 int bx_du_main(int argc, char** argv);
 int bx_flock_main(int argc, char** argv);
+int bx_mountpoint_main(int argc, char** argv);
 int bx_sync_main(int argc, char** argv);
 int bx_dd_main(int argc, char** argv);
 int bx_printf_main(int argc, char** argv);

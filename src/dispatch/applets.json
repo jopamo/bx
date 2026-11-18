@@ -254,6 +254,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "mountpoint",
+      "main": "bx_mountpoint_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "sync",
       "main": "bx_sync_main",
       "capabilities": [
