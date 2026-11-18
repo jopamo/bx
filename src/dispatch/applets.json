@@ -361,17 +361,6 @@
       "execution_class": "exec-only"
     },
     {
-      "name": "screen",
-      "main": "bx_screen_main",
-      "capabilities": [
-        "filesystem-read",
-        "filesystem-write",
-        "terminal-control",
-        "raw-output"
-      ],
-      "execution_class": "exec-only"
-    },
-    {
       "name": "getty",
       "main": "bx_getty_main",
       "capabilities": [

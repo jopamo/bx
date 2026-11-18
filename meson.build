@@ -66,9 +66,6 @@ lscolors_install_subdir = '/etc'
 lscolors_install_path = join_paths(lscolors_install_subdir, 'LS_COLORS')
 add_project_arguments('-DBX_LSCOLORS_FILE="' + lscolors_install_path + '"', language : 'c')
 
-screen_utf8_install_subdir = join_paths(get_option('datadir'), 'bx', 'screen', 'utf8encodings')
-screen_utf8_install_path = join_paths(get_option('prefix'), screen_utf8_install_subdir)
-screen_system_rc_path = join_paths(get_option('prefix'), get_option('sysconfdir'), 'bx', 'screenrc')
 edit_vim_runtime_install_subdir = join_paths(get_option('datadir'), 'bx', 'vim')
 edit_vim_runtime_install_path = join_paths(get_option('prefix'), edit_vim_runtime_install_subdir)
 edit_vim_runtime_source_path = join_paths(meson.project_source_root(), 'src', 'applets', 'text', 'edit', 'runtime')
@@ -842,53 +839,6 @@ bx_search_sources = [
   'src/search/traverse.c',
 ]
 
-screen_native_sources = files(
-  'src/applets/system/screen/acls.c',
-  'src/applets/system/screen/ansi.c',
-  'src/applets/system/screen/attacher.c',
-  'src/applets/system/screen/backtick.c',
-  'src/applets/system/screen/canvas.c',
-  'src/applets/system/screen/comm.c',
-  'src/applets/system/screen/display.c',
-  'src/applets/system/screen/encoding.c',
-  'src/applets/system/screen/fileio.c',
-  'src/applets/system/screen/help.c',
-  'src/applets/system/screen/input.c',
-  'src/applets/system/screen/kmapdef.c',
-  'src/applets/system/screen/layer.c',
-  'src/applets/system/screen/layout.c',
-  'src/applets/system/screen/list_display.c',
-  'src/applets/system/screen/list_generic.c',
-  'src/applets/system/screen/list_license.c',
-  'src/applets/system/screen/list_window.c',
-  'src/applets/system/screen/logfile.c',
-  'src/applets/system/screen/mark.c',
-  'src/applets/system/screen/misc.c',
-  'src/applets/system/screen/process.c',
-  'src/applets/system/screen/process_lookup.c',
-  'src/applets/system/screen/process_parse.c',
-  'src/applets/system/screen/process_window_nav.c',
-  'src/applets/system/screen/process_action_store.c',
-  'src/applets/system/screen/process_prompts.c',
-  'src/applets/system/screen/process_resize_prompt.c',
-  'src/applets/system/screen/pty.c',
-  'src/applets/system/screen/resize.c',
-  'src/applets/system/screen/sched.c',
-  'src/applets/system/screen/screen.c',
-  'src/applets/system/screen/screen_cli.c',
-  'src/applets/system/screen/screen_osc52_policy.c',
-  'src/applets/system/screen/search.c',
-  'src/applets/system/screen/socket.c',
-  'src/applets/system/screen/term.c',
-  'src/applets/system/screen/termcap.c',
-  'src/applets/system/screen/tty.c',
-  'src/applets/system/screen/viewport.c',
-  'src/applets/system/screen/window.c',
-  'src/applets/system/screen/winmsg.c',
-  'src/applets/system/screen/winmsgbuf.c',
-  'src/applets/system/screen/winmsgcond.c',
-)
-
 sources = bx_core_sources
 sources += bx_lib_sources
 sources += bx_crypto_sources
@@ -1035,8 +985,8 @@ socat_lib = static_library('bx_socat',
   c_args : socat_c_args,
 )
 
-screen_termcap_dep = declare_dependency()
-screen_termcap_found = false
+edit_termcap_dep = declare_dependency()
+edit_termcap_found = false
 foreach dep_name : ['tinfotw', 'ncursestw', 'tinfo', 'ncurses', 'tinfow', 'ncursesw']
   dep = dependency(dep_name,
     method : 'pkg-config',
@@ -1044,83 +994,39 @@ foreach dep_name : ['tinfotw', 'ncursestw', 'tinfo', 'ncurses', 'tinfow', 'ncurs
     static : use_static_binary,
   )
   if dep.found() and cc.has_function('tgetent', dependencies : dep)
-    screen_termcap_dep = dep
-    screen_termcap_found = true
+    edit_termcap_dep = dep
+    edit_termcap_found = true
     break
   endif
 endforeach
-if not screen_termcap_found
-  screen_termcap_found = cc.has_function('tgetent')
+if not edit_termcap_found
+  edit_termcap_found = cc.has_function('tgetent')
 endif
-if not screen_termcap_found
+if not edit_termcap_found
   foreach lib : ['tinfotw', 'ncursestw', 'curses', 'termcap', 'termlib', 'ncursesw', 'tinfow', 'ncurses', 'tinfo']
     dep = cc.find_library(lib, required : false)
     if dep.found() and cc.has_function('tgetent', dependencies : dep)
-      screen_termcap_dep = dep
-      screen_termcap_found = true
+      edit_termcap_dep = dep
+      edit_termcap_found = true
       break
     endif
   endforeach
 endif
-if not screen_termcap_found
-  error('screen requires tgetent()')
+if not edit_termcap_found
+  error('vim requires tgetent()')
 endif
-
-screen_openpty_dep = declare_dependency()
-screen_openpty_found = cc.has_function('openpty')
-if not screen_openpty_found
-  foreach lib : ['util', 'openpty', 'bsd']
-    dep = cc.find_library(lib, required : false)
-    if dep.found() and cc.has_function('openpty', dependencies : dep)
-      screen_openpty_dep = dep
-      screen_openpty_found = true
-      break
-    endif
-  endforeach
-endif
-if not screen_openpty_found
-  error('screen requires openpty()')
-endif
-
-screen_deps = [screen_termcap_dep, screen_openpty_dep]
-screen_crypt_dep = declare_dependency()
-if not cc.has_function('crypt')
-  if cc.has_function('crypt', args : ['-lcrypt'])
-    screen_crypt_dep = declare_dependency(link_args : ['-lcrypt'])
-    screen_deps += [screen_crypt_dep]
-  endif
-endif
-
-screen_c_args = [
-  '-D_GNU_SOURCE',
-  '-D_DEFAULT_SOURCE',
-  '-Ddflag=screen_dflag',
-  '-Diflag=screen_iflag',
-  '-Drflag=screen_rflag',
-  '-DSCREENENCODINGS="' + screen_utf8_install_path + '"',
-  '-DSYSTEM_SCREENRC="' + screen_system_rc_path + '"',
-  '-Dxflag=screen_xflag',
-  '-Dxrealloc=screen_xrealloc',
-]
 
 if use_static_binary
-  screen_termcap_static_ok = cc.links(
+  edit_termcap_static_ok = cc.links(
     'int tgetent(char *, const char *); int main(void) { return tgetent(0, 0); }',
-    dependencies : [screen_termcap_dep],
+    dependencies : [edit_termcap_dep],
     args : bx_static_link_args,
-    name : 'screen termcap static linkability probe',
+    name : 'vim termcap static linkability probe',
   )
-  if not screen_termcap_static_ok
-    error('screen requires a static-capable termcap library when static_binary is enabled')
+  if not edit_termcap_static_ok
+    error('vim requires a static-capable termcap library when static_binary is enabled')
   endif
 endif
-
-screen_lib = static_library('bx_screen',
-  screen_native_sources,
-  include_directories : include_directories('src'),
-  dependencies : screen_deps,
-  c_args : screen_c_args,
-)
 
 edit_wrapper_sources = files(
   'src/applets/text/edit/edit_main.c',
@@ -1254,7 +1160,7 @@ edit_vim_sources = files(
   'src/applets/text/edit/vim/src/xdiff/xutils.c',
 )
 
-edit_vim_deps = [screen_termcap_dep]
+edit_vim_deps = [edit_termcap_dep]
 edit_vim_dl_dep = cc.find_library('dl', required : false)
 if edit_vim_dl_dep.found()
   edit_vim_deps += [edit_vim_dl_dep]
@@ -1594,7 +1500,7 @@ endif
 if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
@@ -1824,7 +1730,6 @@ bx_exe = executable('bx',
   link_with : [
     nc_lib,
     socat_lib,
-    screen_lib,
     edit_wrapper_lib,
     edit_vim_lib,
     xxd_lib,
@@ -1839,10 +1744,6 @@ bx_exe = executable('bx',
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
-)
-
-install_subdir('src/applets/system/screen/utf8encodings',
-  install_dir : join_paths(get_option('datadir'), 'bx', 'screen')
 )
 
 install_subdir('src/applets/text/edit/runtime',

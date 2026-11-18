@@ -18,7 +18,6 @@ areas include:
 - src/applets/network/traceroute/ — GPL-2.0-or-later, with clif.[ch] under
   LGPL-2.1-or-later
 - src/applets/system/init/ — BusyBox init-derived policy, GPL-2.0-or-later
-- src/applets/system/screen/ — GNU Screen, GPL-3.0-or-later
 - src/applets/text/ed/ — GNU ed, GPL-2.0-or-later
 - src/applets/text/edit/vim/ — Vim license
 - src/applets/text/edit/runtime/ — curated Vim runtime subset; some files carry
@@ -44,7 +43,4 @@ Combined binary note
 --------------------
 bx is linked as one multicall executable. Because that combined work includes
 components under different copyleft terms, the binary you ship must satisfy the
-obligations of the included parts. In particular, builds that include the
-Screen-derived applet must be distributable under GPL-3.0-or-later-compatible
-terms. For that reason the bx-owned default above is GPL-2.0-or-later, not
-GPL-2.0-only.
+obligations of the included parts.
