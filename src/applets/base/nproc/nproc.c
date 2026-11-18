@@ -1,4 +1,10 @@
+#define _GNU_SOURCE
 #include <ctype.h>
+#include <errno.h>
+#include <stdlib.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 #include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -141,6 +147,30 @@ static enum bx_nproc_parse_status bx_nproc_parse_options(
     return BX_NPROC_PARSE_OK;
 }
 
+static long bx_nproc_available(void) {
+#ifdef __linux__
+    cpu_set_t local;
+    cpu_set_t* mask = &local;
+    size_t bytes = sizeof(local);
+    for (;;) {
+        int rc = sched_getaffinity(0, bytes, mask);
+        int err = errno;
+        long count = rc == 0 ? CPU_COUNT_S(bytes, mask) : 0;
+        if (mask != &local)
+            free(mask);
+        if (count > 0)
+            return count;
+        if (rc == 0 || err != EINVAL || bytes >= 1024 * 1024)
+            break;
+        bytes *= 2;
+        mask = malloc(bytes);
+        if (!mask)
+            break;
+    }
+#endif
+    return sysconf(_SC_NPROCESSORS_ONLN);
+}
+
 int bx_nproc_main(int argc, char** argv) {
     struct bx_nproc_options options;
     struct bx_diag_ctx diag = {.progname = "nproc", .exit_status = 0};
@@ -166,7 +196,7 @@ int bx_nproc_main(int argc, char** argv) {
         nproc = sysconf(_SC_NPROCESSORS_CONF);
     }
     else {
-        nproc = sysconf(_SC_NPROCESSORS_ONLN);
+        nproc = bx_nproc_available();
     }
 
     if (nproc <= 0)
