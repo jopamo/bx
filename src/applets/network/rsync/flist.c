@@ -33,7 +33,6 @@
 #endif
 #include <limits.h>
 #include <inttypes.h>
-#include <search.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,6 +86,12 @@ flist_cmp(const void *p1, const void *p2)
 	const struct flist *f1 = p1, *f2 = p2;
 
 	return strcmp(f1->wpath, f2->wpath);
+}
+
+static int
+strp_cmp(const void *p1, const void *p2)
+{
+	return strcmp(*(const char *const *)p1, *(const char *const *)p2);
 }
 
 /*
@@ -2784,8 +2789,7 @@ flist_gen_dels(struct sess *sess, const char *root, struct flist **fl,
 	FTSENT		 *ent, *perish_ent = NULL;
 	struct flist	 *f;
 	size_t		  cargvs = 0, skipc = 0, i, j, max = 0, stripdir;
-	ENTRY		  hent;
-	ENTRY		 *hentp;
+	const char	**wanted = NULL;
 	int		  fts_flags;
 	bool		  have_dotdir = false;
 
@@ -2874,42 +2878,19 @@ flist_gen_dels(struct sess *sess, const char *root, struct flist **fl,
 
 	LOG3("delete from %zu directories", cargvs);
 
-	/*
-	 * Next, use the standard hcreate(3) hashtable interface to hash
-	 * all of the files that we want to synchronise.
-	 * This way, we'll be able to determine which files we want to
-	 * delete in O(n) time instead of O(n * search) time.
-	 * Plus, we can do the scan in-band and only allocate the files
-	 * we want to delete.
-	 */
-
-	if (!hcreate(wflsz)) {
-		ERR("hcreate");
+	/* Wire order is not strcmp order. Index borrowed names separately. */
+	wanted = reallocarray(NULL, wflsz, sizeof(*wanted));
+	if (wanted == NULL) {
+		ERR("allocating deletion index");
 		goto out;
 	}
-
 	for (i = 0; i < wflsz; i++) {
-		const char *kpath;
-
-		memset(&hent, 0, sizeof(ENTRY));
-		kpath = wfl[i].wpath;
+		const char *kpath = wfl[i].wpath;
 		while (strncmp(kpath, "./", 2) == 0)
 			kpath += 2;
-		if ((hent.key = strdup(kpath)) == NULL) {
-			ERR("strdup");
-			goto out;
-		}
-		if ((hentp = hsearch(hent, ENTER)) == NULL) {
-			ERR("hsearch");
-			goto out;
-		} else if (hentp->key != hent.key) {
-			/*
-			 * Duplicate entry; this may happen if we had a single
-			 * src spec listed multiple times, so just drop it.
-			 */
-			free(hent.key);
-		}
+		wanted[i] = kpath;
 	}
+	qsort(wanted, wflsz, sizeof(*wanted), strp_cmp);
 
 	/*
 	 * Now we're going to try to descend into all of the top-level
@@ -3032,10 +3013,7 @@ flist_gen_dels(struct sess *sess, const char *root, struct flist **fl,
 		if (ent->fts_info == FTS_D && perish_ent != NULL)
 			continue;
 
-		/* Look up in hashtable. */
-		memset(&hent, 0, sizeof(ENTRY));
-		hent.key = (char *)rpath;
-		if (hsearch(hent, FIND) != NULL) {
+		if (bsearch(&rpath, wanted, wflsz, sizeof(*wanted), strp_cmp) != NULL) {
 			if (ent->fts_info == FTS_D &&
 			    !sess->opts->recursive &&
 			    strcmp(rpath, ".") != 0) {
@@ -3117,7 +3095,7 @@ out:
 		free(skipv[i]);
 	free(cargv);
 	free(skipv);
-	hdestroy();
+	free(wanted);
 	return rc;
 }
 
@@ -3529,12 +3507,6 @@ fdgets(struct sess *sess, int fd, char *buf, size_t bufsz)
 		buf[length++] = '\0';
 	assert(length == 0 || buf[length - 1] == '\0');
 	return length;
-}
-
-static int
-strp_cmp(const void *p1, const void *p2)
-{
-	return strcmp(*(const char **)p1, *(const char **)p2);
 }
 
 void
