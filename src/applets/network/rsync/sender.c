@@ -25,6 +25,7 @@
 #include <sys/time.h>
 
 #include <assert.h>
+#include COMPAT_ENDIAN_H
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -1075,91 +1076,44 @@ file_success(void *cookie, const void *data, size_t datasz)
 	return 1;
 }
 
+/* Consume read-ahead before waiting for the rest of a goodbye field. */
+static int
+sender_read_final(struct sess *sess, struct iobuf *buf, int fd, void *val,
+    size_t size)
+{
+	size_t buffered = MIN(iobuf_get_readsz(buf), size);
+
+	if (buffered != 0)
+		iobuf_read_buf(buf, val, buffered);
+	return buffered == size ||
+	    io_read_buf(sess, fd, (uint8_t *)val + buffered, size - buffered);
+}
+
 static int
 sender_finalize(struct sess *sess, const struct fl *fl, struct iobuf *rbuf,
      int fdin, int fdout)
 {
-	int32_t idx;
+	uint32_t idx;
+	uint16_t flags;
 
-	idx = 0;
-	if (!protocol_keepalive) {
-		while (iobuf_get_readsz(rbuf) < sizeof(idx)) {
-			if (!iobuf_fill(sess, rbuf, fdin)) {
-				ERRX1("iobuf_fill on final goodbye");
-				return ERR_PROTOCOL;
-			}
-		}
-
-		iobuf_read_int(rbuf, &idx);
-	} else {
-		size_t needed;
-		int32_t keepalive;
-		enum { NEED_IDX, NEED_KEEPALIVE, DONE } state;
-
-		needed = sizeof(int32_t);
-		state = NEED_IDX;
-		while (state != DONE) {
-			while (iobuf_get_readsz(rbuf) < needed) {
-				if (!iobuf_fill(sess, rbuf, fdin)) {
-					/*
-					 * iobuf_fill() will only error out if
-					 * we didn't read anything, so we can
-					 * safely bail out here knowing that
-					 * our request won't be satisified.
-					 */
-					ERRX1("iobuf_fill on final goodbye in state %d",
-					    state);
-					return ERR_PROTOCOL;
-				}
-			}
-
-			switch (state) {
-			case NEED_IDX:
-				iobuf_read_int(rbuf, &idx);
-				if ((uint32_t)idx != fl->sz) {
-					state = DONE;
-					break;
-				}
-
-				state = NEED_KEEPALIVE;
-				needed = sizeof(int16_t);
-
-				break;
-			case NEED_KEEPALIVE:
-				iobuf_read_short(rbuf, &keepalive);
-
-				if (keepalive != IFLAG_NEW) {
-					state = DONE;
-					break;
-				}
-
-				/* Reply to the keepalive ping */
-				if (!io_write_int(sess, fdout, (int)fl->sz)) {
-					ERRX1("io_write_int");
-					state = DONE;
-					break;
-				} else if (!io_write_short(sess, fdout, IFLAG_NEW)) {
-					ERRX1("io_write_short");
-					state = DONE;
-					break;
-				}
-
-				state = NEED_IDX;
-				needed = sizeof(int32_t);
-
-				break;
-			default:
-				assert(state != DONE);
-				break;
-			}
-		}
+	for (;;) {
+		if (!sender_read_final(sess, rbuf, fdin, &idx, sizeof(idx)))
+			return 0;
+		idx = le32toh(idx);
+		if (idx == UINT32_MAX) /* final -1 */
+			return 1;
+		if (!protocol_keepalive || idx != fl->sz)
+			break;
+		if (!sender_read_final(sess, rbuf, fdin, &flags, sizeof(flags)))
+			return 0;
+		if (le16toh(flags) != IFLAG_NEW)
+			break;
+		if (!io_write_int(sess, fdout, (int)idx) ||
+		    !io_write_short(sess, fdout, IFLAG_NEW))
+			return 0;
 	}
 
-	if (idx != -1) {
-		ERRX("read incorrect update complete ack");
-		return ERR_PROTOCOL;
-	}
-
+	ERRX("read incorrect update complete ack");
 	return 0;
 }
 
@@ -1969,7 +1923,7 @@ rsync_sender(struct sess *sess, int fdin,
 	}
 
 	/* Final "goodbye" message. */
-	if ((rc = sender_finalize(sess, &fl, &rbuf, fdin, fdout)) != 0) {
+	if (!sender_finalize(sess, &fl, &rbuf, fdin, fdout)) {
 		ERRX1("sender_finalize");
 		goto out;
 	}
