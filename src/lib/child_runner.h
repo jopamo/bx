@@ -168,6 +168,9 @@ int bx_child_exec_file_argv_in_path(
     char *const *argv,
     const char *path,
     enum bx_child_path_search_mode mode);
+/* Look up an executable without running it. Returns an errno value or
+ * transfers ownership of the successful pathname through found. */
+int bx_child_find_executable(const char *name, const char *path, char **found);
 enum bx_child_callback_signals {
     BX_CHILD_SIGNALS_INHERIT,
     BX_CHILD_SIGNALS_RESET_CAUGHT,

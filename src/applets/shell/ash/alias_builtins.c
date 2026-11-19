@@ -12,7 +12,7 @@
 #include "applets/shell/ash/shell_policy.h"
 #include "lib/output_quote.h"
 
-static bool ash_alias_print(
+bool ash_alias_print(
     const struct ash_alias* alias,
     bool prefix
 ) {

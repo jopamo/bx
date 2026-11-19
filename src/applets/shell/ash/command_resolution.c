@@ -244,6 +244,24 @@ struct ash_command_resolution ash_command_resolve(const struct ash_shell* shell,
     return ash_command_resolve_namespaces(shell, name, true, true);
 }
 
+struct ash_command_resolution ash_command_resolve_query(const struct ash_shell* shell, const char* name, bool default_path) {
+    struct ash_command_resolution result = ash_command_resolve_namespaces(shell, name, true, !default_path);
+    result.default_path = default_path && result.kind == ASH_COMMAND_PATH_SEARCH;
+    return result;
+}
+
+bool ash_command_options_add(struct ash_command_options* options, const char* letters) {
+    for (; *letters != '\0'; letters++) {
+        switch (*letters) {
+            case 'p': options->default_path = true; break;
+            case 'v': options->query = ASH_COMMAND_QUERY_SHORT; break;
+            case 'V': options->query = ASH_COMMAND_QUERY_VERBOSE; break;
+            default: return false;
+        }
+    }
+    return true;
+}
+
 void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_prefix* prefix, const char* name, size_t index) {
     if (prefix->state == ASH_COMMAND_PREFIX_COMPLETE) {
         return;
@@ -254,8 +272,7 @@ void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_pr
             return;
         }
         if (name[0] == '-' && name[1] != '\0') {
-            if (strspn(name + 1u, "p") == strlen(name + 1u)) {
-                prefix->default_path = true;
+            if (ash_command_options_add(&prefix->options, name + 1u)) {
                 return;
             }
             prefix->option_error_index = index;
@@ -263,13 +280,17 @@ void ash_command_prefix_add(const struct ash_shell* shell, struct ash_command_pr
             return;
         }
     }
+    if (prefix->options.query != ASH_COMMAND_EXECUTE) {
+        prefix->state = ASH_COMMAND_PREFIX_COMPLETE;
+        return;
+    }
     prefix->via_command = prefix->state != ASH_COMMAND_PREFIX_NAME;
-    prefix->target = prefix->via_command ? ash_command_resolve_namespaces(shell, name, false, !prefix->default_path) : ash_command_resolve(shell, name);
-    prefix->target.default_path = prefix->default_path && prefix->target.kind == ASH_COMMAND_PATH_SEARCH;
+    prefix->target = prefix->via_command ? ash_command_resolve_namespaces(shell, name, false, !prefix->options.default_path) : ash_command_resolve(shell, name);
+    prefix->target.default_path = prefix->options.default_path && prefix->target.kind == ASH_COMMAND_PATH_SEARCH;
     prefix->index = index;
     prefix->state = ash_command_resolution_is_builtin(&prefix->target) && prefix->target.target.builtin == ASH_BUILTIN_COMMAND ? ASH_COMMAND_PREFIX_OPTIONS : ASH_COMMAND_PREFIX_COMPLETE;
     if (prefix->state == ASH_COMMAND_PREFIX_OPTIONS) {
-        prefix->default_path = false;
+        prefix->options = (struct ash_command_options){0};
     }
 }
 

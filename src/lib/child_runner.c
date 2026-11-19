@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -199,7 +200,8 @@ static int bx_child_exec_file_argv_search(
     char *const *envp,
     const char *path,
     enum bx_child_path_search_mode mode,
-    bool explicit_current_directory);
+    bool explicit_current_directory,
+    char **found);
 
 int bx_child_exec_file_argv(const char *executable, char *const *argv) {
     if (!executable || !argv || !argv[0])
@@ -212,7 +214,7 @@ int bx_child_exec_file_argv(const char *executable, char *const *argv) {
         path = BX_CHILD_DEFAULT_PATH;
     return bx_child_exec_file_argv_search(
         executable, argv, environ, path,
-        BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false);
+        BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false, NULL);
 }
 
 int bx_child_exec_argv_envp(char *const *argv,
@@ -235,7 +237,16 @@ int bx_child_exec_file_argv_envp(const char *executable,
         path = BX_CHILD_DEFAULT_PATH;
     return bx_child_exec_file_argv_search(
         executable, argv, envp, path,
-        BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false);
+        BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false, NULL);
+}
+
+static int bx_child_check_executable(const char *path) {
+    struct stat st;
+    if (stat(path, &st) < 0)
+        return errno;
+    if (!S_ISREG(st.st_mode))
+        return EACCES;
+    return faccessat(AT_FDCWD, path, X_OK, AT_EACCESS) == 0 ? 0 : errno;
 }
 
 static int bx_child_exec_file_argv_search(
@@ -244,13 +255,21 @@ static int bx_child_exec_file_argv_search(
     char *const *envp,
     const char *path,
     enum bx_child_path_search_mode mode,
-    bool explicit_current_directory) {
-    if (!executable || !argv || !argv[0] || !envp || !path ||
+    bool explicit_current_directory,
+    char **found) {
+    if (!executable || (!found && (!argv || !argv[0] || !envp)) || !path ||
         (mode != BX_CHILD_PATH_SEARCH_STOP_ON_ERROR &&
          mode != BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR))
         return EINVAL;
-    if (strchr(executable, '/'))
-        return bx_child_exec_file_argv_envp_exact(executable, argv, envp);
+    if (strchr(executable, '/')) {
+        if (!found)
+            return bx_child_exec_file_argv_envp_exact(executable, argv, envp);
+        int error = bx_child_check_executable(executable);
+        if (error != 0)
+            return error;
+        *found = strdup(executable);
+        return *found != NULL ? 0 : ENOMEM;
+    }
 
     const char *command = executable;
     size_t command_len = strlen(command);
@@ -290,8 +309,17 @@ static int bx_child_exec_file_argv_search(
             memcpy(candidate_path + dir_len + 1, command, command_len + 1);
         }
 
-        execve(candidate_path, argv, envp);
-        int err = errno != 0 ? errno : EIO;
+        int err;
+        if (found) {
+            err = bx_child_check_executable(candidate_path);
+            if (err == 0) {
+                *found = candidate_path;
+                return 0;
+            }
+        } else {
+            execve(candidate_path, argv, envp);
+            err = errno != 0 ? errno : EIO;
+        }
         free(candidate_path);
 
         if (err == EACCES) {
@@ -317,7 +345,13 @@ int bx_child_exec_file_argv_in_path(
     const char *path,
     enum bx_child_path_search_mode mode) {
     return bx_child_exec_file_argv_search(
-        executable, argv, environ, path, mode, true);
+        executable, argv, environ, path, mode, true, NULL);
+}
+
+int bx_child_find_executable(const char *name, const char *path, char **found) {
+    *found = NULL;
+    return bx_child_exec_file_argv_search(
+        name, NULL, NULL, path, BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR, true, found);
 }
 
 static int bx_child_internal_fd_pair(int pair[2]) {

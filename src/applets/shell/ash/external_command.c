@@ -1,11 +1,37 @@
 #include <errno.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/external_command.h"
 #include "applets/shell/ash/variables.h"
 #include "lib/child_runner.h"
+
+static char* ash_standard_path(void) {
+    size_t size = confstr(_CS_PATH, NULL, 0);
+    if (size == 0)
+        return NULL;
+    char* path = malloc(size);
+    if (path != NULL && confstr(_CS_PATH, path, size) == size)
+        return path;
+    free(path);
+    return NULL;
+}
+
+int ash_external_command_find(const struct ash_shell* shell, const struct ash_command_resolution* resolution, char** path_out) {
+    *path_out = NULL;
+    if (resolution->kind == ASH_COMMAND_EXPLICIT_PATH || resolution->kind == ASH_COMMAND_HASHED_EXTERNAL)
+        return bx_child_find_executable(resolution->target.path, "", path_out);
+    if (resolution->kind != ASH_COMMAND_PATH_SEARCH)
+        return ENOENT;
+
+    char* standard = resolution->default_path ? ash_standard_path() : NULL;
+    const char* path = resolution->default_path ? (standard != NULL ? standard : BX_CHILD_DEFAULT_PATH) : ash_var_get(shell, "PATH");
+    int error = path != NULL ? bx_child_find_executable(resolution->command_name, path, path_out) : ENOENT;
+    free(standard);
+    return error;
+}
 
 static int ash_external_path_search(struct ash_shell* shell, char** argv, const char* command, bool default_path) {
     /*
@@ -15,7 +41,8 @@ static int ash_external_path_search(struct ash_shell* shell, char** argv, const 
      * environment import; an explicitly empty PATH remains an empty segment.
      * command -p overrides only the search path, not the child environment.
      */
-    const char* path = default_path ? BX_CHILD_DEFAULT_PATH : getenv("PATH");
+    char* standard = default_path ? ash_standard_path() : NULL;
+    const char* path = default_path ? (standard != NULL ? standard : BX_CHILD_DEFAULT_PATH) : getenv("PATH");
     if (path == NULL) {
         path = ash_var_get(shell, "PATH");
     }
@@ -28,6 +55,7 @@ static int ash_external_path_search(struct ash_shell* shell, char** argv, const 
             BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR
         ) :
         ENOENT;
+    free(standard);
     if (lookup_error == ENOMEM) {
         ash_diag_oom(shell);
         return 126;

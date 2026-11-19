@@ -4,6 +4,13 @@
 struct ash_command_resolution;
 struct ash_shell;
 
+/* Look up an external resolution without executing it. See bx_child_find_executable. */
+int ash_external_command_find(
+    const struct ash_shell* shell,
+    const struct ash_command_resolution* resolution,
+    char** path_out
+);
+
 /*
  * Execute one already resolved pathname without PATH search.
  */

@@ -16,6 +16,7 @@
 #include "applets.h"
 #include "applets/shell/ash/applet_command.h"
 #include "applets/shell/ash/alias_builtins.h"
+#include "applets/shell/ash/aliases.h"
 #include "applets/shell/ash/command.h"
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
@@ -40,6 +41,7 @@
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/shopt_builtin.h"
 #include "applets/shell/ash/startup.h"
+#include "applets/shell/ash/syntax.h"
 #include "applets/shell/ash/trap_builtin.h"
 #include "applets/shell/ash/traps.h"
 #include "applets/shell/ash/variables.h"
@@ -1243,14 +1245,105 @@ static int ash_run_input_builtin(struct ash_shell* shell, enum ash_builtin_kind 
     return status;
 }
 
+/* Returns 1 for a match, 0 for an unknown name and -1 on output failure. */
+static int ash_describe_command(struct ash_shell* shell, const char* name, const struct ash_command_options* options) {
+    bool verbose = options->query == ASH_COMMAND_QUERY_VERBOSE;
+    const char* kind = NULL;
+    struct ash_alias* alias = ash_shell_policy_expands_aliases(&shell->policy) ? ash_alias_find(shell->aliases, name) : NULL;
+    if (ash_reserved_word_from_span(name, strlen(name)) != ASH_RESERVED_NONE) {
+        kind = "a shell keyword";
+    } else if (alias != NULL) {
+        if (!verbose)
+            return ash_alias_print(alias, true) ? 1 : -1;
+        return printf("%s is aliased to ", name) >= 0 &&
+            bx_output_quote_write_single(stdout, ash_alias_value(alias)) &&
+            fputc('\n', stdout) != EOF ? 1 : -1;
+    } else {
+        struct ash_command_resolution resolution = ash_command_resolve_query(shell, name, options->default_path);
+        switch (resolution.kind) {
+            case ASH_COMMAND_SPECIAL_BUILTIN:
+            case ASH_COMMAND_REGULAR_BUILTIN:
+                kind = "a shell builtin";
+                break;
+            case ASH_COMMAND_FUNCTION:
+                kind = "a shell function";
+                break;
+            case ASH_COMMAND_BX_APPLET:
+                kind = "a bx applet";
+                break;
+            default: {
+                char* path;
+                int error = ash_external_command_find(shell, &resolution, &path);
+                if (error != 0) {
+                    if (error == ENOMEM) {
+                        ash_diag_oom(shell);
+                        return -1;
+                    }
+                    if (verbose)
+                        ash_diag(shell, "command: %s: not found", name);
+                    return 0;
+                }
+                if (path[0] != '/') {
+                    char* absolute = bx_path_make_absolute_dup(path);
+                    error = errno;
+                    free(path);
+                    if (absolute == NULL) {
+                        ash_exec_error(shell, "command: getcwd", error);
+                        return -1;
+                    }
+                    path = absolute;
+                }
+                int written = verbose ? printf("%s is %s\n", name, path) : puts(path);
+                free(path);
+                return written >= 0 ? 1 : -1;
+            }
+        }
+    }
+    return (verbose ? printf("%s is %s\n", name, kind) : puts(name)) >= 0 ? 1 : -1;
+}
+
+static int ash_builtin_command(struct ash_shell* shell, const struct ash_command* command) {
+    struct ash_command_options options = {0};
+    size_t index = 1;
+    for (; index < command->word_count; index++) {
+        const char* word = command->words[index];
+        if (strcmp(word, "--") == 0) {
+            index++;
+            break;
+        }
+        if (word[0] != '-' || word[1] == '\0')
+            break;
+        if (!ash_command_options_add(&options, word + 1)) {
+            ash_diag(shell, "command: unsupported option '%s'", word);
+            return 2;
+        }
+    }
+    if (index == command->word_count)
+        return 0;
+
+    int status = 1;
+    for (; index < command->word_count; index++) {
+        int result = ash_describe_command(shell, command->words[index], &options);
+        if (result < 0) {
+            status = 2;
+            break;
+        }
+        if (result > 0)
+            status = 0;
+    }
+    if (fflush(stdout) == EOF || ferror(stdout)) {
+        int error = errno != 0 ? errno : EIO;
+        clearerr(stdout);
+        ash_exec_error(shell, "command: stdout", error);
+        return 2;
+    }
+    return status;
+}
+
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command) {
     switch (builtin) {
         case ASH_BUILTIN_COMMAND:
-            if (command->word_count == 1u) {
-                return 0;
-            }
-            ash_diag(shell, "command: unsupported option '%s'", command->words[command->word_count - 1u]);
-            return 2;
+            return ash_builtin_command(shell, command);
         case ASH_BUILTIN_ALIAS:
             return ash_alias_builtin(shell, command);
         case ASH_BUILTIN_COLON:
@@ -1664,9 +1757,8 @@ static int ash_execute_command(
     prepared.words += prefix.index;
     prepared.word_count -= prefix.index;
     prepared.regular_builtin_semantics = prefix.via_command;
-    if (ash_command_resolution_is_builtin(&prefix.target) && prefix.target.target.builtin == ASH_BUILTIN_COMMAND) {
-        prepared.word_count = prefix.option_error_index != 0u ? prefix.option_error_index - prefix.index + 1u : 1u;
-    }
+    if (prefix.option_error_index != 0u)
+        prepared.word_count = prefix.option_error_index - prefix.index + 1u;
     command = &prepared;
     struct ash_command_resolution resolution = prefix.target;
     if (!ash_command_resolution_valid(&resolution)) {

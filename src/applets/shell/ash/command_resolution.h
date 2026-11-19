@@ -85,13 +85,27 @@ enum ash_command_prefix_state {
     ASH_COMMAND_PREFIX_COMPLETE,
 };
 
+enum ash_command_query {
+    ASH_COMMAND_EXECUTE = 0,
+    ASH_COMMAND_QUERY_SHORT,
+    ASH_COMMAND_QUERY_VERBOSE,
+};
+
+struct ash_command_options {
+    enum ash_command_query query;
+    bool default_path;
+};
+
+/* Parse a nonempty option cluster (without its leading dash). */
+bool ash_command_options_add(struct ash_command_options* options, const char* letters);
+
 /* Zero-initialize, then feed expanded fields in order; names remain borrowed. */
 struct ash_command_prefix {
     struct ash_command_resolution target;
     size_t index;
     enum ash_command_prefix_state state;
     bool via_command;
-    bool default_path;
+    struct ash_command_options options;
     size_t option_error_index;
 };
 
@@ -108,6 +122,8 @@ struct ash_command_resolution ash_command_resolve(
     const struct ash_shell* shell,
     const char* name
 );
+struct ash_command_resolution ash_command_resolve_query(
+    const struct ash_shell* shell, const char* name, bool default_path);
 /* Recognize supported declaration utilities under the active namespace policy. */
 bool ash_command_resolution_is_declaration_utility(const struct ash_command_resolution* resolution);
 /* Resolve an operand that must cross an external-command exec boundary. */
