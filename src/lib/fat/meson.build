@@ -1,5 +1,6 @@
 fat_config = configuration_data()
 fat_config.set10('BX_FAT_LINUX_BLOCK', cc.compiles('''
+  #include <stddef.h>
   #include <linux/fs.h>
   #include <sys/ioctl.h>
   int main(void) { return BLKSSZGET == BLKGETSIZE64; }
