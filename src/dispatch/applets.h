@@ -114,6 +114,8 @@ int bx_logname_main(int argc, char** argv);
 int bx_join_main(int argc, char** argv);
 int bx_comm_main(int argc, char** argv);
 int bx_cmp_main(int argc, char** argv);
+int bx_losetup_main(int argc, char** argv);
+int bx_insmod_main(int argc, char** argv);
 int bx_cksum_main(int argc, char** argv);
 int bx_md5sum_main(int argc, char** argv);
 int bx_sha1sum_main(int argc, char** argv);

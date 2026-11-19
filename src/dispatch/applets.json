@@ -1078,6 +1078,25 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "insmod",
+      "main": "bx_insmod_main",
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "losetup",
+      "main": "bx_losetup_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "cmp",
       "main": "bx_cmp_main",
       "capabilities": [

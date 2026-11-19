@@ -737,6 +737,8 @@ bx_system_applet_sources = [
   'src/applets/system/chroot/chroot.c',
   'src/applets/system/flock/flock.c',
   'src/applets/system/mountpoint/mountpoint.c',
+  'src/applets/system/losetup/losetup.c',
+  'src/applets/system/modules/insmod.c',
   'src/applets/system/swapoff/swapoff.c',
   'src/applets/system/unshare/unshare.c',
   'src/applets/system/dmesg/dmesg.c',
