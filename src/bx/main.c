@@ -406,12 +406,30 @@ static int install_one_applet_shortcut(
     const char* install_dir,
     const char* applet_name,
     bool symlink_mode,
+    const char* relative_target,
     struct bx_diag_ctx* diag
 ) {
     char* destination_path = bx_path_join(install_dir, applet_name);
 
     struct stat st;
     if (lstat(destination_path, &st) == 0) {
+        if (relative_target != NULL) {
+            bool matches = false;
+            if (S_ISLNK(st.st_mode)) {
+                char* existing = bx_path_readlink_dup(destination_path);
+                matches = existing != NULL && strcmp(existing, relative_target) == 0;
+                free(existing);
+            } else if (S_ISREG(st.st_mode)) {
+                struct stat source;
+                matches = stat(bx_path, &source) == 0 &&
+                    st.st_dev == source.st_dev && st.st_ino == source.st_ino;
+            }
+            if (!matches) {
+                bx_diag(diag, "existing path is not a relocatable bx shortcut: '%s'", destination_path);
+                free(destination_path);
+                return bx_status_error();
+            }
+        }
         free(destination_path);
         return bx_status_success();
     }
@@ -423,7 +441,7 @@ static int install_one_applet_shortcut(
 
     int rc;
     if (symlink_mode) {
-        rc = symlink(bx_path, destination_path);
+        rc = symlink(relative_target != NULL ? relative_target : bx_path, destination_path);
     }
     else {
         rc = link(bx_path, destination_path);
@@ -439,10 +457,24 @@ static int install_one_applet_shortcut(
     return bx_status_success();
 }
 
-static int install_missing_applets(const char* bx_path, const char* install_dir, bool symlink_mode, struct bx_diag_ctx* diag) {
+static int install_missing_applets(const char* bx_path, const char* install_dir, bool symlink_mode, bool relative, struct bx_diag_ctx* diag) {
     if (!path_is_directory(install_dir)) {
         bx_diag(diag, "install target is not a directory: '%s'", install_dir);
         return bx_status_error();
+    }
+
+    char* canonical_dir = NULL;
+    char* relative_target = NULL;
+    if (relative) {
+        canonical_dir = bx_path_realpath_dup(install_dir);
+        if (canonical_dir != NULL)
+            relative_target = bx_path_relative_path_between(canonical_dir, bx_path);
+        if (relative_target == NULL) {
+            bx_perror_path(diag, install_dir);
+            free(canonical_dir);
+            return bx_status_error();
+        }
+        install_dir = canonical_dir;
     }
 
     int status = bx_status_success();
@@ -452,29 +484,38 @@ static int install_missing_applets(const char* bx_path, const char* install_dir,
         if (applet == NULL) {
             continue;
         }
-        if (install_one_applet_shortcut(bx_path, install_dir, applet->name, symlink_mode, diag) != 0) {
+        if (install_one_applet_shortcut(bx_path, install_dir, applet->name, symlink_mode, relative_target, diag) != 0) {
             status = bx_status_error();
         }
     }
     bx_runtime_snapshot_destroy(runtime);
+    free(relative_target);
+    free(canonical_dir);
 
     return status;
 }
 
 static int run_install_mode(int argc, char** argv, int first_arg_index, struct bx_diag_ctx* diag) {
     bool symlink_mode = false;
+    bool relative = false;
     const char* install_dir = ".";
     bool install_dir_set = false;
 
     for (int i = first_arg_index; i < argc; i++) {
         const char* arg = argv[i];
         if (strcmp(arg, "--help") == 0) {
-            printf("usage: bx --install [-s|--symlink] [DIR]\n");
+            printf("usage: bx --install [-s|--symlink|--relative] [DIR]\n");
             printf("Install missing applet shortcuts into DIR (default: .).\n");
             printf("By default hard links are created; -s creates symlinks.\n");
+            printf("--relative creates relative symlinks and checks existing shortcuts.\n");
             return bx_status_success();
         }
         if (strcmp(arg, "-s") == 0 || strcmp(arg, "--symlink") == 0) {
+            symlink_mode = true;
+            continue;
+        }
+        if (strcmp(arg, "--relative") == 0) {
+            relative = true;
             symlink_mode = true;
             continue;
         }
@@ -502,7 +543,7 @@ static int run_install_mode(int argc, char** argv, int first_arg_index, struct b
         );
         return bx_status_error();
     }
-    int rc = install_missing_applets(bx_path, install_dir, symlink_mode, diag);
+    int rc = install_missing_applets(bx_path, install_dir, symlink_mode, relative, diag);
     free(bx_path);
     return bx_status_from_applet(rc);
 }
@@ -810,7 +851,7 @@ int main(int argc, char** argv) {
 usage:
     printf("usage: bx SUBCOMMAND [options] ...\n");
     printf("       bx [--profile PROFILE] SUBCOMMAND [options] ...\n");
-    printf("       bx --install [-s|--symlink] [DIR]\n");
+    printf("       bx --install [-s|--symlink|--relative] [DIR]\n");
     printf("\n");
     printf("Global profile selection also honors BX_PROFILE when dispatching applets.\n");
     printf("Recognized global options: --help, --version, --json, --color, --no-color,\n");
