@@ -568,6 +568,7 @@ bx_base_applet_sources = [
   'src/applets/base/bc/vm.c',
   'src/applets/base/cat/cat.c',
   'src/applets/base/cksum/cksum.c',
+  'src/applets/base/cmp/cmp.c',
   'src/applets/base/comm/comm.c',
   'src/applets/base/cp/cp.c',
   'src/applets/base/cut/cut.c',

@@ -1078,6 +1078,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "cmp",
+      "main": "bx_cmp_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "comm",
       "main": "bx_comm_main",
       "capabilities": [
