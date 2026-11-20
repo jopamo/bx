@@ -29,6 +29,8 @@ struct ash_var {
     struct ash_value value;
     /* Metadata is orthogonal to the tagged value and composes as flags. */
     uint32_t attributes;
+    /* Only OPTIND uses this byte offset into the current option word. */
+    size_t option_offset;
     struct ash_var* next;
 };
 
@@ -93,6 +95,8 @@ bool ash_var_set_caller(
     const char* value,
     bool force_export
 );
+size_t ash_var_optind_offset(const struct ash_shell* shell);
+bool ash_var_set_optind(struct ash_shell* shell, const char* value, size_t offset);
 bool ash_var_set_local(
     struct ash_shell* shell,
     const char* name,

@@ -1340,6 +1340,106 @@ static int ash_builtin_command(struct ash_shell* shell, const struct ash_command
     return status;
 }
 
+static int ash_builtin_getopts(struct ash_shell* shell, const struct ash_command* command) {
+    size_t first = 1u;
+    if (command->word_count > first && strcmp(command->words[first], "--") == 0)
+        first++;
+    if (command->word_count - first < 2u) {
+        ash_diag(shell, "usage: getopts OPTSTRING NAME [ARG ...]");
+        return 2;
+    }
+    const char* spec = command->words[first++];
+    const char* name = command->words[first++];
+    size_t name_length = strlen(name);
+    if (!ash_is_valid_name_span(name, name_length)) {
+        ash_diag(shell, "getopts: invalid variable name '%s'", name);
+        return 2;
+    }
+    if (!ash_var_builtin_assignment_allowed(shell, name, name_length) ||
+        !ash_var_builtin_assignment_allowed(shell, "OPTIND", 6u) ||
+        !ash_var_builtin_assignment_allowed(shell, "OPTARG", 6u))
+        return 2;
+
+    const struct ash_positional_frame* frame = ash_scope_positionals(shell);
+    bool explicit_args = command->word_count > first;
+    char* const* args = explicit_args ? command->words + first : frame->values;
+    size_t count = explicit_args ? command->word_count - first : frame->count;
+    const char* index = ash_var_get(shell, "OPTIND");
+    size_t word = 0u;
+    if (index != NULL && *index >= '0' && *index <= '9') {
+        char* end;
+        errno = 0;
+        unsigned long long value = strtoull(index, &end, 10);
+        if (*end == '\0' && value > 0u)
+            word = (errno == ERANGE || value - 1u > count) ? count : (size_t)(value - 1u);
+    }
+    size_t offset = ash_var_optind_offset(shell);
+    const char* arg = word < count ? args[word] : NULL;
+    const char* value = NULL;
+    char result[2] = {'?', '\0'};
+    char bad[2] = {'\0', '\0'};
+    int status = 1;
+    if (arg == NULL || arg[0] != '-' || arg[1] == '\0') {
+        offset = 0u;
+    }
+    else if (offset == 0u && strcmp(arg, "--") == 0) {
+        word++;
+    }
+    else {
+        if (offset == 0u || offset >= strlen(arg))
+            offset = 1u;
+        bool silent = spec[0] == ':';
+        char option = arg[offset++];
+        const char* found = option == ':' || option == '?' ? NULL :
+            strchr(spec + silent, option);
+        status = 0;
+        if (found == NULL) {
+            if (silent) {
+                bad[0] = option;
+                value = bad;
+            }
+            else
+                ash_diag(shell, "getopts: illegal option -- %c", option);
+        }
+        else if (found[1] == ':') {
+            if (arg[offset] != '\0') {
+                value = arg + offset;
+                offset = 0u;
+                word++;
+                result[0] = option;
+            }
+            else if (word + 1u < count) {
+                value = args[word + 1u];
+                offset = 0u;
+                word += 2u;
+                result[0] = option;
+            }
+            else if (silent) {
+                result[0] = ':';
+                bad[0] = option;
+                value = bad;
+            }
+            else
+                ash_diag(shell, "getopts: option requires an argument -- %c", option);
+        }
+        else {
+            result[0] = option;
+        }
+        if (offset != 0u && arg[offset] == '\0') {
+            offset = 0u;
+            word++;
+        }
+    }
+
+    char next[3u * sizeof(size_t) + 1u];
+    snprintf(next, sizeof(next), "%zu", word + 1u);
+    if (!ash_var_set_caller(shell, "OPTARG", value, false) ||
+        !ash_var_set_optind(shell, next, offset) ||
+        !ash_var_set_caller(shell, name, result, false))
+        return 2;
+    return status;
+}
+
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command) {
     switch (builtin) {
         case ASH_BUILTIN_COMMAND:
@@ -1360,6 +1460,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_trap_builtin(shell, command);
         case ASH_BUILTIN_KILL:
             return ash_kill_builtin(shell, command);
+        case ASH_BUILTIN_GETOPTS:
+            return ash_builtin_getopts(shell, command);
         case ASH_BUILTIN_READ:
             return ash_read_builtin(shell, command);
         case ASH_BUILTIN_EXPORT:

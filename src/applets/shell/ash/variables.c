@@ -168,6 +168,7 @@ bool ash_var_list_invariants(const struct ash_var* variables) {
                 variable->name_length
             ) ||
             !ash_var_attributes_valid(variable->attributes) ||
+            (variable->option_offset != 0u && strcmp(variable->name, "OPTIND") != 0) ||
             !ash_value_invariants(&variable->value)) {
             return false;
         }
@@ -395,6 +396,7 @@ static bool ash_var_set_in_scope(
         return false;
     }
     ash_value_destroy(&previous);
+    var->option_offset = 0u;
     assert(ash_var_list_invariants(scope->variables));
     return ash_vars_refresh_locale(shell);
 }
@@ -454,7 +456,10 @@ bool ash_var_set_local(
     );
 }
 
-bool ash_var_set_caller(struct ash_shell* shell, const char* name, const char* value, bool force_export) {
+static bool ash_var_set_caller_with_offset(
+    struct ash_shell* shell, const char* name, const char* value,
+    bool force_export, size_t offset
+) {
     struct ash_scope* current = ash_scope_current(shell);
     bool temporary = current != NULL && current->kind == ASH_SCOPE_TEMPORARY_ASSIGNMENT;
     size_t name_length = strlen(name);
@@ -466,7 +471,28 @@ bool ash_var_set_caller(struct ash_shell* shell, const char* name, const char* v
     if (!ash_var_set_in_scope(shell, owner, name, name_length, value, 0u, force_export)) {
         return false;
     }
-    return !temporary || ash_var_find_in_scope(current, name, name_length) == NULL || ash_var_set_in_scope(shell, current, name, name_length, value, 0u, force_export);
+    if (offset != 0u)
+        ash_var_find_in_scope(owner, name, name_length)->option_offset = offset;
+    struct ash_var* prefix = temporary ? ash_var_find_in_scope(current, name, name_length) : NULL;
+    if (prefix == NULL)
+        return true;
+    if (!ash_var_set_in_scope(shell, current, name, name_length, value, 0u, force_export))
+        return false;
+    prefix->option_offset = offset;
+    return true;
+}
+
+bool ash_var_set_caller(struct ash_shell* shell, const char* name, const char* value, bool force_export) {
+    return ash_var_set_caller_with_offset(shell, name, value, force_export, 0u);
+}
+
+size_t ash_var_optind_offset(const struct ash_shell* shell) {
+    const struct ash_var* var = ash_var_find_len_const(shell, "OPTIND", 6u);
+    return var != NULL ? var->option_offset : 0u;
+}
+
+bool ash_var_set_optind(struct ash_shell* shell, const char* value, size_t offset) {
+    return ash_var_set_caller_with_offset(shell, "OPTIND", value, false, offset);
 }
 
 bool ash_var_set_temporary(
@@ -649,7 +675,8 @@ bool ash_import_environment(struct ash_shell* shell) {
     }
 
     if (unsetenv("IFS") != 0 ||
-        !ash_var_set(shell, "IFS", " \t\n", false)) {
+        !ash_var_set(shell, "IFS", " \t\n", false) ||
+        !ash_var_set(shell, "OPTIND", "1", false)) {
         return false;
     }
 

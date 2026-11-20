@@ -22,6 +22,7 @@ static const struct ash_builtin_definition ash_builtins[] = {
     {"exec", ASH_BUILTIN_EXEC},
     {"exit", ASH_BUILTIN_EXIT},
     {"export", ASH_BUILTIN_EXPORT},
+    {"getopts", ASH_BUILTIN_GETOPTS},
     {"kill", ASH_BUILTIN_KILL},
     {"read", ASH_BUILTIN_READ},
     {"readonly", ASH_BUILTIN_READONLY},
@@ -62,6 +63,7 @@ static enum ash_command_resolution_kind ash_builtin_resolution_kind(
         case ASH_BUILTIN_ALIAS:
         case ASH_BUILTIN_CD:
         case ASH_BUILTIN_COMMAND:
+        case ASH_BUILTIN_GETOPTS:
         case ASH_BUILTIN_KILL:
         case ASH_BUILTIN_READ:
         case ASH_BUILTIN_UNALIAS:
