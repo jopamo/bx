@@ -18,12 +18,9 @@ static void usage(FILE* out, const char* name) {
 #include <stdlib.h>
 #include <string.h>
 
-#include "applets/archive/archive_codec.h"
 #include "lib/fd_ops.h"
 #include "module_elf.h"
 #include "module_index.h"
-
-enum { MODULE_SIZE_LIMIT = 128 * 1024 * 1024 };
 
 static bool print_field(const char* key, size_t len, const char* value, const char* field) {
     if (field != NULL)
@@ -161,34 +158,16 @@ int bx_modinfo_main(int argc, char** argv) {
             continue;
         }
         size_t size;
-        unsigned char* file = (unsigned char*)bx_module_read_regular(fd, MODULE_SIZE_LIMIT, &size);
+        unsigned char* file = bx_module_elf_read(fd, arg, &size, &diag);
+        bx_fd_cleanup(&fd);
         if (file == NULL) {
-            bx_perror_path(&diag, arg);
-            bx_fd_cleanup(&fd);
             status = 1;
             continue;
-        }
-        bx_fd_cleanup(&fd);
-        const struct bx_archive_codec* codec = size ? bx_archive_codec_detect_magic(file, size) : NULL;
-        struct bx_archive_buffer decoded = {0};
-        bool ready = true;
-        if (codec == bx_archive_codec_bzip2()) {
-            bx_diag(&diag, "'%s': unsupported module compression", arg);
-            ready = false;
-        } else if (codec != NULL) {
-            struct bx_archive_buffer input = {.data = file, .len = size};
-            ready = bx_archive_codec_decode_buffer_limited(codec, &input, &decoded,
-                                                          MODULE_SIZE_LIMIT, &diag);
-            free(file);
-            file = decoded.data;
-            size = decoded.len;
         }
         const char* data;
         size_t len;
         bool printed = true;
-        if (!ready) {
-            status = 1;
-        } else if (!bx_module_elf_info(file, size, &data, &len)) {
+        if (!bx_module_elf_info(file, size, &data, &len)) {
             bx_diag(&diag, "'%s': expected an ELF module with valid .modinfo", arg);
             status = 1;
         } else if (field != NULL && strcmp(field, "filename") == 0) {

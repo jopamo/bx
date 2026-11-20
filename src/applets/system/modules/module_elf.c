@@ -3,7 +3,48 @@
 #ifdef __linux__
 #include <elf.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+
+#include "applets/archive/archive_codec.h"
+#include "bx/diag.h"
+#include "module_index.h"
+
+unsigned char* bx_module_elf_read(int fd, const char* path, size_t* length,
+                                  struct bx_diag_ctx* diag) {
+    enum { MODULE_SIZE_LIMIT = 128 * 1024 * 1024 };
+    size_t size;
+    unsigned char* file = (unsigned char*)bx_module_read_regular(fd, MODULE_SIZE_LIMIT, &size);
+    if (file == NULL) {
+        bx_perror_path(diag, path);
+        return NULL;
+    }
+    const struct bx_archive_codec* codec = bx_archive_codec_detect_magic(file, size);
+    if (codec == NULL) {
+        *length = size;
+        return file;
+    }
+    if (codec == bx_archive_codec_bzip2()) {
+        bx_diag(diag, "'%s': unsupported module compression", path);
+        free(file);
+        return NULL;
+    }
+    struct bx_archive_buffer input = {.data = file, .len = size};
+    struct bx_archive_buffer decoded = {0};
+    bool ok = bx_archive_codec_decode_buffer_limited(codec, &input, &decoded, MODULE_SIZE_LIMIT, diag);
+    free(file);
+    if (!ok) {
+        free(decoded.data);
+        return NULL;
+    }
+    if (decoded.len == 0) {
+        bx_diag(diag, "'%s': expected an ELF module with valid .modinfo", path);
+        free(decoded.data);
+        return NULL;
+    }
+    *length = decoded.len;
+    return decoded.data;
+}
 
 struct elf_layout {
     bool wide;
