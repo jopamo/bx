@@ -7,8 +7,9 @@
 
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE\n"
-                 "Show the hard dependency order for an exact module name.\n"
-                 "Does not load modules or read modprobe configuration.\n", name);
+                 "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
+                 "Show hard dependencies or resolve aliases from installed module metadata.\n"
+                 "Does not load modules or read modprobe configuration.\n", name, name);
 }
 
 #ifdef __linux__
@@ -18,7 +19,35 @@ static void usage(FILE* out, const char* name) {
 #include <stdlib.h>
 #include <string.h>
 
+#include "module_alias.h"
 #include "module_plan.h"
+
+static bool print_name(const char* prefix, const char* name, size_t len) {
+    char normalized[NAME_MAX + 1];
+    for (size_t i = 0; i < len; i++)
+        normalized[i] = name[i] == '-' ? '_' : name[i];
+    normalized[len] = '\0';
+    return printf("%s%s\n", prefix, normalized) >= 0;
+}
+
+static int show_aliases(struct bx_module_tree* tree, const char* query, struct bx_diag_ctx* diag) {
+    struct bx_module_aliases aliases;
+    if (bx_module_resolve_alias(tree, query, &aliases) < 0) {
+        bx_diag(diag, "cannot resolve alias '%s': %s", query, strerror(errno));
+        return 1;
+    }
+    bool printed = true;
+    for (size_t i = 0; printed && i < aliases.count; i++) {
+        struct bx_module_path name = bx_module_alias_at(&aliases, i);
+        printed = print_name("", name.text, name.len);
+    }
+    free(aliases.matches);
+    if (!printed || fflush(stdout) == EOF) {
+        bx_perror_path(diag, "standard output");
+        return 1;
+    }
+    return 0;
+}
 #endif
 
 int bx_modprobe_main(int argc, char** argv) {
@@ -29,6 +58,7 @@ int bx_modprobe_main(int argc, char** argv) {
 #ifdef __linux__
     static const struct option opts[] = {
         {"show-depends", no_argument, NULL, 'D'},
+        {"resolve-alias", no_argument, NULL, 'R'},
         {"dirname", required_argument, NULL, 'd'},
         {"set-version", required_argument, NULL, 'S'},
         {NULL, 0, NULL, 0},
@@ -36,12 +66,16 @@ int bx_modprobe_main(int argc, char** argv) {
     const char* base = "/";
     const char* release = NULL;
     bool show = false;
+    bool alias = false;
     opterr = 0;
     optind = 1;
-    for (int opt; (opt = getopt_long(argc, argv, ":Dd:S:", opts, NULL)) != -1;) {
+    for (int opt; (opt = getopt_long(argc, argv, ":DRd:S:", opts, NULL)) != -1;) {
         switch (opt) {
         case 'D':
             show = true;
+            break;
+        case 'R':
+            alias = true;
             break;
         case 'd':
             if (*optarg == '\0' || strpbrk(optarg, "\r\n") != NULL) {
@@ -65,11 +99,12 @@ int bx_modprobe_main(int argc, char** argv) {
             return 1;
         }
     }
-    if (!show) {
-        bx_diag(&diag, "only --show-depends is supported; no modules were loaded");
+    if (!show && !alias) {
+        bx_diag(&diag, "only --show-depends and --resolve-alias are supported; no modules were loaded");
         return 1;
     }
-    if (argc - optind != 1 || !bx_module_name_valid(argv[optind])) {
+    if ((show && alias) || argc - optind != 1 ||
+        !(show ? bx_module_name_valid(argv[optind]) : bx_module_alias_query_valid(argv[optind]))) {
         usage(stderr, diag.progname);
         return 1;
     }
@@ -80,6 +115,10 @@ int bx_modprobe_main(int argc, char** argv) {
         bx_perror_path(&diag, tree.path ? tree.path : "module tree");
         goto out;
     }
+    if (alias) {
+        status = show_aliases(&tree, name, &diag);
+        goto out;
+    }
     struct bx_module_plan plan;
     int planned = bx_module_tree_plan(&tree, name, &plan);
     if (planned < 0) {
@@ -88,14 +127,8 @@ int bx_modprobe_main(int argc, char** argv) {
         goto out;
     }
     bool printed = true;
-    if (plan.builtin) {
-        char normalized[NAME_MAX + 1];
-        size_t i;
-        for (i = 0; name[i] != '\0'; i++)
-            normalized[i] = name[i] == '-' ? '_' : name[i];
-        normalized[i] = '\0';
-        printed = printf("builtin %s\n", normalized) >= 0;
-    }
+    if (plan.builtin)
+        printed = print_name("builtin ", name, strlen(name));
     for (size_t i = 0; printed && i < plan.count; i++) {
         struct bx_module_path path = plan.files[i];
         printed = printf("insmod %s/%.*s\n", tree.path, (int)path.len, path.text) >= 0;

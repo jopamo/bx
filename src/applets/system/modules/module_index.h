@@ -18,6 +18,7 @@ struct bx_module_tree {
     struct bx_module_index deps;
     struct bx_module_index builtins;
     struct bx_module_index info;
+    struct bx_module_index aliases;
 };
 
 struct bx_module_path {
@@ -38,6 +39,7 @@ struct bx_module_dep_iter {
 
 bool bx_module_name_valid(const char* name);
 bool bx_module_name_matches(const char* name, const char* key, size_t len);
+bool bx_module_name_span_valid(const char* name, size_t len);
 bool bx_module_release_valid(const char* release);
 char* bx_module_read_regular(int fd, size_t limit, size_t* size);
 
@@ -46,6 +48,9 @@ int bx_module_tree_open(struct bx_module_tree* tree, const char* base, const cha
 void bx_module_tree_close(struct bx_module_tree* tree);
 /* Return 0 with a relative path, 1 for a built-in, or -1 on error. */
 int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* path, size_t size);
+/* Return 1 if found, 0 if absent, or -1 on error. Path output is optional. */
+int bx_module_tree_find_loadable(struct bx_module_tree* tree, const char* name, char* path, size_t size);
+int bx_module_tree_has_builtin(struct bx_module_tree* tree, const char* name);
 int bx_module_tree_open_file(const struct bx_module_tree* tree, const char* path, int flags);
 bool bx_module_path_valid(const char* path, size_t len);
 struct bx_module_path bx_module_path_name(struct bx_module_path path, bool compressed);
@@ -54,6 +59,7 @@ int bx_module_tree_deps(struct bx_module_tree* tree, struct bx_module_dep_iter* 
 int bx_module_dep_next(struct bx_module_dep_iter* iter, struct bx_module_dep* record);
 /* Return borrowed, validated module.key=value records (NUL-delimited). */
 int bx_module_tree_builtin_info(struct bx_module_tree* tree, const char** data, size_t* size);
+int bx_module_tree_aliases(struct bx_module_tree* tree, const char** data, size_t* size);
 #endif
 
 #endif

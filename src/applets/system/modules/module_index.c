@@ -22,7 +22,10 @@ static bool name_char(char c) {
 }
 
 bool bx_module_name_valid(const char* name) {
-    size_t len = strlen(name);
+    return bx_module_name_span_valid(name, strlen(name));
+}
+
+bool bx_module_name_span_valid(const char* name, size_t len) {
     if (len == 0 || len > NAME_MAX)
         return false;
     for (size_t i = 0; i < len; i++) {
@@ -115,6 +118,7 @@ void bx_module_tree_close(struct bx_module_tree* tree) {
     free(tree->deps.data);
     free(tree->builtins.data);
     free(tree->info.data);
+    free(tree->aliases.data);
 }
 
 int bx_module_tree_open_file(const struct bx_module_tree* tree, const char* path, int flags) {
@@ -241,13 +245,8 @@ struct bx_module_path bx_module_path_name(struct bx_module_path path, bool compr
             (compressed && ((suffix_len == 6 && (memcmp(suffix, ".ko.gz", 6) == 0 ||
                                                  memcmp(suffix, ".ko.xz", 6) == 0)) ||
                             (suffix_len == 7 && memcmp(suffix, ".ko.zst", 7) == 0)))) {
-            if (len <= NAME_MAX) {
-                for (size_t i = 0; i < len; i++) {
-                    if (!name_char(file[i]))
-                        return (struct bx_module_path) {0};
-                }
+            if (bx_module_name_span_valid(file, len))
                 return (struct bx_module_path) {file, len};
-            }
         }
     }
     return (struct bx_module_path) {0};
@@ -258,7 +257,7 @@ static bool module_path_matches(const char* name, struct bx_module_path path, bo
     return key.len != 0 && bx_module_name_matches(name, key.text, key.len);
 }
 
-int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* path, size_t size) {
+int bx_module_tree_find_loadable(struct bx_module_tree* tree, const char* name, char* path, size_t size) {
     struct bx_module_dep_iter iter;
     if (bx_module_tree_deps(tree, &iter) < 0)
         return -1;
@@ -269,22 +268,30 @@ int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* pat
         size_t len = record.path.len;
         if (!module_path_matches(name, record.path, true))
             continue;
-        if (!bx_module_path_valid(p, len) || len >= size) {
-            errno = len >= size ? ENAMETOOLONG : EINVAL;
+        if (!bx_module_path_valid(p, len)) {
+            errno = EINVAL;
             return -1;
         }
-        memcpy(path, p, len);
-        path[len] = '\0';
-        return 0;
+        if (path != NULL) {
+            if (len >= size) {
+                errno = ENAMETOOLONG;
+                return -1;
+            }
+            memcpy(path, p, len);
+            path[len] = '\0';
+        }
+        return 1;
     }
-    if (r < 0)
-        return -1;
-    r = load_index(tree, &tree->builtins, "modules.builtin", false);
+    return r;
+}
+
+int bx_module_tree_has_builtin(struct bx_module_tree* tree, const char* name) {
+    int r = load_index(tree, &tree->builtins, "modules.builtin", false);
     if (r < 0)
         return -1;
     if (r > 0) {
         const char* data = tree->builtins.data;
-        iter = (struct bx_module_dep_iter) {data, data + tree->builtins.size};
+        struct bx_module_dep_iter iter = {data, data + tree->builtins.size};
         const char* p;
         const char* end;
         while (next_line(&iter, &p, &end)) {
@@ -297,16 +304,35 @@ int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* pat
             }
         }
     }
+    return 0;
+}
+
+int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* path, size_t size) {
+    int r = bx_module_tree_find_loadable(tree, name, path, size);
+    if (r != 0)
+        return r > 0 ? 0 : -1;
+    r = bx_module_tree_has_builtin(tree, name);
+    if (r != 0)
+        return r;
     errno = ENOENT;
     return -1;
 }
 
-int bx_module_tree_builtin_info(struct bx_module_tree* tree, const char** data, size_t* size) {
-    int r = load_index(tree, &tree->info, "modules.builtin.modinfo", true);
+static int index_contents(const struct bx_module_tree* tree, struct bx_module_index* index,
+                          const char* filename, bool builtin_info, const char** data, size_t* size) {
+    int r = load_index(tree, index, filename, builtin_info);
     if (r < 0)
         return -1;
-    *data = r == 0 ? "" : tree->info.data;
-    *size = r == 0 ? 0 : tree->info.size;
+    *data = r == 0 ? "" : index->data;
+    *size = r == 0 ? 0 : index->size;
     return 0;
+}
+
+int bx_module_tree_builtin_info(struct bx_module_tree* tree, const char** data, size_t* size) {
+    return index_contents(tree, &tree->info, "modules.builtin.modinfo", true, data, size);
+}
+
+int bx_module_tree_aliases(struct bx_module_tree* tree, const char** data, size_t* size) {
+    return index_contents(tree, &tree->aliases, "modules.alias", false, data, size);
 }
 #endif

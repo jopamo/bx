@@ -743,6 +743,7 @@ bx_system_applet_sources = [
   'src/applets/system/losetup/losetup.c',
   'src/applets/system/modules/insmod.c',
   'src/applets/system/modules/modinfo.c',
+  'src/applets/system/modules/module_alias.c',
   'src/applets/system/modules/module_elf.c',
   'src/applets/system/modules/module_index.c',
   'src/applets/system/modules/module_plan.c',
