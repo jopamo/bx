@@ -14,17 +14,17 @@
 #include "scan.h"
 
 enum output { FULL, EXPORT, VALUE, DEVICE };
-enum tag { FAT_BOOT_LABEL, LABEL, UUID, BLOCK_SIZE, TYPE, USAGE, TAG_COUNT };
+enum tag { FAT_BOOT_LABEL, LABEL, UUID, BLOCK_SIZE, VERSION, TYPE, USAGE, TAG_COUNT };
 
 static const char *const tag_names[TAG_COUNT] = {
-    "LABEL_FATBOOT", "LABEL", "UUID", "BLOCK_SIZE", "TYPE", "USAGE",
+    "LABEL_FATBOOT", "LABEL", "UUID", "BLOCK_SIZE", "VERSION", "TYPE", "USAGE",
 };
 
 static void usage(FILE *out)
 {
-    fputs("Usage: blkid [-p | [-l] -t TAG=value] [-u filesystem|other]"
+    fputs("Usage: blkid [-p | [-l] -t TAG=value] [-u filesystem|other|crypto]"
           " [-o full|export|value|device] [-s TAG]... [--] [DEVICE...]\n"
-          "Probe block devices or images for FAT, ext, ISO 9660, or Linux swap.\n"
+          "Probe block devices or images for FAT, ext, ISO 9660, Linux swap, or LUKS.\n"
           "With no devices, scan Linux block devices. -p requires a device.\n"
           "-t matches an exact LABEL or UUID. -l requires one matching path.\n", out);
 }
@@ -51,6 +51,16 @@ static void print_escaped(const char *value, enum output format)
     }
 }
 
+static const char *usage_name(enum bx_probe_usage usage)
+{
+    switch (usage) {
+    case BX_PROBE_FILESYSTEM: return "filesystem";
+    case BX_PROBE_OTHER: return "other";
+    case BX_PROBE_CRYPTO: return "crypto";
+    }
+    return "";
+}
+
 static bool print_signature(const char *path, const struct bx_fs_signature *fs,
                             unsigned tags, enum output format, bool lowlevel,
                             bool prior_record)
@@ -66,8 +76,9 @@ static bool print_signature(const char *path, const struct bx_fs_signature *fs,
     else
         size[0] = 0;
     const char *const values[TAG_COUNT] = {
-        fs->fat_boot_label, fs->label, fs->uuid, size, fs->type,
-        lowlevel ? (fs->usage == BX_PROBE_FILESYSTEM ? "filesystem" : "other") : "",
+        fs->fat_boot_label, fs->label, fs->uuid, size,
+        lowlevel && fs->version ? fs->version : "", fs->type,
+        lowlevel ? usage_name(fs->usage) : "",
     };
     bool printed = false;
     for (unsigned i = 0; i < TAG_COUNT; i++) {
@@ -220,6 +231,8 @@ int bx_blkid_main(int argc, char **argv)
                 selected = BX_PROBE_FILESYSTEM;
             else if (strcmp(optarg, "other") == 0)
                 selected = BX_PROBE_OTHER;
+            else if (strcmp(optarg, "crypto") == 0)
+                selected = BX_PROBE_CRYPTO;
             else {
                 bx_diag(&run.diag, "unsupported usage: '%s'", optarg);
                 return 4;
@@ -265,7 +278,7 @@ int bx_blkid_main(int argc, char **argv)
     if (!filtered)
         run.tags = (1u << TAG_COUNT) - 1;
     if (!run.usages)
-        run.usages = BX_PROBE_FILESYSTEM | BX_PROBE_OTHER;
+        run.usages = BX_PROBE_FILESYSTEM | BX_PROBE_OTHER | BX_PROBE_CRYPTO;
 
     if (run.scanning && bx_blkid_scan(probe_device, &run) < 0) {
         bx_perror_path(&run.diag, "scan block devices");

@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "crypto/sha256.h"
+#include "crypto/sha512.h"
 #include "lib/fat/compat.h"
 #include "lib/swap_format.h"
 
@@ -305,12 +307,15 @@ static int probe_iso9660(int fd, uint64_t bytes, struct bx_fs_signature *fs)
     return 1;
 }
 
-static uint32_t swap_u32(const uint8_t *value, bool little)
+static uint32_t probe_be32(const uint8_t *value)
 {
-    if (little)
-        return bx_fat_le32dec(value);
     return (uint32_t)value[0] << 24 | (uint32_t)value[1] << 16 |
            (uint32_t)value[2] << 8 | value[3];
+}
+
+static uint32_t swap_u32(const uint8_t *value, bool little)
+{
+    return little ? bx_fat_le32dec(value) : probe_be32(value);
 }
 
 static int probe_swap(int fd, uint64_t bytes, struct bx_fs_signature *fs)
@@ -355,6 +360,112 @@ static int probe_swap(int fd, uint64_t bytes, struct bx_fs_signature *fs)
     return 1;
 }
 
+enum {
+    LUKS_UUID = 168,
+    LUKS2_LABEL = 24,
+    LUKS2_ALGORITHM = 72,
+    LUKS2_OFFSET = 256,
+    LUKS2_CHECKSUM = 448,
+    LUKS2_CHECKSUM_LEN = 64,
+    LUKS2_MIN_AREA = 16 * 1024,
+    LUKS2_MAX_AREA = 4 * 1024 * 1024,
+};
+
+static bool luks_uuid(const uint8_t *uuid)
+{
+    for (unsigned i = 0; i < 36; i++) {
+        unsigned c = uuid[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-')
+                return false;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                     (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return uuid[36] == 0;
+}
+
+static int luks2_verify(int fd, uint8_t *header, uint64_t bytes)
+{
+    /* LUKS2 primary metadata area sizes are powers of two. Its offset
+     * field must be zero; a secondary header is not a primary header. */
+    uint32_t area = probe_be32(header + 12);
+    if (probe_be32(header + 8) || area < LUKS2_MIN_AREA || area > LUKS2_MAX_AREA ||
+        !powerof2(area) || area > bytes ||
+        probe_be32(header + LUKS2_OFFSET) || probe_be32(header + LUKS2_OFFSET + 4))
+        return 0;
+
+    bool sha256 = memcmp(header + LUKS2_ALGORITHM, "sha256", sizeof("sha256")) == 0;
+    if (!sha256 && memcmp(header + LUKS2_ALGORITHM, "sha512", sizeof("sha512")) != 0)
+        return 0;
+
+    /* The digest covers the binary header and padded JSON area, with the
+     * checksum field zeroed. No JSON or keyslot data is interpreted. */
+    uint8_t expected[LUKS2_CHECKSUM_LEN], digest[LUKS2_CHECKSUM_LEN];
+    memcpy(expected, header + LUKS2_CHECKSUM, sizeof(expected));
+    memset(header + LUKS2_CHECKSUM, 0, sizeof(expected));
+    union {
+        struct bx_sha256_ctx sha256;
+        struct bx_sha512_ctx sha512;
+    } hash;
+    size_t prefix = LUKS2_CHECKSUM + LUKS2_CHECKSUM_LEN;
+    if (sha256) {
+        bx_sha256_init(&hash.sha256);
+        bx_sha256_update(&hash.sha256, header, prefix);
+    } else {
+        bx_sha512_init(&hash.sha512);
+        bx_sha512_update(&hash.sha512, header, prefix);
+    }
+    for (size_t offset = prefix; offset < area;) {
+        uint8_t chunk[4096];
+        size_t count = area - offset;
+        if (count > sizeof(chunk))
+            count = sizeof(chunk);
+        if (read_at(fd, chunk, count, offset) < 0)
+            return -1;
+        if (sha256)
+            bx_sha256_update(&hash.sha256, chunk, count);
+        else
+            bx_sha512_update(&hash.sha512, chunk, count);
+        offset += count;
+    }
+    if (sha256)
+        bx_sha256_final(&hash.sha256, digest);
+    else
+        bx_sha512_final(&hash.sha512, digest);
+    return memcmp(digest, expected, sha256 ? BX_SHA256_DIGEST_SIZE : BX_SHA512_DIGEST_SIZE) == 0;
+}
+
+static int probe_luks(int fd, uint64_t bytes, struct bx_fs_signature *fs)
+{
+    uint8_t header[LUKS2_CHECKSUM + LUKS2_CHECKSUM_LEN];
+    if (bytes < sizeof(header))
+        return 0;
+    if (read_at(fd, header, sizeof(header), 0) < 0)
+        return -1;
+    if (memcmp(header, "LUKS\xba\xbe", 6) != 0 || header[6] ||
+        (header[7] != 1 && header[7] != 2) || !luks_uuid(header + LUKS_UUID))
+        return 0;
+
+    if (header[7] == 1) {
+        uint32_t payload_sector = probe_be32(header + 104);
+        if (bytes < 592 || (payload_sector && (payload_sector < 2 || payload_sector >= bytes / 512)) ||
+            !probe_be32(header + 108) || !probe_be32(header + 164))
+            return 0;
+        fs->version = "1";
+    } else {
+        int valid = luks2_verify(fd, header, bytes);
+        if (valid <= 0)
+            return valid;
+        fs->version = "2";
+        memcpy(fs->label, header + LUKS2_LABEL, 48);
+    }
+    memcpy(fs->uuid, header + LUKS_UUID, 36);
+    fs->type = "crypto_LUKS";
+    return 1;
+}
+
 int bx_fs_probe(int fd, unsigned usages, struct bx_fs_signature *result)
 {
     uint64_t bytes;
@@ -370,6 +481,7 @@ int bx_fs_probe(int fd, unsigned usages, struct bx_fs_signature *result)
         {BX_PROBE_FILESYSTEM, probe_ext},
         {BX_PROBE_FILESYSTEM, probe_iso9660},
         {BX_PROBE_OTHER, probe_swap},
+        {BX_PROBE_CRYPTO, probe_luks},
     };
     struct bx_fs_signature found;
     bool matched = false;

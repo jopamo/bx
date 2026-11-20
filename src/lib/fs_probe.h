@@ -5,13 +5,15 @@
 enum bx_probe_usage {
     BX_PROBE_FILESYSTEM = 1,
     BX_PROBE_OTHER = 2,
+    BX_PROBE_CRYPTO = 4,
 };
 
 struct bx_fs_signature {
     const char *type;
+    const char *version;
     enum bx_probe_usage usage;
     unsigned block_size;
-    char label[33];
+    char label[49];
     char fat_boot_label[12];
     char uuid[37];
 };
