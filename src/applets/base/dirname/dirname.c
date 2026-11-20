@@ -36,11 +36,16 @@ static void bx_dirname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  %s stdio.h            -> \".\"\n", progname);
 }
 
+enum {
+    BX_DIRNAME_OPT_HELP = 256,
+    BX_DIRNAME_OPT_VERSION,
+};
+
 static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_DIRNAME_OPT_HELP},
+        {"version", no_argument, NULL, BX_DIRNAME_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -49,10 +54,10 @@ static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_op
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+z", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-z", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -61,10 +66,10 @@ static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_op
             case 'z':
                 options->zero_terminated = true;
                 break;
-            case 1:
+            case BX_DIRNAME_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_DIRNAME_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

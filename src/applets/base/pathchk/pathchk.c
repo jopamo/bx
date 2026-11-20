@@ -46,11 +46,17 @@ static void bx_pathchk_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version      output version information and exit\n");
 }
 
+enum {
+    BX_PATHCHK_OPT_PORTABILITY = 256,
+    BX_PATHCHK_OPT_HELP,
+    BX_PATHCHK_OPT_VERSION,
+};
+
 static bool bx_pathchk_parse_options(int argc, char** argv, struct bx_pathchk_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"portability", no_argument, NULL, 1},
-        {"help", no_argument, NULL, 2},
-        {"version", no_argument, NULL, 3},
+        {"portability", no_argument, NULL, BX_PATHCHK_OPT_PORTABILITY},
+        {"help", no_argument, NULL, BX_PATHCHK_OPT_HELP},
+        {"version", no_argument, NULL, BX_PATHCHK_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -59,10 +65,10 @@ static bool bx_pathchk_parse_options(int argc, char** argv, struct bx_pathchk_op
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+pP", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-pP", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -74,14 +80,14 @@ static bool bx_pathchk_parse_options(int argc, char** argv, struct bx_pathchk_op
             case 'P':
                 options->posix_safety = true;
                 break;
-            case 1:
+            case BX_PATHCHK_OPT_PORTABILITY:
                 options->portability = true;
                 options->posix_safety = true;
                 break;
-            case 2:
+            case BX_PATHCHK_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 3:
+            case BX_PATHCHK_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

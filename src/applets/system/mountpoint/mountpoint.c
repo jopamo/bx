@@ -100,8 +100,9 @@ int bx_mountpoint_main(int argc, char** argv) {
         return help;
     bool quiet = false;
     bx_args_getopt_reset();
+    int next_operand = 1;
     int opt;
-    while ((opt = bx_args_getopt_long(argc, argv, "+q", NULL, NULL)) != -1) {
+    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-q", NULL, &next_operand)) != -1) {
         if (opt != 'q') {
             print_help(stderr, "mountpoint");
             return 1;
