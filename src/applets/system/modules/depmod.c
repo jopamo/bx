@@ -45,6 +45,7 @@ struct module {
     size_t first;
     size_t edge_count;
     size_t rank;
+    size_t install_order;
 };
 
 struct reference {
@@ -153,6 +154,72 @@ static int order_modules(const void* a, const void* b) {
     return strcmp(((const struct module*)a)->path, ((const struct module*)b)->path);
 }
 
+static int installed_order(const void* a, const void* b) {
+    const struct module* left = a;
+    const struct module* right = b;
+    if (left->install_order != right->install_order)
+        return (left->install_order > right->install_order) - (left->install_order < right->install_order);
+    return order_modules(a, b);
+}
+
+static bool apply_modules_order(struct scan* scan, const struct bx_module_tree* tree) {
+    int fd = bx_module_tree_open_for_load(tree, "modules.order");
+    if (fd < 0 && errno == ENOENT)
+        return true;
+    size_t size;
+    char* data = fd < 0 ? NULL : bx_module_read_regular(fd, BX_MODULE_INDEX_BYTES_LIMIT, &size);
+    bx_fd_cleanup(&fd);
+    if (!data) {
+        bx_perror_path(scan->diag, "modules.order");
+        return false;
+    }
+    bool ok = false;
+    const char* end = data + size;
+    size_t rank = 0;
+    for (const char* p = data; p < end;) {
+        const char* line = p;
+        const char* nl = memchr(line, '\n', (size_t)(end - line));
+        size_t len = (size_t)((nl ? nl : end) - line);
+        p = nl ? nl + 1 : end;
+        if (!len)
+            continue;
+        char path[PATH_MAX];
+        if (++rank > ENTRIES_MAX || len >= sizeof(path) - sizeof(".zst") ||
+            !bx_module_path_valid(line, len) ||
+            !bx_module_path_name((struct bx_module_path){line, len}, false).len) {
+            bx_diag(scan->diag, "invalid modules.order record");
+            goto done;
+        }
+        memcpy(path, line, len);
+        static const char* const suffixes[] = {"", ".gz", ".xz", ".zst"};
+        struct module* match = NULL;
+        for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
+            strcpy(path + len, suffixes[i]);
+            struct module key = {.path = path};
+            struct module* item = bsearch(&key, scan->modules, scan->count,
+                                          sizeof(*scan->modules), order_modules);
+            if (item) {
+                if (match || item->install_order) {
+                    bx_diag(scan->diag, "duplicate installed module for modules.order record '%.*s'",
+                            (int)len, line);
+                    goto done;
+                }
+                match = item;
+            }
+        }
+        if (match)
+            match->install_order = rank;
+    }
+    for (size_t i = 0; i < scan->count; i++)
+        if (!scan->modules[i].install_order)
+            scan->modules[i].install_order = rank + 1;
+    qsort(scan->modules, scan->count, sizeof(*scan->modules), installed_order);
+    ok = true;
+done:
+    free(data);
+    return ok;
+}
+
 static bool collect_symbol(const char* name, size_t len, enum bx_module_elf_symbol_kind kind,
                             void* user) {
     struct scan* scan = user;
@@ -217,6 +284,8 @@ static bool read_tree(struct scan* scan, const struct bx_module_tree* tree,
     if (bx_walk_opened_dir(".", stream, &opts, &ops, scan) != 0)
         return false;
     qsort(scan->modules, scan->count, sizeof(*scan->modules), order_modules);
+    if (format != SYMBOLS && !apply_modules_order(scan, tree))
+        return false;
     size_t remaining = MODULE_BYTES_MAX;
     for (size_t i = 0; i < scan->count; i++) {
         struct module* module = &scan->modules[i];
