@@ -46,6 +46,10 @@ const char* ash_var_get_len(
 );
 /* Returned values are borrowed until the next mutation of that variable. */
 const char* ash_var_get(const struct ash_shell* shell, const char* name);
+const char* ash_var_get_indexed(const struct ash_shell* shell, const char* name,
+                               size_t name_length, size_t index);
+/* Consume captures on successful publication. */
+bool ash_var_take_rematch(struct ash_shell* shell, struct ash_value* captures);
 /* Binding existence includes declarations whose scalar value remains unset. */
 bool ash_var_exists(const struct ash_shell* shell, const char* name);
 bool ash_var_attributes_valid(uint32_t attributes);

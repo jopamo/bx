@@ -2021,6 +2021,8 @@ static bool ash_lexer_word_boundary(const struct ash_lexer* lexer) {
     if (ch == '\0' || ash_lexer_blank_width(lexer, 0u) != 0u) {
         return true;
     }
+    if (lexer->regex_operand)
+        return ch == '\n';
     return !ash_lexer_starts_process_substitution(lexer) &&
         ash_lexer_operator(lexer) != NULL;
 }
@@ -2039,8 +2041,8 @@ static bool ash_lexer_text_boundary(
 
     char ch = ash_lexer_peek(lexer, 0u);
     if (quote == ASH_QUOTE_NONE) {
-        return ash_lexer_starts_extglob(lexer) ||
-            ash_lexer_starts_process_substitution(lexer) ||
+        return (!lexer->regex_operand &&
+                (ash_lexer_starts_extglob(lexer) || ash_lexer_starts_process_substitution(lexer))) ||
             ash_lexer_word_boundary(lexer) ||
             ch == '\\' || ch == '\'' || ch == '"' ||
             ch == '$' || ch == '`';
@@ -2526,7 +2528,7 @@ static enum ash_lexer_result ash_lexer_scan_word(
                 ASH_MATCH_BACKQUOTE
             );
         }
-        else if (ash_lexer_starts_process_substitution(lexer)) {
+        else if (!lexer->regex_operand && ash_lexer_starts_process_substitution(lexer)) {
             result = ash_lexer_scan_matched(
                 lexer,
                 &token->word,
@@ -2534,7 +2536,7 @@ static enum ash_lexer_result ash_lexer_scan_word(
                 ASH_MATCH_PROCESS
             );
         }
-        else if (ash_lexer_starts_extglob(lexer)) {
+        else if (!lexer->regex_operand && ash_lexer_starts_extglob(lexer)) {
             result = ash_lexer_scan_extglob(
                 lexer,
                 &token->word
@@ -2661,7 +2663,7 @@ static enum ash_lexer_result ash_lexer_next_active(struct ash_lexer* lexer, stru
             ash_lexer_advance_logical_count(lexer, blank_width);
         }
         ash_lexer_skip_line_continuations(lexer);
-        if (ash_lexer_peek(lexer, 0u) == '#') {
+        if (!lexer->regex_operand && ash_lexer_peek(lexer, 0u) == '#') {
             ash_lexer_skip_comment(lexer);
             continue;
         }
@@ -2677,12 +2679,13 @@ static enum ash_lexer_result ash_lexer_next_active(struct ash_lexer* lexer, stru
     }
 
     struct ash_io_redirect_match io_redirect;
-    if (ash_lexer_match_io_redirect(lexer, &io_redirect)) {
+    if (!lexer->regex_operand && ash_lexer_match_io_redirect(lexer, &io_redirect)) {
         result = ash_lexer_scan_io_redirect(lexer, token, &io_redirect);
         goto done;
     }
 
     const struct ash_operator* operator =
+        (lexer->regex_operand && ash_lexer_peek(lexer, 0u) != '\n') ||
         ash_lexer_starts_process_substitution(lexer) ?
             NULL :
             ash_lexer_operator(lexer);

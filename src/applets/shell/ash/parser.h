@@ -47,6 +47,7 @@ struct ash_parser {
     struct ash_token lookahead;
     bool has_lookahead;
     bool lookahead_alias_checked;
+    bool regex_operand;
     enum ash_parser_result result;
     bool complete_command_boundary;
     struct ash_source_location error_location;

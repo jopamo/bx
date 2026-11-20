@@ -262,13 +262,18 @@ static struct ash_condition* ash_parse_condition_atom(struct ash_conditional_par
     token = ash_parser_peek(parser);
     struct ash_condition* node = NULL;
     bool unequal = ash_condition_spelling(token, "!=");
-    if (unequal || ash_condition_spelling(token, "=") || ash_condition_spelling(token, "==")) {
+    bool regex = ash_condition_spelling(token, "=~");
+    if (regex || unequal || ash_condition_spelling(token, "=") || ash_condition_spelling(token, "==")) {
         ash_condition_consume(parser);
         struct ash_token right;
-        if (ash_condition_operand(parser, &right)) {
+        parser->regex_operand = regex;
+        bool have_right = ash_condition_operand(parser, &right);
+        parser->regex_operand = false;
+        if (have_right) {
             node = ash_condition_new(state, ASH_CONDITION_BINARY, location);
             if (node != NULL)
-                (void)ash_condition_take_binary(node, unequal ? ASH_CONDITION_STRING_NOT_PATTERN :
+                (void)ash_condition_take_binary(node, regex ? ASH_CONDITION_STRING_REGEX :
+                    unequal ? ASH_CONDITION_STRING_NOT_PATTERN :
                     ASH_CONDITION_STRING_PATTERN, &left.word, &right.word);
             ash_token_destroy(&right);
         }

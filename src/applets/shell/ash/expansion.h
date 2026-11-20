@@ -12,6 +12,7 @@ struct bx_text_buffer;
 enum ash_expansion_context {
     ASH_EXPANSION_WORD = 0,
     ASH_EXPANSION_PATTERN,
+    ASH_EXPANSION_REGEX,
     /* Full assignment word, with tilde positions after '=' and unquoted ':'. */
     ASH_EXPANSION_ASSIGNMENT,
 };

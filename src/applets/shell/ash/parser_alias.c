@@ -76,10 +76,12 @@ static enum ash_parser_result ash_parser_fill(struct ash_parser* parser) {
                 ];
             ash_parser_note_alias_progress(parser, frame);
         }
+        lexer->regex_operand = parser->regex_operand;
         enum ash_lexer_result result = ash_lexer_next(
             lexer,
             &parser->lookahead
         );
+        lexer->regex_operand = false;
         if (parser->alias_frame_count != 0u &&
             ash_lexer_discarded_comment(lexer)) {
             parser->alias_comment_elided = true;

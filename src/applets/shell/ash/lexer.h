@@ -95,6 +95,7 @@ struct ash_lexer {
     bool discarded_comment;
     bool ended_in_comment;
     bool position_overflow;
+    bool regex_operand;
     struct ash_source_location error_location;
     const char* error;
 };

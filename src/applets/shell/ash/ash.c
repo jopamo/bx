@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <regex.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -2899,6 +2900,54 @@ static int ash_execute_ast_case_body(
     return status;
 }
 
+static int ash_execute_regex(struct ash_shell* shell, const struct ash_word* right, const char* value) {
+    char* pattern = NULL;
+    if (!ash_expand(shell, right, ASH_EXPANSION_REGEX, &pattern, NULL))
+        return 2;
+    regex_t regex;
+    int error = regcomp(&regex, pattern, REG_EXTENDED);
+    free(pattern);
+    if (error != 0) {
+        char message[128];
+        regerror(error, &regex, message, sizeof(message));
+        ash_diag(shell, "conditional regex: %s", message);
+        return 2;
+    }
+    regmatch_t matches[65];
+    if (regex.re_nsub >= sizeof(matches) / sizeof(matches[0])) {
+        regfree(&regex);
+        ash_diag(shell, "conditional regex: too many capture groups");
+        return 2;
+    }
+    size_t count = regex.re_nsub + 1u;
+    error = regexec(&regex, value, count, matches, 0);
+    regfree(&regex);
+    if (error != 0 && error != REG_NOMATCH) {
+        ash_diag(shell, "conditional regex: match failed");
+        return 2;
+    }
+    struct ash_value captures;
+    ash_value_init_indexed(&captures);
+    int status = error == REG_NOMATCH ? 1 : 0;
+    if (status == 0) {
+        for (size_t i = 0; i < count; i++) {
+            regoff_t begin = matches[i].rm_so, end = matches[i].rm_eo;
+            char* item = begin < 0 ? strdup("") : strndup(value + begin, (size_t)(end - begin));
+            bool stored = item != NULL && ash_value_indexed_set(&captures, i, item);
+            free(item);
+            if (!stored) {
+                ash_diag_oom(shell);
+                status = 2;
+                break;
+            }
+        }
+    }
+    if (status < 2 && !ash_var_take_rematch(shell, &captures))
+        status = 2;
+    ash_value_destroy(&captures);
+    return status;
+}
+
 static int ash_execute_condition(struct ash_shell* shell, const struct ash_condition* condition) {
     int status;
     const struct ash_word* word;
@@ -2930,7 +2979,11 @@ static int ash_execute_condition(struct ash_shell* shell, const struct ash_condi
     char* value = NULL;
     if (!ash_expand_word(shell, word, &value, NULL))
         return 2;
-    if (condition->kind == ASH_CONDITION_BINARY) {
+    if (condition->kind == ASH_CONDITION_BINARY &&
+        condition->value.binary.operator == ASH_CONDITION_STRING_REGEX) {
+        status = ash_execute_regex(shell, &condition->value.binary.right.syntax, value);
+    }
+    else if (condition->kind == ASH_CONDITION_BINARY) {
         bool matched;
         if (!ash_expand_case_pattern(shell, &condition->value.binary.right.syntax, value, &matched))
             status = 2;

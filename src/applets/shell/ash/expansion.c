@@ -281,15 +281,19 @@ static bool ash_append_special(struct ash_shell* shell, char parameter, struct b
 struct ash_parameter_reference {
     size_t start;
     size_t end;
+    size_t name_length;
+    uintmax_t index;
     bool numbered;
     bool special;
     bool measure;
+    bool indexed;
 };
 
 static bool ash_parameter_reference_parse(const char* input, struct ash_parameter_reference* reference) {
     if (input[0] != '$' || input[1] != '{') {
         return false;
     }
+    *reference = (struct ash_parameter_reference){0};
     size_t position = 2u;
     bool count_operator = input[position] == '#' && (input[position + 1u] == ':' ||
                                                      (input[position + 1u] != '\0' && strchr("-+?=", input[position + 1u]) != NULL && input[position + 2u] != '\0' && input[position + 2u] != '}'));
@@ -313,6 +317,18 @@ static bool ash_parameter_reference_parse(const char* input, struct ash_paramete
         while (ash_is_name_char((unsigned char)input[position])) {
             position++;
         }
+        reference->name_length = position - reference->start;
+        if (input[position] == '[' && reference->name_length == sizeof("BASH_REMATCH") - 1u &&
+            memcmp(input + reference->start, "BASH_REMATCH", reference->name_length) == 0) {
+            size_t digits = ++position;
+            while (input[position] >= '0' && input[position] <= '9')
+                position++;
+            if (input[position] != ']' || digits == position ||
+                !ash_parameter_index(input + digits, position - digits, &reference->index))
+                return false;
+            reference->indexed = true;
+            position++;
+        }
     }
     reference->end = position;
     return true;
@@ -327,7 +343,16 @@ static bool ash_append_parameter_reference(struct ash_shell* shell, const char* 
     if (reference->special) {
         return ash_append_special(shell, name[0], output, true, reference->measure);
     }
-    return ash_append_parameter_value(shell, output, ash_var_get_len(shell, name, length), name, length, reference->measure);
+    const char* value;
+    if (reference->indexed) {
+        if (!ash_shell_policy_is_bash(&shell->policy))
+            return ash_expansion_bad_substitution(shell, input);
+        value = reference->index <= SIZE_MAX ?
+            ash_var_get_indexed(shell, name, reference->name_length, (size_t)reference->index) : NULL;
+    }
+    else
+        value = ash_var_get_len(shell, name, length);
+    return ash_append_parameter_value(shell, output, value, name, length, reference->measure);
 }
 
 static bool ash_expand_parameter(struct ash_shell* shell, const struct ash_word_part* part, struct bx_text_buffer* output) {
@@ -501,21 +526,6 @@ static bool ash_append_pattern_span(
     return true;
 }
 
-static bool ash_append_pattern_component(
-    struct ash_shell* shell,
-    struct bx_text_buffer* output,
-    const struct bx_text_buffer* component,
-    bool quoted
-) {
-    return ash_append_pattern_span(
-        shell,
-        output,
-        component->data,
-        component->length,
-        quoted
-    );
-}
-
 struct ash_tilde_prefix {
     const char* value;
     char* owned;
@@ -685,6 +695,8 @@ static bool ash_select_parameter_operand(struct ash_shell* shell, const struct a
     if (part->kind != ASH_WORD_PARAMETER || !ash_parameter_reference_parse(part->text, &reference) || reference.measure) {
         return true;
     }
+    if (reference.indexed)
+        return true;
     size_t position = reference.end;
     char removal = part->text[position];
     if (removal == '#' || removal == '%') {
@@ -1006,7 +1018,21 @@ static bool ash_expansion_refresh_state(struct ash_shell* shell) {
     return true;
 }
 
-static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, bool assignment, int* substitution_status) {
+static bool ash_append_match_span(struct ash_shell* shell, struct bx_text_buffer* out,
+                                  const char* text, size_t length, bool quoted, bool regex) {
+    if (!regex)
+        return ash_append_pattern_span(shell, out, text, length, quoted);
+    for (size_t i = 0; i < length; i++) {
+        if (quoted && strchr("\\.^$[]()|*+?{}", text[i]) != NULL &&
+            !ash_expansion_append_char(shell, out, '\\'))
+            return false;
+        if (!ash_expansion_append_char(shell, out, text[i]))
+            return false;
+    }
+    return true;
+}
+
+static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* word, struct bx_text_buffer* value, struct bx_text_buffer* pattern, bool assignment, bool regex, int* substitution_status) {
     if (!ash_expansion_refresh_state(shell)) {
         return false;
     }
@@ -1023,7 +1049,7 @@ static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* w
                 goto fail;
             }
             bool prefix_appended = prefix.value == NULL || ((result_value == NULL || ash_expansion_append_text(shell, result_value, prefix.value)) &&
-                                                            (result_pattern == NULL || ash_append_pattern_span(shell, result_pattern, prefix.value, strlen(prefix.value), true)) &&
+                                                            (result_pattern == NULL || ash_append_match_span(shell, result_pattern, prefix.value, strlen(prefix.value), true, regex)) &&
                                                             ash_operand_capture(shell, &frames, prefix.value, strlen(prefix.value), true));
             free(prefix.owned);
             if (!prefix_appended) {
@@ -1037,7 +1063,7 @@ static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* w
             bool appended = ash_operand_frames_complete(shell, &frames, &completion);
             if (appended && completion.produced && !frames.values[frames.count - 1u].capture_only) {
                 appended = (value == NULL || ash_expansion_append_span(shell, value, completion.text, completion.length)) &&
-                           (pattern == NULL || ash_append_pattern_span(shell, pattern, completion.text, completion.length, completion.quoted));
+                           (pattern == NULL || ash_append_match_span(shell, pattern, completion.text, completion.length, completion.quoted, regex));
             }
             bx_text_buffer_destroy(&completion.owned);
             if (!appended) {
@@ -1075,7 +1101,7 @@ static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* w
             bool appended = selection.kind == ASH_PARAMETER_SELECTED_WORD
                                 ? ash_operand_frames_push(shell, &frames, &selection)
                                 : ((result_value == NULL || ash_expansion_append_span(shell, result_value, selection.value.data, selection.value.length)) &&
-                                   (result_pattern == NULL || ash_append_pattern_component(shell, result_pattern, &selection.value, ash_word_part_is_quoted(part))) &&
+                                   (result_pattern == NULL || ash_append_match_span(shell, result_pattern, selection.value.data, selection.value.length, ash_word_part_is_quoted(part), regex)) &&
                                    ash_operand_capture(shell, &frames, selection.value.data, selection.value.length, ash_word_part_is_quoted(part)));
             ash_parameter_selection_destroy(&selection);
             if (!appended) {
@@ -1091,7 +1117,7 @@ static bool ash_expand_buffers(struct ash_shell* shell, const struct ash_word* w
         }
 
         bool appended = (result_value == NULL || ash_expansion_append_span(shell, result_value, component.data, component.length)) &&
-                        (result_pattern == NULL || ash_append_pattern_component(shell, result_pattern, &component, ash_word_part_is_quoted(part))) &&
+                        (result_pattern == NULL || ash_append_match_span(shell, result_pattern, component.data, component.length, ash_word_part_is_quoted(part), regex)) &&
                         ash_operand_capture(shell, &frames, component.data, component.length, ash_word_part_is_quoted(part));
         bx_text_buffer_destroy(&component);
         if (!appended) {
@@ -1217,8 +1243,9 @@ bool ash_expand(struct ash_shell* shell, const struct ash_word* word, enum ash_e
     *output_word = NULL;
     struct bx_text_buffer output;
     bx_text_buffer_init(&output);
-    bool pattern = context == ASH_EXPANSION_PATTERN;
-    if (!ash_expand_buffers(shell, word, pattern ? NULL : &output, pattern ? &output : NULL, context == ASH_EXPANSION_ASSIGNMENT, substitution_status)) {
+    bool pattern = context == ASH_EXPANSION_PATTERN || context == ASH_EXPANSION_REGEX;
+    if (!ash_expand_buffers(shell, word, pattern ? NULL : &output, pattern ? &output : NULL,
+                            context == ASH_EXPANSION_ASSIGNMENT, context == ASH_EXPANSION_REGEX, substitution_status)) {
         bx_text_buffer_destroy(&output);
         return false;
     }
@@ -1304,7 +1331,7 @@ bool ash_expand_here_document(struct ash_shell* shell,
         }
     }
     else {
-        expanded = ash_expand_buffers(shell, &word, output, NULL, false, substitution_status);
+        expanded = ash_expand_buffers(shell, &word, output, NULL, false, false, substitution_status);
     }
     ash_word_destroy(&word);
     if (!expanded) {
@@ -1611,7 +1638,7 @@ enum ash_redirection_expansion_result ash_expand_redirection(
     struct bx_text_buffer pattern_buffer;
     bx_text_buffer_init(&value_buffer);
     bx_text_buffer_init(&pattern_buffer);
-    if (!ash_expand_buffers(shell, word, &value_buffer, needs_pattern ? &pattern_buffer : NULL, false, substitution_status)) {
+    if (!ash_expand_buffers(shell, word, &value_buffer, needs_pattern ? &pattern_buffer : NULL, false, false, substitution_status)) {
         bx_text_buffer_destroy(&value_buffer);
         bx_text_buffer_destroy(&pattern_buffer);
         return ASH_REDIRECTION_EXPANSION_ERROR;

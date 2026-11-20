@@ -130,11 +130,24 @@ const char* ash_var_get_len(
         ) != ASH_SCOPE_LOOKUP_FOUND) {
         return NULL;
     }
-    return ash_value_get_scalar(&binding.variable->value);
+    const struct ash_value* value = &binding.variable->value;
+    return value->kind == ASH_VALUE_INDEXED_ARRAY ?
+        ash_value_indexed_get(value, 0) : ash_value_get_scalar(value);
 }
 
 const char* ash_var_get(const struct ash_shell* shell, const char* name) {
     return ash_var_get_len(shell, name, strlen(name));
+}
+
+const char* ash_var_get_indexed(const struct ash_shell* shell, const char* name,
+                               size_t length, size_t index) {
+    struct ash_scope_binding binding;
+    if (ash_scope_lookup(shell, name, length, ASH_SCOPE_LOOKUP_VISIBLE, true, &binding) != ASH_SCOPE_LOOKUP_FOUND)
+        return NULL;
+    const struct ash_value* value = &binding.variable->value;
+    if (value->kind == ASH_VALUE_INDEXED_ARRAY)
+        return ash_value_indexed_get(value, index);
+    return index == 0 ? ash_value_get_scalar(value) : NULL;
 }
 
 bool ash_var_exists(const struct ash_shell* shell, const char* name) {
@@ -399,6 +412,29 @@ static bool ash_var_set_in_scope(
     var->option_offset = 0u;
     assert(ash_var_list_invariants(scope->variables));
     return ash_vars_refresh_locale(shell);
+}
+
+bool ash_var_take_rematch(struct ash_shell* shell, struct ash_value* captures) {
+    static const char name[] = "BASH_REMATCH";
+    const size_t length = sizeof(name) - 1u;
+    struct ash_scope* global = ash_scope_global(shell);
+    struct ash_var* var = ash_var_find_in_scope(global, name, length);
+    if (!ash_var_writable(shell, var, false))
+        return false;
+    if (var == NULL) {
+        if (!ash_var_create_in_scope(shell, global, name, length, NULL, 0u))
+            return false;
+        var = ash_var_find_in_scope(global, name, length);
+    }
+    struct ash_value previous = var->value;
+    var->value = *captures;
+    if (!ash_var_publish_environment(shell, name, length)) {
+        var->value = previous;
+        return false;
+    }
+    *captures = (struct ash_value){0};
+    ash_value_destroy(&previous);
+    return true;
 }
 
 bool ash_var_set_with_export(
