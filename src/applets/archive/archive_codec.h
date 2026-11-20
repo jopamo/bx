@@ -43,6 +43,7 @@ struct bx_archive_codec_input_options {
     const struct bx_archive_codec* required_codec;
     enum bx_archive_codec_seek_mode seek_mode;
     size_t thread_count;
+    uint64_t xz_memory_limit; /* Zero keeps the codec's existing default. */
 };
 
 const struct bx_archive_codec* bx_archive_codec_none(void);
@@ -107,6 +108,7 @@ bool bx_archive_codec_input_skip(struct bx_archive_codec_input* input,
 bool bx_archive_codec_input_finish_success(struct bx_archive_codec_input* input,
                                            struct bx_diag_ctx* diag);
 uint64_t bx_archive_codec_input_total_bytes_read(const struct bx_archive_codec_input* input);
+bool bx_archive_codec_input_decode_failed(const struct bx_archive_codec_input* input);
 void bx_archive_codec_input_close(struct bx_archive_codec_input* input);
 
 #endif

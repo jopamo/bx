@@ -1432,6 +1432,18 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "bzcat",
+      "main": "bx_bzcat_main",
+      "capabilities": ["filesystem-read", "raw-output"],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "xzcat",
+      "main": "bx_xzcat_main",
+      "capabilities": ["filesystem-read", "raw-output"],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "cpio",
       "main": "bx_cpio_main",
       "capabilities": [

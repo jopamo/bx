@@ -482,6 +482,7 @@ bx_crypto_sources = [
 
 bx_archive_applet_sources = [
   'src/applets/archive/archive_bzip2.c',
+  'src/applets/archive/archive_cat.c',
   'src/applets/archive/archive_codec.c',
   'src/applets/archive/archive_common.c',
   'src/applets/archive/archive_gzip.c',
@@ -1531,7 +1532,7 @@ if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
 system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'blkid', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip', 'pidof', 'sysctl', 'swapon', 'mkswap', 'pivot_root', 'modinfo', 'modprobe']
-systemwide_disabled_applet_names = ['ps', 'find', 'xargs', 'diff', 'hexdump']
+systemwide_disabled_applet_names = ['ps', 'find', 'xargs', 'diff', 'hexdump', 'bzcat', 'xzcat']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
 install_bx_path = join_paths(install_bx_bindir, 'bx')

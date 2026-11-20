@@ -43,6 +43,7 @@ struct bx_archive_codec_input {
     void* codec_reader;
     size_t thread_count;
     uint64_t xz_memory_limit;
+    bool decode_failed;
     int zstd_window_log_max;
     const struct bx_archive_codec* required_codec;
     bool checked_mode;
@@ -613,6 +614,7 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
                                                const struct bx_archive_codec* required_codec,
                                                enum bx_archive_codec_seek_mode seek_mode,
                                                size_t thread_count,
+                                               uint64_t xz_memory_limit,
                                                struct bx_diag_ctx* diag) {
     struct bx_archive_codec_input* input;
 
@@ -627,6 +629,7 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
     input->source = (struct bx_fd_input)BX_FD_INPUT_INIT;
     input->force_seek = seek_mode == BX_ARCHIVE_CODEC_SEEK_FORCE;
     input->thread_count = thread_count;
+    input->xz_memory_limit = xz_memory_limit;
     if (bx_fd_input_init(&input->source, fd, ownership) != 0) {
         int error = errno;
         if (ownership == BX_FD_INPUT_OWNED)
@@ -666,7 +669,7 @@ bool bx_archive_codec_input_open_fd(struct bx_archive_codec_input** input_out,
         bx_diag(diag, "invalid archive codec reader configuration");
         return false;
     }
-    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_DUPLICATE_BORROWED, required_codec, BX_ARCHIVE_CODEC_SEEK_AUTO, 0u, diag);
+    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_DUPLICATE_BORROWED, required_codec, BX_ARCHIVE_CODEC_SEEK_AUTO, 0u, 0u, diag);
 }
 
 bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
@@ -680,7 +683,7 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
     }
 
     if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
-        return bx_archive_codec_input_open_source(input_out, STDIN_FILENO, BX_FD_INPUT_DUPLICATE_BORROWED, options->required_codec, options->seek_mode, options->thread_count, diag);
+        return bx_archive_codec_input_open_source(input_out, STDIN_FILENO, BX_FD_INPUT_DUPLICATE_BORROWED, options->required_codec, options->seek_mode, options->thread_count, options->xz_memory_limit, diag);
     }
     else {
         fd = bx_fd_open_cloexec(options->archive_path, O_RDONLY, 0);
@@ -690,7 +693,7 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
         }
     }
 
-    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_OWNED, options->required_codec, options->seek_mode, options->thread_count, diag);
+    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_OWNED, options->required_codec, options->seek_mode, options->thread_count, options->xz_memory_limit, diag);
 }
 
 static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* input, unsigned char* buffer, size_t len, size_t* nread_out, struct bx_diag_ctx* diag) {
@@ -715,6 +718,7 @@ static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* i
             return false;
         }
         if (result == BX_ARCHIVE_DECODE_ERROR) {
+            input->decode_failed = true;
             bx_diag(diag, "%s decompression failed%s%s", bx_archive_codec_name(input->required_codec), chunk.error_detail ? ": " : "", chunk.error_detail ? chunk.error_detail : "");
             return false;
         }
@@ -731,6 +735,7 @@ static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* i
             continue;
         size_t remaining = input->decode_len - input->decode_pos;
         if (input->source_eof || remaining == sizeof(input->decode_buffer)) {
+            input->decode_failed = true;
             bx_diag(diag, "%s decompression failed: decoder made no progress", bx_archive_codec_name(input->required_codec));
             return false;
         }
@@ -894,6 +899,10 @@ bool bx_archive_codec_input_finish_success(struct bx_archive_codec_input* input,
 
 uint64_t bx_archive_codec_input_total_bytes_read(const struct bx_archive_codec_input* input) {
     return input != NULL ? input->logical_offset : 0u;
+}
+
+bool bx_archive_codec_input_decode_failed(const struct bx_archive_codec_input* input) {
+    return input->decode_failed;
 }
 
 void bx_archive_codec_input_close(struct bx_archive_codec_input* input) {
