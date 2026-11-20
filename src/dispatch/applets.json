@@ -1069,6 +1069,12 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "hexdump",
+      "main": "bx_hexdump_main",
+      "capabilities": ["filesystem-read"],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "hostid",
       "main": "bx_hostid_main",
       "capabilities": [],

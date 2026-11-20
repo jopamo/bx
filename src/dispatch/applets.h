@@ -105,6 +105,7 @@ int bx_expr_main(int argc, char** argv);
 int bx_fold_main(int argc, char** argv);
 int bx_fmt_main(int argc, char** argv);
 int bx_head_main(int argc, char** argv);
+int bx_hexdump_main(int argc, char** argv);
 int bx_hostid_main(int argc, char** argv);
 int bx_hostname_main(int argc, char** argv);
 int bx_echo_main(int argc, char** argv);
