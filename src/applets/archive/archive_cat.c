@@ -82,28 +82,36 @@ static bool encode_input(void* user, const struct bx_archive_codec_stream_sink* 
     }
 }
 
+struct encode_sink {
+    int fd;
+    bool* error;
+};
+
 static bool encode_output(void* user, const void* data, size_t len) {
-    bool* output_error = user;
-    if (bx_xwrite_all(STDOUT_FILENO, data, len))
+    struct encode_sink* output = user;
+    if (bx_xwrite_all(output->fd, data, len))
         return true;
-    *output_error = true;
+    *output->error = true;
     return false;
 }
 
-static int encode(const char* name, const struct bx_archive_codec* codec,
+static int encode(const char* name, int source_fd, int output_fd,
+                  const struct bx_archive_codec* codec,
                   const struct bx_archive_codec_encode_options* options, struct bx_diag_ctx* diag,
                   bool* output_error) {
     bool standard = strcmp(name, "-") == 0;
-    int fd = standard ? STDIN_FILENO : bx_fd_open_read(name, diag);
+    bool owned = source_fd < 0 && !standard;
+    int fd = owned ? bx_fd_open_read(name, diag) : source_fd < 0 ? STDIN_FILENO : source_fd;
     if (fd < 0)
         return 1;
     const char* label = standard ? "(stdin)" : name;
     struct bx_diag_ctx codec_diag = {
         .progname = diag->progname, .emit = input_error, .emit_user = &label,
     };
-    const struct bx_archive_codec_stream_sink sink = {.user = output_error, .write = encode_output};
+    struct encode_sink output = {.fd = output_fd, .error = output_error};
+    const struct bx_archive_codec_stream_sink sink = {.user = &output, .write = encode_output};
     bool ok = bx_archive_codec_run_encode_stream(codec, options, encode_input, &fd, &sink, &codec_diag);
-    if (!standard && !bx_fd_close(&fd, name, diag))
+    if (owned && !bx_fd_close(&fd, name, diag))
         ok = false;
     return ok ? 0 : 1;
 }
@@ -115,17 +123,32 @@ static bool same_source(const struct stat* a, const struct stat* b) {
            a->st_mtim.tv_nsec == b->st_mtim.tv_nsec;
 }
 
-static int decode_to_new_file(const char* name, const char* suffix,
-                              const struct bx_archive_codec* codec, struct bx_diag_ctx* diag) {
+static int transform_to_new_file(const char* name, const char* suffix,
+                                 const struct bx_archive_codec* codec,
+                                 const struct bx_archive_codec_encode_options* encoding,
+                                 struct bx_diag_ctx* diag) {
     struct bx_path_split parts = bx_path_split(name, false);
     size_t suffix_len = strlen(suffix);
-    if (parts.basename_length <= suffix_len ||
-        strcmp(parts.basename + parts.basename_length - suffix_len, suffix) != 0) {
-        bx_diag(diag, "%s: expected suffix %s", name, suffix);
+    bool has_suffix = parts.basename_length >= suffix_len &&
+                      strcmp(parts.basename + parts.basename_length - suffix_len, suffix) == 0;
+    if (!parts.basename_length || (encoding ? has_suffix :
+        (!has_suffix || parts.basename_length == suffix_len))) {
+        if (encoding)
+            bx_diag(diag, "%s: expected a filename without suffix %s", name, suffix);
+        else
+            bx_diag(diag, "%s: expected suffix %s", name, suffix);
         return 1;
     }
     char* parent = parts.parent_length ? strndup(name, parts.parent_length) : NULL;
-    char* target = strndup(parts.basename, parts.basename_length - suffix_len);
+    char* target = NULL;
+    if (encoding) {
+        target = malloc(parts.basename_length + suffix_len + 1);
+        if (target) {
+            memcpy(target, parts.basename, parts.basename_length);
+            memcpy(target + parts.basename_length, suffix, suffix_len + 1);
+        }
+    } else
+        target = strndup(parts.basename, parts.basename_length - suffix_len);
     int dir = -1, source = -1, output = -1;
     int status = 1;
     if (!target || (parts.parent_length && !parent)) {
@@ -161,7 +184,8 @@ static int decode_to_new_file(const char* name, const char* suffix,
         goto done;
     }
     bool output_error = false;
-    status = decode(name, source, output, target, codec, diag, &output_error);
+    status = encoding ? encode(name, source, output, codec, encoding, diag, &output_error) :
+                        decode(name, source, output, target, codec, diag, &output_error);
     if (status != 0)
         goto done;
     status = 1;
@@ -231,7 +255,7 @@ static int archive_command(int argc, char** argv, const char* progname,
                    writer ? "[-cdk] [-LEVEL]" : "[-cdk]");
             if (writer)
                 printf("Use -c to compress %s data to stdout or -dc to decode it.\n"
-                       "With -d -k, decode to a new file without deleting the input.\n"
+                       "Use -k to write a new file without overwriting or deleting the input.\n"
                        "Use a single-digit compression level (%d to 9).\n",
                        bx_archive_codec_name(codec), codec == bx_archive_codec_xz() ? 0 : 1);
             else if (suffix)
@@ -255,25 +279,24 @@ static int archive_command(int argc, char** argv, const char* progname,
     }
     bool output_error = false;
     if (optind == argc)
-        return compress ? encode("-", codec, &encoding, &diag, &output_error) :
+        return compress ? encode("-", -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
                           decode("-", -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
-    if (!to_stdout && (compress || !keep)) {
+    if (!to_stdout && !keep) {
         for (int i = optind; i < argc; i++)
             if (strcmp(argv[i], "-") != 0) {
-                bx_diag(&diag, "%s", compress ? "use -c for standard output" :
-                        "use -k to keep the input or -c for standard output");
+                bx_diag(&diag, "use -k to keep the input or -c for standard output");
                 return 1;
             }
     }
     int status = 0;
     for (int i = optind; i < argc && !output_error; i++) {
         int result;
-        if (compress)
-            result = encode(argv[i], codec, &encoding, &diag, &output_error);
-        else if (to_stdout || strcmp(argv[i], "-") == 0)
-            result = decode(argv[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
+        if (to_stdout || strcmp(argv[i], "-") == 0)
+            result = compress ?
+                encode(argv[i], -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
+                decode(argv[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
         else
-            result = decode_to_new_file(argv[i], suffix, codec, &diag);
+            result = transform_to_new_file(argv[i], suffix, codec, compress ? &encoding : NULL, &diag);
         if (status < result)
             status = result;
     }
