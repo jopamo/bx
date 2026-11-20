@@ -8,7 +8,9 @@
 
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s -n [-ae] -F SYSTEM_MAP [-b ROOT] [RELEASE]\n"
-                 "Print dependencies of installed modules without writing indices.\n", name);
+                 "       %s --write-bx-index [-ae] -F SYSTEM_MAP -b ROOT RELEASE\n"
+                 "Print dependencies with -n, or create a new modules.dep without replacing an existing index.\n",
+                 name, name);
 }
 
 #ifdef __linux__
@@ -23,6 +25,7 @@ static void usage(FILE* out, const char* name) {
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/text_buffer.h"
+#include "lib/xreadwrite.h"
 #include "module_elf.h"
 #include "module_index.h"
 #include "module_symbols.h"
@@ -339,6 +342,24 @@ done:
     free(reachable);
     return ok;
 }
+
+static bool publish_dep_index(const struct bx_module_tree* tree,
+                              const struct bx_text_buffer* index, struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_anonymous_file_at(tree->fd);
+    bool ok = fd >= 0 &&
+              bx_xwrite_all(fd, index->data, index->length) &&
+              fchmod(fd, 0644) == 0 &&
+              bx_fd_fsync(fd) == 0 &&
+              bx_fd_publish_anonymous_file_at(fd, tree->fd, "modules.dep") == 0;
+    if (!ok) {
+        bx_perror_path(diag, "modules.dep");
+    } else if (bx_fd_fsync(tree->fd) < 0) {
+        bx_diag(diag, "modules.dep published, but directory sync failed: %s", bx_strerror(errno));
+        ok = false;
+    }
+    bx_fd_cleanup(&fd);
+    return ok;
+}
 #endif
 
 int bx_depmod_main(int argc, char** argv) {
@@ -347,23 +368,28 @@ int bx_depmod_main(int argc, char** argv) {
     if (handled >= 0)
         return handled;
 #ifdef __linux__
+    enum { WRITE_BX_INDEX = 256 };
     static const struct option opts[] = {
         {"all", no_argument, NULL, 'a'}, {"errsyms", no_argument, NULL, 'e'},
         {"show", no_argument, NULL, 'n'}, {"dry-run", no_argument, NULL, 'n'},
         {"basedir", required_argument, NULL, 'b'}, {"filesyms", required_argument, NULL, 'F'},
+        {"write-bx-index", no_argument, NULL, WRITE_BX_INDEX},
         {0},
     };
     const char* base = "/";
     const char* map = NULL;
     bool dry_run = false;
+    bool write_index = false;
+    bool base_set = false;
     int operand = 1;
     bx_args_getopt_reset();
     for (int opt; (opt = bx_args_getopt_long_interspersed(argc, argv, "-:aenb:F:", opts, &operand)) != -1;) {
         switch (opt) {
         case 'a': case 'e': break;
         case 'n': dry_run = true; break;
-        case 'b': base = optarg; break;
+        case 'b': base = optarg; base_set = true; break;
         case 'F': map = optarg; break;
+        case WRITE_BX_INDEX: write_index = true; break;
         case ':':
             bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
             return 1;
@@ -372,7 +398,8 @@ int bx_depmod_main(int argc, char** argv) {
             return 1;
         }
     }
-    if (!dry_run || !map || !*map || !*base || argc - optind > 1) {
+    if (dry_run == write_index || !map || !*map || !*base ||
+        argc - optind > 1 || (write_index && (!base_set || argc - optind != 1))) {
         usage(stderr, "depmod");
         return 1;
     }
@@ -391,6 +418,8 @@ int bx_depmod_main(int argc, char** argv) {
         struct bx_text_buffer index = {0};
         if (!render_deps(&scan, &index))
             bx_perror_path(&diag, "build modules.dep");
+        else if (write_index)
+            status = publish_dep_index(&tree, &index, &diag) ? 0 : 1;
         else if ((!index.length || fwrite(index.data, 1, index.length, stdout) == index.length) &&
                  fflush(stdout) == 0)
             status = 0;

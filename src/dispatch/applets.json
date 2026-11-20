@@ -1159,7 +1159,7 @@
     {
       "name": "depmod",
       "main": "bx_depmod_main",
-      "capabilities": ["filesystem-read", "recursive-traversal"],
+      "capabilities": ["filesystem-read", "filesystem-write", "recursive-traversal"],
       "execution_class": "exec-only"
     },
     {
