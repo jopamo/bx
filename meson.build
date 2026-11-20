@@ -741,6 +741,7 @@ bx_system_applet_sources = [
   'src/applets/system/mountpoint/mountpoint.c',
   'src/applets/system/blockdev/blockdev.c',
   'src/applets/system/blkid/blkid.c',
+  'src/applets/system/blkid/scan_linux.c',
   'src/applets/system/findfs/findfs.c',
   'src/applets/system/losetup/losetup.c',
   'src/applets/system/modules/insmod.c',
