@@ -17,6 +17,7 @@
 #include "lib/disk_tag.h"
 #include "lib/fd_ops.h"
 #include "lib/fs_probe.h"
+#include "lib/loop_device.h"
 #include "lib/mount_table.h"
 #include "lib/args_common.h"
 
@@ -79,7 +80,7 @@ static void bx_mount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Mount a filesystem.\n");
     fprintf(stream, "\n");
     fprintf(stream, "Supported subset:\n");
-    fprintf(stream, "  -t, --types TYPE      filesystem type (auto detects block devices via procfs)\n");
+    fprintf(stream, "  -t, --types TYPE      filesystem type (auto uses procfs for devices and read-only images)\n");
     fprintf(stream, "  -o, --options LIST    comma-separated mount options\n");
     fprintf(stream, "  -r, --read-only       mount read-only\n");
     fprintf(stream, "  -w, --read-write      mount read-write\n");
@@ -873,12 +874,12 @@ static void bx_mount_success_message(const struct bx_mount_options* options) {
 }
 
 struct bx_mount_detected {
-    int path_fd, data_fd;
+    int path_fd, data_fd, loop_fd;
     char fd_path[64];
     const char* type;
 };
 
-static bool bx_mount_detect(const char* source, struct bx_mount_detected* detected,
+static bool bx_mount_detect(const char* source, bool read_only, struct bx_mount_detected* detected,
                              struct bx_diag_ctx* diag) {
 #ifdef __linux__
     /* Check the source type before opening the underlying device. Keep
@@ -889,8 +890,13 @@ static bool bx_mount_detect(const char* source, struct bx_mount_detected* detect
         bx_perror_path(diag, source);
         return false;
     }
-    if (!S_ISBLK(expected.st_mode)) {
-        bx_diag(diag, "cannot detect filesystem on '%s': not a block device; use -t TYPE", source);
+    bool image = S_ISREG(expected.st_mode);
+    if (!S_ISBLK(expected.st_mode) && !image) {
+        bx_diag(diag, "cannot detect filesystem on '%s': not a block device or regular image", source);
+        return false;
+    }
+    if (image && !read_only) {
+        bx_diag(diag, "mounting regular image '%s' requires -r or -o ro", source);
         return false;
     }
 
@@ -906,7 +912,7 @@ static bool bx_mount_detect(const char* source, struct bx_mount_detected* detect
     snprintf(detected->fd_path, sizeof(detected->fd_path), "/proc/self/fd/%d", detected->path_fd);
     detected->data_fd = bx_fd_open_cloexec(detected->fd_path, O_RDONLY | O_NONBLOCK | O_NOCTTY, 0);
     if (detected->data_fd < 0 || bx_fd_fstat_expected(detected->data_fd, &expected, &opened) != 0) {
-        bx_diag(diag, "cannot open pinned block device '%s': %s", source, strerror(errno));
+        bx_diag(diag, "cannot open pinned mount source '%s': %s", source, strerror(errno));
         return false;
     }
     if (opened.st_rdev != expected.st_rdev) {
@@ -925,11 +931,21 @@ static bool bx_mount_detect(const char* source, struct bx_mount_detected* detect
     else if (fs.usage != BX_PROBE_FILESYSTEM)
         bx_diag(diag, "'%s' identifies as '%s', not a filesystem", source, fs.type);
     else {
+        if (image) {
+            detected->loop_fd = bx_loop_attach_readonly(detected->data_fd, source);
+            if (detected->loop_fd < 0) {
+                bx_diag(diag, "cannot attach read-only loop device for '%s': %s", source, strerror(errno));
+                return false;
+            }
+            snprintf(detected->fd_path, sizeof(detected->fd_path), "/proc/self/fd/%d",
+                     detected->loop_fd);
+        }
         detected->type = fs.type;
         return true;
     }
 #else
     (void)source;
+    (void)read_only;
     (void)detected;
     bx_diag(diag, "filesystem detection is not supported on this platform; use -t TYPE");
 #endif
@@ -952,7 +968,7 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
     const char* fstype = options->fstype;
     const void* data = bx_mount_data_present(options) ? options->data : NULL;
     unsigned long flags = options->op_flags | options->flag_values;
-    struct bx_mount_detected detected = {.path_fd = -1, .data_fd = -1};
+    struct bx_mount_detected detected = {.path_fd = -1, .data_fd = -1, .loop_fd = -1};
     bool success = false;
 
     if (source != NULL) {
@@ -971,7 +987,7 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
         data = NULL;
     }
     else if (!bx_mount_has_remount(options) && (!fstype || strcmp(fstype, "auto") == 0)) {
-        if (!bx_mount_detect(source, &detected, diag))
+        if (!bx_mount_detect(source, (flags & MS_RDONLY) != 0, &detected, diag))
             goto done;
         source = detected.fd_path;
         fstype = detected.type;
@@ -985,6 +1001,7 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
     success = true;
 
 done:
+    bx_fd_cleanup(&detected.loop_fd);
     bx_fd_cleanup(&detected.data_fd);
     bx_fd_cleanup(&detected.path_fd);
     free(resolved_source);

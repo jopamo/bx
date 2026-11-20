@@ -405,6 +405,7 @@ bx_lib_sources = [
   'src/lib/dir_path.c',
   'src/lib/disk_tag.c',
   'src/lib/fs_probe.c',
+  'src/lib/loop_device.c',
   'src/lib/daemon_ops.c',
   'src/lib/env_ops.c',
   'src/lib/fd_ops.c',

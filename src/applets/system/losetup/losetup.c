@@ -9,12 +9,11 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <linux/loop.h>
-#include <linux/major.h>
 #include <signal.h>
 #include <sys/ioctl.h>
-#include <sys/sysmacros.h>
 
 #include "lib/fd_ops.h"
+#include "lib/loop_device.h"
 #include "lib/size_parse.h"
 
 struct loop_options {
@@ -23,38 +22,9 @@ struct loop_options {
     bool find, show, list, detach;
 };
 
-static int open_loop(const char* path, int flags) {
-    int fd = bx_fd_open_cloexec(path, flags | O_NONBLOCK | O_NOCTTY, 0);
-    if (fd < 0)
-        return -1;
-    struct stat st;
-    if (fstat(fd, &st) == 0) {
-        if (S_ISBLK(st.st_mode) && major(st.st_rdev) == LOOP_MAJOR) {
-            char sysfs_path[96];
-            int n = snprintf(sysfs_path, sizeof(sysfs_path), "/sys/dev/block/%u:%u",
-                             major(st.st_rdev), minor(st.st_rdev));
-            if (stat(sysfs_path, &st) == 0) {
-                /* A loop ioctl on a partition can reach its parent disk. The
-                 * loop/ attributes are not available before attachment. */
-                memcpy(sysfs_path + n, "/partition", sizeof("/partition"));
-                if (stat(sysfs_path, &st) == 0)
-                    errno = ENODEV;
-                else if (errno == ENOENT)
-                    return fd;
-            }
-        } else {
-            errno = ENODEV;
-        }
-    }
-    int error = errno;
-    bx_fd_cleanup(&fd);
-    errno = error;
-    return -1;
-}
-
 static int report_loop(const char* path, struct bx_diag_ctx* diag, bool listing) {
     struct loop_info64 info;
-    int fd = open_loop(path, O_RDONLY);
+    int fd = bx_loop_open(path, O_RDONLY);
     if (fd >= 0 && ioctl(fd, LOOP_GET_STATUS64, &info) == 0) {
         bx_fd_cleanup(&fd);
         if (printf("%s: [%04" PRIx64 "]:%" PRIu64 " (%.*s)\n", path,
@@ -108,7 +78,7 @@ static int list_loops(struct bx_diag_ctx* diag) {
 }
 
 static int detach_loop(const char* path, struct bx_diag_ctx* diag) {
-    int fd = open_loop(path, O_RDONLY);
+    int fd = bx_loop_open(path, O_RDONLY);
     int status = fd >= 0 && ioctl(fd, LOOP_CLR_FD) == 0 ? 0 : 1;
     if (status != 0)
         bx_perror_path(diag, path);
@@ -194,7 +164,7 @@ static int attach_loop(const char* device, const char* file, struct loop_options
                 bx_perror_path(diag, "standard output");
             break;
         }
-        int fd = open_loop(device, O_RDWR | O_EXCL);
+        int fd = bx_loop_open(device, O_RDWR | O_EXCL);
         if (fd < 0) {
             if (options->find && attempt + 1 < 32 && (errno == EBUSY || errno == ENOENT)) {
                 (void)nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
