@@ -392,6 +392,16 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "pivot_root",
+      "main": "bx_pivot_root_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "dhcp",
       "main": "bx_dhcp_main",
       "capabilities": [

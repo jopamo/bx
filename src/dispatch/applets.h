@@ -58,6 +58,7 @@ int bx_nohup_main(int argc, char** argv);
 int bx_timeout_main(int argc, char** argv);
 int bx_stdbuf_main(int argc, char** argv);
 int bx_switch_root_main(int argc, char** argv);
+int bx_pivot_root_main(int argc, char** argv);
 int bx_chroot_main(int argc, char** argv);
 int bx_mount_main(int argc, char** argv);
 int bx_umount_main(int argc, char** argv);
