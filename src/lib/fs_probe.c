@@ -172,13 +172,10 @@ static int probe_fat(int fd, uint64_t bytes, struct bx_fs_signature *fs)
     return 1;
 }
 
-/* ext4 uses CRC32C with an all-ones seed and no final complement for the
- * superblock, independent of the volume's metadata checksum seed. */
-static uint32_t ext_super_crc(const uint8_t *sb, size_t len)
+static uint32_t probe_crc32c(uint32_t crc, const uint8_t *data, size_t len)
 {
-    uint32_t crc = UINT32_MAX;
     for (size_t i = 0; i < len; i++) {
-        crc ^= sb[i];
+        crc ^= data[i];
         for (unsigned bit = 0; bit < 8; bit++)
             crc = (crc >> 1) ^ ((crc & 1) ? UINT32_C(0x82f63b78) : 0);
     }
@@ -209,8 +206,10 @@ static int probe_ext(int fd, uint64_t bytes, struct bx_fs_signature *fs)
     unsigned block_size = 1024u << log_size;
     if (blocks > bytes / block_size)
         return 0;
+    /* The ext4 superblock always uses an all-ones seed, independent of
+     * the volume's metadata checksum seed. */
     if ((ro_compat & 0x400) && /* METADATA_CSUM */
-        (sb[0x175] != 1 || ext_super_crc(sb, 1020) != bx_fat_le32dec(sb + 1020)))
+        (sb[0x175] != 1 || probe_crc32c(UINT32_MAX, sb, 1020) != bx_fat_le32dec(sb + 1020)))
         return 0;
 
     /* FILETYPE, RECOVER and META_BG plus the first three ro-compat bits
@@ -226,6 +225,65 @@ static int probe_ext(int fd, uint64_t bytes, struct bx_fs_signature *fs)
 static uint64_t probe_le64(const uint8_t *data)
 {
     return bx_fat_le32dec(data) | (uint64_t)bx_fat_le32dec(data + 4) << 32;
+}
+
+static int probe_erofs(int fd, uint64_t bytes, struct bx_fs_signature *fs)
+{
+    enum { OFFSET = 1024, SLOT_SIZE = 16 };
+    uint8_t sb[128];
+    if (bytes < OFFSET + sizeof(sb))
+        return 0;
+    if (read_at(fd, sb, sizeof(sb), OFFSET) < 0)
+        return -1;
+    if (bx_fat_le32dec(sb) != UINT32_C(0xe0f5e1e2) || sb[12] < 9 || sb[12] > 16 ||
+        !probe_le64(sb + 16) || bx_fat_le16dec(sb + 86) != 0)
+        return 0;
+
+    unsigned block_size = 1u << sb[12];
+    unsigned span = block_size > OFFSET ? block_size - OFFSET : block_size;
+    uint64_t root = bx_fat_le16dec(sb + 14);
+    uint64_t blocks = bx_fat_le32dec(sb + 36);
+    uint64_t meta_block = bx_fat_le32dec(sb + 40);
+    uint32_t incompat = bx_fat_le32dec(sb + 80);
+    if ((incompat & 0x80) && probe_le64(sb + 112)) { /* 48-bit block addresses */
+        blocks |= root << 32;
+        root = probe_le64(sb + 112);
+    }
+    if (blocks > bytes / block_size || meta_block >= blocks ||
+        sizeof(sb) + sb[13] * SLOT_SIZE > span)
+        return 0;
+    uint64_t extent = blocks * block_size;
+    unsigned end = OFFSET + span;
+    if (end > extent)
+        return 0;
+    /* The root inode is ordinarily a 32-byte slot in the metadata area.
+     * A metabox can use an alternate address space for its inodes. */
+    if (!(incompat & 0x100) && root >= (extent - meta_block * block_size) / 32)
+        return 0;
+
+    if (bx_fat_le32dec(sb + 8) & 1) { /* SB_CHKSUM */
+        /* EROFS CRC covers the superblock's block after magic and checksum,
+         * with a seed that accounts for those first eight bytes. */
+        uint32_t crc = probe_crc32c(UINT32_C(0x5045b54a), sb + 8, sizeof(sb) - 8);
+        for (unsigned pos = OFFSET + sizeof(sb); pos < end;) {
+            uint8_t chunk[4096];
+            size_t count = end - pos;
+            if (count > sizeof(chunk))
+                count = sizeof(chunk);
+            if (read_at(fd, chunk, count, pos) < 0)
+                return -1;
+            crc = probe_crc32c(crc, chunk, count);
+            pos += count;
+        }
+        if (crc != bx_fat_le32dec(sb + 4))
+            return 0;
+    }
+
+    fs->type = "erofs";
+    fs->block_size = block_size;
+    format_uuid(fs->uuid, sb + 48);
+    memcpy(fs->label, sb + 64, 16);
+    return 1;
 }
 
 static int probe_squashfs(int fd, uint64_t bytes, struct bx_fs_signature *fs)
@@ -523,6 +581,7 @@ int bx_fs_probe(int fd, unsigned usages, struct bx_fs_signature *result)
         {BX_PROBE_FILESYSTEM, probe_ext},
         {BX_PROBE_FILESYSTEM, probe_iso9660},
         {BX_PROBE_FILESYSTEM, probe_squashfs},
+        {BX_PROBE_FILESYSTEM, probe_erofs},
         {BX_PROBE_OTHER, probe_swap},
         {BX_PROBE_CRYPTO, probe_luks},
     };

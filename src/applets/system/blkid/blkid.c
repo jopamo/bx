@@ -24,7 +24,7 @@ static void usage(FILE *out)
 {
     fputs("Usage: blkid [-p | [-l] -t TAG=value] [-u filesystem|other|crypto]"
           " [-o full|export|value|device] [-s TAG]... [--] [DEVICE...]\n"
-          "Probe block devices or images for FAT, ext, ISO 9660, SquashFS, Linux swap, or LUKS.\n"
+          "Probe block devices or images for FAT, ext, ISO 9660, SquashFS, EROFS, Linux swap, or LUKS.\n"
           "With no devices, scan Linux block devices. -p requires a device.\n"
           "-t matches an exact LABEL or UUID. -l requires one matching path.\n", out);
 }
