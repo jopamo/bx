@@ -9,8 +9,10 @@
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s -n [-ae] -F SYSTEM_MAP [-b ROOT] [RELEASE]\n"
                  "       %s --write-bx-index [-ae] -F SYSTEM_MAP -b ROOT RELEASE\n"
-                 "Print dependencies with -n, or create a new modules.dep without replacing an existing index.\n",
-                 name, name);
+                 "       %s --show-bx-aliases [-b ROOT] [RELEASE]\n"
+                 "Print dependencies with -n, create a new modules.dep without clobbering,\n"
+                 "or print loadable-module aliases from ELF metadata.\n",
+                 name, name, name);
 }
 
 #ifdef __linux__
@@ -26,6 +28,7 @@ static void usage(FILE* out, const char* name) {
 #include "lib/fd_ops.h"
 #include "lib/text_buffer.h"
 #include "lib/xreadwrite.h"
+#include "module_alias.h"
 #include "module_elf.h"
 #include "module_index.h"
 #include "module_symbols.h"
@@ -61,6 +64,34 @@ struct scan {
     size_t refs_capacity;
     size_t refs_bytes;
 };
+
+static bool index_append(struct bx_text_buffer* out, const char* text, size_t len);
+
+static bool render_aliases(const struct module* module, const unsigned char* file,
+                           size_t length, struct bx_text_buffer* out) {
+    const char* records;
+    size_t size;
+    if (!bx_module_elf_info(file, length, &records, &size))
+        return false;
+    struct bx_module_path key = bx_module_path_name(
+        (struct bx_module_path){module->path, strlen(module->path)}, true);
+    char name[NAME_MAX + 1];
+    for (size_t i = 0; i < key.len; i++)
+        name[i] = key.text[i] == '-' ? '_' : key.text[i];
+    for (const char* p = records; p < records + size; p += strlen(p) + 1) {
+        static const char alias[] = "alias=";
+        if (strncmp(p, alias, sizeof(alias) - 1) != 0)
+            continue;
+        const char* value = p + sizeof(alias) - 1;
+        size_t len = strlen(value);
+        if (!bx_module_alias_pattern_valid((struct bx_module_path){value, len}) ||
+            !index_append(out, "alias ", 6) || !index_append(out, value, len) ||
+            !index_append(out, " ", 1) || !index_append(out, name, key.len) ||
+            !index_append(out, "\n", 1))
+            return false;
+    }
+    return true;
+}
 
 static enum bx_walk_action walk_error(const char* path, int error, void* user) {
     struct scan* scan = user;
@@ -154,7 +185,8 @@ static bool read_map(struct scan* scan, const char* path) {
     return ok;
 }
 
-static bool read_tree(struct scan* scan, const struct bx_module_tree* tree) {
+static bool read_tree(struct scan* scan, const struct bx_module_tree* tree,
+                      struct bx_text_buffer* aliases) {
     int fd = bx_fd_dup_cloexec(tree->fd);
     DIR* stream = fd < 0 ? NULL : fdopendir(fd);
     if (!stream) {
@@ -190,10 +222,11 @@ static bool read_tree(struct scan* scan, const struct bx_module_tree* tree) {
         scan->owner = i + 1;
         module->first = scan->refs_count;
         errno = 0;
-        bool ok = bx_module_elf_symbols(file, length, collect_symbol, scan);
+        bool ok = aliases ? render_aliases(module, file, length, aliases) :
+                           bx_module_elf_symbols(file, length, collect_symbol, scan);
         if (!ok)
             bx_diag(scan->diag, "%s: %s", module->path,
-                    errno ? bx_strerror(errno) : "invalid ELF module symbol table");
+                    errno ? bx_strerror(errno) : aliases ? "invalid .modinfo" : "invalid ELF module symbol table");
         free(file);
         if (!ok)
             return false;
@@ -368,18 +401,20 @@ int bx_depmod_main(int argc, char** argv) {
     if (handled >= 0)
         return handled;
 #ifdef __linux__
-    enum { WRITE_BX_INDEX = 256 };
+    enum { WRITE_BX_INDEX = 256, SHOW_BX_ALIASES };
     static const struct option opts[] = {
         {"all", no_argument, NULL, 'a'}, {"errsyms", no_argument, NULL, 'e'},
         {"show", no_argument, NULL, 'n'}, {"dry-run", no_argument, NULL, 'n'},
         {"basedir", required_argument, NULL, 'b'}, {"filesyms", required_argument, NULL, 'F'},
         {"write-bx-index", no_argument, NULL, WRITE_BX_INDEX},
+        {"show-bx-aliases", no_argument, NULL, SHOW_BX_ALIASES},
         {0},
     };
     const char* base = "/";
     const char* map = NULL;
     bool dry_run = false;
     bool write_index = false;
+    bool show_aliases = false;
     bool base_set = false;
     int operand = 1;
     bx_args_getopt_reset();
@@ -390,6 +425,7 @@ int bx_depmod_main(int argc, char** argv) {
         case 'b': base = optarg; base_set = true; break;
         case 'F': map = optarg; break;
         case WRITE_BX_INDEX: write_index = true; break;
+        case SHOW_BX_ALIASES: show_aliases = true; break;
         case ':':
             bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
             return 1;
@@ -398,13 +434,14 @@ int bx_depmod_main(int argc, char** argv) {
             return 1;
         }
     }
-    if (dry_run == write_index || !map || !*map || !*base ||
+    if (dry_run + write_index + show_aliases != 1 || (show_aliases ? map != NULL : !map || !*map) || !*base ||
         argc - optind > 1 || (write_index && (!base_set || argc - optind != 1))) {
         usage(stderr, "depmod");
         return 1;
     }
     struct bx_module_tree tree = {.fd = -1};
     struct scan scan = {.diag = &diag, .modules = calloc(FILES_MAX, sizeof(*scan.modules))};
+    struct bx_text_buffer index = {0};
     int status = 1;
     if (!scan.modules) {
         bx_perror_path(&diag, "module tree inventory");
@@ -414,9 +451,11 @@ int bx_depmod_main(int argc, char** argv) {
         bx_perror_path(&diag, tree.path ? tree.path : "module tree");
         goto done;
     }
-    if (read_map(&scan, map) && read_tree(&scan, &tree) && resolve(&scan) && rank_graph(&scan)) {
-        struct bx_text_buffer index = {0};
-        if (!render_deps(&scan, &index))
+    bool ready = show_aliases ? read_tree(&scan, &tree, &index) :
+                 read_map(&scan, map) && read_tree(&scan, &tree, NULL) &&
+                 resolve(&scan) && rank_graph(&scan);
+    if (ready) {
+        if (!show_aliases && !render_deps(&scan, &index))
             bx_perror_path(&diag, "build modules.dep");
         else if (write_index)
             status = publish_dep_index(&tree, &index, &diag) ? 0 : 1;
@@ -425,9 +464,9 @@ int bx_depmod_main(int argc, char** argv) {
             status = 0;
         else
             bx_perror_path(&diag, "standard output");
-        bx_text_buffer_destroy(&index);
     }
 done:
+    bx_text_buffer_destroy(&index);
     for (size_t i = 0; i < scan.refs_count; i++)
         free(scan.refs[i].name);
     free(scan.refs);

@@ -113,6 +113,12 @@ invalid:
     return -1;
 }
 
+bool bx_module_alias_pattern_valid(struct bx_module_path pattern) {
+    struct atom atoms[BX_MODULE_ALIAS_LIMIT];
+    size_t count;
+    return parse_pattern(pattern, atoms, &count) == 0;
+}
+
 static int match_pattern(const char* query, struct bx_module_path pattern, size_t* budget) {
     struct atom atoms[BX_MODULE_ALIAS_LIMIT];
     size_t n;

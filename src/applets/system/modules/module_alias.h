@@ -11,6 +11,7 @@ struct bx_module_aliases {
 
 enum { BX_MODULE_ALIAS_LIMIT = 1024 };
 bool bx_module_alias_span_valid(const char* query, size_t len);
+bool bx_module_alias_pattern_valid(struct bx_module_path pattern);
 bool bx_module_alias_query_valid(const char* query);
 /* Loadable modules precede built-ins; exact names precede aliases within each.
  * The caller frees matches, whose names borrow storage from tree or matches. */
