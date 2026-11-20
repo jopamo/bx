@@ -613,6 +613,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "pidof",
+      "main": "bx_pidof_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "killall",
       "main": "bx_killall_main",
       "capabilities": [

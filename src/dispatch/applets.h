@@ -61,6 +61,7 @@ int bx_mount_main(int argc, char** argv);
 int bx_umount_main(int argc, char** argv);
 int bx_kill_main(int argc, char** argv);
 int bx_killall_main(int argc, char** argv);
+int bx_pidof_main(int argc, char** argv);
 int bx_ps_main(int argc, char** argv);
 int bx_pslog_main(int argc, char** argv);
 int bx_pstree_main(int argc, char** argv);
