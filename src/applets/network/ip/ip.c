@@ -4,6 +4,7 @@
 
 static void ip_help(FILE* out) {
     fputs("usage: ip link set [dev] IFACE {up|down}\n"
+          "       ip [-4] {a|addr|address} [show [dev IFACE]]\n"
           "       ip [-4] {addr|address} {replace|del} IPV4/PREFIX dev IFACE\n"
           "       ip [-4] route {replace|del} default via IPV4 dev IFACE [metric NUMBER]\n"
           "PREFIX is a CIDR length or a contiguous dotted netmask. Linux only.\n", out);
@@ -108,9 +109,115 @@ static bool ip_parse_prefix(const char* text, struct in_addr* local, unsigned ch
     return true;
 }
 
+static const char* ip_scope(unsigned char scope) {
+    switch (scope) {
+    case RT_SCOPE_UNIVERSE: return "global";
+    case RT_SCOPE_SITE: return "site";
+    case RT_SCOPE_LINK: return "link";
+    case RT_SCOPE_HOST: return "host";
+    case RT_SCOPE_NOWHERE: return "nowhere";
+    default: return NULL;
+    }
+}
+
+static int ip_address_record(const struct nlmsghdr* header, void* context) {
+    unsigned int selected = *(const unsigned int*)context;
+    struct ifaddrmsg addr;
+    const size_t offset = NLMSG_LENGTH(sizeof(addr));
+    if (header->nlmsg_len < offset)
+        goto invalid;
+    const unsigned char* data = (const void*)header;
+    memcpy(&addr, data + NLMSG_HDRLEN, sizeof(addr));
+    if (addr.ifa_family != AF_INET || (selected && addr.ifa_index != selected))
+        return 0;
+    if (!addr.ifa_index || addr.ifa_prefixlen > 32)
+        goto invalid;
+    struct in_addr local, peer;
+    bool has_local = false, has_peer = false;
+    const unsigned char* cursor = data + offset;
+    size_t left = header->nlmsg_len - offset;
+    while (left) {
+        struct rtattr attribute;
+        if (left < sizeof(attribute))
+            goto invalid;
+        memcpy(&attribute, cursor, sizeof(attribute));
+        size_t size = RTA_ALIGN(attribute.rta_len);
+        if (attribute.rta_len < RTA_LENGTH(0) || size > left)
+            goto invalid;
+        if (attribute.rta_type == IFA_LOCAL || attribute.rta_type == IFA_ADDRESS) {
+            bool is_local = attribute.rta_type == IFA_LOCAL;
+            bool* seen = is_local ? &has_local : &has_peer;
+            if (*seen || attribute.rta_len != RTA_LENGTH(sizeof(local)))
+                goto invalid;
+            *seen = true;
+            memcpy(is_local ? &local : &peer, cursor + RTA_LENGTH(0), sizeof(local));
+        }
+        cursor += size;
+        left -= size;
+    }
+    if (!has_local && !has_peer)
+        goto invalid;
+    char name[IF_NAMESIZE];
+    if (!if_indextoname(addr.ifa_index, name))
+        return errno == ENODEV || errno == ENXIO ? 0 : -1;
+    char host[INET_ADDRSTRLEN], other[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, has_local ? &local : &peer, host, sizeof(host)))
+        return -1;
+    bool point_to_point = has_local && has_peer && local.s_addr != peer.s_addr;
+    if (point_to_point && !inet_ntop(AF_INET, &peer, other, sizeof(other)))
+        return -1;
+    char numeric_scope[4];
+    const char* scope = ip_scope(addr.ifa_scope);
+    if (!scope) {
+        snprintf(numeric_scope, sizeof(numeric_scope), "%u", (unsigned int)addr.ifa_scope);
+        scope = numeric_scope;
+    }
+    return printf("%u: %s inet %s%s%s/%u scope %s\n", addr.ifa_index, name, host,
+                  point_to_point ? " peer " : "", point_to_point ? other : "",
+                  (unsigned int)addr.ifa_prefixlen, scope) < 0 ? -1 : 0;
+
+invalid:
+    errno = EPROTO;
+    return -1;
+}
+
+static int ip_show_addresses(int argc, char** argv, struct bx_diag_ctx* diag) {
+    if (argc && (strcmp(argv[0], "show") == 0 || strcmp(argv[0], "list") == 0 ||
+                 strcmp(argv[0], "lst") == 0)) {
+        argc--;
+        argv++;
+    }
+    unsigned int index = 0;
+    if (argc) {
+        if (argc != 2 || strcmp(argv[0], "dev") != 0)
+            return ip_usage(diag);
+        index = ip_ifindex(argv[1], diag);
+        if (!index)
+            return 1;
+    }
+    struct {
+        struct nlmsghdr header;
+        struct ifaddrmsg address;
+    } request = {
+        .header = {.nlmsg_len = NLMSG_LENGTH(sizeof(request.address)), .nlmsg_type = RTM_GETADDR},
+        .address = {.ifa_family = AF_INET},
+    };
+    if (bx_rtnl_dump(&request, RTM_NEWADDR, ip_address_record, &index) < 0) {
+        bx_perror_path(diag, ferror(stdout) ? "standard output" : "address dump");
+        return 1;
+    }
+    if (fflush(stdout) == EOF) {
+        bx_perror_path(diag, "standard output");
+        return 1;
+    }
+    return 0;
+}
+
 static int ip_address(int argc, char** argv, struct bx_diag_ctx* diag) {
     enum ip_action action;
-    if (argc != 4 || !ip_action(argv[0], &action) || strcmp(argv[2], "dev") != 0)
+    if (!argc || !ip_action(argv[0], &action))
+        return ip_show_addresses(argc, argv, diag);
+    if (argc != 4 || strcmp(argv[2], "dev") != 0)
         return ip_usage(diag);
     struct in_addr local;
     unsigned char prefix;
@@ -198,7 +305,7 @@ int bx_ip_main(int argc, char** argv) {
     if (argc >= 2) {
         if (strcmp(argv[1], "link") == 0)
             return ip_link(argc - 2, argv + 2, &diag);
-        if (strcmp(argv[1], "addr") == 0 || strcmp(argv[1], "address") == 0)
+        if (strcmp(argv[1], "a") == 0 || strcmp(argv[1], "addr") == 0 || strcmp(argv[1], "address") == 0)
             return ip_address(argc - 2, argv + 2, &diag);
         if (strcmp(argv[1], "route") == 0)
             return ip_route(argc - 2, argv + 2, &diag);

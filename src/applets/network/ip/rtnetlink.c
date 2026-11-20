@@ -31,14 +31,9 @@ bool bx_rtnl_attr(void* buffer, size_t capacity, unsigned short type,
     return true;
 }
 
-static int rtnl_receive_ack(int fd, const struct nlmsghdr* request) {
-    /* A single request, no multicast subscriptions and no multipart dump. */
-    union {
-        struct nlmsghdr alignment;
-        unsigned char bytes[4096];
-    } response;
+static ssize_t rtnl_receive(int fd, void* buffer, size_t capacity) {
     struct sockaddr_nl sender = {0};
-    struct iovec vec = {.iov_base = response.bytes, .iov_len = sizeof(response.bytes)};
+    struct iovec vec = {.iov_base = buffer, .iov_len = capacity};
     struct msghdr msg = {
         .msg_name = &sender, .msg_namelen = sizeof(sender),
         .msg_iov = &vec, .msg_iovlen = 1,
@@ -49,22 +44,26 @@ static int rtnl_receive_ack(int fd, const struct nlmsghdr* request) {
     } while (bytes < 0 && errno == EINTR);
     if (bytes < 0)
         return -1;
+    if (msg.msg_flags & MSG_TRUNC) {
+        errno = EMSGSIZE;
+        return -1;
+    }
     if (msg.msg_namelen != sizeof(sender) || sender.nl_family != AF_NETLINK ||
-        sender.nl_pid != 0 || sender.nl_groups != 0 || (msg.msg_flags & MSG_TRUNC) != 0 ||
-        bytes < (ssize_t)NLMSG_LENGTH(sizeof(struct nlmsgerr))) {
+        sender.nl_pid != 0 || sender.nl_groups != 0 || bytes < NLMSG_HDRLEN) {
         errno = EPROTO;
         return -1;
     }
-    struct nlmsghdr header;
-    memcpy(&header, response.bytes, sizeof(header));
-    if (header.nlmsg_type != NLMSG_ERROR || header.nlmsg_seq != request->nlmsg_seq ||
-        header.nlmsg_len < NLMSG_LENGTH(sizeof(struct nlmsgerr)) ||
-        header.nlmsg_len > (size_t)bytes) {
+    return bytes;
+}
+
+static int rtnl_check_ack(const struct nlmsghdr* header, const struct nlmsghdr* request) {
+    if (header->nlmsg_type != NLMSG_ERROR || header->nlmsg_seq != request->nlmsg_seq ||
+        header->nlmsg_len < NLMSG_LENGTH(sizeof(struct nlmsgerr))) {
         errno = EPROTO;
         return -1;
     }
     struct nlmsgerr ack;
-    memcpy(&ack, response.bytes + NLMSG_HDRLEN, sizeof(ack));
+    memcpy(&ack, (const unsigned char*)header + NLMSG_HDRLEN, sizeof(ack));
     if (ack.msg.nlmsg_type != request->nlmsg_type || ack.msg.nlmsg_seq != request->nlmsg_seq ||
         ack.error > 0 || ack.error == INT_MIN) {
         errno = EPROTO;
@@ -76,27 +75,141 @@ static int rtnl_receive_ack(int fd, const struct nlmsghdr* request) {
     return -1;
 }
 
-int bx_rtnl_apply(void* buffer) {
-    struct nlmsghdr* request = buffer;
+static int rtnl_open(void) {
     int fd = bx_fd_socket_cloexec(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     if (fd < 0)
         return -1;
-
-    struct sockaddr_nl kernel = {.nl_family = AF_NETLINK};
     struct timeval receive_timeout = {.tv_sec = 5};
-    int rc = -1;
-    request->nlmsg_flags |= NLM_F_REQUEST | NLM_F_ACK;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof(receive_timeout)) < 0) {
+        int error = errno;
+        bx_fd_cleanup(&fd);
+        errno = error;
+    }
+    return fd;
+}
+
+static int rtnl_send(int fd, struct nlmsghdr* request, unsigned short flags) {
+    struct sockaddr_nl kernel = {.nl_family = AF_NETLINK};
+    request->nlmsg_flags |= NLM_F_REQUEST | flags;
     request->nlmsg_seq = 1; /* Each call owns its socket. */
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof(receive_timeout)) == 0) {
-        ssize_t sent;
-        do {
-            sent = sendto(fd, buffer, request->nlmsg_len, 0,
-                          (const struct sockaddr*)&kernel, sizeof(kernel));
-        } while (sent < 0 && errno == EINTR);
-        if (sent == (ssize_t)request->nlmsg_len)
-            rc = rtnl_receive_ack(fd, request);
-        else if (sent >= 0)
-            errno = EIO;
+    ssize_t sent;
+    do {
+        sent = sendto(fd, request, request->nlmsg_len, 0,
+                      (const struct sockaddr*)&kernel, sizeof(kernel));
+    } while (sent < 0 && errno == EINTR);
+    if (sent == (ssize_t)request->nlmsg_len)
+        return 0;
+    if (sent >= 0)
+        errno = EIO;
+    return -1;
+}
+
+int bx_rtnl_apply(void* buffer) {
+    int fd = rtnl_open();
+    if (fd < 0)
+        return -1;
+    int rc = -1;
+    if (rtnl_send(fd, buffer, NLM_F_ACK) == 0) {
+        union {
+            struct nlmsghdr alignment;
+            unsigned char bytes[4096];
+        } response;
+        ssize_t bytes = rtnl_receive(fd, response.bytes, sizeof(response.bytes));
+        if (bytes >= 0) {
+            const struct nlmsghdr* header = &response.alignment;
+            if (header->nlmsg_len > (size_t)bytes)
+                errno = EPROTO;
+            else
+                rc = rtnl_check_ack(header, buffer);
+        }
+    }
+    int error = errno;
+    bx_fd_cleanup(&fd);
+    errno = error;
+    return rc;
+}
+
+static int rtnl_receive_dump(int fd, const struct nlmsghdr* request, unsigned short type,
+                             unsigned int port, int (*visit)(const struct nlmsghdr*, void*),
+                             void* context) {
+    enum { DUMP_LIMIT = 16 * 1024 * 1024 };
+    union {
+        struct nlmsghdr alignment;
+        unsigned char bytes[32768];
+    } response;
+    size_t total = 0;
+    for (;;) {
+        ssize_t received = rtnl_receive(fd, response.bytes, sizeof(response.bytes));
+        if (received < 0)
+            return -1;
+        total += (size_t)received;
+        if (total > DUMP_LIMIT) {
+            errno = EFBIG;
+            return -1;
+        }
+        size_t left = (size_t)received;
+        const unsigned char* cursor = response.bytes;
+        while (left) {
+            if (left < NLMSG_HDRLEN)
+                goto invalid;
+            const struct nlmsghdr* header = (const void*)cursor;
+            if (header->nlmsg_len < NLMSG_HDRLEN || header->nlmsg_len > left ||
+                header->nlmsg_pid != port || header->nlmsg_seq != request->nlmsg_seq)
+                goto invalid;
+            size_t size = NLMSG_ALIGN(header->nlmsg_len);
+            if (size > left)
+                goto invalid;
+            if (header->nlmsg_flags & NLM_F_DUMP_INTR) {
+                errno = EINTR;
+                return -1;
+            }
+            if (header->nlmsg_type == NLMSG_ERROR) {
+                if (rtnl_check_ack(header, request) < 0)
+                    return -1;
+                goto invalid; /* The dump did not request an ACK. */
+            }
+            if (!(header->nlmsg_flags & NLM_F_MULTI))
+                goto invalid;
+            if (header->nlmsg_type == NLMSG_DONE) {
+                int error;
+                if (size != left || header->nlmsg_len < NLMSG_LENGTH(sizeof(error)))
+                    goto invalid;
+                memcpy(&error, cursor + NLMSG_HDRLEN, sizeof(error));
+                if (error > 0 || error == INT_MIN)
+                    goto invalid;
+                if (!error)
+                    return 0;
+                errno = -error;
+                return -1;
+            }
+            if (header->nlmsg_type != type)
+                goto invalid;
+            if (visit(header, context) < 0)
+                return -1;
+            left -= size;
+            cursor += size;
+        }
+    }
+invalid:
+    errno = EPROTO;
+    return -1;
+}
+
+int bx_rtnl_dump(void* buffer, unsigned short type,
+                 int (*visit)(const struct nlmsghdr*, void*), void* context) {
+    int fd = rtnl_open();
+    if (fd < 0)
+        return -1;
+    int rc = -1;
+    if (rtnl_send(fd, buffer, NLM_F_DUMP) == 0) {
+        struct sockaddr_nl local;
+        socklen_t size = sizeof(local);
+        if (getsockname(fd, (struct sockaddr*)&local, &size) == 0) {
+            if (size != sizeof(local) || local.nl_family != AF_NETLINK || !local.nl_pid)
+                errno = EPROTO;
+            else
+                rc = rtnl_receive_dump(fd, buffer, type, local.nl_pid, visit, context);
+        }
     }
     int error = errno;
     bx_fd_cleanup(&fd);
