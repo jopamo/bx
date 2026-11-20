@@ -21,6 +21,8 @@ enum { BX_MODULE_PLAN_CYCLE = -2 };
 /* Plan all matches of a name or installed alias. Caller frees steps; strings
  * are borrowed from tree. */
 int bx_module_tree_plan(struct bx_module_tree* tree, const char* query, struct bx_module_plan* plan);
+/* Plan one exact name and its hard dependencies, without opening module files. */
+int bx_module_tree_remove_plan(struct bx_module_tree* tree, const char* name, struct bx_module_plan* plan);
 #endif
 
 #endif

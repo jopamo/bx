@@ -9,10 +9,12 @@ static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE_OR_ALIAS\n"
                  "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
                  "       %s [-C FILE] MODULE_OR_ALIAS [PARAMETER ...]\n"
+                 "       %s -r MODULE\n"
                  "Load by name or installed alias for the running kernel. Read modprobe.d\n"
                  "or FILE for blacklist and options directives. Also honors\n"
-                 "modprobe.blacklist= on the kernel command line. No hooks run.\n",
-                 name, name, name);
+                 "modprobe.blacklist= on the kernel command line. No hooks run.\n"
+                 "-r removes an exact name and then its unused installed hard dependencies.\n",
+                 name, name, name, name);
 }
 
 #ifdef __linux__
@@ -141,6 +143,40 @@ out:
     free(inputs);
     return status;
 }
+
+static int remove_plan(const struct bx_module_plan* plan, struct bx_diag_ctx* diag) {
+    /* A single exact request is last in a plan of hard dependencies. */
+    const struct bx_module_step* root = &plan->steps[plan->count - 1];
+    if (root->builtin) {
+        bx_diag(diag, "module '%.*s' is built in", (int)root->name.len, root->name.text);
+        return 1;
+    }
+    for (size_t i = 0; i < plan->count; i++) {
+        struct bx_module_path name = plan->steps[i].name;
+        if (!bx_module_remove_name_valid(name)) {
+            bx_diag(diag, "invalid module name: '%.*s'", (int)name.len, name.text);
+            return 1;
+        }
+    }
+    if (bx_module_remove(root->name) < 0) {
+        int error = errno;
+        if (error == ENOENT)
+            return 0; /* Do not prune the dependencies of an absent module. */
+        bx_module_remove_report(diag, root->name, error);
+        return 1;
+    }
+    for (size_t i = plan->count - 1; i > 0; i--) {
+        struct bx_module_path name = plan->steps[i - 1].name;
+        if (bx_module_remove(name) < 0) {
+            int error = errno;
+            if (error != ENOENT && error != EWOULDBLOCK && error != EBUSY) {
+                bx_module_remove_report(diag, name, error);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
 #endif
 
 int bx_modprobe_main(int argc, char** argv) {
@@ -152,6 +188,7 @@ int bx_modprobe_main(int argc, char** argv) {
     static const struct option opts[] = {
         {"show-depends", no_argument, NULL, 'D'},
         {"resolve-alias", no_argument, NULL, 'R'},
+        {"remove", no_argument, NULL, 'r'},
         {"dirname", required_argument, NULL, 'd'},
         {"set-version", required_argument, NULL, 'S'},
         {"config", required_argument, NULL, 'C'},
@@ -162,16 +199,20 @@ int bx_modprobe_main(int argc, char** argv) {
     const char* config = NULL;
     bool show = false;
     bool alias = false;
+    bool remove = false;
     opterr = 0;
     optind = 1;
     bool alternate_root = false;
-    for (int opt; (opt = getopt_long(argc, argv, ":DRd:S:C:", opts, NULL)) != -1;) {
+    for (int opt; (opt = getopt_long(argc, argv, ":DRrd:S:C:", opts, NULL)) != -1;) {
         switch (opt) {
         case 'D':
             show = true;
             break;
         case 'R':
             alias = true;
+            break;
+        case 'r':
+            remove = true;
             break;
         case 'd':
             if (*optarg == '\0' || strpbrk(optarg, "\r\n") != NULL) {
@@ -203,18 +244,23 @@ int bx_modprobe_main(int argc, char** argv) {
             return 1;
         }
     }
-    bool load = !show && !alias;
-    if (load && (alternate_root || release != NULL)) {
-        bx_diag(&diag, "loading is only supported for the running kernel's installed module tree");
+    bool load = !show && !alias && !remove;
+    if ((load || remove) && (alternate_root || release != NULL)) {
+        bx_diag(&diag, "%s is only supported for the running kernel's installed module tree",
+                remove ? "removal" : "loading");
         return 1;
     }
-    if ((show && alias) || (!load && config != NULL) || optind == argc ||
+    if ((show && alias) || (remove && (show || alias)) || (!load && config != NULL) || optind == argc ||
         (!load && argc - optind != 1) ||
         !bx_module_alias_query_valid(argv[optind])) {
         usage(stderr, diag.progname);
         return 1;
     }
     const char* name = argv[optind];
+    if (remove && !bx_module_remove_name_valid((struct bx_module_path) {name, strlen(name)})) {
+        bx_diag(&diag, "invalid module name: '%s'", name);
+        return 1;
+    }
     struct bx_module_tree tree = {.fd = -1};
     struct bx_module_policy policy = {0};
     int status = 1;
@@ -229,10 +275,16 @@ int bx_modprobe_main(int argc, char** argv) {
         goto out;
     }
     struct bx_module_plan plan;
-    int planned = bx_module_tree_plan(&tree, name, &plan);
+    int planned = remove ? bx_module_tree_remove_plan(&tree, name, &plan)
+                         : bx_module_tree_plan(&tree, name, &plan);
     if (planned < 0) {
         bx_diag(&diag, "cannot plan dependencies for '%s': %s", name,
                 planned == BX_MODULE_PLAN_CYCLE ? "dependency cycle" : strerror(errno));
+        goto out;
+    }
+    if (remove) {
+        status = remove_plan(&plan, &diag);
+        free(plan.steps);
         goto out;
     }
     if (load) {

@@ -298,7 +298,7 @@ static int next_softdep(struct bx_module_tree* tree, struct entry** names, size_
 
 static int order_entries(struct bx_module_tree* tree, struct entry* entries, struct entry** names,
                          size_t count, struct entry* root, size_t* queries, size_t* edges,
-                         struct bx_module_plan* plan) {
+                         bool removal, struct bx_module_plan* plan) {
     struct entry* current = root;
     current->visit = HARD;
     while (current) {
@@ -320,7 +320,7 @@ static int order_entries(struct bx_module_tree* tree, struct entry* entries, str
                 return -1;
             if (next == 0) {
                 if (current->visit == PRE) {
-                    if (!current->builtin && check_module(tree, current->record.path) < 0)
+                    if (!removal && !current->builtin && check_module(tree, current->record.path) < 0)
                         return -1;
                     plan->steps[plan->count++] = (struct bx_module_step) {
                         .target = current->builtin ? current->name : current->record.path,
@@ -349,7 +349,8 @@ static int order_entries(struct bx_module_tree* tree, struct entry* entries, str
     return 0;
 }
 
-int bx_module_tree_plan(struct bx_module_tree* tree, const char* query, struct bx_module_plan* plan) {
+static int tree_plan(struct bx_module_tree* tree, const char* query, bool removal,
+                     struct bx_module_plan* plan) {
     size_t count;
     struct entry* entries = read_entries(tree, &count);
     if (entries == NULL)
@@ -364,31 +365,34 @@ int bx_module_tree_plan(struct bx_module_tree* tree, const char* query, struct b
     for (size_t i = 0; i < count; i++)
         names[i] = &entries[i];
     qsort(names, count, sizeof(*names), by_name);
-    if (bx_module_resolve_alias(tree, query, &aliases) < 0)
+    if (!removal && bx_module_resolve_alias(tree, query, &aliases) < 0)
         goto out;
-    roots = malloc(aliases.count * sizeof(*roots));
+    size_t root_count = removal ? 1 : aliases.count;
+    roots = malloc(root_count * sizeof(*roots));
     if (roots == NULL)
         goto out;
     /* Mark all requested modules before traversal. A later match can first
      * be reached as an earlier match's dependency and still needs its args. */
-    for (size_t i = 0; i < aliases.count; i++) {
-        roots[i] = find_name(names, count, bx_module_alias_at(&aliases, i));
+    for (size_t i = 0; i < root_count; i++) {
+        struct bx_module_path target = removal ? (struct bx_module_path) {query, strlen(query)}
+                                               : bx_module_alias_at(&aliases, i);
+        roots[i] = find_name(names, count, target);
         if (roots[i] == NULL) {
             errno = ENOENT;
             goto out;
         }
         roots[i]->requested = true;
     }
-    if (read_softdeps(tree, names, count) < 0)
+    if (!removal && read_softdeps(tree, names, count) < 0)
         goto out;
     result.steps = calloc(count, sizeof(*result.steps));
     if (result.steps == NULL)
         goto out;
     size_t queries = ALIAS_QUERY_LIMIT, edges = SOFT_EDGE_LIMIT;
     r = 0;
-    for (size_t i = 0; i < aliases.count && r == 0; i++) {
+    for (size_t i = 0; i < root_count && r == 0; i++) {
         if (roots[i]->visit == UNSEEN)
-            r = order_entries(tree, entries, names, count, roots[i], &queries, &edges, &result);
+            r = order_entries(tree, entries, names, count, roots[i], &queries, &edges, removal, &result);
     }
 out:;
     int error = errno;
@@ -405,5 +409,13 @@ out:;
     }
     *plan = result;
     return 0;
+}
+
+int bx_module_tree_plan(struct bx_module_tree* tree, const char* query, struct bx_module_plan* plan) {
+    return tree_plan(tree, query, false, plan);
+}
+
+int bx_module_tree_remove_plan(struct bx_module_tree* tree, const char* name, struct bx_module_plan* plan) {
+    return tree_plan(tree, name, true, plan);
 }
 #endif

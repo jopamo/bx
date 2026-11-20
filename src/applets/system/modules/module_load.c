@@ -109,4 +109,43 @@ int bx_module_load_fd(int fd, const struct stat* st, const char* parameters) {
     int flags = module_flags(fd);
     return flags < 0 ? -1 : load_module(fd, st, parameters, flags);
 }
+
+/* The kernel's module-name buffer is no larger than 64 bytes. */
+enum { MODULE_NAME_CAPACITY = 64 };
+
+bool bx_module_remove_name_valid(struct bx_module_path name) {
+    return name.len < MODULE_NAME_CAPACITY && bx_module_name_span_valid(name.text, name.len) &&
+           name.text[0] != '-';
+}
+
+int bx_module_remove(struct bx_module_path name) {
+    if (!bx_module_remove_name_valid(name)) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef SYS_delete_module
+    char normalized[MODULE_NAME_CAPACITY];
+    for (size_t i = 0; i < name.len; i++)
+        normalized[i] = name.text[i] == '-' ? '_' : name.text[i];
+    normalized[name.len] = '\0';
+    return (int)syscall(SYS_delete_module, normalized, (unsigned int)O_NONBLOCK);
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+void bx_module_remove_report(struct bx_diag_ctx* diag, struct bx_module_path name, int error) {
+    if (error == ENOSYS) {
+        bx_diag(diag, "the kernel does not support module unloading");
+        return;
+    }
+    const char* reason = error == EWOULDBLOCK ? "is in use" :
+                         error == EBUSY ? "is busy or cannot be unloaded" :
+                         error == ENOENT ? "is not loaded" : NULL;
+    if (reason != NULL)
+        bx_diag(diag, "module '%.*s' %s", (int)name.len, name.text, reason);
+    else
+        bx_diag(diag, "cannot unload '%.*s': %s", (int)name.len, name.text, strerror(error));
+}
 #endif

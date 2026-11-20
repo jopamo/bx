@@ -6,20 +6,8 @@
 #include "bx/diag.h"
 
 #ifdef __linux__
-#include <fcntl.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
-
-#if defined(__linux__) && defined(SYS_delete_module)
-/* The kernel's module-name buffer is no larger than 64 bytes. */
-enum { MODULE_NAME_CAPACITY = 64 };
-
-static int valid_module_name(const char* name) {
-    size_t len = strnlen(name, MODULE_NAME_CAPACITY);
-    return name[0] != '-' && len != 0 && len < MODULE_NAME_CAPACITY &&
-           strspn(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") == len;
-}
+#include <errno.h>
+#include "module_load.h"
 #endif
 
 int bx_rmmod_main(int argc, char** argv) {
@@ -30,7 +18,7 @@ int bx_rmmod_main(int argc, char** argv) {
     }
 
     struct bx_diag_ctx diag = {.progname = "rmmod"};
-#if defined(__linux__) && defined(SYS_delete_module)
+#ifdef __linux__
     int operand = argc > 1 && strcmp(argv[1], "--") == 0 ? 2 : 1;
     if (operand >= argc) {
         bx_diag(&diag, "a module name is required");
@@ -42,7 +30,7 @@ int bx_rmmod_main(int argc, char** argv) {
             bx_diag(&diag, "unsupported option: '%s'", argv[i]);
             return 1;
         }
-        if (!valid_module_name(argv[i])) {
+        if (!bx_module_remove_name_valid((struct bx_module_path) {argv[i], strlen(argv[i])})) {
             bx_diag(&diag, "invalid module name: '%s'", argv[i]);
             return 1;
         }
@@ -50,25 +38,12 @@ int bx_rmmod_main(int argc, char** argv) {
 
     int status = 0;
     for (int i = operand; i < argc; i++) {
-        char name[MODULE_NAME_CAPACITY];
-        strcpy(name, argv[i]);
-        for (char* p = name; *p != '\0'; p++)
-            if (*p == '-')
-                *p = '_';
-
-        /* Never ask the kernel to force removal or wait for references. */
-        if (syscall(SYS_delete_module, name, (unsigned int)O_NONBLOCK) < 0) {
-            if (errno == EWOULDBLOCK)
-                bx_diag(&diag, "module '%s' is in use", argv[i]);
-            else if (errno == EBUSY)
-                bx_diag(&diag, "module '%s' is busy or cannot be unloaded", argv[i]);
-            else if (errno == ENOENT)
-                bx_diag(&diag, "module '%s' is not loaded", argv[i]);
-            else if (errno == ENOSYS) {
-                bx_diag(&diag, "the kernel does not support module unloading");
+        struct bx_module_path name = {argv[i], strlen(argv[i])};
+        if (bx_module_remove(name) < 0) {
+            int error = errno;
+            bx_module_remove_report(&diag, name, error);
+            if (error == ENOSYS)
                 return 1;
-            } else
-                bx_perror_path(&diag, argv[i]);
             status = 1;
         }
     }
