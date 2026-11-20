@@ -10,13 +10,16 @@ static void usage(FILE* out, const char* name) {
                  "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
                  "       %s --dry-run [-d ROOT] [-S RELEASE] [-C FILE] MODULE_OR_ALIAS [PARAMETER ...]\n"
                  "       %s [-C FILE] MODULE_OR_ALIAS [PARAMETER ...]\n"
+                 "       %s [-bq] [-C FILE] -a MODULE_OR_ALIAS ...\n"
                  "       %s -r MODULE\n"
                  "Load by name or installed alias for the running kernel. Read modprobe.d\n"
                  "or FILE for blacklist and options directives. Also honors\n"
                  "modprobe.blacklist= on the kernel command line. No hooks run.\n"
                  "--dry-run checks the load plan without asking the kernel to load it.\n"
+                 "-a plans all operands together; -b requests the blacklist checks already enabled.\n"
+                 "-q suppresses missing-module diagnostics, not other errors.\n"
                  "-r removes an exact name and then its unused installed hard dependencies.\n",
-                 name, name, name, name, name);
+                 name, name, name, name, name, name);
 }
 
 #ifdef __linux__
@@ -40,10 +43,12 @@ static bool print_name(const char* prefix, const char* name, size_t len) {
     return printf("%s%s\n", prefix, normalized) >= 0;
 }
 
-static int show_aliases(struct bx_module_tree* tree, const char* query, struct bx_diag_ctx* diag) {
+static int show_aliases(struct bx_module_tree* tree, const char* query, bool quiet,
+                        struct bx_diag_ctx* diag) {
     struct bx_module_aliases aliases;
     if (bx_module_resolve_alias(tree, query, &aliases) < 0) {
-        bx_diag(diag, "cannot resolve alias '%s': %s", query, strerror(errno));
+        if (!quiet || errno != ENOENT)
+            bx_diag(diag, "cannot resolve alias '%s': %s", query, strerror(errno));
         return 1;
     }
     bool printed = true;
@@ -193,6 +198,9 @@ int bx_modprobe_main(int argc, char** argv) {
         {"remove", no_argument, NULL, 'r'},
         {"dry-run", no_argument, NULL, 'n'},
         {"show", no_argument, NULL, 'n'},
+        {"all", no_argument, NULL, 'a'},
+        {"use-blacklist", no_argument, NULL, 'b'},
+        {"quiet", no_argument, NULL, 'q'},
         {"dirname", required_argument, NULL, 'd'},
         {"set-version", required_argument, NULL, 'S'},
         {"config", required_argument, NULL, 'C'},
@@ -205,10 +213,13 @@ int bx_modprobe_main(int argc, char** argv) {
     bool alias = false;
     bool remove = false;
     bool dry_run = false;
+    bool all = false;
+    bool use_blacklist = false;
+    bool quiet = false;
     opterr = 0;
     optind = 1;
     bool alternate_root = false;
-    for (int opt; (opt = getopt_long(argc, argv, ":DRrnd:S:C:", opts, NULL)) != -1;) {
+    for (int opt; (opt = getopt_long(argc, argv, ":DRrnabqd:S:C:", opts, NULL)) != -1;) {
         switch (opt) {
         case 'D':
             show = true;
@@ -221,6 +232,15 @@ int bx_modprobe_main(int argc, char** argv) {
             break;
         case 'n':
             dry_run = true;
+            break;
+        case 'a':
+            all = true;
+            break;
+        case 'b':
+            use_blacklist = true;
+            break;
+        case 'q':
+            quiet = true;
             break;
         case 'd':
             if (*optarg == '\0' || strpbrk(optarg, "\r\n") != NULL) {
@@ -258,14 +278,24 @@ int bx_modprobe_main(int argc, char** argv) {
                 remove ? "removal" : "loading");
         return 1;
     }
-    if ((show && alias) || (remove && (show || alias)) || (!load && (config != NULL || dry_run)) ||
-        optind == argc ||
-        (!load && argc - optind != 1) ||
-        !bx_module_alias_query_valid(argv[optind])) {
+    if ((show && alias) || (remove && (show || alias)) ||
+        (!load && (config != NULL || dry_run || all || use_blacklist)) ||
+        optind == argc || (!load && argc - optind != 1)) {
         usage(stderr, diag.progname);
         return 1;
     }
     const char* name = argv[optind];
+    int queries = all ? argc - optind : 1;
+    if (queries > 256) {
+        bx_diag(&diag, "too many module requests");
+        return 1;
+    }
+    for (int i = 0; i < queries; i++) {
+        if (!bx_module_alias_query_valid(argv[optind + i])) {
+            bx_diag(&diag, "invalid module or alias operand");
+            return 1;
+        }
+    }
     if (remove && !bx_module_remove_name_valid((struct bx_module_path) {name, strlen(name)})) {
         bx_diag(&diag, "invalid module name: '%s'", name);
         return 1;
@@ -280,15 +310,21 @@ int bx_modprobe_main(int argc, char** argv) {
         goto out;
     }
     if (alias) {
-        status = show_aliases(&tree, name, &diag);
+        status = show_aliases(&tree, name, quiet, &diag);
         goto out;
     }
     struct bx_module_plan plan;
+    const char* failed = NULL;
     int planned = remove ? bx_module_tree_remove_plan(&tree, name, &plan)
-                         : bx_module_tree_plan(&tree, name, &plan);
+                         : bx_module_tree_plan(&tree, queries, argv + optind, &plan, &failed);
     if (planned < 0) {
-        bx_diag(&diag, "cannot plan dependencies for '%s': %s", name,
-                planned == BX_MODULE_PLAN_CYCLE ? "dependency cycle" : strerror(errno));
+        if (!quiet || planned != BX_MODULE_PLAN_NOTFOUND) {
+            const char* reason = planned == BX_MODULE_PLAN_CYCLE ? "dependency cycle" : strerror(errno);
+            if (failed != NULL || queries == 1)
+                bx_diag(&diag, "cannot plan dependencies for '%s': %s", failed ? failed : name, reason);
+            else
+                bx_diag(&diag, "cannot plan dependencies: %s", reason);
+        }
         goto out;
     }
     if (remove) {
@@ -297,7 +333,7 @@ int bx_modprobe_main(int argc, char** argv) {
         goto out;
     }
     if (load) {
-        char* parameters = bx_module_parameters(argc - optind - 1, argv + optind + 1);
+        char* parameters = bx_module_parameters(all ? 0 : argc - optind - 1, argv + optind + 1);
         if (parameters == NULL)
             bx_perror_path(&diag, "module parameters");
         else

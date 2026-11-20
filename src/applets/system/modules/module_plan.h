@@ -16,11 +16,12 @@ struct bx_module_plan {
     size_t count;
 };
 
-enum { BX_MODULE_PLAN_CYCLE = -2 };
+enum { BX_MODULE_PLAN_CYCLE = -2, BX_MODULE_PLAN_NOTFOUND = -3 };
 
-/* Plan all matches of a name or installed alias. Caller frees steps; strings
- * are borrowed from tree. */
-int bx_module_tree_plan(struct bx_module_tree* tree, const char* query, struct bx_module_plan* plan);
+/* Plan all matches of the requested names or aliases. Caller frees steps;
+ * strings are borrowed from tree. failed identifies a failed lookup, if any. */
+int bx_module_tree_plan(struct bx_module_tree* tree, int nqueries, char* const* queries,
+                        struct bx_module_plan* plan, const char** failed);
 /* Plan one exact name and its hard dependencies, without opening module files. */
 int bx_module_tree_remove_plan(struct bx_module_tree* tree, const char* name, struct bx_module_plan* plan);
 #endif
