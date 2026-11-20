@@ -745,6 +745,8 @@ bx_system_applet_sources = [
   'src/applets/system/modules/modinfo.c',
   'src/applets/system/modules/module_elf.c',
   'src/applets/system/modules/module_index.c',
+  'src/applets/system/modules/module_plan.c',
+  'src/applets/system/modules/modprobe.c',
   'src/applets/system/modules/lsmod.c',
   'src/applets/system/modules/rmmod.c',
   'src/applets/system/swapoff/swapoff.c',
@@ -1518,7 +1520,7 @@ endif
 if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip', 'pidof', 'sysctl', 'swapon', 'mkswap', 'pivot_root', 'modinfo']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip', 'pidof', 'sysctl', 'swapon', 'mkswap', 'pivot_root', 'modinfo', 'modprobe']
 systemwide_disabled_applet_names = ['ps', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir

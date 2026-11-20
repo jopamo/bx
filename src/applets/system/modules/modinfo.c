@@ -151,7 +151,7 @@ int bx_modinfo_main(int argc, char** argv) {
                     goto output_error;
                 continue;
             }
-            fd = bx_module_tree_open_file(&tree, relative);
+            fd = bx_module_tree_open_file(&tree, relative, O_RDONLY | O_NONBLOCK);
         } else {
             fd = bx_fd_open_cloexec(arg, O_RDONLY | O_NONBLOCK, 0);
         }

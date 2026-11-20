@@ -117,8 +117,8 @@ void bx_module_tree_close(struct bx_module_tree* tree) {
     free(tree->info.data);
 }
 
-int bx_module_tree_open_file(const struct bx_module_tree* tree, const char* path) {
-    return bx_openat_resolve(tree->fd, path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0,
+int bx_module_tree_open_file(const struct bx_module_tree* tree, const char* path, int flags) {
+    return bx_openat_resolve(tree->fd, path, flags | O_CLOEXEC, 0,
                             RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS);
 }
 
@@ -147,7 +147,7 @@ static int load_index(const struct bx_module_tree* tree, struct bx_module_index*
                       const char* filename, bool builtin_info) {
     if (!index->loaded) {
         index->loaded = true;
-        int fd = bx_module_tree_open_file(tree, filename);
+        int fd = bx_module_tree_open_file(tree, filename, O_RDONLY | O_NONBLOCK);
         if (fd < 0) {
             index->error = errno;
         } else {
@@ -170,7 +170,7 @@ static int load_index(const struct bx_module_tree* tree, struct bx_module_index*
     return 1;
 }
 
-static bool module_path_valid(const char* path, size_t len) {
+bool bx_module_path_valid(const char* path, size_t len) {
     size_t start = 0;
     for (size_t i = 0; i <= len; i++) {
         if (i == len || path[i] == '/') {
@@ -185,73 +185,120 @@ static bool module_path_valid(const char* path, size_t len) {
     return true;
 }
 
-static bool module_path_matches(const char* name, const char* path, size_t len, bool deps) {
-    const char* file = path;
-    for (size_t i = 0; i < len; i++) {
-        if (path[i] == '/')
-            file = path + i + 1;
-    }
-    size_t file_len = len - (size_t)(file - path), name_len = strlen(name);
-    if (file_len <= name_len)
-        return false;
-    const char* suffix = file + name_len;
-    size_t suffix_len = file_len - name_len;
-    if (!(suffix_len == 3 && memcmp(suffix, ".ko", 3) == 0) &&
-        !(deps && ((suffix_len == 6 && (memcmp(suffix, ".ko.gz", 6) == 0 ||
-                                       memcmp(suffix, ".ko.xz", 6) == 0)) ||
-                   (suffix_len == 7 && memcmp(suffix, ".ko.zst", 7) == 0))))
-        return false;
-    return bx_module_name_matches(name, file, name_len);
-}
-
-static int find_in_index(const struct bx_module_index* index, const char* name,
-                         char* path, size_t size, bool deps) {
-    const char* end = index->data + index->size;
-    for (const char* p = index->data; p < end;) {
-        const char* nl = memchr(p, '\n', (size_t)(end - p));
-        const char* line_end = nl ? nl : end;
-        if (p != line_end) {
-            const char* key_end = deps ? memchr(p, ':', (size_t)(line_end - p)) : line_end;
-            if (key_end == NULL || key_end == p) {
-                errno = EINVAL;
-                return -1;
-            }
-            size_t len = (size_t)(key_end - p);
-            if (module_path_matches(name, p, len, deps)) {
-                if (!module_path_valid(p, len)) {
-                    errno = EINVAL;
-                    return -1;
-                }
-                if (deps) {
-                    if (len >= size) {
-                        errno = ENAMETOOLONG;
-                        return -1;
-                    }
-                    memcpy(path, p, len);
-                    path[len] = '\0';
-                }
-                return 1;
-            }
-        }
-        p = nl ? nl + 1 : end;
-    }
+int bx_module_tree_deps(struct bx_module_tree* tree, struct bx_module_dep_iter* iter) {
+    int result = load_index(tree, &tree->deps, "modules.dep", false);
+    if (result < 0)
+        return -1;
+    iter->next = result == 0 ? "" : tree->deps.data;
+    iter->end = iter->next + tree->deps.size;
     return 0;
 }
 
-int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* path, size_t size) {
-    int r = load_index(tree, &tree->deps, "modules.dep", false);
-    if (r > 0)
-        r = find_in_index(&tree->deps, name, path, size, true);
-    if (r != 0)
-        return r < 0 ? -1 : 0;
-    r = load_index(tree, &tree->builtins, "modules.builtin", false);
-    if (r > 0)
-        r = find_in_index(&tree->builtins, name, NULL, 0, false);
-    if (r == 0) {
-        errno = ENOENT;
+static bool next_line(struct bx_module_dep_iter* iter, const char** line, const char** end) {
+    while (iter->next != iter->end) {
+        const char* p = iter->next;
+        const char* nl = memchr(p, '\n', (size_t)(iter->end - p));
+        const char* stop = nl ? nl : iter->end;
+        iter->next = nl ? nl + 1 : stop;
+        if (p != stop) {
+            *line = p;
+            *end = stop;
+            return true;
+        }
+    }
+    return false;
+}
+
+int bx_module_dep_next(struct bx_module_dep_iter* iter, struct bx_module_dep* record) {
+    const char* p;
+    const char* end;
+    if (!next_line(iter, &p, &end))
+        return 0;
+    const char* colon = memchr(p, ':', (size_t)(end - p));
+    if (colon == NULL || colon == p) {
+        errno = EINVAL;
         return -1;
     }
-    return r;
+    *record = (struct bx_module_dep) {
+        .path = {p, (size_t)(colon - p)},
+        .dependencies = colon + 1,
+        .length = (size_t)(end - colon - 1),
+    };
+    return 1;
+}
+
+struct bx_module_path bx_module_path_name(struct bx_module_path path, bool compressed) {
+    const char* file = path.text;
+    for (size_t i = 0; i < path.len; i++) {
+        if (path.text[i] == '/')
+            file = path.text + i + 1;
+    }
+    size_t file_len = path.len - (size_t)(file - path.text);
+    const char* suffix = memchr(file, '.', file_len);
+    if (suffix != NULL) {
+        size_t len = (size_t)(suffix - file), suffix_len = file_len - len;
+        if ((suffix_len == 3 && memcmp(suffix, ".ko", 3) == 0) ||
+            (compressed && ((suffix_len == 6 && (memcmp(suffix, ".ko.gz", 6) == 0 ||
+                                                 memcmp(suffix, ".ko.xz", 6) == 0)) ||
+                            (suffix_len == 7 && memcmp(suffix, ".ko.zst", 7) == 0)))) {
+            if (len <= NAME_MAX) {
+                for (size_t i = 0; i < len; i++) {
+                    if (!name_char(file[i]))
+                        return (struct bx_module_path) {0};
+                }
+                return (struct bx_module_path) {file, len};
+            }
+        }
+    }
+    return (struct bx_module_path) {0};
+}
+
+static bool module_path_matches(const char* name, struct bx_module_path path, bool compressed) {
+    struct bx_module_path key = bx_module_path_name(path, compressed);
+    return key.len != 0 && bx_module_name_matches(name, key.text, key.len);
+}
+
+int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* path, size_t size) {
+    struct bx_module_dep_iter iter;
+    if (bx_module_tree_deps(tree, &iter) < 0)
+        return -1;
+    int r;
+    struct bx_module_dep record;
+    while ((r = bx_module_dep_next(&iter, &record)) > 0) {
+        const char* p = record.path.text;
+        size_t len = record.path.len;
+        if (!module_path_matches(name, record.path, true))
+            continue;
+        if (!bx_module_path_valid(p, len) || len >= size) {
+            errno = len >= size ? ENAMETOOLONG : EINVAL;
+            return -1;
+        }
+        memcpy(path, p, len);
+        path[len] = '\0';
+        return 0;
+    }
+    if (r < 0)
+        return -1;
+    r = load_index(tree, &tree->builtins, "modules.builtin", false);
+    if (r < 0)
+        return -1;
+    if (r > 0) {
+        const char* data = tree->builtins.data;
+        iter = (struct bx_module_dep_iter) {data, data + tree->builtins.size};
+        const char* p;
+        const char* end;
+        while (next_line(&iter, &p, &end)) {
+            size_t len = (size_t)(end - p);
+            if (module_path_matches(name, (struct bx_module_path) {p, len}, false)) {
+                if (bx_module_path_valid(p, len))
+                    return 1;
+                errno = EINVAL;
+                return -1;
+            }
+        }
+    }
+    errno = ENOENT;
+    return -1;
 }
 
 int bx_module_tree_builtin_info(struct bx_module_tree* tree, const char** data, size_t* size) {

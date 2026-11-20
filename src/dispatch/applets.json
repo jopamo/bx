@@ -1151,6 +1151,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "modprobe",
+      "main": "bx_modprobe_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "lsmod",
       "main": "bx_lsmod_main",
       "capabilities": [
