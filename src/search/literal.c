@@ -139,17 +139,21 @@ static enum bx_lit_result bx_literal_arm64_neon_confirm_candidate_lanes_bitmask(
     size_t needle_len,
     size_t *match_off);
 #endif
+#if BX_LITERAL_HAVE_AVX2_TARGET
 static int bx_literal_find_case_sensitive_avx2(const struct bx_literal_matcher *m,
                                                const unsigned char *buf,
                                                size_t len,
                                                size_t start,
                                                struct bx_match *out);
+#endif
 static int bx_literal_find_case_sensitive_compiled(const struct bx_literal_matcher *m,
                                                    const unsigned char *buf,
                                                    size_t len,
                                                    size_t start,
                                                    struct bx_match *out);
+#if defined(__SSE2__)
 static bool bx_literal_can_use_sse2(const struct bx_literal_matcher *m);
+#endif
 static bool bx_literal_can_use_avx2(const struct bx_literal_matcher *m);
 static bool bx_literal_avx2_target_available(void);
 static bool bx_literal_avx2_eligible_without_runtime(const struct bx_literal_matcher *m);
@@ -186,10 +190,12 @@ static enum bx_lit_result bx_literal_scan_absent_long_scalar_plan(const struct b
                                                                   const unsigned char *buf,
                                                                   size_t len,
                                                                   size_t *match_off);
+#if BX_LITERAL_HAVE_AVX2_TARGET
 static enum bx_lit_result bx_literal_scan_absent_avx2_plan(const struct bx_lit_plan *plan,
                                                            const unsigned char *buf,
                                                            size_t len,
                                                            size_t *match_off);
+#endif
 #if defined(__aarch64__)
 #if BX_LITERAL_HAVE_ARM64_SVE_INTRINSICS
 static enum bx_lit_result bx_literal_scan_absent_arm64_sve_plan(const struct bx_lit_plan *plan,
@@ -253,7 +259,9 @@ static enum bx_literal_backend bx_literal_backend_auto_state = BX_LITERAL_BACKEN
 static bool bx_literal_runtime_has_avx2_state = false;
 #if defined(__aarch64__)
 static bool bx_literal_runtime_has_arm64_neon_state = false;
+#if BX_LITERAL_HAVE_ARM64_SVE_INTRINSICS
 static bool bx_literal_runtime_has_arm64_sve_state = false;
+#endif
 typedef enum bx_lit_result (*bx_literal_arm64_neon_confirm_lanes_fn)(
     uint16_t lane_mask,
     const unsigned char *buf,
@@ -350,10 +358,12 @@ static bool bx_literal_runtime_has_arm64_neon(void) {
     return bx_literal_runtime_has_arm64_neon_state;
 }
 
+#if BX_LITERAL_HAVE_ARM64_SVE_INTRINSICS
 static bool bx_literal_runtime_has_arm64_sve(void) {
     pthread_once(&bx_literal_backend_auto_once, bx_literal_backend_auto_init);
     return bx_literal_runtime_has_arm64_sve_state;
 }
+#endif
 #endif
 
 static enum bx_literal_backend bx_literal_backend_override(void) {
@@ -424,14 +434,11 @@ static void bx_literal_choose_anchor(struct bx_literal_matcher *m) {
     m->has_anchor = true;
 }
 
-static bool bx_literal_can_use_sse2(const struct bx_literal_matcher *m) {
 #if defined(__SSE2__)
+static bool bx_literal_can_use_sse2(const struct bx_literal_matcher *m) {
     return m && !m->ignore_case && m->plan.needle_len >= 4u && m->plan.needle_len <= 256u;
-#else
-    (void)m;
-    return false;
-#endif
 }
+#endif
 
 static bool bx_literal_can_use_avx2(const struct bx_literal_matcher *m) {
 #if BX_LITERAL_HAVE_AVX2_TARGET
@@ -927,12 +934,12 @@ static int bx_literal_find_case_sensitive_long_scalar(const struct bx_literal_ma
     return bx_literal_find_anchored_exact(m, buf, len, start, out);
 }
 
+#if BX_LITERAL_HAVE_AVX2_TARGET
 static int bx_literal_find_case_sensitive_avx2(const struct bx_literal_matcher *m,
                                                const unsigned char *buf,
                                                size_t len,
                                                size_t start,
                                                struct bx_match *out) {
-#if BX_LITERAL_HAVE_AVX2_TARGET
     size_t match_off = SIZE_MAX;
 
     if (!m || !buf || start >= len || m->plan.needle_len < 4u ||
@@ -951,10 +958,8 @@ static int bx_literal_find_case_sensitive_avx2(const struct bx_literal_matcher *
         out->end = out->start + m->plan.needle_len;
     }
     return 0;
-#else
-    return bx_literal_find_case_sensitive_rare_pair_scalar(m, buf, len, start, out);
-#endif
 }
+#endif
 
 #if defined(__aarch64__)
 static int bx_literal_find_case_sensitive_arm64_neon(const struct bx_literal_matcher *m,
@@ -1711,11 +1716,11 @@ static enum bx_lit_result BX_LITERAL_AVX2_TARGET bx_literal_scan_absent_avx2_cor
 }
 #endif
 
+#if BX_LITERAL_HAVE_AVX2_TARGET
 static enum bx_lit_result bx_literal_scan_absent_avx2_plan(const struct bx_lit_plan *plan,
                                                            const unsigned char *buf,
                                                            size_t len,
                                                            size_t *match_off) {
-#if BX_LITERAL_HAVE_AVX2_TARGET
     if (!plan || !buf || plan->needle_len < 4u || plan->needle_len > 256u || len < plan->needle_len)
         return BX_LIT_NOT_FOUND;
 
@@ -1723,10 +1728,8 @@ static enum bx_lit_result bx_literal_scan_absent_avx2_plan(const struct bx_lit_p
     bx_search_dev_counters_note_literal_algo_rare_pair_call();
     bx_search_dev_counters_note_literal_algo_x86_avx2_call();
     return bx_literal_scan_absent_avx2_core(plan, buf, len, match_off);
-#else
-    return bx_literal_scan_absent_rare_pair_scalar_plan(plan, buf, len, match_off);
-#endif
 }
+#endif
 
 #if defined(__SSE2__)
 static enum bx_lit_result bx_literal_scan_absent_sse2_plan(const struct bx_lit_plan *plan,
