@@ -1,12 +1,21 @@
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 
 #include "mount_table.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "bx/libbx.h"
+#include "fd_ops.h"
+
+#ifdef __linux__
+#include "path_ops.h"
+#include "statx_compat.h"
+#endif
 
 static void bx_mount_entry_free(struct bx_mount_entry* entry) {
     free(entry->source);
@@ -59,6 +68,106 @@ char* bx_mount_unescape_field(const char* text) {
 
     out[j] = '\0';
     return out;
+}
+
+static bool fstab_field_valid(const char* field) {
+    for (size_t i = 0; field[i]; i++) {
+        if (field[i] != '\\')
+            continue;
+        const char* escape = field + i + 1;
+        if (strncmp(escape, "040", 3) && strncmp(escape, "011", 3) &&
+            strncmp(escape, "012", 3) && strncmp(escape, "134", 3))
+            return false;
+        i += 3;
+    }
+    return true;
+}
+
+bool bx_mount_table_load_fstab(struct bx_mount_table* table, const char* path, size_t* line) {
+    enum { LINE_LIMIT = 8192, BYTE_LIMIT = 1024 * 1024, ROW_LIMIT = 1024 };
+    memset(table, 0, sizeof(*table));
+    *line = 0;
+    int fd = bx_fd_open_cloexec(path, O_RDONLY | O_NONBLOCK | O_NOCTTY, 0);
+    if (fd < 0)
+        return false;
+    struct stat st;
+    bool stat_ok = fstat(fd, &st) == 0;
+    if (!stat_ok || !S_ISREG(st.st_mode)) {
+        int error = stat_ok ? EINVAL : errno;
+        bx_fd_cleanup(&fd);
+        errno = error;
+        return false;
+    }
+    FILE* fp = fdopen(fd, "r");
+    if (!fp) {
+        int error = errno;
+        bx_fd_cleanup(&fd);
+        errno = error;
+        return false;
+    }
+    size_t bytes = 0;
+    int error = 0;
+    for (;;) {
+        char buf[LINE_LIMIT + 1];
+        size_t len = 0;
+        int ch;
+        (*line)++;
+        while ((ch = getc(fp)) != EOF) {
+            if (++bytes > BYTE_LIMIT || (ch != '\n' && len == LINE_LIMIT)) {
+                error = EFBIG;
+                goto done;
+            }
+            if (ch == '\n')
+                break;
+            if (ch == '\0') {
+                error = EINVAL;
+                goto done;
+            }
+            buf[len++] = (char)ch;
+        }
+        if (ch == EOF) {
+            if (ferror(fp))
+                error = errno;
+            if (len == 0 || error)
+                break;
+        }
+        buf[len] = '\0';
+        char* save;
+        char* fields[6];
+        size_t count = 0;
+        for (char* token = strtok_r(buf, " \t\r", &save); token && *token != '#';
+             token = strtok_r(NULL, " \t\r", &save)) {
+            if (count == 6 || (count < 4 ? !fstab_field_valid(token)
+                                        : token[strspn(token, "0123456789")] != '\0')) {
+                error = EINVAL;
+                goto done;
+            }
+            fields[count++] = token;
+        }
+        if (count == 0)
+            continue;
+        if (count < 4 || table->len == ROW_LIMIT) {
+            error = count < 4 ? EINVAL : EFBIG;
+            break;
+        }
+        struct bx_mount_entry entry = {
+            .source = bx_mount_unescape_field(fields[0]),
+            .target = bx_mount_unescape_field(fields[1]),
+            .fstype = bx_mount_unescape_field(fields[2]),
+            .options = bx_mount_unescape_field(fields[3]),
+            .line = *line,
+        };
+        bx_mount_table_append(table, &entry);
+    }
+done:
+    if (fclose(fp) != 0 && error == 0)
+        error = errno;
+    if (error) {
+        bx_mount_table_free(table);
+        errno = error;
+        return false;
+    }
+    return true;
 }
 
 bool bx_mount_table_load(struct bx_mount_table* table) {
@@ -150,3 +259,82 @@ bool bx_mount_table_is_target_or_child(const char* parent, const char* candidate
     }
     return candidate[parent_len] == '/';
 }
+
+#ifdef __linux__
+#ifndef STATX_ATTR_MOUNT_ROOT
+#define STATX_ATTR_MOUNT_ROOT 0x2000
+#endif
+
+/* Match both the path and its visible mount: a covered mount can still
+ * appear in mountinfo at a path below the covering mount. */
+static int lookup_mount(int fd) {
+    char proc_path[64];
+    snprintf(proc_path, sizeof(proc_path), "/proc/self/fdinfo/%d", fd);
+    FILE* fp = fopen(proc_path, "r");
+    if (!fp)
+        return -1;
+    unsigned long mount_id;
+    char field[128];
+    bool found = false;
+    while (fgets(field, sizeof(field), fp)) {
+        if (sscanf(field, "mnt_id: %lu", &mount_id) == 1) {
+            found = true;
+            break;
+        }
+    }
+    int err = ferror(fp) ? errno : EOPNOTSUPP;
+    fclose(fp);
+    if (!found) {
+        errno = err;
+        return -1;
+    }
+    snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", fd);
+    char* path = bx_path_readlink_dup(proc_path);
+    if (!path)
+        return -1;
+    fp = fopen("/proc/self/mountinfo", "r");
+    int result = -1;
+    if (fp) {
+        char* line = NULL;
+        size_t cap = 0;
+        while (getline(&line, &cap, fp) >= 0) {
+            unsigned long id;
+            int start = 0;
+            if (sscanf(line, "%lu %*s %*s %*s %n", &id, &start) != 1 ||
+                !start || id != mount_id)
+                continue;
+            line[start + strcspn(line + start, " ")] = '\0';
+            char* target = bx_mount_unescape_field(line + start);
+            result = strcmp(path, target) == 0;
+            free(target);
+            break;
+        }
+        err = feof(fp) ? EOPNOTSUPP : errno;
+        free(line);
+        fclose(fp);
+    }
+    else
+        err = errno;
+    free(path);
+    errno = err;
+    return result;
+}
+
+int bx_mount_is_mountpoint(const char* path) {
+    struct statx info;
+    if (statx(AT_FDCWD, path, 0, STATX_TYPE, &info) == 0) {
+        if (info.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT)
+            return (info.stx_attributes & STATX_ATTR_MOUNT_ROOT) != 0;
+    }
+    else if (errno != ENOSYS && errno != EOPNOTSUPP && errno != EINVAL)
+        return -1;
+    int fd = bx_fd_open_cloexec(path, O_PATH, 0);
+    if (fd < 0)
+        return -1;
+    int result = lookup_mount(fd);
+    int err = errno;
+    close(fd);
+    errno = err;
+    return result;
+}
+#endif

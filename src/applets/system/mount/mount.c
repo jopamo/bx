@@ -59,6 +59,10 @@ struct bx_mount_options {
     bool option_list_set;
     bool loop;
     bool loop_geometry;
+    bool all;
+    bool noauto;
+    bool nofail;
+    const char* fstab;
     const char* fstype;
     const char* source;
     const char* target;
@@ -79,9 +83,12 @@ static void bx_mount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "       %s [options] [--source] <source> | [--target] <directory>\n", progname);
     fprintf(stream, "       %s [options] <source> <directory>\n", progname);
     fprintf(stream, "       %s <operation> <mountpoint> [<target>]\n", progname);
+    fprintf(stream, "       %s -a [-nv] [-T FILE]\n", progname);
     fprintf(stream, "Mount a filesystem.\n");
     fprintf(stream, "\n");
     fprintf(stream, "Supported subset:\n");
+    fprintf(stream, "  -a, --all             mount local fstab entries serially, without helpers\n");
+    fprintf(stream, "  -T, --fstab FILE      read FILE instead of /etc/fstab (with -a)\n");
     fprintf(stream, "  -t, --types TYPE      filesystem type (auto uses procfs for devices and read-only images)\n");
     fprintf(stream, "  -o, --options LIST    comma-separated mount options\n");
     fprintf(stream, "  -r, --read-only       mount read-only\n");
@@ -148,7 +155,23 @@ static void bx_mount_append_data_option(struct bx_mount_options* options, const 
 }
 
 static bool bx_mount_parse_option_token(const char* token, struct bx_mount_options* options,
-                                        struct bx_diag_ctx* diag) {
+                                        struct bx_diag_ctx* diag, bool fstab) {
+    if (fstab) {
+        if (strcmp(token, "auto") == 0 || strcmp(token, "noauto") == 0)
+            return true;
+        if (strcmp(token, "nofail") == 0) {
+            options->nofail = true;
+            return true;
+        }
+        if (strcmp(token, "_netdev") == 0 || strcmp(token, "user") == 0 ||
+            strncmp(token, "user=", 5) == 0 || strcmp(token, "nouser") == 0 ||
+            strcmp(token, "users") == 0 || strcmp(token, "owner") == 0 ||
+            strcmp(token, "group") == 0 || strncmp(token, "x-", 2) == 0 ||
+            strncmp(token, "X-", 2) == 0) {
+            bx_diag(diag, "unsupported fstab option '%s'", token);
+            return false;
+        }
+    }
     if (strcmp(token, "defaults") == 0) {
         return true;
     }
@@ -287,13 +310,34 @@ static bool bx_mount_parse_option_token(const char* token, struct bx_mount_optio
     return true;
 }
 
-static bool bx_mount_parse_option_list(const char* text, struct bx_mount_options* options, struct bx_diag_ctx* diag) {
+static bool bx_mount_parse_option_list(const char* text, struct bx_mount_options* options,
+                                       struct bx_diag_ctx* diag, bool fstab) {
     if (text == NULL) {
         bx_diag(diag, "missing mount option list");
         return false;
     }
 
+    if (fstab && strpbrk(text, "\"'") != NULL) {
+        bx_diag(diag, "quoted fstab option values are not supported");
+        return false;
+    }
+
     char* copy = xstrdup(text);
+    if (fstab) {
+        char* save;
+        for (char* token = strtok_r(copy, ",", &save); token; token = strtok_r(NULL, ",", &save)) {
+            token = bx_mount_trim_token(token);
+            if (strcmp(token, "noauto") == 0)
+                options->noauto = true;
+            else if (strcmp(token, "auto") == 0)
+                options->noauto = false;
+        }
+        if (options->noauto) {
+            free(copy);
+            return true;
+        }
+        memcpy(copy, text, strlen(text) + 1);
+    }
     char* cursor = copy;
 
     while (true) {
@@ -305,7 +349,7 @@ static bool bx_mount_parse_option_list(const char* text, struct bx_mount_options
         }
 
         token = bx_mount_trim_token(token);
-        if (token[0] != '\0' && !bx_mount_parse_option_token(token, options, diag)) {
+        if (token[0] != '\0' && !bx_mount_parse_option_token(token, options, diag, fstab)) {
             free(copy);
             return false;
         }
@@ -344,6 +388,8 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
     };
 
     static const struct option long_options[] = {
+        {"all", no_argument, NULL, 'a'},
+        {"fstab", required_argument, NULL, 'T'},
         {"types", required_argument, NULL, 't'},
         {"type", required_argument, NULL, 't'},
         {"options", required_argument, NULL, 'o'},
@@ -377,16 +423,22 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
 
     int next_operand = 1;
     while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-:BMo:t:rwnRL:U:v",
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-:aT:BMo:t:rwnRL:U:v",
                                                  long_options, &next_operand);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'a':
+                options->all = true;
+                break;
+            case 'T':
+                options->fstab = optarg;
+                break;
             case 'o':
                 options->option_list_set = true;
-                if (!bx_mount_parse_option_list(optarg, options, diag)) {
+                if (!bx_mount_parse_option_list(optarg, options, diag, false)) {
                     return false;
                 }
                 break;
@@ -1053,6 +1105,94 @@ done:
     return success;
 }
 
+#ifdef __linux__
+static bool bx_mount_fstab_local_type(const char* type) {
+    static const char* const types[] = {
+        "auto", "btrfs", "devpts", "devtmpfs", "erofs", "exfat", "ext2", "ext3",
+        "ext4", "iso9660", "msdos", "overlay", "proc", "squashfs", "sysfs",
+        "tmpfs", "vfat", "xfs",
+    };
+    for (size_t i = 0; i < sizeof(types) / sizeof(*types); i++) {
+        if (strcmp(type, types[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+static int bx_mount_all(const struct bx_mount_options* cli, struct bx_diag_ctx* diag) {
+    const char* path = cli->fstab ? cli->fstab : "/etc/fstab";
+    struct bx_mount_table table;
+    size_t line;
+    if (!bx_mount_table_load_fstab(&table, path, &line)) {
+        if (line)
+            bx_diag(diag, "%s:%zu: cannot read fstab record: %s", path, line, strerror(errno));
+        else
+            bx_perror_path(diag, path);
+        return 1;
+    }
+    struct bx_mount_options* plan = calloc(table.len ? table.len : 1, sizeof(*plan));
+    if (!plan) {
+        bx_perror_path(diag, "mount plan");
+        bx_mount_table_free(&table);
+        return 1;
+    }
+    int status = 1;
+    /* Validate every selected row before mounting anything. Borrow the
+     * table's fields for the lifetime of the plan. */
+    for (size_t i = 0; i < table.len; i++) {
+        const struct bx_mount_entry* entry = &table.entries[i];
+        struct bx_mount_options* row = &plan[i];
+        if (strcmp(entry->fstype, "swap") == 0 || strcmp(entry->fstype, "ignore") == 0)
+            continue;
+        *row = (struct bx_mount_options){
+            .progname = cli->progname, .verbose = cli->verbose,
+            .source = entry->source, .target = entry->target, .fstype = entry->fstype,
+            .explicit_source = true, .explicit_target = true,
+        };
+        if (!bx_mount_parse_option_list(entry->options, row, diag, true)) {
+            bx_diag(diag, "%s:%zu: invalid mount for '%s'", path, entry->line, entry->target);
+            goto done;
+        }
+        if (row->noauto)
+            continue;
+        if (entry->target[0] != '/' || bx_mount_has_move(row) || bx_mount_has_remount(row) ||
+            (bx_mount_has_bind(row) ? strcmp(entry->fstype, "none") != 0 || entry->source[0] != '/'
+                                   : !bx_mount_fstab_local_type(entry->fstype))) {
+            bx_diag(diag, "%s:%zu: unsupported fstab mount for '%s'", path, entry->line, entry->target);
+            goto done;
+        }
+        if (bx_mount_has_bind(row))
+            row->fstype = NULL;
+        bool print_only;
+        const char* single_target;
+        if (!bx_mount_validate_request(0, NULL, row, diag, &print_only, &single_target)) {
+            bx_diag(diag, "%s:%zu: invalid mount for '%s'", path, entry->line, entry->target);
+            goto done;
+        }
+    }
+
+    status = 0;
+    for (size_t i = 0; i < table.len; i++) {
+        const struct bx_mount_options* row = &plan[i];
+        if (!row->target || row->noauto)
+            continue;
+        int mounted = bx_mount_is_mountpoint(row->target);
+        if (mounted > 0)
+            continue;
+        if (mounted < 0)
+            bx_perror_path(diag, row->target);
+        if ((mounted < 0 || !bx_mount_perform(row, diag)) && !row->nofail)
+            status = 1;
+    }
+done:
+    for (size_t i = 0; i < table.len; i++)
+        free(plan[i].data);
+    free(plan);
+    bx_mount_table_free(&table);
+    return status;
+}
+#endif
+
 int bx_mount_main(int argc, char** argv) {
     struct bx_mount_options options;
     struct bx_diag_ctx diag = {
@@ -1083,6 +1223,25 @@ int bx_mount_main(int argc, char** argv) {
         free(options.owned_source);
         free(options.data);
         return 0;
+    }
+
+    if (options.all || options.fstab != NULL) {
+        int status = 1;
+        if (!options.all || (options.fstab && !*options.fstab) ||
+            options.explicit_source || options.explicit_target ||
+            options.fstype || options.option_list_set || options.flag_mentions ||
+            options.op_flags || options.propagation || options.operand_index != argc) {
+            bx_diag(&diag, "use -a with only -T, -n or -v and no operands");
+        } else {
+#ifdef __linux__
+            status = bx_mount_all(&options, &diag);
+#else
+            bx_diag(&diag, "mount -a is not supported on this platform");
+#endif
+        }
+        free(options.owned_source);
+        free(options.data);
+        return status;
     }
 
     if (!bx_mount_validate_request(argc, argv, &options, &diag, &print_only, &single_target)) {
