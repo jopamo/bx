@@ -6,10 +6,10 @@
 #include "lib/cli_common.h"
 
 static void usage(FILE* out, const char* name) {
-    fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE\n"
+    fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE_OR_ALIAS\n"
                  "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
-                 "       %s [-C FILE] MODULE [PARAMETER ...]\n"
-                 "Load an exact module name for the running kernel. Read modprobe.d\n"
+                 "       %s [-C FILE] MODULE_OR_ALIAS [PARAMETER ...]\n"
+                 "Load by name or installed alias for the running kernel. Read modprobe.d\n"
                  "or FILE for blacklist and options directives. Also honors\n"
                  "modprobe.blacklist= on the kernel command line. No hooks run.\n",
                  name, name, name);
@@ -210,7 +210,7 @@ int bx_modprobe_main(int argc, char** argv) {
     }
     if ((show && alias) || (!load && config != NULL) || optind == argc ||
         (!load && argc - optind != 1) ||
-        !(alias ? bx_module_alias_query_valid(argv[optind]) : bx_module_name_valid(argv[optind]))) {
+        !bx_module_alias_query_valid(argv[optind])) {
         usage(stderr, diag.progname);
         return 1;
     }

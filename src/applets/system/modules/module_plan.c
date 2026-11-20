@@ -23,6 +23,7 @@ struct entry {
     struct entry* parent;
     enum visit visit;
     bool builtin;
+    bool requested;
 };
 
 static int compare_paths(struct bx_module_path a, struct bx_module_path b) {
@@ -296,8 +297,8 @@ static int next_softdep(struct bx_module_tree* tree, struct entry** names, size_
 }
 
 static int order_entries(struct bx_module_tree* tree, struct entry* entries, struct entry** names,
-                         size_t count, struct entry* root, struct bx_module_plan* plan) {
-    size_t queries = ALIAS_QUERY_LIMIT, edges = SOFT_EDGE_LIMIT;
+                         size_t count, struct entry* root, size_t* queries, size_t* edges,
+                         struct bx_module_plan* plan) {
     struct entry* current = root;
     current->visit = HARD;
     while (current) {
@@ -314,7 +315,7 @@ static int order_entries(struct bx_module_tree* tree, struct entry* entries, str
                 return -1;
             }
         } else {
-            int next = next_softdep(tree, names, count, current, &queries, &edges, &dep);
+            int next = next_softdep(tree, names, count, current, queries, edges, &dep);
             if (next < 0)
                 return -1;
             if (next == 0) {
@@ -325,7 +326,7 @@ static int order_entries(struct bx_module_tree* tree, struct entry* entries, str
                         .target = current->builtin ? current->name : current->record.path,
                         .name = current->name,
                         .builtin = current->builtin,
-                        .requested = current == root,
+                        .requested = current->requested,
                     };
                     current->visit = POST;
                 } else {
@@ -348,34 +349,54 @@ static int order_entries(struct bx_module_tree* tree, struct entry* entries, str
     return 0;
 }
 
-int bx_module_tree_plan(struct bx_module_tree* tree, const char* name, struct bx_module_plan* plan) {
+int bx_module_tree_plan(struct bx_module_tree* tree, const char* query, struct bx_module_plan* plan) {
     size_t count;
     struct entry* entries = read_entries(tree, &count);
     if (entries == NULL)
         return -1;
     struct bx_module_plan result = {0};
     struct entry** names = malloc((count ? count : 1) * sizeof(*names));
+    struct bx_module_aliases aliases = {0};
+    struct entry** roots = NULL;
     int r = -1;
     if (names == NULL)
         goto out;
     for (size_t i = 0; i < count; i++)
         names[i] = &entries[i];
     qsort(names, count, sizeof(*names), by_name);
-    struct entry* root = find_name(names, count, (struct bx_module_path) {name, strlen(name)});
-    if (root == NULL) {
-        errno = ENOENT;
+    if (bx_module_resolve_alias(tree, query, &aliases) < 0)
         goto out;
+    roots = malloc(aliases.count * sizeof(*roots));
+    if (roots == NULL)
+        goto out;
+    /* Mark all requested modules before traversal. A later match can first
+     * be reached as an earlier match's dependency and still needs its args. */
+    for (size_t i = 0; i < aliases.count; i++) {
+        roots[i] = find_name(names, count, bx_module_alias_at(&aliases, i));
+        if (roots[i] == NULL) {
+            errno = ENOENT;
+            goto out;
+        }
+        roots[i]->requested = true;
     }
     if (read_softdeps(tree, names, count) < 0)
         goto out;
     result.steps = calloc(count, sizeof(*result.steps));
-    if (result.steps != NULL)
-        r = order_entries(tree, entries, names, count, root, &result);
+    if (result.steps == NULL)
+        goto out;
+    size_t queries = ALIAS_QUERY_LIMIT, edges = SOFT_EDGE_LIMIT;
+    r = 0;
+    for (size_t i = 0; i < aliases.count && r == 0; i++) {
+        if (roots[i]->visit == UNSEEN)
+            r = order_entries(tree, entries, names, count, roots[i], &queries, &edges, &result);
+    }
 out:;
     int error = errno;
     for (size_t i = 0; i < count; i++)
         free(entries[i].aliases.matches);
     free(names);
+    free(roots);
+    free(aliases.matches);
     free(entries);
     if (r < 0) {
         free(result.steps);
