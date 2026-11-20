@@ -5,7 +5,7 @@
 struct bx_fs_signature {
     const char *type;
     unsigned block_size;
-    char label[17];
+    char label[33];
     char fat_boot_label[12];
     char uuid[37];
 };

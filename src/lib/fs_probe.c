@@ -216,6 +216,90 @@ static int probe_ext(int fd, uint64_t bytes, struct bx_fs_signature *fs)
     return 1;
 }
 
+/* ECMA-119 stores these fields twice, in little- then big-endian order. */
+static bool iso_dual(const uint8_t *p, unsigned width, uint32_t *value)
+{
+    uint32_t little = 0, big = 0;
+    for (unsigned i = 0; i < width; i++) {
+        little = (little << 8) | p[width - 1 - i];
+        big = (big << 8) | p[width + i];
+    }
+    *value = little;
+    return little == big;
+}
+
+static bool iso_valid_date(const uint8_t *date)
+{
+    bool nonzero = false;
+    for (unsigned i = 0; i < 16; i++) {
+        if (date[i] < '0' || date[i] > '9')
+            return false;
+        nonzero |= date[i] != '0';
+    }
+    return nonzero;
+}
+
+static int probe_iso9660(int fd, uint64_t bytes, struct bx_fs_signature *fs)
+{
+    enum { SECTOR = 2048, FIRST_DESCRIPTOR = 16, MAX_DESCRIPTORS = 64 };
+    uint8_t pvd[SECTOR];
+    uint64_t offset = (uint64_t)FIRST_DESCRIPTOR * SECTOR;
+
+    /* A boot descriptor can precede the primary one. Bound the work
+     * on media with no primary descriptor or terminator. */
+    unsigned i;
+    for (i = 0; i < MAX_DESCRIPTORS; i++, offset += SECTOR) {
+        if (offset + SECTOR > bytes)
+            return 0;
+        if (read_at(fd, pvd, sizeof(pvd), offset) < 0)
+            return -1;
+        if (memcmp(pvd + 1, "CD001", 5) != 0 || pvd[0] == 255)
+            return 0;
+        if (pvd[0] == 1)
+            break;
+    }
+    if (i == MAX_DESCRIPTORS || pvd[6] != 1 || pvd[881] != 1)
+        return 0;
+
+    uint32_t blocks, block_size, root_extent, root_size;
+    const uint8_t *root = pvd + 156;
+    if (!iso_dual(pvd + 80, 4, &blocks) ||
+        !iso_dual(pvd + 128, 2, &block_size) ||
+        (block_size != 512 && block_size != 1024 && block_size != 2048))
+        return 0;
+    uint64_t volume_size = (uint64_t)blocks * block_size;
+    if (volume_size < offset + SECTOR || volume_size > bytes ||
+        root[0] != 34 || !(root[25] & 2) || root[32] != 1 || root[33] != 0 ||
+        !iso_dual(root + 2, 4, &root_extent) || !iso_dual(root + 10, 4, &root_size) ||
+        !root_size || root_extent >= blocks ||
+        ((uint64_t)root_extent + root[1]) * block_size + root_size > volume_size)
+        return 0;
+
+    /* The primary descriptor's 32-byte volume ID is space padded. */
+    size_t len = 32;
+    while (len && pvd[40 + len - 1] == ' ')
+        len--;
+    if (!memchr(pvd + 40, 0, len))
+        memcpy(fs->label, pvd + 40, len);
+
+    /* Conventional ISO UUID from modification time, or creation time
+     * when it is absent. The final byte of each date is a zone offset. */
+    const uint8_t *date = pvd + 830;
+    if (!iso_valid_date(date))
+        date = pvd + 813;
+    if (iso_valid_date(date)) {
+        size_t pos = 0;
+        for (unsigned n = 0; n < 16; n++) {
+            if (n >= 4 && (n % 2) == 0)
+                fs->uuid[pos++] = '-';
+            fs->uuid[pos++] = (char)date[n];
+        }
+    }
+    fs->block_size = block_size;
+    fs->type = "iso9660";
+    return 1;
+}
+
 int bx_fs_probe(int fd, struct bx_fs_signature *result)
 {
     uint64_t bytes;
@@ -223,14 +307,24 @@ int bx_fs_probe(int fd, struct bx_fs_signature *result)
     if (bx_fat_geometry(fd, &bytes, &sector) < 0)
         return -1;
 
-    struct bx_fs_signature fat = {0}, ext = {0};
-    int a = probe_fat(fd, bytes, &fat);
-    if (a < 0)
-        return -1;
-    int b = probe_ext(fd, bytes, &ext);
-    if (b < 0)
-        return -1;
-    if (a + b == 1)
-        *result = a ? fat : ext;
-    return a + b;
+    static int (*const probes[])(int, uint64_t, struct bx_fs_signature *) = {
+        probe_fat, probe_ext, probe_iso9660,
+    };
+    struct bx_fs_signature found;
+    bool matched = false;
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        struct bx_fs_signature candidate = {0};
+        int match = probes[i](fd, bytes, &candidate);
+        if (match < 0)
+            return -1;
+        if (!match)
+            continue;
+        if (matched)
+            return 2;
+        found = candidate;
+        matched = true;
+    }
+    if (matched)
+        *result = found;
+    return matched;
 }
