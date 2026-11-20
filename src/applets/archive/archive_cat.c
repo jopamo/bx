@@ -132,6 +132,19 @@ static bool same_source(const struct stat* a, const struct stat* b) {
            a->st_mtim.tv_nsec == b->st_mtim.tv_nsec;
 }
 
+static bool controlled_parent(int dir, const char* name, struct bx_diag_ctx* diag) {
+    struct stat st;
+    if (fstat(dir, &st) < 0) {
+        bx_perror_path(diag, name);
+        return false;
+    }
+    if (st.st_uid != geteuid() || (st.st_mode & (S_IWGRP | S_IWOTH))) {
+        bx_diag(diag, "%s: replacement or source removal requires a directory owned by the caller and not writable by others", name);
+        return false;
+    }
+    return true;
+}
+
 static bool publish_replacement(int fd, int parent, const char* target, struct bx_diag_ctx* diag) {
     // Normal cancellation can interrupt the long transform. Defer it only
     // while the completed output has a named staging entry to clean up.
@@ -173,7 +186,7 @@ done:
 static int transform_to_new_file(const char* name, const char* suffix,
                                  const struct bx_archive_codec* codec,
                                  const struct bx_archive_codec_encode_options* encoding,
-                                 bool replace, struct bx_diag_ctx* diag) {
+                                 bool replace, bool keep, struct bx_diag_ctx* diag) {
     struct bx_path_split parts = bx_path_split(name, false);
     if (!encoding && legacy_lzma(codec, name))
         suffix = ".lzma";
@@ -214,17 +227,8 @@ static int transform_to_new_file(const char* name, const char* suffix,
         bx_perror_path(diag, name);
         goto done;
     }
-    if (replace) {
-        if (fstat(dir, &current) < 0) {
-            bx_perror_path(diag, name);
-            goto done;
-        }
-        // The named staging directory must not be mutable by other users.
-        if (current.st_uid != geteuid() || (current.st_mode & (S_IWGRP | S_IWOTH))) {
-            bx_diag(diag, "%s: replacement requires a directory owned by the caller and not writable by others", name);
-            goto done;
-        }
-    }
+    if ((replace || !keep) && !controlled_parent(dir, name, diag))
+        goto done;
     if (!S_ISREG(st.st_mode)) {
         bx_diag(diag, "%s: input is not a regular file", name);
         goto done;
@@ -232,6 +236,11 @@ static int transform_to_new_file(const char* name, const char* suffix,
     source = bx_fd_openat_regular_verified(dir, parts.basename, &st, &st);
     if (source < 0) {
         bx_perror_path(diag, name);
+        goto done;
+    }
+    if (!keep && (st.st_uid != geteuid() || (st.st_mode & (S_IWGRP | S_IWOTH)) ||
+                  (!replace && st.st_nlink != 1))) {
+        bx_diag(diag, "%s: refusing to remove a shared input; use -k", name);
         goto done;
     }
     if (!replace) {
@@ -264,6 +273,8 @@ static int transform_to_new_file(const char* name, const char* suffix,
         bx_diag(diag, "%s: input changed; output not published", name);
         goto done;
     }
+    if ((replace || !keep) && !controlled_parent(dir, name, diag))
+        goto done;
     // Until publication, closing the anonymous descriptor discards partial output.
     if (replace) {
         if (!publish_replacement(output, dir, target, diag))
@@ -271,6 +282,25 @@ static int transform_to_new_file(const char* name, const char* suffix,
     } else if (bx_fd_publish_anonymous_file_at(output, dir, target) < 0) {
         bx_perror_path(diag, target);
         goto done;
+    }
+    if (!keep) {
+        // Commit the new directory entry before attempting any source removal.
+        // The directory is caller-controlled, not a lock against same-user edits.
+        struct stat written, published;
+        if (bx_fd_fsync(dir) < 0 || fstat(output, &written) < 0 ||
+            fstatat(dir, target, &published, AT_SYMLINK_NOFOLLOW) < 0 ||
+            fstatat(dir, parts.basename, &current, AT_SYMLINK_NOFOLLOW) < 0) {
+            bx_diag(diag, "%s: could not confirm publication; input not removed: %s", name, bx_strerror(errno));
+            goto done;
+        }
+        if (!same_source(&written, &published) || !same_source(&st, &current)) {
+            bx_diag(diag, "%s: input or output changed; input not removed", name);
+            goto done;
+        }
+        if (bx_fd_unlinkat_child(dir, parts.basename, 0) < 0 || bx_fd_fsync(dir) < 0) {
+            bx_perror_path(diag, name);
+            goto done;
+        }
     }
     status = 0;
 done:
@@ -326,7 +356,7 @@ static int archive_command(int argc, char** argv, const char* progname,
             break;
         case 'h':
             printf("Usage: %s %s [--] [FILE...]\n", progname,
-                   writer ? "[-cd] [-k [-f]] [-LEVEL]" : suffix ? "[-cd] [-k [-f]]" : "[-cd]");
+                   writer ? "[-cdkf] [-LEVEL]" : suffix ? "[-cdkf]" : "[-cd]");
             if (writer)
                 printf("Use -c to compress %s data to stdout or -dc to decode it.\n"
                        "Use -k to write a new file without overwriting or deleting the input.\n"
@@ -334,13 +364,14 @@ static int archive_command(int argc, char** argv, const char* progname,
                        bx_archive_codec_name(codec), codec == bx_archive_codec_xz() ? 0 : 1);
             else if (suffix)
                 printf("Use -k to decode %s files to new files (without their suffix).\n"
-                       "Use -c for standard output. Source deletion is not supported.\n",
+                       "Use -c for standard output.\n",
                        suffix);
             else
                 printf("Decompress %s data to standard output without changing the input files.\n",
                        bx_archive_codec_name(codec));
             if (suffix)
-                puts("Use -k -f to replace output in a directory you own that others cannot write.");
+                puts("Use -k to keep the source and -f to replace output. Source removal and\n"
+                     "replacement require a directory you own that others cannot write.");
             puts("With no files or a '-' operand, read standard input and write to standard output.");
             if (codec == bx_archive_codec_xz())
                 puts("Named .lzma inputs select the legacy LZMA decoder.");
@@ -355,8 +386,8 @@ static int archive_command(int argc, char** argv, const char* progname,
         bx_diag(&diag, "invalid compression level for this mode: %d", encoding.level);
         return 1;
     }
-    if (replace && (!keep || to_stdout || optind == argc)) {
-        bx_diag(&diag, "replacement requires -k and named file output");
+    if (replace && (to_stdout || optind == argc)) {
+        bx_diag(&diag, "replacement requires named file output");
         return 1;
     }
     if (replace) {
@@ -370,13 +401,6 @@ static int archive_command(int argc, char** argv, const char* progname,
     if (optind == argc)
         return compress ? encode("-", -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
                           decode("-", -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
-    if (!to_stdout && !keep) {
-        for (int i = optind; i < argc; i++)
-            if (strcmp(argv[i], "-") != 0) {
-                bx_diag(&diag, "use -k to keep the input or -c for standard output");
-                return 1;
-            }
-    }
     int status = 0;
     for (int i = optind; i < argc && !output_error; i++) {
         int result;
@@ -385,7 +409,7 @@ static int archive_command(int argc, char** argv, const char* progname,
                 encode(argv[i], -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
                 decode(argv[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
         else
-            result = transform_to_new_file(argv[i], suffix, codec, compress ? &encoding : NULL, replace, &diag);
+            result = transform_to_new_file(argv[i], suffix, codec, compress ? &encoding : NULL, replace, keep, &diag);
         if (status < result)
             status = result;
     }
