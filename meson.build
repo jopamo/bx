@@ -746,6 +746,8 @@ bx_system_applet_sources = [
   'src/applets/system/modules/module_alias.c',
   'src/applets/system/modules/module_elf.c',
   'src/applets/system/modules/module_index.c',
+  'src/applets/system/modules/module_load.c',
+  'src/applets/system/modules/module_policy.c',
   'src/applets/system/modules/module_plan.c',
   'src/applets/system/modules/modprobe.c',
   'src/applets/system/modules/lsmod.c',

@@ -134,6 +134,11 @@ int bx_module_tree_open_file(const struct bx_module_tree* tree, const char* path
                             RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS);
 }
 
+int bx_module_tree_open_for_load(const struct bx_module_tree* tree, const char* path) {
+    return bx_openat_resolve(tree->fd, path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0,
+                            RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS);
+}
+
 static bool builtin_info_valid(const char* data, size_t len) {
     while (len != 0) {
         const char* end = memchr(data, '\0', len);

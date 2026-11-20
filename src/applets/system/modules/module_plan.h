@@ -6,7 +6,9 @@
 
 struct bx_module_step {
     struct bx_module_path target;
+    struct bx_module_path name;
     bool builtin;
+    bool requested;
 };
 
 struct bx_module_plan {

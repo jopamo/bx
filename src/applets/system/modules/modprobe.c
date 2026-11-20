@@ -8,8 +8,11 @@
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE\n"
                  "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
-                 "Show dependencies or resolve aliases from installed module metadata.\n"
-                 "Does not load modules or read modprobe configuration.\n", name, name);
+                 "       %s -C FILE MODULE [PARAMETER ...]\n"
+                 "Load an exact module name for the running kernel with an explicit policy.\n"
+                 "FILE may be empty and supports only blacklist directives. Also honors\n"
+                 "modprobe.blacklist= on the kernel command line. No hooks run.\n",
+                 name, name, name);
 }
 
 #ifdef __linux__
@@ -19,8 +22,11 @@ static void usage(FILE* out, const char* name) {
 #include <stdlib.h>
 #include <string.h>
 
+#include "lib/fd_ops.h"
 #include "module_alias.h"
+#include "module_load.h"
 #include "module_plan.h"
+#include "module_policy.h"
 
 static bool print_name(const char* prefix, const char* name, size_t len) {
     char normalized[NAME_MAX + 1];
@@ -48,6 +54,85 @@ static int show_aliases(struct bx_module_tree* tree, const char* query, struct b
     }
     return 0;
 }
+
+static int load_plan(const struct bx_module_tree* tree, const struct bx_module_plan* plan,
+                     const struct bx_module_policy* policy, const char* parameters,
+                     struct bx_diag_ctx* diag) {
+    enum { LOAD_LIMIT = 256 };
+    size_t count = 0;
+    for (size_t i = 0; i < plan->count; i++) {
+        const struct bx_module_step* step = &plan->steps[i];
+        if (step->builtin) {
+            if (step->requested && *parameters != '\0') {
+                bx_diag(diag, "cannot set parameters on a built-in module");
+                return 1;
+            }
+            continue;
+        }
+        if (bx_module_policy_blocks(policy, step->name)) {
+            bx_diag(diag, "module '%.*s' is blacklisted", (int)step->name.len, step->name.text);
+            return 1;
+        }
+        if (++count > LOAD_LIMIT) {
+            bx_diag(diag, "too many modules in load plan");
+            return 1;
+        }
+    }
+    struct input {
+        const struct bx_module_step* step;
+        struct stat st;
+        int fd;
+    };
+    struct input* inputs = calloc(count ? count : 1, sizeof(*inputs));
+    if (inputs == NULL) {
+        bx_perror_path(diag, "module load plan");
+        return 1;
+    }
+    int status = 1;
+    size_t n = 0;
+    /* Pin every file before the first load, so a path or fd error cannot
+     * leave behind a partial load and the syscall gets the checked fd. */
+    for (size_t i = 0; i < plan->count; i++) {
+        const struct bx_module_step* step = &plan->steps[i];
+        if (step->builtin)
+            continue;
+        struct bx_module_path target = step->target;
+        char path[PATH_MAX];
+        memcpy(path, target.text, target.len);
+        path[target.len] = '\0';
+        int fd = bx_module_tree_open_for_load(tree, path);
+        if (fd < 0) {
+            bx_perror_path(diag, path);
+            goto out;
+        }
+        struct input* input = &inputs[n++];
+        input->step = step;
+        input->fd = fd;
+        if (fstat(fd, &input->st) < 0) {
+            bx_perror_path(diag, path);
+            goto out;
+        }
+        if (!S_ISREG(input->st.st_mode)) {
+            bx_diag(diag, "module is not a regular file: '%s'", path);
+            goto out;
+        }
+    }
+    for (size_t i = 0; i < n; i++) {
+        const struct input* input = &inputs[i];
+        const char* args = input->step->requested ? parameters : "";
+        if (bx_module_load_fd(input->fd, &input->st, args) < 0 && errno != EEXIST) {
+            struct bx_module_path target = input->step->target;
+            bx_diag(diag, "cannot load '%.*s': %s", (int)target.len, target.text, strerror(errno));
+            goto out;
+        }
+    }
+    status = 0;
+out:
+    for (size_t i = 0; i < n; i++)
+        bx_fd_cleanup(&inputs[i].fd);
+    free(inputs);
+    return status;
+}
 #endif
 
 int bx_modprobe_main(int argc, char** argv) {
@@ -61,15 +146,18 @@ int bx_modprobe_main(int argc, char** argv) {
         {"resolve-alias", no_argument, NULL, 'R'},
         {"dirname", required_argument, NULL, 'd'},
         {"set-version", required_argument, NULL, 'S'},
+        {"config", required_argument, NULL, 'C'},
         {NULL, 0, NULL, 0},
     };
     const char* base = "/";
     const char* release = NULL;
+    const char* config = NULL;
     bool show = false;
     bool alias = false;
     opterr = 0;
     optind = 1;
-    for (int opt; (opt = getopt_long(argc, argv, ":DRd:S:", opts, NULL)) != -1;) {
+    bool alternate_root = false;
+    for (int opt; (opt = getopt_long(argc, argv, ":DRd:S:C:", opts, NULL)) != -1;) {
         switch (opt) {
         case 'D':
             show = true;
@@ -83,6 +171,7 @@ int bx_modprobe_main(int argc, char** argv) {
                 return 1;
             }
             base = optarg;
+            alternate_root = true;
             break;
         case 'S':
             if (!bx_module_release_valid(optarg)) {
@@ -90,6 +179,13 @@ int bx_modprobe_main(int argc, char** argv) {
                 return 1;
             }
             release = optarg;
+            break;
+        case 'C':
+            if (*optarg == '\0' || config != NULL) {
+                bx_diag(&diag, "specify one non-empty policy filename");
+                return 1;
+            }
+            config = optarg;
             break;
         default:
             if (opt == ':')
@@ -99,18 +195,27 @@ int bx_modprobe_main(int argc, char** argv) {
             return 1;
         }
     }
-    if (!show && !alias) {
-        bx_diag(&diag, "only --show-depends and --resolve-alias are supported; no modules were loaded");
+    bool load = !show && !alias;
+    if (load && config == NULL) {
+        bx_diag(&diag, "loading requires an explicit -C policy file; no modules were loaded");
         return 1;
     }
-    if ((show && alias) || argc - optind != 1 ||
-        !(show ? bx_module_name_valid(argv[optind]) : bx_module_alias_query_valid(argv[optind]))) {
+    if (load && (alternate_root || release != NULL)) {
+        bx_diag(&diag, "loading is only supported for the running kernel's installed module tree");
+        return 1;
+    }
+    if ((show && alias) || (!load && config != NULL) || optind == argc ||
+        (!load && argc - optind != 1) ||
+        !(alias ? bx_module_alias_query_valid(argv[optind]) : bx_module_name_valid(argv[optind]))) {
         usage(stderr, diag.progname);
         return 1;
     }
     const char* name = argv[optind];
     struct bx_module_tree tree = {.fd = -1};
+    struct bx_module_policy policy = {0};
     int status = 1;
+    if (load && bx_module_policy_open(&policy, config, &diag) < 0)
+        goto out;
     if (bx_module_tree_open(&tree, base, release) < 0) {
         bx_perror_path(&diag, tree.path ? tree.path : "module tree");
         goto out;
@@ -126,6 +231,16 @@ int bx_modprobe_main(int argc, char** argv) {
                 planned == BX_MODULE_PLAN_CYCLE ? "dependency cycle" : strerror(errno));
         goto out;
     }
+    if (load) {
+        char* parameters = bx_module_parameters(argc - optind - 1, argv + optind + 1);
+        if (parameters == NULL)
+            bx_perror_path(&diag, "module parameters");
+        else
+            status = load_plan(&tree, &plan, &policy, parameters, &diag);
+        free(parameters);
+        free(plan.steps);
+        goto out;
+    }
     bool printed = true;
     for (size_t i = 0; printed && i < plan.count; i++) {
         struct bx_module_step step = plan.steps[i];
@@ -139,6 +254,7 @@ int bx_modprobe_main(int argc, char** argv) {
     else
         status = 0;
 out:
+    bx_module_policy_close(&policy);
     bx_module_tree_close(&tree);
     return status;
 #else

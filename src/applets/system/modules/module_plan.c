@@ -296,8 +296,9 @@ static int next_softdep(struct bx_module_tree* tree, struct entry** names, size_
 }
 
 static int order_entries(struct bx_module_tree* tree, struct entry* entries, struct entry** names,
-                         size_t count, struct entry* current, struct bx_module_plan* plan) {
+                         size_t count, struct entry* root, struct bx_module_plan* plan) {
     size_t queries = ALIAS_QUERY_LIMIT, edges = SOFT_EDGE_LIMIT;
+    struct entry* current = root;
     current->visit = HARD;
     while (current) {
         struct entry* dep;
@@ -321,7 +322,10 @@ static int order_entries(struct bx_module_tree* tree, struct entry* entries, str
                     if (!current->builtin && check_module(tree, current->record.path) < 0)
                         return -1;
                     plan->steps[plan->count++] = (struct bx_module_step) {
-                        current->builtin ? current->name : current->record.path, current->builtin,
+                        .target = current->builtin ? current->name : current->record.path,
+                        .name = current->name,
+                        .builtin = current->builtin,
+                        .requested = current == root,
                     };
                     current->visit = POST;
                 } else {

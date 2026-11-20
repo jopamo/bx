@@ -54,6 +54,7 @@ int bx_module_tree_find(struct bx_module_tree* tree, const char* name, char* pat
 int bx_module_tree_find_loadable(struct bx_module_tree* tree, const char* name, char* path, size_t size);
 int bx_module_tree_has_builtin(struct bx_module_tree* tree, const char* name);
 int bx_module_tree_open_file(const struct bx_module_tree* tree, const char* path, int flags);
+int bx_module_tree_open_for_load(const struct bx_module_tree* tree, const char* path);
 bool bx_module_path_valid(const char* path, size_t len);
 struct bx_module_path bx_module_path_name(struct bx_module_path path, bool compressed);
 /* Dependency records borrow their text from the tree. next returns 1, 0 at EOF, or -1. */
