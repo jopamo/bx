@@ -161,13 +161,8 @@ static bool token_is(struct bx_module_path token, const char* text) {
     return token.len == strlen(text) && memcmp(token.text, text, token.len) == 0;
 }
 
-static int parse_softdep(struct bx_module_path line, struct entry** names, size_t count) {
-    struct bx_module_path cmd = shift_token(&line);
-    if (cmd.len == 0 || cmd.text[0] == '#')
-        return 0;
-    struct bx_module_path owner = shift_token(&line);
-    if (!token_is(cmd, "softdep") || !bx_module_name_span_valid(owner.text, owner.len))
-        goto invalid;
+bool bx_module_softdep_fields(struct bx_module_path line, struct bx_module_path* pre_out,
+                              struct bx_module_path* post_out) {
     struct bx_module_path pre = {0}, post = {0}, *section = NULL;
     struct bx_module_path word;
     while ((word = shift_token(&line)).len != 0) {
@@ -186,6 +181,25 @@ static int parse_softdep(struct bx_module_path line, struct entry** names, size_
     }
     if (section == NULL)
         goto invalid;
+    *pre_out = pre;
+    *post_out = post;
+    return true;
+invalid:
+    errno = EINVAL;
+    return false;
+}
+
+static int parse_softdep(struct bx_module_path line, struct entry** names, size_t count) {
+    struct bx_module_path cmd = shift_token(&line);
+    if (cmd.len == 0 || cmd.text[0] == '#')
+        return 0;
+    struct bx_module_path owner = shift_token(&line);
+    struct bx_module_path pre, post;
+    if (!token_is(cmd, "softdep") || !bx_module_name_span_valid(owner.text, owner.len) ||
+        !bx_module_softdep_fields(line, &pre, &post)) {
+        errno = EINVAL;
+        return -1;
+    }
     for (size_t i = first_name(names, count, owner);
          i < count && bx_module_name_cmp(names[i]->name, owner) == 0; i++) {
         if (names[i]->pre.text != NULL || names[i]->post.text != NULL)
@@ -194,9 +208,6 @@ static int parse_softdep(struct bx_module_path line, struct entry** names, size_
         names[i]->post = post;
     }
     return 0;
-invalid:
-    errno = EINVAL;
-    return -1;
 }
 
 static int read_softdeps(struct bx_module_tree* tree, struct entry** names, size_t count) {

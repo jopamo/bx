@@ -18,6 +18,11 @@ struct bx_module_plan {
 
 enum { BX_MODULE_PLAN_CYCLE = -2, BX_MODULE_PLAN_NOTFOUND = -3 };
 
+/* Parse the pre:/post: fields following a module name. Borrow both spans
+ * from the input; a missing section has a null span. */
+bool bx_module_softdep_fields(struct bx_module_path line, struct bx_module_path* pre,
+                              struct bx_module_path* post);
+
 /* Plan all matches of the requested names or aliases. Caller frees steps;
  * strings are borrowed from tree. failed identifies a failed lookup, if any. */
 int bx_module_tree_plan(struct bx_module_tree* tree, int nqueries, char* const* queries,

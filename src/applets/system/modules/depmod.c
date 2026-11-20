@@ -10,9 +10,10 @@ static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s -n [-ae] -F SYSTEM_MAP [-b ROOT] [RELEASE]\n"
                  "       %s --write-bx-index [-ae] -F SYSTEM_MAP -b ROOT RELEASE\n"
                  "       %s --show-bx-aliases [-b ROOT] [RELEASE]\n"
+                 "       %s --show-bx-softdeps [-b ROOT] [RELEASE]\n"
                  "Print dependencies with -n, create a new modules.dep without clobbering,\n"
-                 "or print loadable-module aliases from ELF metadata.\n",
-                 name, name, name);
+                 "or print loadable-module aliases or soft dependencies from ELF metadata.\n",
+                 name, name, name, name);
 }
 
 #ifdef __linux__
@@ -31,6 +32,7 @@ static void usage(FILE* out, const char* name) {
 #include "module_alias.h"
 #include "module_elf.h"
 #include "module_index.h"
+#include "module_plan.h"
 #include "module_symbols.h"
 #include "module_system_map.h"
 
@@ -67,27 +69,42 @@ struct scan {
 
 static bool index_append(struct bx_text_buffer* out, const char* text, size_t len);
 
-static bool render_aliases(const struct module* module, const unsigned char* file,
-                           size_t length, struct bx_text_buffer* out) {
+enum metadata_format { SYMBOLS, ALIASES, SOFTDEPS };
+
+static bool render_metadata(const struct module* module, const unsigned char* file,
+                            size_t length, enum metadata_format format, struct bx_text_buffer* out) {
     const char* records;
     size_t size;
-    if (!bx_module_elf_info(file, length, &records, &size))
+    if (!bx_module_elf_info(file, length, &records, &size)) {
+        errno = EINVAL;
         return false;
+    }
     struct bx_module_path key = bx_module_path_name(
         (struct bx_module_path){module->path, strlen(module->path)}, true);
     char name[NAME_MAX + 1];
     for (size_t i = 0; i < key.len; i++)
         name[i] = key.text[i] == '-' ? '_' : key.text[i];
+    const char* field = format == ALIASES ? "alias=" : "softdep=";
+    size_t field_len = strlen(field);
     for (const char* p = records; p < records + size; p += strlen(p) + 1) {
-        static const char alias[] = "alias=";
-        if (strncmp(p, alias, sizeof(alias) - 1) != 0)
+        if (strncmp(p, field, field_len) != 0)
             continue;
-        const char* value = p + sizeof(alias) - 1;
+        const char* value = p + field_len;
         size_t len = strlen(value);
-        if (!bx_module_alias_pattern_valid((struct bx_module_path){value, len}) ||
-            !index_append(out, "alias ", 6) || !index_append(out, value, len) ||
-            !index_append(out, " ", 1) || !index_append(out, name, key.len) ||
-            !index_append(out, "\n", 1))
+        struct bx_module_path span = {value, len};
+        if (format == ALIASES) {
+            if (!bx_module_alias_pattern_valid(span) ||
+                !index_append(out, "alias ", 6) || !index_append(out, value, len) ||
+                !index_append(out, " ", 1) || !index_append(out, name, key.len))
+                return false;
+        } else {
+            struct bx_module_path pre, post;
+            if (!bx_module_softdep_fields(span, &pre, &post) ||
+                !index_append(out, "softdep ", 8) || !index_append(out, name, key.len) ||
+                !index_append(out, " ", 1) || !index_append(out, value, len))
+                return false;
+        }
+        if (!index_append(out, "\n", 1))
             return false;
     }
     return true;
@@ -186,7 +203,7 @@ static bool read_map(struct scan* scan, const char* path) {
 }
 
 static bool read_tree(struct scan* scan, const struct bx_module_tree* tree,
-                      struct bx_text_buffer* aliases) {
+                      enum metadata_format format, struct bx_text_buffer* index) {
     int fd = bx_fd_dup_cloexec(tree->fd);
     DIR* stream = fd < 0 ? NULL : fdopendir(fd);
     if (!stream) {
@@ -222,11 +239,11 @@ static bool read_tree(struct scan* scan, const struct bx_module_tree* tree,
         scan->owner = i + 1;
         module->first = scan->refs_count;
         errno = 0;
-        bool ok = aliases ? render_aliases(module, file, length, aliases) :
-                           bx_module_elf_symbols(file, length, collect_symbol, scan);
+        bool ok = format == SYMBOLS ? bx_module_elf_symbols(file, length, collect_symbol, scan) :
+                                      render_metadata(module, file, length, format, index);
         if (!ok)
             bx_diag(scan->diag, "%s: %s", module->path,
-                    errno ? bx_strerror(errno) : aliases ? "invalid .modinfo" : "invalid ELF module symbol table");
+                    errno ? bx_strerror(errno) : "invalid ELF module symbol table");
         free(file);
         if (!ok)
             return false;
@@ -401,13 +418,14 @@ int bx_depmod_main(int argc, char** argv) {
     if (handled >= 0)
         return handled;
 #ifdef __linux__
-    enum { WRITE_BX_INDEX = 256, SHOW_BX_ALIASES };
+    enum { WRITE_BX_INDEX = 256, SHOW_BX_ALIASES, SHOW_BX_SOFTDEPS };
     static const struct option opts[] = {
         {"all", no_argument, NULL, 'a'}, {"errsyms", no_argument, NULL, 'e'},
         {"show", no_argument, NULL, 'n'}, {"dry-run", no_argument, NULL, 'n'},
         {"basedir", required_argument, NULL, 'b'}, {"filesyms", required_argument, NULL, 'F'},
         {"write-bx-index", no_argument, NULL, WRITE_BX_INDEX},
         {"show-bx-aliases", no_argument, NULL, SHOW_BX_ALIASES},
+        {"show-bx-softdeps", no_argument, NULL, SHOW_BX_SOFTDEPS},
         {0},
     };
     const char* base = "/";
@@ -415,6 +433,7 @@ int bx_depmod_main(int argc, char** argv) {
     bool dry_run = false;
     bool write_index = false;
     bool show_aliases = false;
+    bool show_softdeps = false;
     bool base_set = false;
     int operand = 1;
     bx_args_getopt_reset();
@@ -426,6 +445,7 @@ int bx_depmod_main(int argc, char** argv) {
         case 'F': map = optarg; break;
         case WRITE_BX_INDEX: write_index = true; break;
         case SHOW_BX_ALIASES: show_aliases = true; break;
+        case SHOW_BX_SOFTDEPS: show_softdeps = true; break;
         case ':':
             bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
             return 1;
@@ -434,7 +454,9 @@ int bx_depmod_main(int argc, char** argv) {
             return 1;
         }
     }
-    if (dry_run + write_index + show_aliases != 1 || (show_aliases ? map != NULL : !map || !*map) || !*base ||
+    enum metadata_format format = show_aliases ? ALIASES : show_softdeps ? SOFTDEPS : SYMBOLS;
+    if (dry_run + write_index + show_aliases + show_softdeps != 1 ||
+        (format != SYMBOLS ? map != NULL : !map || !*map) || !*base ||
         argc - optind > 1 || (write_index && (!base_set || argc - optind != 1))) {
         usage(stderr, "depmod");
         return 1;
@@ -451,11 +473,11 @@ int bx_depmod_main(int argc, char** argv) {
         bx_perror_path(&diag, tree.path ? tree.path : "module tree");
         goto done;
     }
-    bool ready = show_aliases ? read_tree(&scan, &tree, &index) :
-                 read_map(&scan, map) && read_tree(&scan, &tree, NULL) &&
+    bool ready = format != SYMBOLS ? read_tree(&scan, &tree, format, &index) :
+                 read_map(&scan, map) && read_tree(&scan, &tree, SYMBOLS, NULL) &&
                  resolve(&scan) && rank_graph(&scan);
     if (ready) {
-        if (!show_aliases && !render_deps(&scan, &index))
+        if (format == SYMBOLS && !render_deps(&scan, &index))
             bx_perror_path(&diag, "build modules.dep");
         else if (write_index)
             status = publish_dep_index(&tree, &index, &diag) ? 0 : 1;
