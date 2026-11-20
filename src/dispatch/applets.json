@@ -1176,6 +1176,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "blkid",
+      "main": "bx_blkid_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "findfs",
       "main": "bx_findfs_main",
       "capabilities": [
