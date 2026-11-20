@@ -44,6 +44,7 @@ struct bx_archive_codec_input_options {
     enum bx_archive_codec_seek_mode seek_mode;
     size_t thread_count;
     uint64_t xz_memory_limit; /* Zero keeps the codec's existing default. */
+    bool xz_lzma_alone; /* Select LZMA-Alone instead of XZ explicitly. */
 };
 
 const struct bx_archive_codec* bx_archive_codec_none(void);

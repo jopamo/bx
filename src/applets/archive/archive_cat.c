@@ -23,6 +23,12 @@ static void input_error(void* user, const char* progname, const char* message) {
     fprintf(stderr, "%s: %s: %s\n", progname, name, message);
 }
 
+static bool legacy_lzma(const struct bx_archive_codec* codec, const char* name) {
+    size_t len = strlen(name);
+    return codec == bx_archive_codec_xz() && len >= sizeof(".lzma") - 1 &&
+           strcmp(name + len - (sizeof(".lzma") - 1), ".lzma") == 0;
+}
+
 static int decode(const char* name, int source_fd, int output_fd, const char* output_label,
                   const struct bx_archive_codec* codec, struct bx_diag_ctx* diag,
                   bool* output_error) {
@@ -31,6 +37,7 @@ static int decode(const char* name, int source_fd, int output_fd, const char* ou
         .required_codec = codec,
         .seek_mode = BX_ARCHIVE_CODEC_SEEK_DISABLE,
         .xz_memory_limit = UINT64_C(256) << 20,
+        .xz_lzma_alone = legacy_lzma(codec, name),
     };
     struct bx_archive_codec_input* input;
     bool opened = source_fd < 0 ? bx_archive_codec_input_open(&input, &options, diag) :
@@ -128,6 +135,8 @@ static int transform_to_new_file(const char* name, const char* suffix,
                                  const struct bx_archive_codec_encode_options* encoding,
                                  struct bx_diag_ctx* diag) {
     struct bx_path_split parts = bx_path_split(name, false);
+    if (!encoding && legacy_lzma(codec, name))
+        suffix = ".lzma";
     size_t suffix_len = strlen(suffix);
     bool has_suffix = parts.basename_length >= suffix_len &&
                       strcmp(parts.basename + parts.basename_length - suffix_len, suffix) == 0;
@@ -266,6 +275,8 @@ static int archive_command(int argc, char** argv, const char* progname,
                 printf("Decompress %s data to standard output without changing the input files.\n",
                        bx_archive_codec_name(codec));
             puts("With no files or a '-' operand, read standard input and write to standard output.");
+            if (codec == bx_archive_codec_xz())
+                puts("Named .lzma inputs select the legacy LZMA decoder.");
             return 0;
         default:
             bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);

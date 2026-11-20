@@ -18,6 +18,8 @@ struct bx_archive_xz_reader {
 #if BX_HAVE_LIBLZMA
     lzma_stream stream;
     bool stream_initialized;
+    bool lzma_alone;
+    bool lzma_end_seen;
 #else
     int unused;
 #endif
@@ -294,11 +296,12 @@ out:
 bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
                               size_t thread_count,
                               uint64_t memory_limit,
+                              bool lzma_alone,
                               struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBLZMA
     if (!memory_limit)
         memory_limit = UINT64_MAX;
-    if (!reader_out || thread_count > UINT32_MAX) {
+    if (!reader_out || thread_count > UINT32_MAX || (lzma_alone && thread_count > 1u)) {
         bx_diag(diag, "invalid xz reader configuration");
         return false;
     }
@@ -307,7 +310,10 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
     memset(reader, 0, sizeof(*reader));
     reader->stream = (lzma_stream)LZMA_STREAM_INIT;
     lzma_ret rc;
-    if (thread_count > 1u) {
+    reader->lzma_alone = lzma_alone;
+    if (lzma_alone) {
+        rc = lzma_alone_decoder(&reader->stream, memory_limit);
+    } else if (thread_count > 1u) {
 #if BX_HAVE_LIBLZMA_MT_DECODER
         lzma_mt options = {
             .flags = LZMA_CONCATENATED,
@@ -337,6 +343,7 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
     (void)reader_out;
     (void)thread_count;
     (void)memory_limit;
+    (void)lzma_alone;
     bx_diag(diag, "xz support is unavailable in this build");
     return false;
 #endif
@@ -345,6 +352,14 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
 enum bx_archive_decode_result bx_archive_xz_reader_decode(struct bx_archive_xz_reader* reader, struct bx_archive_decode_chunk* chunk) {
 #if BX_HAVE_LIBLZMA
     chunk->error_detail = NULL;
+    chunk->input_used = chunk->output_used = 0;
+    if (reader->lzma_end_seen) {
+        if (chunk->input_size) {
+            chunk->error_detail = "trailing data after LZMA stream";
+            return BX_ARCHIVE_DECODE_ERROR;
+        }
+        return chunk->input_eof ? BX_ARCHIVE_DECODE_END : BX_ARCHIVE_DECODE_MORE;
+    }
     reader->stream.next_in = chunk->input;
     reader->stream.avail_in = chunk->input_size;
     reader->stream.next_out = chunk->output;
@@ -354,6 +369,14 @@ enum bx_archive_decode_result bx_archive_xz_reader_decode(struct bx_archive_xz_r
     chunk->output_used = chunk->output_size - reader->stream.avail_out;
     reader->stream.next_in = reader->stream.next_out = NULL;
     reader->stream.avail_in = reader->stream.avail_out = 0u;
+    if (rc == LZMA_STREAM_END && reader->lzma_alone) {
+        if (chunk->input_used != chunk->input_size) {
+            chunk->error_detail = "trailing data after LZMA stream";
+            return BX_ARCHIVE_DECODE_ERROR;
+        }
+        reader->lzma_end_seen = true;
+        return chunk->input_eof ? BX_ARCHIVE_DECODE_END : BX_ARCHIVE_DECODE_MORE;
+    }
     if (rc == LZMA_STREAM_END)
         return BX_ARCHIVE_DECODE_END;
     if (rc == LZMA_OK && chunk->input_eof && !chunk->input_used && !chunk->output_used)

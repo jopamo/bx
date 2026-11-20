@@ -43,6 +43,7 @@ struct bx_archive_codec_input {
     void* codec_reader;
     size_t thread_count;
     uint64_t xz_memory_limit;
+    bool xz_lzma_alone;
     bool decode_failed;
     int zstd_window_log_max;
     const struct bx_archive_codec* required_codec;
@@ -491,6 +492,7 @@ static bool bx_archive_codec_input_start_decoder(struct bx_archive_codec_input* 
         return bx_archive_xz_reader_open((struct bx_archive_xz_reader**)&input->codec_reader,
                                          input->thread_count,
                                          input->xz_memory_limit,
+                                         input->xz_lzma_alone,
                                          diag);
     }
     if (codec == bx_archive_codec_zstd()) {
@@ -628,6 +630,7 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
     input->force_seek = options->seek_mode == BX_ARCHIVE_CODEC_SEEK_FORCE;
     input->thread_count = options->thread_count;
     input->xz_memory_limit = options->xz_memory_limit;
+    input->xz_lzma_alone = options->xz_lzma_alone;
     if (bx_fd_input_init(&input->source, fd, ownership) != 0) {
         int error = errno;
         if (ownership == BX_FD_INPUT_OWNED)
