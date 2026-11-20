@@ -589,6 +589,16 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "swapon",
+      "main": "bx_swapon_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "swapoff",
       "main": "bx_swapoff_main",
       "capabilities": [

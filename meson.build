@@ -745,6 +745,7 @@ bx_system_applet_sources = [
   'src/applets/system/modules/lsmod.c',
   'src/applets/system/modules/rmmod.c',
   'src/applets/system/swapoff/swapoff.c',
+  'src/applets/system/swap/swapon.c',
   'src/applets/system/unshare/unshare.c',
   'src/applets/system/dmesg/dmesg.c',
   'src/applets/system/fuser/fuser.c',
@@ -1512,7 +1513,7 @@ endif
 if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip', 'pidof', 'sysctl']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip', 'pidof', 'sysctl', 'swapon']
 systemwide_disabled_applet_names = ['ps', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
