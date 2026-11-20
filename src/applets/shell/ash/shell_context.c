@@ -264,6 +264,7 @@ bool ash_shell_context_init(
 static struct ash_parser_config ash_shell_context_parser_config(const struct ash_shell* shell) {
     return (struct ash_parser_config){
         .extended_pipeline_negation = ash_shell_policy_is_bash(&shell->policy),
+        .conditional_commands = ash_shell_policy_is_bash(&shell->policy),
         .aliases =
             ash_shell_policy_expands_aliases(&shell->policy) ?
                 shell->aliases :
@@ -354,6 +355,7 @@ bool ash_shell_context_resume_parse(struct ash_shell* shell, struct ash_parser* 
     parser->aliases = config.aliases;
     parser->lexer.options = config.lexer;
     parser->extended_pipeline_negation = config.extended_pipeline_negation;
+    parser->conditional_commands = config.conditional_commands;
     for (size_t i = 0u; i < parser->alias_frame_count; i++) {
         parser->alias_frames[i].lexer.options = config.lexer;
     }

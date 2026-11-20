@@ -2899,6 +2899,58 @@ static int ash_execute_ast_case_body(
     return status;
 }
 
+static int ash_execute_condition(struct ash_shell* shell, const struct ash_condition* condition) {
+    int status;
+    const struct ash_word* word;
+    switch (condition->kind) {
+        case ASH_CONDITION_NOT:
+            status = ash_execute_condition(shell, condition->value.branches.left);
+            return status < 2 ? !status : status;
+        case ASH_CONDITION_GROUP:
+            return ash_execute_condition(shell, condition->value.branches.left);
+        case ASH_CONDITION_AND:
+        case ASH_CONDITION_OR:
+            status = ash_execute_condition(shell, condition->value.branches.left);
+            if (status != (condition->kind == ASH_CONDITION_AND ? 0 : 1) ||
+                shell->should_exit || ash_control_pending(shell))
+                return status;
+            return ash_execute_condition(shell, condition->value.branches.right);
+        case ASH_CONDITION_WORD:
+            word = &condition->value.word.syntax;
+            break;
+        case ASH_CONDITION_UNARY:
+            word = &condition->value.unary.operand.syntax;
+            break;
+        case ASH_CONDITION_BINARY:
+            word = &condition->value.binary.left.syntax;
+            break;
+        default:
+            return 2;
+    }
+    char* value = NULL;
+    if (!ash_expand_word(shell, word, &value, NULL))
+        return 2;
+    if (condition->kind == ASH_CONDITION_BINARY) {
+        bool matched;
+        if (!ash_expand_case_pattern(shell, &condition->value.binary.right.syntax, value, &matched))
+            status = 2;
+        else
+            status = condition->value.binary.operator == ASH_CONDITION_STRING_NOT_PATTERN ?
+                matched : !matched;
+    }
+    else {
+        bool empty = condition->kind == ASH_CONDITION_UNARY &&
+            condition->value.unary.operator == ASH_CONDITION_STRING_EMPTY;
+        status = empty ? value[0] != '\0' : value[0] == '\0';
+    }
+    free(value);
+    return status;
+}
+
+static int ash_execute_ast_conditional(struct ash_shell* shell, const struct ash_ast* node) {
+    return ash_execute_condition(shell, node->value.conditional_command.root);
+}
+
 static int ash_execute_ast_function(
     struct ash_shell* shell,
     const struct ash_ast* node
@@ -2962,8 +3014,10 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
         case ASH_AST_FUNCTION:
             status = ash_execute_ast_function(shell, node);
             break;
-        case ASH_AST_ARITHMETIC_COMMAND:
         case ASH_AST_CONDITIONAL_COMMAND:
+            status = ash_errexit_status(shell, ash_execute_ast_compound(shell, node, ash_execute_ast_conditional));
+            break;
+        case ASH_AST_ARITHMETIC_COMMAND:
         case ASH_AST_C_STYLE_FOR:
         case ASH_AST_SELECT:
         case ASH_AST_TIME:

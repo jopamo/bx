@@ -16,6 +16,7 @@ enum ash_parser_result ash_parser_fail(
     const char* error
 );
 struct ash_token* ash_parser_peek(struct ash_parser* parser);
+bool ash_parser_conditional_start(const struct ash_parser* parser, const struct ash_token* token);
 bool ash_parser_take(
     struct ash_parser* parser,
     struct ash_token* token

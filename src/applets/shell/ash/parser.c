@@ -134,6 +134,208 @@ static struct ash_ast* ash_parse_list(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
 );
+static bool ash_condition_spelling(const struct ash_token* token, const char* spelling) {
+    if (token == NULL || token->kind != ASH_TOKEN_WORD)
+        return false;
+    size_t length = strlen(spelling);
+    for (size_t i = 0; i < token->word.count; i++) {
+        const struct ash_word_part* part = &token->word.parts[i];
+        if (part->kind != ASH_WORD_TEXT || ash_word_part_is_quoted(part) ||
+            part->length > length || memcmp(part->text, spelling, part->length) != 0)
+            return false;
+        spelling += part->length;
+        length -= part->length;
+    }
+    return length == 0;
+}
+
+bool ash_parser_conditional_start(const struct ash_parser* parser, const struct ash_token* token) {
+    return parser->conditional_commands && ash_condition_spelling(token, "[[");
+}
+
+static void ash_condition_consume(struct ash_parser* parser) {
+    struct ash_token token;
+    (void)ash_parser_take(parser, &token);
+    ash_token_destroy(&token);
+}
+
+static bool ash_condition_operand(struct ash_parser* parser, struct ash_token* operand) {
+    struct ash_token* token = ash_parser_peek(parser);
+    if (token == NULL)
+        return false;
+    if (token->kind != ASH_TOKEN_WORD || ash_condition_spelling(token, "]]")) {
+        ash_parser_fail(parser, token->kind == ASH_TOKEN_EOF ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+                        token->location, "conditional operand expected");
+        return false;
+    }
+    return ash_parser_take(parser, operand);
+}
+
+struct ash_conditional_parse {
+    struct ash_parser* parser;
+    unsigned nodes;
+};
+
+static struct ash_condition* ash_parse_condition_or(struct ash_conditional_parse*, unsigned);
+
+static struct ash_condition* ash_condition_new(struct ash_conditional_parse* state,
+                                               enum ash_condition_kind kind,
+                                               struct ash_source_location location) {
+    if (++state->nodes > 256u) {
+        ash_parser_fail(state->parser, ASH_PARSER_ERROR, location, "conditional expression is too large");
+        return NULL;
+    }
+    struct ash_condition* result = ash_condition_create(kind, location);
+    if (result == NULL)
+        ash_parser_fail(state->parser, ASH_PARSER_ERROR, location, "out of memory");
+    return result;
+}
+
+static struct ash_condition* ash_condition_join(struct ash_conditional_parse* state,
+                                                enum ash_condition_kind kind,
+                                                struct ash_source_location location,
+                                                struct ash_condition* left,
+                                                struct ash_condition* right) {
+    struct ash_condition* node = left != NULL &&
+        (right != NULL || kind == ASH_CONDITION_NOT || kind == ASH_CONDITION_GROUP) ?
+        ash_condition_new(state, kind, location) : NULL;
+    if (node != NULL) {
+        node->value.branches.left = left;
+        node->value.branches.right = right;
+    }
+    else {
+        ash_condition_destroy(left);
+        ash_condition_destroy(right);
+    }
+    return node;
+}
+
+static struct ash_condition* ash_parse_condition_atom(struct ash_conditional_parse* state, unsigned depth) {
+    struct ash_parser* parser = state->parser;
+    ash_parser_skip_newlines(parser);
+    struct ash_token* token = ash_parser_peek(parser);
+    if (token == NULL)
+        return NULL;
+    struct ash_source_location location = token->location;
+    if (depth == 32u) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "conditional nesting limit reached");
+        return NULL;
+    }
+    if (ash_condition_spelling(token, "!")) {
+        ash_condition_consume(parser);
+        return ash_condition_join(state, ASH_CONDITION_NOT, location,
+                                  ash_parse_condition_atom(state, depth + 1u), NULL);
+    }
+    if (token->kind == ASH_TOKEN_LPAREN) {
+        ash_condition_consume(parser);
+        struct ash_condition* nested = ash_parse_condition_or(state, depth + 1u);
+        if (nested == NULL)
+            return NULL;
+        token = ash_parser_peek(parser);
+        if (token == NULL || token->kind != ASH_TOKEN_RPAREN) {
+            ash_parser_fail(parser, ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR, location,
+                            "')' expected in conditional");
+            ash_condition_destroy(nested);
+            return NULL;
+        }
+        ash_condition_consume(parser);
+        return ash_condition_join(state, ASH_CONDITION_GROUP, location, nested, NULL);
+    }
+
+    bool empty = ash_condition_spelling(token, "-z");
+    if (empty || ash_condition_spelling(token, "-n")) {
+        ash_condition_consume(parser);
+        struct ash_token operand;
+        if (!ash_condition_operand(parser, &operand))
+            return NULL;
+        struct ash_condition* node = ash_condition_new(state, ASH_CONDITION_UNARY, location);
+        if (node != NULL)
+            (void)ash_condition_take_unary(node, empty ? ASH_CONDITION_STRING_EMPTY :
+                ASH_CONDITION_STRING_NONEMPTY, &operand.word);
+        ash_token_destroy(&operand);
+        return node;
+    }
+
+    struct ash_token left;
+    if (!ash_condition_operand(parser, &left))
+        return NULL;
+    token = ash_parser_peek(parser);
+    struct ash_condition* node = NULL;
+    bool unequal = ash_condition_spelling(token, "!=");
+    if (unequal || ash_condition_spelling(token, "=") || ash_condition_spelling(token, "==")) {
+        ash_condition_consume(parser);
+        struct ash_token right;
+        if (ash_condition_operand(parser, &right)) {
+            node = ash_condition_new(state, ASH_CONDITION_BINARY, location);
+            if (node != NULL)
+                (void)ash_condition_take_binary(node, unequal ? ASH_CONDITION_STRING_NOT_PATTERN :
+                    ASH_CONDITION_STRING_PATTERN, &left.word, &right.word);
+            ash_token_destroy(&right);
+        }
+    }
+    else if (token != NULL) {
+        node = ash_condition_new(state, ASH_CONDITION_WORD, location);
+        if (node != NULL)
+            (void)ash_condition_take_word(node, &left.word);
+    }
+    ash_token_destroy(&left);
+    return node;
+}
+
+static struct ash_condition* ash_parse_condition_chain(struct ash_conditional_parse* state, unsigned depth,
+                                                       bool conjunction) {
+    struct ash_parser* parser = state->parser;
+    struct ash_condition* left = conjunction ? ash_parse_condition_atom(state, depth) :
+        ash_parse_condition_chain(state, depth, true);
+    while (left != NULL) {
+        ash_parser_skip_newlines(parser);
+        struct ash_token* token = ash_parser_peek(parser);
+        if (token == NULL || token->kind != (conjunction ? ASH_TOKEN_AND_IF : ASH_TOKEN_OR_IF))
+            break;
+        struct ash_source_location location = token->location;
+        ash_condition_consume(parser);
+        struct ash_condition* right = conjunction ? ash_parse_condition_atom(state, depth) :
+            ash_parse_condition_chain(state, depth, true);
+        left = ash_condition_join(state, conjunction ? ASH_CONDITION_AND : ASH_CONDITION_OR,
+                                  location, left, right);
+    }
+    return left;
+}
+
+static struct ash_condition* ash_parse_condition_or(struct ash_conditional_parse* state, unsigned depth) {
+    return ash_parse_condition_chain(state, depth, false);
+}
+
+static bool ash_parser_take_trailing_redirections(struct ash_parser*, struct ash_ast*);
+
+static struct ash_ast* ash_parse_conditional_command(struct ash_parser* parser,
+                                                    struct ash_source_location location) {
+    ash_condition_consume(parser);
+    struct ash_condition* root = ash_parse_condition_or(&(struct ash_conditional_parse){.parser = parser}, 0);
+    if (root == NULL)
+        return NULL;
+    struct ash_token* next = ash_parser_peek(parser);
+    if (!ash_condition_spelling(next, "]]")) {
+        ash_parser_fail(parser, ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+                        next != NULL ? next->location : location, "unsupported conditional operator or missing ']]'");
+        ash_condition_destroy(root);
+        return NULL;
+    }
+    ash_condition_consume(parser);
+    struct ash_ast* node = ash_ast_create(ASH_AST_CONDITIONAL_COMMAND, location);
+    if (node == NULL) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+        ash_condition_destroy(root);
+        return NULL;
+    }
+    node->value.conditional_command.root = root;
+    if (!ash_parser_take_trailing_redirections(parser, node)) {
+        ash_ast_destroy(node);
+        return NULL;
+    }
+    return node;
+}
+
 static struct ash_ast* ash_parse_command(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
@@ -1114,6 +1316,8 @@ static struct ash_ast* ash_parse_command(
     if (token == NULL) {
         return NULL;
     }
+    if (ash_parser_conditional_start(parser, token))
+        return ash_parse_conditional_command(parser, token->location);
     if (token->kind == ASH_TOKEN_LPAREN) {
         struct ash_source_location location = token->location;
         struct ash_token opening;
@@ -1554,6 +1758,7 @@ void ash_parser_init_at_with_config(
     *parser = (struct ash_parser){
         .result = ASH_PARSER_COMPLETE,
         .extended_pipeline_negation = config->extended_pipeline_negation,
+        .conditional_commands = config->conditional_commands,
     };
     ash_parser_alias_state_init(parser, config->aliases);
     ash_lexer_init_at_with_options(

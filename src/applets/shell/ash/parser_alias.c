@@ -693,8 +693,8 @@ bool ash_parser_prepare_alias(
 
         parser->continue_alias = false;
         if (reserved_word_precedes_alias &&
-            is_reserved_word != NULL &&
-            is_reserved_word(token)) {
+            ((is_reserved_word != NULL && is_reserved_word(token)) ||
+             ash_parser_conditional_start(parser, token))) {
             parser->lookahead_alias_checked = true;
             return true;
         }
