@@ -973,6 +973,15 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "ip",
+      "main": "bx_ip_main",
+      "capabilities": [
+        "network-access",
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "ping",
       "main": "bx_ping_main",
       "capabilities": [

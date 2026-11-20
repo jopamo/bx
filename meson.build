@@ -773,6 +773,8 @@ bx_system_applet_sources = [
 
 bx_network_applet_sources = [
   'src/applets/network/dhcp/dhcp.c',
+  'src/applets/network/ip/ip.c',
+  'src/applets/network/ip/rtnetlink.c',
   'src/applets/network/mira/cli.c',
   'src/applets/network/mira/presets.c',
   'src/applets/network/mira/debug_trace.c',
@@ -1503,7 +1505,7 @@ endif
 if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'losetup', 'insmod']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'losetup', 'insmod', 'ip']
 systemwide_disabled_applet_names = ['ps', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
