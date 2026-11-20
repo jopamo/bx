@@ -243,13 +243,16 @@ add_project_arguments(
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
 acl_dep = dependency('libacl', static : use_static_binary)
-libcurl_dep = dependency('libcurl', static : use_static_binary)
-fetch_native_html_dep = dependency(
-  'liblexa-html-candidate',
-  version : '>=0.1.0',
-  required : true,
-  static : use_static_binary,
-)
+fetch_enabled = get_option('fetch')
+if fetch_enabled
+  libcurl_dep = dependency('libcurl', static : use_static_binary)
+  fetch_native_html_dep = dependency(
+    'liblexa-html-candidate',
+    version : '>=0.1.0',
+    required : true,
+    static : use_static_binary,
+  )
+endif
 
 if host_machine.system() != 'linux'
   error('bx fetch requires Linux kernel 5.6 or newer and has no insecure path-resolution fallback')
@@ -358,6 +361,11 @@ bx_core_sources = [
   'src/bx/libbx.c',
 ]
 
+dispatch_exclude_args = []
+if not fetch_enabled
+  dispatch_exclude_args += ['--exclude', 'mira,wget']
+endif
+
 dispatch_tables_src = custom_target(
   'bx-dispatch-tables-c',
   input : 'src/dispatch/applets.json',
@@ -367,7 +375,7 @@ dispatch_tables_src = custom_target(
     files('tools/dispatch/generate_dispatch_tables.py'),
     '@INPUT@',
     '@OUTPUT@',
-  ],
+  ] + dispatch_exclude_args,
   depend_files : files(
     'tools/dispatch/generate_dispatch_tables.py',
   ),
@@ -806,6 +814,10 @@ bx_network_applet_sources = [
   'src/applets/network/dhcp/dhcp.c',
   'src/applets/network/ip/ip.c',
   'src/applets/network/ip/rtnetlink.c',
+  'src/applets/network/ping/ping.c',
+]
+
+bx_fetch_applet_sources = [
   'src/applets/network/mira/cli.c',
   'src/applets/network/mira/presets.c',
   'src/applets/network/mira/debug_trace.c',
@@ -820,7 +832,6 @@ bx_network_applet_sources = [
   'src/applets/network/mira/options.c',
   'src/applets/network/mira/progress.c',
   'src/applets/network/mira/run.c',
-  'src/applets/network/ping/ping.c',
   'src/applets/network/wget/wget.c',
   'src/applets/network/wget/run.c',
 ]
@@ -906,6 +917,9 @@ bx_network_applet_sources += files(
 )
 
 sources += bx_network_applet_sources
+if fetch_enabled
+  sources += bx_fetch_applet_sources
+endif
 sources += bx_search_sources
 
 nc_sources = files(
@@ -1522,6 +1536,7 @@ applet_names = run_command(
   files('tools/dispatch/generate_dispatch_tables.py'),
   '--meson-list',
   files('src/dispatch/applets.json'),
+  dispatch_exclude_args,
   check : true,
 ).stdout().strip().split('\n')
 
@@ -1637,79 +1652,81 @@ bx_markdown_dep = declare_dependency(
   include_directories : bx_include_dirs,
 )
 
-bx_fetch_core_sources = files(
-  'src/lib/fetch/config.c',
-  'src/lib/fetch/input.c',
-  'src/lib/fetch/core/crawl_coordinator.c',
-  'src/lib/fetch/core/http_header.c',
-  'src/lib/fetch/core/link_conversion.c',
-  'src/lib/fetch/core/publication.c',
-  'src/lib/fetch/core/rate_limiter.c',
-  'src/lib/fetch/core/request.c',
-  'src/lib/fetch/core/response.c',
-  'src/lib/fetch/core/run.c',
-  'src/lib/fetch/core/scheduler.c',
-  'src/lib/fetch/core/recovery.c',
-  'src/lib/fetch/core/json_document.c',
-  'src/lib/fetch/core/transfer_completion.c',
-  'src/lib/fetch/core/transfer_prepare.c',
-  'src/lib/fetch/crawl/crawler.c',
-  'src/lib/fetch/crawl/document.c',
-  'src/lib/fetch/fs/metadata.c',
-  'src/lib/fetch/fs/metadata_recovery.c',
-  'src/lib/fetch/fs/pathmap.c',
-  'src/lib/fetch/fs/credential_file.c',
-  'src/lib/fetch/fs/writer.c',
-  'src/lib/fetch/fs/xattr.c',
-  'src/lib/fetch/html/lore_markdown.c',
-  'src/lib/fetch/html/markdown.c',
-  'src/lib/fetch/html/site_markdown.c',
-  'src/lib/fetch/html/parser.c',
-  'src/lib/fetch/net/credentials.c',
-  'src/lib/fetch/net/anubis.c',
-  'src/lib/fetch/net/curl_capabilities.c',
-  'src/lib/fetch/net/curl_global.c',
-  'src/lib/fetch/net/curl_multi.c',
-  'src/lib/fetch/net/engine_state.c',
-  'src/lib/fetch/net/progress.c',
-  'src/lib/fetch/net/request_budget.c',
-  'src/lib/fetch/net/spider.c',
-  'src/lib/fetch/net/client_profile.c',
-  'src/lib/fetch/policy/representation.c',
-  'src/lib/fetch/policy/rate_limit.c',
-  'src/lib/fetch/net/resume_validation.c',
-  'src/lib/fetch/net/submit.c',
-  'src/lib/fetch/net/transfer.c',
-  'src/lib/fetch/net/url.c',
-  'src/lib/fetch/policy/filter.c',
-  'src/lib/fetch/store/url_map_store.c',
-  'src/lib/fetch/store/state_directory.c',
-  'src/lib/fetch/store/client_profile_store.c',
-  'src/lib/fetch/util/error.c',
-  'src/lib/fetch/util/exit_code.c',
-  'src/lib/fetch/util/hashset.c',
-  'src/lib/fetch/util/regex.c',
-  'src/lib/fetch/util/secure_path.c',
-  'src/lib/fetch/util/timestamp_policy.c',
-)
+if fetch_enabled
+  bx_fetch_core_sources = files(
+    'src/lib/fetch/config.c',
+    'src/lib/fetch/input.c',
+    'src/lib/fetch/core/crawl_coordinator.c',
+    'src/lib/fetch/core/http_header.c',
+    'src/lib/fetch/core/link_conversion.c',
+    'src/lib/fetch/core/publication.c',
+    'src/lib/fetch/core/rate_limiter.c',
+    'src/lib/fetch/core/request.c',
+    'src/lib/fetch/core/response.c',
+    'src/lib/fetch/core/run.c',
+    'src/lib/fetch/core/scheduler.c',
+    'src/lib/fetch/core/recovery.c',
+    'src/lib/fetch/core/json_document.c',
+    'src/lib/fetch/core/transfer_completion.c',
+    'src/lib/fetch/core/transfer_prepare.c',
+    'src/lib/fetch/crawl/crawler.c',
+    'src/lib/fetch/crawl/document.c',
+    'src/lib/fetch/fs/metadata.c',
+    'src/lib/fetch/fs/metadata_recovery.c',
+    'src/lib/fetch/fs/pathmap.c',
+    'src/lib/fetch/fs/credential_file.c',
+    'src/lib/fetch/fs/writer.c',
+    'src/lib/fetch/fs/xattr.c',
+    'src/lib/fetch/html/lore_markdown.c',
+    'src/lib/fetch/html/markdown.c',
+    'src/lib/fetch/html/site_markdown.c',
+    'src/lib/fetch/html/parser.c',
+    'src/lib/fetch/net/credentials.c',
+    'src/lib/fetch/net/anubis.c',
+    'src/lib/fetch/net/curl_capabilities.c',
+    'src/lib/fetch/net/curl_global.c',
+    'src/lib/fetch/net/curl_multi.c',
+    'src/lib/fetch/net/engine_state.c',
+    'src/lib/fetch/net/progress.c',
+    'src/lib/fetch/net/request_budget.c',
+    'src/lib/fetch/net/spider.c',
+    'src/lib/fetch/net/client_profile.c',
+    'src/lib/fetch/policy/representation.c',
+    'src/lib/fetch/policy/rate_limit.c',
+    'src/lib/fetch/net/resume_validation.c',
+    'src/lib/fetch/net/submit.c',
+    'src/lib/fetch/net/transfer.c',
+    'src/lib/fetch/net/url.c',
+    'src/lib/fetch/policy/filter.c',
+    'src/lib/fetch/store/url_map_store.c',
+    'src/lib/fetch/store/state_directory.c',
+    'src/lib/fetch/store/client_profile_store.c',
+    'src/lib/fetch/util/error.c',
+    'src/lib/fetch/util/exit_code.c',
+    'src/lib/fetch/util/hashset.c',
+    'src/lib/fetch/util/regex.c',
+    'src/lib/fetch/util/secure_path.c',
+    'src/lib/fetch/util/timestamp_policy.c',
+  )
 
-bx_fetch_core_deps = [libcurl_dep, bx_markdown_dep, fetch_native_html_dep]
+  bx_fetch_core_deps = [libcurl_dep, bx_markdown_dep, fetch_native_html_dep]
 
-# Private fetch mechanics shared by the Wget and Mira policy frontends.
-bx_fetch_core_lib = static_library(
-  'bx_fetch_core',
-  bx_fetch_core_sources,
-  include_directories : bx_include_dirs,
-  dependencies : bx_fetch_core_deps,
-)
+  # Private fetch mechanics shared by the Wget and Mira policy frontends.
+  bx_fetch_core_lib = static_library(
+    'bx_fetch_core',
+    bx_fetch_core_sources,
+    include_directories : bx_include_dirs,
+    dependencies : bx_fetch_core_deps,
+  )
 
-bx_fetch_core_dep = declare_dependency(
-  link_with : bx_fetch_core_lib,
-  include_directories : bx_include_dirs,
-  dependencies : bx_fetch_core_deps,
-)
+  bx_fetch_core_dep = declare_dependency(
+    link_with : bx_fetch_core_lib,
+    include_directories : bx_include_dirs,
+    dependencies : bx_fetch_core_deps,
+  )
 
-bx_deps += [bx_fetch_core_dep]
+  bx_deps += [bx_fetch_core_dep]
+endif
 
 stdbuf_preload = shared_module(
   'stdbuf',

@@ -24,6 +24,12 @@ option(
   description : 'Static link policy: enabled (default), auto (musl toolchains), or disabled'
 )
 option(
+  'fetch',
+  type : 'boolean',
+  value : true,
+  description : 'Build the Mira/Wget fetch core and link libcurl/liblexa; disabling removes those applets from dispatch'
+)
+option(
   'multicall_install_mode',
   type : 'combo',
   choices : ['shebang', 'symlink'],

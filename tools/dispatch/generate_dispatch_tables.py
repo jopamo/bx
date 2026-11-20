@@ -83,6 +83,52 @@ def load_entries(manifest: dict[str, object], field: str) -> list[dict[str, obje
     return entries
 
 
+def apply_exclusions(
+    boot_critical: list[dict[str, object]],
+    applets: list[dict[str, object]],
+    excluded: set[str],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if not excluded:
+        return boot_critical, applets
+
+    available = {str(entry["name"]) for entry in boot_critical + applets}
+    unknown = excluded - available
+    if unknown:
+        raise SystemExit(f"unknown dispatch exclusions: {', '.join(sorted(unknown))}")
+
+    return (
+        [entry for entry in boot_critical if str(entry["name"]) not in excluded],
+        [entry for entry in applets if str(entry["name"]) not in excluded],
+    )
+
+
+def split_exclusions(argv: list[str]) -> tuple[list[str], set[str]]:
+    arguments: list[str] = []
+    excluded: set[str] = set()
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        value: str | None = None
+        if argument == "--exclude":
+            if index + 1 >= len(argv):
+                raise SystemExit("--exclude requires a comma-separated applet list")
+            value = argv[index + 1]
+            index += 2
+        elif argument.startswith("--exclude="):
+            value = argument.split("=", 1)[1]
+            index += 1
+        else:
+            arguments.append(argument)
+            index += 1
+            continue
+        for name in value.split(","):
+            name = name.strip()
+            if not name:
+                raise SystemExit("--exclude contains an empty applet name")
+            excluded.add(name)
+    return arguments, excluded
+
+
 def validate_entries(boot_critical: list[dict[str, object]], applets: list[dict[str, object]]) -> None:
     if not boot_critical or boot_critical[0]["name"] != "switch_root":
         raise SystemExit("boot-critical dispatch order must begin with switch_root")
@@ -302,23 +348,27 @@ def write_dispatch_c(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 3 and argv[1] == "--meson-list":
-        manifest_path = Path(argv[2])
+    arguments, excluded = split_exclusions(argv[1:])
+
+    if len(arguments) == 2 and arguments[0] == "--meson-list":
+        manifest_path = Path(arguments[1])
         manifest = read_manifest(manifest_path)
         boot_critical = load_entries(manifest, "boot_critical")
         applets = load_entries(manifest, "applets")
+        boot_critical, applets = apply_exclusions(boot_critical, applets, excluded)
         validate_entries(boot_critical, applets)
         sys.stdout.write("\n".join(dispatch_names(boot_critical, applets)) + "\n")
         return 0
 
-    if len(argv) != 3:
-        raise SystemExit(f"usage: {Path(argv[0]).name} APPLETS_JSON OUTPUT_C")
+    if len(arguments) != 2:
+        raise SystemExit(f"usage: {Path(argv[0]).name} [--exclude NAMES] APPLETS_JSON OUTPUT_C")
 
-    manifest_path = Path(argv[1])
-    output = Path(argv[2])
+    manifest_path = Path(arguments[0])
+    output = Path(arguments[1])
     manifest = read_manifest(manifest_path)
     boot_critical = load_entries(manifest, "boot_critical")
     applets = load_entries(manifest, "applets")
+    boot_critical, applets = apply_exclusions(boot_critical, applets, excluded)
     validate_entries(boot_critical, applets)
     write_dispatch_c(
         output=output,
