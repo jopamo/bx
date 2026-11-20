@@ -14,6 +14,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/disk_tag.h"
 #include "lib/mount_table.h"
 #include "lib/args_common.h"
 
@@ -602,40 +603,6 @@ static int bx_mount_print_mounts(const struct bx_mount_options* options, const c
     return rc;
 }
 
-static char* bx_mount_resolve_disk_tag(const char* directory, const char* value) {
-    size_t dir_len = strlen(directory);
-    size_t value_len = strlen(value);
-    char* path = xmalloc(dir_len + 1u + value_len + 1u);
-    memcpy(path, directory, dir_len);
-    path[dir_len] = '/';
-    memcpy(path + dir_len + 1u, value, value_len + 1u);
-
-    char* resolved = realpath(path, NULL);
-    free(path);
-    return resolved;
-}
-
-static char* bx_mount_resolve_source_spec(const char* source) {
-    if (source == NULL) {
-        return NULL;
-    }
-
-    if (strncmp(source, "LABEL=", 6) == 0) {
-        return bx_mount_resolve_disk_tag("/dev/disk/by-label", source + 6);
-    }
-    if (strncmp(source, "UUID=", 5) == 0) {
-        return bx_mount_resolve_disk_tag("/dev/disk/by-uuid", source + 5);
-    }
-    if (strncmp(source, "PARTLABEL=", 10) == 0) {
-        return bx_mount_resolve_disk_tag("/dev/disk/by-partlabel", source + 10);
-    }
-    if (strncmp(source, "PARTUUID=", 9) == 0) {
-        return bx_mount_resolve_disk_tag("/dev/disk/by-partuuid", source + 9);
-    }
-
-    return xstrdup(source);
-}
-
 static bool bx_mount_assign_regular_operands(int argc, char** argv, struct bx_mount_options* options, struct bx_diag_ctx* diag) {
     int remaining = argc - options->operand_index;
 
@@ -922,12 +889,12 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
     unsigned long flags = options->op_flags | options->flag_values;
 
     if (source != NULL) {
-        resolved_source = bx_mount_resolve_source_spec(source);
-        if (resolved_source == NULL && (strncmp(source, "LABEL=", 6) == 0 || strncmp(source, "UUID=", 5) == 0 || strncmp(source, "PARTLABEL=", 10) == 0 || strncmp(source, "PARTUUID=", 9) == 0)) {
+        int resolved = bx_disk_tag_resolve(source, &resolved_source);
+        if (resolved < 0) {
             bx_diag(diag, "cannot resolve source '%s': %s", source, strerror(errno));
             return false;
         }
-        if (resolved_source != NULL) {
+        if (resolved > 0) {
             source = resolved_source;
         }
     }

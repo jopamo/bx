@@ -403,6 +403,7 @@ bx_lib_sources = [
   'src/lib/copy_tree.c',
   'src/lib/dir_cycle.c',
   'src/lib/dir_path.c',
+  'src/lib/disk_tag.c',
   'src/lib/daemon_ops.c',
   'src/lib/env_ops.c',
   'src/lib/fd_ops.c',
@@ -738,6 +739,7 @@ bx_system_applet_sources = [
   'src/applets/system/flock/flock.c',
   'src/applets/system/mountpoint/mountpoint.c',
   'src/applets/system/blockdev/blockdev.c',
+  'src/applets/system/findfs/findfs.c',
   'src/applets/system/losetup/losetup.c',
   'src/applets/system/modules/insmod.c',
   'src/applets/system/modules/lsmod.c',
@@ -1508,7 +1510,7 @@ endif
 if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip']
 systemwide_disabled_applet_names = ['ps', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
