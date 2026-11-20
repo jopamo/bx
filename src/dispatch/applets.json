@@ -1219,6 +1219,12 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "diff",
+      "main": "bx_diff_main",
+      "capabilities": ["filesystem-read"],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "comm",
       "main": "bx_comm_main",
       "capabilities": [

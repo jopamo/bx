@@ -120,16 +120,7 @@ typedef struct s_bdiffparam {
 	long bsize;
 } bdiffparam_t;
 
-#ifdef VMS
-# include "[]vim.h"
-#else
-# include "../vim.h"
-#endif
-
-#define xdl_malloc(x) lalloc((x), TRUE)
-#define xdl_calloc(n, sz) lalloc_clear(n*sz, TRUE)
-#define xdl_free(ptr) vim_free(ptr)
-#define xdl_realloc(ptr,x) vim_realloc((ptr),(x))
+#include <stddef.h>
 
 const char *xdl_mmfile_first(const mmfile_t *mmf, long *size);
 long xdl_mmfile_size(const mmfile_t *mmf);

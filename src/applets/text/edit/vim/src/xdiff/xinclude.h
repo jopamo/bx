@@ -64,6 +64,17 @@ void xdl_bug(const char *msg);
 #endif
 #include "xmacros.h"
 #include "xdiff.h"
+
+#ifdef VMS
+# include "[]vim.h"
+#else
+# include "../vim.h"
+#endif
+
+#define xdl_malloc(x) lalloc((x), TRUE)
+#define xdl_calloc(n, sz) lalloc_clear(n*sz, TRUE)
+#define xdl_free(ptr) vim_free(ptr)
+#define xdl_realloc(ptr,x) vim_realloc((ptr),(x))
 #include "xtypes.h"
 #include "xutils.h"
 #include "xprepare.h"
