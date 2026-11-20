@@ -20,6 +20,8 @@ struct bx_peekfd_options {
     bool duplicates_removed;
     bool no_headers;
     bool tgid;
+    bool show_help;
+    bool show_version;
     int pid_index;
 };
 
@@ -54,8 +56,9 @@ static bool bx_peekfd_parse_options(struct bx_peekfd_options* options,
 
     memset(options, 0, sizeof(*options));
     bx_args_getopt_reset();
+    int next_operand = 1;
 
-    while ((c = bx_args_getopt_long(argc, argv, "+8ncdthV", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long_interspersed(argc, argv, "-8ncdthV", long_options, &next_operand)) != -1) {
         switch (c) {
             case '8':
                 options->eight_bit_clean = true;
@@ -73,7 +76,10 @@ static bool bx_peekfd_parse_options(struct bx_peekfd_options* options,
                 options->tgid = true;
                 break;
             case 'h':
+                options->show_help = true;
+                return true;
             case 'V':
+                options->show_version = true;
                 return true;
             case '?':
                 if (optopt != 0) {
@@ -150,19 +156,22 @@ int bx_peekfd_main(int argc, char** argv) {
     size_t seen_len = 0u;
     bool vanished = false;
     pid_t pid;
-    int handled;
     size_t i;
     int rc = 1;
 
-    handled = bx_psmisc_maybe_handle_help_or_version(argc, argv, "peekfd", "-h", bx_peekfd_print_help);
-    if (handled >= 0) {
-        return handled;
-    }
     if (!bx_peekfd_parse_options(&options, argc, argv, &diag)) {
         if (diag.exit_status != 0) {
             bx_cli_print_try_help(diag.progname);
         }
         return diag.exit_status != 0 ? diag.exit_status : 1;
+    }
+    if (options.show_help) {
+        bx_peekfd_print_help(stdout, diag.progname);
+        return 0;
+    }
+    if (options.show_version) {
+        bx_cli_print_version(diag.progname);
+        return 0;
     }
     if (!bx_proc_parse_pid_arg(argv[options.pid_index], &pid)) {
         bx_diag(&diag, "invalid process id: %s", argv[options.pid_index]);

@@ -20,6 +20,8 @@ enum bx_pstree_charset {
     BX_PSTREE_CHARSET_UNICODE,
 };
 
+enum { BX_PSTREE_OPT_HELP = 256 };
+
 struct bx_pstree_options {
     bool show_args;
     bool show_pids;
@@ -31,6 +33,8 @@ struct bx_pstree_options {
     pid_t pid_filter;
     bool user_filter_set;
     uid_t user_filter;
+    bool show_help;
+    bool show_version;
 };
 
 struct bx_pstree_connectors {
@@ -92,7 +96,7 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
         {"uid-changes", no_argument, NULL, 'u'},
         {"unicode", no_argument, NULL, 'U'},
         {"security-context", no_argument, NULL, 'Z'},
-        {"help", no_argument, NULL, 1},
+        {"help", no_argument, NULL, BX_PSTREE_OPT_HELP},
         {"version", no_argument, NULL, 'V'},
         {NULL, 0, NULL, 0},
     };
@@ -101,8 +105,10 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
     memset(options, 0, sizeof(*options));
     options->charset = BX_PSTREE_CHARSET_ASCII;
     bx_args_getopt_reset();
+    int next_operand = 1;
 
-    while ((c = bx_args_getopt_long(argc, argv, "+aAcC:GhH:klnpPsStTuUZV", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long_interspersed(
+                argc, argv, "-aAcC:GhH:klnpPsStTuUZV", long_options, &next_operand)) != -1) {
         switch (c) {
             case 'a': options->show_args = true; break;
             case 'A':
@@ -131,8 +137,11 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
                 break;
             case 'C':
                 break;
-            case 1:
+            case BX_PSTREE_OPT_HELP:
+                options->show_help = true;
+                return true;
             case 'V':
+                options->show_version = true;
                 return true;
             case '?':
                 if (optopt != 0) {
@@ -353,18 +362,21 @@ int bx_pstree_main(int argc, char** argv) {
     struct bx_pstree_options options;
     struct bx_proc_list procs = {0};
     size_t i;
-    int handled;
     int rc = 1;
 
-    handled = bx_psmisc_maybe_handle_help_or_version(argc, argv, "pstree", NULL, bx_pstree_print_help);
-    if (handled >= 0) {
-        return handled;
-    }
     if (!bx_pstree_parse_options(&options, argc, argv, &diag)) {
         if (diag.exit_status != 0) {
             bx_cli_print_try_help(diag.progname);
         }
         return diag.exit_status != 0 ? diag.exit_status : 1;
+    }
+    if (options.show_help) {
+        bx_pstree_print_help(stdout, diag.progname);
+        return 0;
+    }
+    if (options.show_version) {
+        bx_cli_print_version(diag.progname);
+        return 0;
     }
     if (!bx_proc_list_read(&procs, BX_PROC_READ_CMDLINE | BX_PROC_READ_EXE)) {
         bx_diag(&diag, "failed to read /proc: %s", strerror(errno));

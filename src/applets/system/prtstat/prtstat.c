@@ -13,6 +13,8 @@
 
 struct bx_prtstat_options {
     bool raw;
+    bool show_help;
+    bool show_version;
     int first_pid_index;
 };
 
@@ -39,14 +41,18 @@ static bool bx_prtstat_parse_options(struct bx_prtstat_options* options,
 
     memset(options, 0, sizeof(*options));
     bx_args_getopt_reset();
+    int next_operand = 1;
 
-    while ((c = bx_args_getopt_long(argc, argv, "+rhV", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long_interspersed(argc, argv, "-rhV", long_options, &next_operand)) != -1) {
         switch (c) {
             case 'r':
                 options->raw = true;
                 break;
             case 'h':
+                options->show_help = true;
+                return true;
             case 'V':
+                options->show_version = true;
                 return true;
             case '?':
                 if (optopt != 0) {
@@ -152,19 +158,22 @@ int bx_prtstat_main(int argc, char** argv) {
         .exit_status = 0,
     };
     struct bx_prtstat_options options;
-    int handled;
     int i;
     int rc = 0;
 
-    handled = bx_psmisc_maybe_handle_help_or_version(argc, argv, "prtstat", "-h", bx_prtstat_print_help);
-    if (handled >= 0) {
-        return handled;
-    }
     if (!bx_prtstat_parse_options(&options, argc, argv, &diag)) {
         if (diag.exit_status != 0) {
             bx_cli_print_try_help(diag.progname);
         }
         return diag.exit_status != 0 ? diag.exit_status : 1;
+    }
+    if (options.show_help) {
+        bx_prtstat_print_help(stdout, diag.progname);
+        return 0;
+    }
+    if (options.show_version) {
+        bx_cli_print_version(diag.progname);
+        return 0;
     }
 
     for (i = options.first_pid_index; i < argc; i++) {
