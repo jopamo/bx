@@ -14,8 +14,6 @@
 #include "lib/open_resolve.h"
 #include "lib/xreadwrite.h"
 
-enum { MODULE_INDEX_LIMIT = 32 * 1024 * 1024 };
-
 static bool name_char(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9') || c == '_' || c == '-';
@@ -168,7 +166,7 @@ static int load_index(const struct bx_module_tree* tree, struct bx_module_index*
         if (fd < 0) {
             index->error = errno;
         } else {
-            index->data = bx_module_read_regular(fd, MODULE_INDEX_LIMIT, &index->size);
+            index->data = bx_module_read_regular(fd, BX_MODULE_INDEX_BYTES_LIMIT, &index->size);
             if (index->data == NULL) {
                 index->error = errno;
             } else if (builtin_info ? !builtin_info_valid(index->data, index->size)

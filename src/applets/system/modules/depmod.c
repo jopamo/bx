@@ -8,7 +8,7 @@
 
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s -n [-ae] -F SYSTEM_MAP [-b ROOT] [RELEASE]\n"
-                 "Print direct dependencies of installed modules without writing indices.\n", name);
+                 "Print dependencies of installed modules without writing indices.\n", name);
 }
 
 #ifdef __linux__
@@ -22,6 +22,7 @@ static void usage(FILE* out, const char* name) {
 #include "fswalk/walk.h"
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/text_buffer.h"
 #include "module_elf.h"
 #include "module_index.h"
 #include "module_symbols.h"
@@ -29,12 +30,13 @@ static void usage(FILE* out, const char* name) {
 
 enum { FILES_MAX = 8192, ENTRIES_MAX = 262144, DEPTH_MAX = 48,
        REFS_BYTES_MAX = 32 * 1024 * 1024, REFS_MAX = 1048576,
-       MODULE_BYTES_MAX = 1024 * 1024 * 1024 };
+       MODULE_BYTES_MAX = 1024 * 1024 * 1024, INDEX_EDGES_MAX = 16777216 };
 
 struct module {
     char* path;
     size_t first;
     size_t edge_count;
+    size_t rank;
 };
 
 struct reference {
@@ -234,7 +236,7 @@ static bool resolve(struct scan* scan) {
     return ok;
 }
 
-static bool acyclic(const struct scan* scan) {
+static bool rank_graph(struct scan* scan) {
     struct frame {size_t module, next;};
     struct frame* stack = calloc(scan->count + 1, sizeof(*stack));
     unsigned char* color = calloc(scan->count + 1, 1);
@@ -243,6 +245,7 @@ static bool acyclic(const struct scan* scan) {
         bx_perror_path(scan->diag, "module dependency graph");
         goto done;
     }
+    size_t rank = 0;
     for (size_t i = 0; i < scan->count; i++) {
         if (color[i])
             continue;
@@ -251,8 +254,9 @@ static bool acyclic(const struct scan* scan) {
         color[i] = 1;
         while (depth) {
             struct frame* frame = &stack[depth - 1];
-            const struct module* module = &scan->modules[frame->module];
+            struct module* module = &scan->modules[frame->module];
             if (frame->next == module->edge_count) {
+                module->rank = rank++;
                 color[frame->module] = 2;
                 depth--;
                 continue;
@@ -276,20 +280,64 @@ done:
     return ok;
 }
 
-static bool print_deps(const struct scan* scan) {
+static int dependency_order(const void* a, const void* b) {
+    const struct module* left = *(const struct module* const*)a;
+    const struct module* right = *(const struct module* const*)b;
+    return (left->rank < right->rank) - (left->rank > right->rank);
+}
+
+static bool index_append(struct bx_text_buffer* out, const char* text, size_t len) {
+    if (len > BX_MODULE_INDEX_BYTES_LIMIT - out->length) {
+        errno = EFBIG;
+        return false;
+    }
+    return bx_text_buffer_append_span(out, text, len);
+}
+
+static bool render_deps(const struct scan* scan, struct bx_text_buffer* out) {
+    size_t* seen = calloc(scan->count + 1, sizeof(*seen));
+    const struct module** reachable = malloc((scan->count + 1) * sizeof(*reachable));
+    bool ok = false;
+    size_t work_left = INDEX_EDGES_MAX;
+    if (!seen || !reachable)
+        goto done;
     for (size_t i = 0; i < scan->count; i++) {
         const struct module* module = &scan->modules[i];
-        if (printf("%s:", module->path) < 0)
-            return false;
-        for (size_t j = 0; j < module->edge_count; j++) {
-            size_t target = scan->refs[module->first + j].provider - 1;
-            if (printf(" %s", scan->modules[target].path) < 0)
-                return false;
+        size_t count = 1;
+        reachable[0] = module;
+        seen[i] = i + 1;
+        for (size_t j = 0; j < count; j++) {
+            const struct module* item = reachable[j];
+            if (work_left < item->edge_count) {
+                errno = EFBIG;
+                goto done;
+            }
+            work_left -= item->edge_count;
+            for (size_t k = 0; k < item->edge_count; k++) {
+                size_t target = scan->refs[item->first + k].provider - 1;
+                if (seen[target] != i + 1) {
+                    seen[target] = i + 1;
+                    reachable[count++] = &scan->modules[target];
+                }
+            }
         }
-        if (putchar('\n') == EOF)
-            return false;
+        // Reverse finish order puts every consumer before its providers.
+        qsort(reachable + 1, count - 1, sizeof(*reachable), dependency_order);
+        if (!index_append(out, module->path, strlen(module->path)) || !index_append(out, ":", 1))
+            goto done;
+        for (size_t j = 1; j < count; j++) {
+            const char* path = reachable[j]->path;
+            if (!index_append(out, " ", 1) || !index_append(out, path, strlen(path)))
+                goto done;
+        }
+        if (!index_append(out, "\n", 1))
+            goto done;
     }
-    return fflush(stdout) == 0;
+    ok = true;
+done:
+    free(seen);
+    free(reachable);
+    return ok;
 }
 #endif
 
@@ -339,11 +387,16 @@ int bx_depmod_main(int argc, char** argv) {
         bx_perror_path(&diag, tree.path ? tree.path : "module tree");
         goto done;
     }
-    if (read_map(&scan, map) && read_tree(&scan, &tree) && resolve(&scan) && acyclic(&scan)) {
-        if (print_deps(&scan))
+    if (read_map(&scan, map) && read_tree(&scan, &tree) && resolve(&scan) && rank_graph(&scan)) {
+        struct bx_text_buffer index = {0};
+        if (!render_deps(&scan, &index))
+            bx_perror_path(&diag, "build modules.dep");
+        else if ((!index.length || fwrite(index.data, 1, index.length, stdout) == index.length) &&
+                 fflush(stdout) == 0)
             status = 0;
         else
             bx_perror_path(&diag, "standard output");
+        bx_text_buffer_destroy(&index);
     }
 done:
     for (size_t i = 0; i < scan.refs_count; i++)

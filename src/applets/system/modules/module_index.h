@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+enum { BX_MODULE_INDEX_BYTES_LIMIT = 32 * 1024 * 1024 };
+
 struct bx_module_index {
     char* data;
     size_t size;
