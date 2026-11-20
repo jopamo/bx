@@ -83,48 +83,64 @@ static int disk_tag_component(const char* value, char* name) {
 }
 #endif
 
-int bx_disk_tag_resolve(const char* spec, char** device) {
-    static const struct {
-        const char* prefix;
-        const char* directory;
-    } tags[] = {
-        {"LABEL=", "/dev/disk/by-label/"},
-        {"UUID=", "/dev/disk/by-uuid/"},
-        {"PARTLABEL=", "/dev/disk/by-partlabel/"},
-        {"PARTUUID=", "/dev/disk/by-partuuid/"},
-    };
-    *device = NULL;
+static const struct bx_disk_tag {
+    const char* prefix;
+    const char* directory;
+} tags[] = {
+    {"LABEL=", "/dev/disk/by-label/"},
+    {"UUID=", "/dev/disk/by-uuid/"},
+    {"PARTLABEL=", "/dev/disk/by-partlabel/"},
+    {"PARTUUID=", "/dev/disk/by-partuuid/"},
+};
+
+static const struct bx_disk_tag* disk_tag_lookup(const char* spec, const char** value) {
     for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
         size_t prefix_len = strlen(tags[i].prefix);
-        if (strncmp(spec, tags[i].prefix, prefix_len) != 0)
-            continue;
-#ifdef __linux__
-        char path[sizeof("/dev/disk/by-partlabel/") + NAME_MAX];
-        size_t dir_len = strlen(tags[i].directory);
-        memcpy(path, tags[i].directory, dir_len);
-        if (disk_tag_component(spec + prefix_len, path + dir_len) < 0)
-            return -1;
-        char* resolved = realpath(path, NULL);
-        if (resolved == NULL)
-            return -1;
-        struct stat st;
-        if (stat(resolved, &st) < 0) {
-            int error = errno;
-            free(resolved);
-            errno = error;
-            return -1;
+        if (strncmp(spec, tags[i].prefix, prefix_len) == 0) {
+            *value = spec + prefix_len;
+            return &tags[i];
         }
-        if (!S_ISBLK(st.st_mode)) {
-            free(resolved);
-            errno = ENOTBLK;
-            return -1;
-        }
-        *device = resolved;
-        return 1;
-#else
-        errno = ENOTSUP;
-        return -1;
-#endif
     }
-    return 0;
+    return NULL;
+}
+
+const char* bx_disk_tag_value(const char* spec) {
+    const char* value = NULL;
+    disk_tag_lookup(spec, &value);
+    return value;
+}
+
+int bx_disk_tag_resolve(const char* spec, char** device) {
+    *device = NULL;
+    const char* value;
+    const struct bx_disk_tag* tag = disk_tag_lookup(spec, &value);
+    if (!tag)
+        return 0;
+#ifdef __linux__
+    char path[sizeof("/dev/disk/by-partlabel/") + NAME_MAX];
+    size_t dir_len = strlen(tag->directory);
+    memcpy(path, tag->directory, dir_len);
+    if (disk_tag_component(value, path + dir_len) < 0)
+        return -1;
+    char* resolved = realpath(path, NULL);
+    if (resolved == NULL)
+        return -1;
+    struct stat st;
+    if (stat(resolved, &st) < 0) {
+        int error = errno;
+        free(resolved);
+        errno = error;
+        return -1;
+    }
+    if (!S_ISBLK(st.st_mode)) {
+        free(resolved);
+        errno = ENOTBLK;
+        return -1;
+    }
+    *device = resolved;
+    return 1;
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
 }

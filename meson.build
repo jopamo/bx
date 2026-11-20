@@ -422,6 +422,7 @@ bx_lib_sources = [
   'src/lib/line_writer_file.c',
   'src/lib/mode_parse.c',
   'src/lib/mount_table.c',
+  'src/lib/swap_table.c',
   'src/lib/manual_runtime.c',
   'src/lib/output_alloc_counter.c',
   'src/lib/output_adapter.c',
