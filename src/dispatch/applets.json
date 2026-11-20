@@ -1096,6 +1096,22 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "lsmod",
+      "main": "bx_lsmod_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "rmmod",
+      "main": "bx_rmmod_main",
+      "capabilities": [
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "losetup",
       "main": "bx_losetup_main",
       "capabilities": [
