@@ -316,7 +316,7 @@ static bool bx_mount_parse_fstype(const char* text, struct bx_mount_options* opt
 
 static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_options* options, struct bx_diag_ctx* diag) {
     enum {
-        BX_MOUNT_OPT_BIND = 1,
+        BX_MOUNT_OPT_BIND = 256,
         BX_MOUNT_OPT_RBIND,
         BX_MOUNT_OPT_MOVE,
         BX_MOUNT_OPT_REMOUNT,
@@ -360,8 +360,10 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
 
     bx_args_getopt_reset();
 
+    int next_operand = 1;
     while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+:BMo:t:rwnRL:U:v", long_options, NULL);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-:BMo:t:rwnRL:U:v",
+                                                 long_options, &next_operand);
         if (c == -1) {
             break;
         }

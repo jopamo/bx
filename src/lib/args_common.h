@@ -17,6 +17,15 @@ int bx_args_getopt_long(
     int* long_index
 );
 
+/* Opt in only when options apply to the entire command, not to a child
+ * command or to individual operands. Use a leading '-' in short_options,
+ * reset getopt, and initialize next_operand to 1. Reserve return value 1 for
+ * positional operands. Options return in input order. On -1,
+ * argv[optind..argc) contains the operands in their original order, including
+ * the literal tail after --. Earlier argv slots may change. */
+int bx_args_getopt_long_interspersed(int argc, char* argv[], const char* short_options,
+                                    const struct option* long_options, int* next_operand);
+
 bool bx_args_parse_preserve_list(const char* arg, unsigned* mask, bool set_bits, bool* mode_mentioned_out, char** invalid_token_out);
 
 bool bx_args_parse_int_range(const char* arg, int min_value, int max_value, int* value_out);

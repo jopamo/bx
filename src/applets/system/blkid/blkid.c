@@ -9,6 +9,8 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/args_common.h"
+#include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/fs_probe.h"
 #include "scan.h"
@@ -209,8 +211,10 @@ int bx_blkid_main(int argc, char **argv)
     };
     struct probe_run run = {.diag = {.progname = "blkid"}, .format = FULL};
     bool filtered = false;
-    int opt;
-    while ((opt = getopt_long(argc, argv, "+hlpu:o:s:t:", options, NULL)) != -1) {
+    int opt, next_operand = 1;
+    bx_args_getopt_reset();
+    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:hlpu:o:s:t:",
+                                                   options, &next_operand)) != -1) {
         switch (opt) {
         case 'h':
             usage(stdout);
@@ -264,6 +268,14 @@ int bx_blkid_main(int argc, char **argv)
                 if (strcmp(optarg, tag_names[i]) == 0)
                     run.tags |= 1u << i;
             break;
+        case ':':
+            bx_cli_diag_option_requires_arg(&run.diag, optopt, optind, argc, argv);
+            usage(stderr);
+            return 4;
+        case '?':
+            bx_cli_diag_unrecognized_option(&run.diag, optopt, optind, argc, argv);
+            usage(stderr);
+            return 4;
         default:
             usage(stderr);
             return 4;

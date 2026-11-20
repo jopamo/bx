@@ -13,6 +13,8 @@
 #include <sys/ioctl.h>
 
 #include "lib/fd_ops.h"
+#include "lib/args_common.h"
+#include "lib/cli_common.h"
 #include "lib/loop_device.h"
 #include "lib/size_parse.h"
 
@@ -227,8 +229,10 @@ int bx_losetup_main(int argc, char** argv) {
     struct bx_diag_ctx diag = {.progname = "losetup"};
     struct loop_options opts = {0};
     bool settings = false;
-    int ch;
-    while ((ch = getopt_long(argc, argv, "adfo:Pr", long_options, NULL)) != -1) {
+    int ch, next_operand = 1;
+    bx_args_getopt_reset();
+    while ((ch = bx_args_getopt_long_interspersed(argc, argv, "-:adfo:Pr",
+                                                  long_options, &next_operand)) != -1) {
         uintmax_t number;
         switch (ch) {
             case 'f': opts.find = true; break;
@@ -259,6 +263,12 @@ int bx_losetup_main(int argc, char** argv) {
                      "       losetup [-rP] [-o OFFSET] [--sizelimit SIZE] [--sector-size BYTES] LOOPDEV FILE\n"
                      "Whole loop devices are verified through /sys.");
                 return 0;
+            case ':':
+                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
+                return 1;
+            case '?':
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
+                return 1;
             default:
                 return 1;
         }

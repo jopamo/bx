@@ -74,6 +74,21 @@ int bx_args_getopt_long(
     return getopt_long(argc, argv, short_options, long_options, long_index);
 }
 
+int bx_args_getopt_long_interspersed(int argc, char* argv[], const char* short_options,
+                                    const struct option* long_options, int* next_operand) {
+    int option;
+    while ((option = bx_args_getopt_long(argc, argv, short_options, long_options, NULL)) == 1)
+        argv[(*next_operand)++] = optarg;
+    if (option == -1) {
+        int tail = argc - optind;
+        memmove(argv + *next_operand, argv + optind, (size_t)tail * sizeof(*argv));
+        int operands = *next_operand - 1 + tail;
+        optind = argc - operands;
+        memmove(argv + optind, argv + 1, (size_t)operands * sizeof(*argv));
+    }
+    return option;
+}
+
 bool bx_args_parse_int_range(const char* arg, int min_value, int max_value, int* value_out) {
     if (arg == NULL || arg[0] == '\0' || value_out == NULL || min_value > max_value) {
         return false;
