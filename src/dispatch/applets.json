@@ -1157,6 +1157,12 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "depmod",
+      "main": "bx_depmod_main",
+      "capabilities": ["filesystem-read", "recursive-traversal"],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "modprobe",
       "main": "bx_modprobe_main",
       "capabilities": [
