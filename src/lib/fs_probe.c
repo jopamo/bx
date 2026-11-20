@@ -223,6 +223,48 @@ static int probe_ext(int fd, uint64_t bytes, struct bx_fs_signature *fs)
     return 1;
 }
 
+static uint64_t probe_le64(const uint8_t *data)
+{
+    return bx_fat_le32dec(data) | (uint64_t)bx_fat_le32dec(data + 4) << 32;
+}
+
+static int probe_squashfs(int fd, uint64_t bytes, struct bx_fs_signature *fs)
+{
+    uint8_t sb[96];
+    if (bytes < sizeof(sb))
+        return 0;
+    if (read_at(fd, sb, sizeof(sb), 0) < 0)
+        return -1;
+    if (memcmp(sb, "hsqs", 4) != 0 || bx_fat_le16dec(sb + 28) != 4 ||
+        bx_fat_le16dec(sb + 30) != 0)
+        return 0;
+
+    unsigned block_log = bx_fat_le16dec(sb + 22);
+    unsigned block_size = bx_fat_le32dec(sb + 12);
+    unsigned compression = bx_fat_le16dec(sb + 20);
+    if (block_log < 12 || block_log > 20 || block_size != (1u << block_log) ||
+        compression < 1 || compression > 6 ||
+        !bx_fat_le32dec(sb + 4) || !bx_fat_le16dec(sb + 26))
+        return 0;
+
+    uint64_t root = probe_le64(sb + 32);
+    uint64_t used = probe_le64(sb + 40);
+    uint64_t id_table = probe_le64(sb + 48);
+    uint64_t inode_table = probe_le64(sb + 64);
+    uint64_t dir_table = probe_le64(sb + 72);
+    /* Root references encode a relative metadata block and an offset
+     * into the decompressed 8 KiB block. The directory table can be empty. */
+    if (used > bytes || inode_table < sizeof(sb) || inode_table >= dir_table ||
+        dir_table > id_table || id_table >= used ||
+        (root & 0xffff) >= 8192 || (root >> 16) >= dir_table - inode_table)
+        return 0;
+
+    fs->type = "squashfs";
+    fs->version = "4.0";
+    fs->block_size = block_size;
+    return 1;
+}
+
 /* ECMA-119 stores these fields twice, in little- then big-endian order. */
 static bool iso_dual(const uint8_t *p, unsigned width, uint32_t *value)
 {
@@ -480,6 +522,7 @@ int bx_fs_probe(int fd, unsigned usages, struct bx_fs_signature *result)
         {BX_PROBE_FILESYSTEM, probe_fat},
         {BX_PROBE_FILESYSTEM, probe_ext},
         {BX_PROBE_FILESYSTEM, probe_iso9660},
+        {BX_PROBE_FILESYSTEM, probe_squashfs},
         {BX_PROBE_OTHER, probe_swap},
         {BX_PROBE_CRYPTO, probe_luks},
     };
