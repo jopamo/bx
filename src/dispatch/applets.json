@@ -1143,6 +1143,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "modinfo",
+      "main": "bx_modinfo_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "lsmod",
       "main": "bx_lsmod_main",
       "capabilities": [

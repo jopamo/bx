@@ -124,6 +124,7 @@ int bx_findfs_main(int argc, char** argv);
 int bx_losetup_main(int argc, char** argv);
 int bx_ip_main(int argc, char** argv);
 int bx_insmod_main(int argc, char** argv);
+int bx_modinfo_main(int argc, char** argv);
 int bx_lsmod_main(int argc, char** argv);
 int bx_rmmod_main(int argc, char** argv);
 int bx_cksum_main(int argc, char** argv);
