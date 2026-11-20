@@ -54,6 +54,12 @@ struct bx_stat_fs_format_ctx {
 
 typedef bool (*bx_stat_format_conversion_fn)(char conv, void* ctx, struct bx_diag_ctx* diag);
 
+enum {
+    BX_STAT_OPT_HELP = 256,
+    BX_STAT_OPT_VERSION,
+    BX_STAT_OPT_PRINTF,
+};
+
 static const char* const BX_STAT_TERSE_FILE_FORMAT = "%n %s %b %f %u %g %D %i %h %t %T %X %Y %Z %W %o";
 static const char* const BX_STAT_TERSE_FILESYSTEM_FORMAT = "%n %i %l %t %s %S %b %f %a %c %d";
 
@@ -72,8 +78,14 @@ static void bx_stat_print_help(FILE* stream, const char* progname) {
 
 static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"format", required_argument, NULL, 'c'}, {"printf", required_argument, NULL, 3}, {"file-system", no_argument, NULL, 'f'}, {"dereference", no_argument, NULL, 'L'},
-        {"terse", no_argument, NULL, 't'},        {"help", no_argument, NULL, 1},         {"version", no_argument, NULL, 2},       {NULL, 0, NULL, 0},
+        {"format", required_argument, NULL, 'c'},
+        {"printf", required_argument, NULL, BX_STAT_OPT_PRINTF},
+        {"file-system", no_argument, NULL, 'f'},
+        {"dereference", no_argument, NULL, 'L'},
+        {"terse", no_argument, NULL, 't'},
+        {"help", no_argument, NULL, BX_STAT_OPT_HELP},
+        {"version", no_argument, NULL, BX_STAT_OPT_VERSION},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -81,9 +93,10 @@ static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options*
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+c:fLt", long_options, NULL);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-c:fLt", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -102,14 +115,14 @@ static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options*
             case 't':
                 options->terse = true;
                 break;
-            case 3:
+            case BX_STAT_OPT_PRINTF:
                 options->format = optarg;
                 options->format_interpret_escapes = true;
                 break;
-            case 1:
+            case BX_STAT_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_STAT_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

@@ -101,10 +101,10 @@ struct bx_df_totals {
 };
 
 enum {
-    BX_DF_OPT_HELP = 1,
-    BX_DF_OPT_VERSION = 2,
-    BX_DF_OPT_OUTPUT = 3,
-    BX_DF_OPT_TOTAL = 4,
+    BX_DF_OPT_HELP = 256,
+    BX_DF_OPT_VERSION,
+    BX_DF_OPT_OUTPUT,
+    BX_DF_OPT_TOTAL,
 };
 
 static void bx_df_print_help(FILE* stream, const char* progname) {
@@ -289,10 +289,10 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+hHkPTt:x:", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-hHkPTt:x:", long_options, &next_operand);
         if (c == -1) {
             break;
         }

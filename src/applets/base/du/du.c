@@ -52,11 +52,11 @@ struct bx_du_options {
 };
 
 enum {
-    BX_DU_OPT_HELP = 1,
-    BX_DU_OPT_VERSION = 2,
-    BX_DU_OPT_MAX_DEPTH = 3,
-    BX_DU_OPT_APPARENT_SIZE = 4,
-    BX_DU_OPT_SI = 5,
+    BX_DU_OPT_HELP = 256,
+    BX_DU_OPT_VERSION,
+    BX_DU_OPT_MAX_DEPTH,
+    BX_DU_OPT_APPARENT_SIZE,
+    BX_DU_OPT_SI,
 };
 
 struct bx_du_inode_slot {
@@ -169,10 +169,10 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+0abclhksxd:B:DHLP", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-0abclhksxd:B:DHLP", long_options, &next_operand);
         if (c == -1) {
             break;
         }

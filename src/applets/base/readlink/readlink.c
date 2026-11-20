@@ -24,6 +24,11 @@ enum bx_readlink_mode {
     BX_READLINK_MODE_CANONICALIZE_MISSING,
 };
 
+enum {
+    BX_READLINK_OPT_HELP = 256,
+    BX_READLINK_OPT_VERSION,
+};
+
 struct bx_readlink_options {
     const char* progname;
     enum bx_readlink_mode mode;
@@ -78,8 +83,8 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
         {"silent", no_argument, NULL, 's'},
         {"verbose", no_argument, NULL, 'v'},
         {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_READLINK_OPT_HELP},
+        {"version", no_argument, NULL, BX_READLINK_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -91,10 +96,10 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+efmnqsvz", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-efmnqsvz", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -126,10 +131,10 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
             case 'z':
                 options->zero_terminated = true;
                 break;
-            case 1:
+            case BX_READLINK_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_READLINK_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

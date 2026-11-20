@@ -29,6 +29,13 @@ enum bx_realpath_symlink_mode {
     BX_REALPATH_SYMLINK_NONE,
 };
 
+enum {
+    BX_REALPATH_OPT_HELP = 256,
+    BX_REALPATH_OPT_VERSION,
+    BX_REALPATH_OPT_RELATIVE_TO,
+    BX_REALPATH_OPT_RELATIVE_BASE,
+};
+
 struct bx_realpath_options {
     const char* progname;
     enum bx_realpath_canonicalization_mode canonicalization_mode;
@@ -67,13 +74,13 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
         {"logical", no_argument, NULL, 'L'},
         {"physical", no_argument, NULL, 'P'},
         {"quiet", no_argument, NULL, 'q'},
-        {"relative-to", required_argument, NULL, 3},
-        {"relative-base", required_argument, NULL, 4},
+        {"relative-to", required_argument, NULL, BX_REALPATH_OPT_RELATIVE_TO},
+        {"relative-base", required_argument, NULL, BX_REALPATH_OPT_RELATIVE_BASE},
         {"strip", no_argument, NULL, 's'},
         {"no-symlinks", no_argument, NULL, 's'},
         {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_REALPATH_OPT_HELP},
+        {"version", no_argument, NULL, BX_REALPATH_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -84,10 +91,10 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+EeLmPqsz", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-EeLmPqsz", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -111,10 +118,10 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
             case 'q':
                 options->quiet = true;
                 break;
-            case 3:
+            case BX_REALPATH_OPT_RELATIVE_TO:
                 options->relative_to_arg = optarg;
                 break;
-            case 4:
+            case BX_REALPATH_OPT_RELATIVE_BASE:
                 options->relative_base_arg = optarg;
                 break;
             case 's':
@@ -123,10 +130,10 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
             case 'z':
                 options->zero = true;
                 break;
-            case 1:
+            case BX_REALPATH_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_REALPATH_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':
