@@ -8,9 +8,9 @@
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE\n"
                  "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
-                 "       %s -C FILE MODULE [PARAMETER ...]\n"
-                 "Load an exact module name for the running kernel with an explicit policy.\n"
-                 "FILE may be empty and supports only blacklist directives. Also honors\n"
+                 "       %s [-C FILE] MODULE [PARAMETER ...]\n"
+                 "Load an exact module name for the running kernel. Read modprobe.d\n"
+                 "or FILE for blacklist and options directives. Also honors\n"
                  "modprobe.blacklist= on the kernel command line. No hooks run.\n",
                  name, name, name);
 }
@@ -82,6 +82,7 @@ static int load_plan(const struct bx_module_tree* tree, const struct bx_module_p
         const struct bx_module_step* step;
         struct stat st;
         int fd;
+        char* args;
     };
     struct input* inputs = calloc(count ? count : 1, sizeof(*inputs));
     if (inputs == NULL) {
@@ -116,11 +117,16 @@ static int load_plan(const struct bx_module_tree* tree, const struct bx_module_p
             bx_diag(diag, "module is not a regular file: '%s'", path);
             goto out;
         }
+        input->args = bx_module_policy_parameters(policy, step->name,
+                                                   step->requested ? parameters : "");
+        if (input->args == NULL) {
+            bx_perror_path(diag, "module parameters");
+            goto out;
+        }
     }
     for (size_t i = 0; i < n; i++) {
         const struct input* input = &inputs[i];
-        const char* args = input->step->requested ? parameters : "";
-        if (bx_module_load_fd(input->fd, &input->st, args) < 0 && errno != EEXIST) {
+        if (bx_module_load_fd(input->fd, &input->st, input->args) < 0 && errno != EEXIST) {
             struct bx_module_path target = input->step->target;
             bx_diag(diag, "cannot load '%.*s': %s", (int)target.len, target.text, strerror(errno));
             goto out;
@@ -128,8 +134,10 @@ static int load_plan(const struct bx_module_tree* tree, const struct bx_module_p
     }
     status = 0;
 out:
-    for (size_t i = 0; i < n; i++)
+    for (size_t i = 0; i < n; i++) {
         bx_fd_cleanup(&inputs[i].fd);
+        free(inputs[i].args);
+    }
     free(inputs);
     return status;
 }
@@ -196,10 +204,6 @@ int bx_modprobe_main(int argc, char** argv) {
         }
     }
     bool load = !show && !alias;
-    if (load && config == NULL) {
-        bx_diag(&diag, "loading requires an explicit -C policy file; no modules were loaded");
-        return 1;
-    }
     if (load && (alternate_root || release != NULL)) {
         bx_diag(&diag, "loading is only supported for the running kernel's installed module tree");
         return 1;
