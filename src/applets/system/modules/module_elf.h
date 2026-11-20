@@ -15,11 +15,19 @@ struct bx_diag_ctx;
 unsigned char* bx_module_elf_read(int fd, const char* path, size_t* length,
                                   struct bx_diag_ctx* diag);
 
-typedef bool (*bx_module_elf_undefined_fn)(const char* name, size_t length, bool weak, void* user);
-/* Visit non-local undefined symbols in a relocatable module's symbol table.
+enum bx_module_elf_symbol_kind {
+    BX_MODULE_ELF_REQUIRED,
+    BX_MODULE_ELF_WEAK,
+    BX_MODULE_ELF_EXPORT,
+};
+
+typedef bool (*bx_module_elf_symbol_fn)(const char* name, size_t length,
+                                       enum bx_module_elf_symbol_kind kind, void* user);
+/* Visit undefined references and __ksymtab exports. Ordinary global
+ * definitions are not exports. Extended symbol section indices are rejected.
  * Names borrow the supplied ELF bytes. On error, discard any collected names. */
-bool bx_module_elf_undefined(const unsigned char* file, size_t size,
-                             bx_module_elf_undefined_fn visit, void* user);
+bool bx_module_elf_symbols(const unsigned char* file, size_t size,
+                           bx_module_elf_symbol_fn visit, void* user);
 #endif
 
 #endif

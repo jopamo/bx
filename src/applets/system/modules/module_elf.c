@@ -184,20 +184,34 @@ bool bx_module_elf_info(const unsigned char* file, size_t size, const char** dat
     return true;
 }
 
-bool bx_module_elf_undefined(const unsigned char* file, size_t size,
-                             bx_module_elf_undefined_fn visit, void* user) {
+bool bx_module_elf_symbols(const unsigned char* file, size_t size,
+                           bx_module_elf_symbol_fn visit, void* user) {
     enum { SYMBOLS_MAX = 262144, SYMBOL_NAME_MAX = 4096 };
     struct elf_sections sections;
-    if (!visit || !elf_sections_read(file, size, &sections))
+    if (!visit || !elf_sections_read(file, size, &sections) || sections.count >= SHN_LORESERVE)
         return false;
     const struct elf_layout* elf = &sections.layout;
     const unsigned char* header = NULL;
+    size_t export_section[2] = {0};
+    size_t export_size[2] = {0};
     for (size_t i = 1; i < sections.count; i++) {
         const unsigned char* sh = sections.table + i * sections.section_size;
-        if (ELF_FIELD(elf, sh, Shdr, sh_type) == SHT_SYMTAB) {
+        uint64_t type = ELF_FIELD(elf, sh, Shdr, sh_type);
+        if (type == SHT_SYMTAB) {
             if (header != NULL)
                 return false;
             header = sh;
+        }
+        size_t offset = (size_t)ELF_FIELD(elf, sh, Shdr, sh_name);
+        const char* section_name = (const char*)sections.names + offset;
+        size_t slot = strcmp(section_name, "__ksymtab") == 0 ? 0 :
+                      strcmp(section_name, "__ksymtab_gpl") == 0 ? 1 : 2;
+        if (slot < 2) {
+            if (export_section[slot] || type != SHT_PROGBITS ||
+                !(ELF_FIELD(elf, sh, Shdr, sh_flags) & SHF_ALLOC) ||
+                !elf_section_bytes(&sections, sh, &export_size[slot]))
+                return false;
+            export_section[slot] = i;
         }
     }
     const size_t symsize = elf->wide ? sizeof(Elf64_Sym) : sizeof(Elf32_Sym);
@@ -222,17 +236,34 @@ bool bx_module_elf_undefined(const unsigned char* file, size_t size,
         const unsigned char* sym = symbols + offset;
         uint64_t name = ELF_FIELD(elf, sym, Sym, st_name);
         uint64_t section = ELF_FIELD(elf, sym, Sym, st_shndx);
-        if (name >= names_size || (section < SHN_LORESERVE && section >= sections.count))
+        if (name >= names_size || section == SHN_XINDEX ||
+            (section < SHN_LORESERVE && section >= sections.count))
             return false;
         unsigned binding = ELF64_ST_BIND(ELF_FIELD(elf, sym, Sym, st_info));
-        if (section != SHN_UNDEF || (binding != STB_GLOBAL && binding != STB_WEAK))
+        bool reference = section == SHN_UNDEF && (binding == STB_GLOBAL || binding == STB_WEAK);
+        size_t export_idx = section != 0 && section == export_section[0] ? 0 :
+                            section != 0 && section == export_section[1] ? 1 : 2;
+        if (!reference && export_idx == 2)
             continue;
         const unsigned char* start = names + (size_t)name;
         size_t available = names_size - (size_t)name;
         const unsigned char* end = memchr(start, '\0',
             available > SYMBOL_NAME_MAX + 1u ? SYMBOL_NAME_MAX + 1u : available);
-        if (!end || end == start ||
-            !visit((const char*)start, (size_t)(end - start), binding == STB_WEAK, user))
+        if (!end)
+            return false;
+        enum bx_module_elf_symbol_kind kind = binding == STB_WEAK ?
+            BX_MODULE_ELF_WEAK : BX_MODULE_ELF_REQUIRED;
+        static const char prefix[] = "__ksymtab_";
+        if (!reference) {
+            if ((size_t)(end - start) <= sizeof(prefix) - 1 ||
+                memcmp(start, prefix, sizeof(prefix) - 1) != 0)
+                continue;
+            if (ELF_FIELD(elf, sym, Sym, st_value) >= export_size[export_idx])
+                return false;
+            start += sizeof(prefix) - 1;
+            kind = BX_MODULE_ELF_EXPORT;
+        }
+        if (end == start || !visit((const char*)start, (size_t)(end - start), kind, user))
             return false;
     }
     return true;
