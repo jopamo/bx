@@ -589,6 +589,15 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "mkswap",
+      "main": "bx_mkswap_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "swapon",
       "main": "bx_swapon_main",
       "capabilities": [
