@@ -1,4 +1,4 @@
-#define _DEFAULT_SOURCE
+#define _GNU_SOURCE
 
 #include <ctype.h>
 #include <errno.h>
@@ -15,8 +15,15 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/disk_tag.h"
+#include "lib/fd_ops.h"
+#include "lib/fs_probe.h"
 #include "lib/mount_table.h"
 #include "lib/args_common.h"
+
+#ifdef __linux__
+#include <linux/magic.h>
+#include <sys/vfs.h>
+#endif
 
 #ifndef MS_MANDLOCK
 #define MS_MANDLOCK 0ul
@@ -72,7 +79,7 @@ static void bx_mount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Mount a filesystem.\n");
     fprintf(stream, "\n");
     fprintf(stream, "Supported subset:\n");
-    fprintf(stream, "  -t, --types TYPE      filesystem type\n");
+    fprintf(stream, "  -t, --types TYPE      filesystem type (auto detects block devices via procfs)\n");
     fprintf(stream, "  -o, --options LIST    comma-separated mount options\n");
     fprintf(stream, "  -r, --read-only       mount read-only\n");
     fprintf(stream, "  -w, --read-write      mount read-write\n");
@@ -800,17 +807,11 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
         return bx_mount_assign_remount_operands(argc, argv, options, diag);
     }
 
-    if (options->fstype == NULL) {
-        bx_diag(diag, "filesystem type required for regular mounts; use -t TYPE");
-        return false;
-    }
-
     return bx_mount_assign_regular_operands(argc, argv, options, diag);
 }
 
-static void bx_mount_diag_failure(const struct bx_mount_options* options, struct bx_diag_ctx* diag) {
-    int mount_error = errno;
-
+static void bx_mount_diag_failure(const struct bx_mount_options* options, const char* fstype,
+                                  int mount_error, struct bx_diag_ctx* diag) {
     if (bx_mount_has_move(options)) {
         bx_diag(diag, "cannot move mount from '%s' to '%s': %s", options->source, options->target, strerror(mount_error));
         return;
@@ -852,7 +853,7 @@ static void bx_mount_diag_failure(const struct bx_mount_options* options, struct
         return;
     }
 
-    bx_diag(diag, "cannot mount '%s' on '%s' as '%s': %s", options->source, options->target, options->fstype, strerror(mount_error));
+    bx_diag(diag, "cannot mount '%s' on '%s' as '%s': %s", options->source, options->target, fstype, strerror(mount_error));
 }
 
 static void bx_mount_success_message(const struct bx_mount_options* options) {
@@ -871,6 +872,70 @@ static void bx_mount_success_message(const struct bx_mount_options* options) {
     }
 }
 
+struct bx_mount_detected {
+    int path_fd, data_fd;
+    char fd_path[64];
+    const char* type;
+};
+
+static bool bx_mount_detect(const char* source, struct bx_mount_detected* detected,
+                             struct bx_diag_ctx* diag) {
+#ifdef __linux__
+    /* Check the source type before opening the underlying device. Keep
+     * this path descriptor for mount(2) rather than resolving source again. */
+    detected->path_fd = bx_fd_open_cloexec(source, O_PATH, 0);
+    struct stat expected, opened;
+    if (detected->path_fd < 0 || fstat(detected->path_fd, &expected) != 0) {
+        bx_perror_path(diag, source);
+        return false;
+    }
+    if (!S_ISBLK(expected.st_mode)) {
+        bx_diag(diag, "cannot detect filesystem on '%s': not a block device; use -t TYPE", source);
+        return false;
+    }
+
+    struct statfs procfs;
+    if (statfs("/proc/self/fd", &procfs) != 0) {
+        bx_perror_path(diag, "/proc/self/fd");
+        return false;
+    }
+    if (procfs.f_type != PROC_SUPER_MAGIC) {
+        bx_diag(diag, "filesystem detection requires /proc/self/fd on procfs");
+        return false;
+    }
+    snprintf(detected->fd_path, sizeof(detected->fd_path), "/proc/self/fd/%d", detected->path_fd);
+    detected->data_fd = bx_fd_open_cloexec(detected->fd_path, O_RDONLY | O_NONBLOCK | O_NOCTTY, 0);
+    if (detected->data_fd < 0 || bx_fd_fstat_expected(detected->data_fd, &expected, &opened) != 0) {
+        bx_diag(diag, "cannot open pinned block device '%s': %s", source, strerror(errno));
+        return false;
+    }
+    if (opened.st_rdev != expected.st_rdev) {
+        bx_diag(diag, "pinned block device '%s' changed", source);
+        return false;
+    }
+
+    struct bx_fs_signature fs;
+    int match = bx_fs_probe(detected->data_fd, BX_PROBE_ALL, &fs);
+    if (match < 0)
+        bx_diag(diag, "cannot probe filesystem on '%s': %s", source, strerror(errno));
+    else if (match == 0)
+        bx_diag(diag, "no supported filesystem signature on '%s'; use -t TYPE", source);
+    else if (match == 2)
+        bx_diag(diag, "conflicting volume signatures on '%s'; use -t TYPE", source);
+    else if (fs.usage != BX_PROBE_FILESYSTEM)
+        bx_diag(diag, "'%s' identifies as '%s', not a filesystem", source, fs.type);
+    else {
+        detected->type = fs.type;
+        return true;
+    }
+#else
+    (void)source;
+    (void)detected;
+    bx_diag(diag, "filesystem detection is not supported on this platform; use -t TYPE");
+#endif
+    return false;
+}
+
 static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_diag_ctx* diag) {
     if (options->propagation != 0) {
         if (mount(NULL, options->target, NULL, options->propagation, NULL) != 0) {
@@ -887,6 +952,8 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
     const char* fstype = options->fstype;
     const void* data = bx_mount_data_present(options) ? options->data : NULL;
     unsigned long flags = options->op_flags | options->flag_values;
+    struct bx_mount_detected detected = {.path_fd = -1, .data_fd = -1};
+    bool success = false;
 
     if (source != NULL) {
         int resolved = bx_disk_tag_resolve(source, &resolved_source);
@@ -903,16 +970,25 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
         fstype = NULL;
         data = NULL;
     }
-
-    if (mount(source, options->target, fstype, flags, data) != 0) {
-        free(resolved_source);
-        bx_mount_diag_failure(options, diag);
-        return false;
+    else if (!bx_mount_has_remount(options) && (!fstype || strcmp(fstype, "auto") == 0)) {
+        if (!bx_mount_detect(source, &detected, diag))
+            goto done;
+        source = detected.fd_path;
+        fstype = detected.type;
     }
 
-    free(resolved_source);
+    if (mount(source, options->target, fstype, flags, data) != 0) {
+        bx_mount_diag_failure(options, fstype, errno, diag);
+        goto done;
+    }
     bx_mount_success_message(options);
-    return true;
+    success = true;
+
+done:
+    bx_fd_cleanup(&detected.data_fd);
+    bx_fd_cleanup(&detected.path_fd);
+    free(resolved_source);
+    return success;
 }
 
 int bx_mount_main(int argc, char** argv) {

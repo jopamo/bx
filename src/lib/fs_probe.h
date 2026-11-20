@@ -8,6 +8,8 @@ enum bx_probe_usage {
     BX_PROBE_CRYPTO = 4,
 };
 
+#define BX_PROBE_ALL (BX_PROBE_FILESYSTEM | BX_PROBE_OTHER | BX_PROBE_CRYPTO)
+
 struct bx_fs_signature {
     const char *type;
     const char *version;

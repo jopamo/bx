@@ -278,7 +278,7 @@ int bx_blkid_main(int argc, char **argv)
     if (!filtered)
         run.tags = (1u << TAG_COUNT) - 1;
     if (!run.usages)
-        run.usages = BX_PROBE_FILESYSTEM | BX_PROBE_OTHER | BX_PROBE_CRYPTO;
+        run.usages = BX_PROBE_ALL;
 
     if (run.scanning && bx_blkid_scan(probe_device, &run) < 0) {
         bx_perror_path(&run.diag, "scan block devices");
