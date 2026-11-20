@@ -47,12 +47,14 @@ struct bx_mount_options {
     bool show_version;
     bool no_mtab;
     bool verbose;
+    bool option_list_set;
     const char* fstype;
     const char* source;
     const char* target;
     char* owned_source;
     char* data;
     unsigned long op_flags;
+    unsigned long propagation;
     unsigned long flag_values;
     unsigned long flag_mentions;
     bool explicit_source;
@@ -77,6 +79,8 @@ static void bx_mount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -R, --rbind           recursive bind mount\n");
     fprintf(stream, "  -M, --move            move mount\n");
     fprintf(stream, "      --remount         remount existing mount\n");
+    fprintf(stream, "      --make-shared DIR mark one mount shared\n");
+    fprintf(stream, "      --make-rslave DIR mark a mount tree slave\n");
     fprintf(stream, "      --source SRC      explicitly specify source\n");
     fprintf(stream, "      --target DIR      explicitly specify target\n");
     fprintf(stream, "  -L, --label LABEL     resolve source from /dev/disk/by-label\n");
@@ -311,6 +315,8 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
         BX_MOUNT_OPT_VERSION,
         BX_MOUNT_OPT_SOURCE,
         BX_MOUNT_OPT_TARGET,
+        BX_MOUNT_OPT_MAKE_SHARED,
+        BX_MOUNT_OPT_MAKE_RSLAVE,
     };
 
     static const struct option long_options[] = {
@@ -326,6 +332,8 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
         {"rbind", no_argument, NULL, BX_MOUNT_OPT_RBIND},
         {"move", no_argument, NULL, BX_MOUNT_OPT_MOVE},
         {"remount", no_argument, NULL, BX_MOUNT_OPT_REMOUNT},
+        {"make-shared", no_argument, NULL, BX_MOUNT_OPT_MAKE_SHARED},
+        {"make-rslave", no_argument, NULL, BX_MOUNT_OPT_MAKE_RSLAVE},
         {"source", required_argument, NULL, BX_MOUNT_OPT_SOURCE},
         {"target", required_argument, NULL, BX_MOUNT_OPT_TARGET},
         {"label", required_argument, NULL, 'L'},
@@ -351,6 +359,7 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
 
         switch (c) {
             case 'o':
+                options->option_list_set = true;
                 if (!bx_mount_parse_option_list(optarg, options, diag)) {
                     return false;
                 }
@@ -384,6 +393,19 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
             case BX_MOUNT_OPT_REMOUNT:
                 options->op_flags |= MS_REMOUNT;
                 break;
+            case BX_MOUNT_OPT_MAKE_SHARED:
+            case BX_MOUNT_OPT_MAKE_RSLAVE:
+#if defined(__linux__) && defined(MS_SHARED) && defined(MS_SLAVE)
+                if (options->propagation != 0) {
+                    bx_diag(diag, "specify only one propagation operation");
+                    return false;
+                }
+                options->propagation = c == BX_MOUNT_OPT_MAKE_SHARED ? MS_SHARED : MS_SLAVE | MS_REC;
+                break;
+#else
+                bx_diag(diag, "mount propagation is unsupported on this platform");
+                return false;
+#endif
             case BX_MOUNT_OPT_SOURCE:
                 options->source = optarg;
                 options->explicit_source = true;
@@ -726,6 +748,22 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
     *print_only = false;
     *single_target = NULL;
 
+    if (options->propagation != 0) {
+        if (options->explicit_source || options->fstype != NULL ||
+            options->op_flags != 0 || options->flag_mentions != 0 ||
+            options->option_list_set) {
+            bx_diag(diag, "propagation operations cannot be combined with a source, type or mount options");
+            return false;
+        }
+        if (remaining != (options->explicit_target ? 0 : 1)) {
+            bx_diag(diag, "propagation operations require exactly one target");
+            return false;
+        }
+        if (!options->explicit_target)
+            options->target = argv[options->operand_index];
+        return bx_mount_validate_operand("target", options->target, diag);
+    }
+
     if (!options->explicit_source && !options->explicit_target && remaining == 0 && !has_bind && !has_move && !has_remount && !bx_mount_data_present(options) && options->flag_mentions == 0ul) {
         *print_only = true;
         return true;
@@ -867,6 +905,16 @@ static void bx_mount_success_message(const struct bx_mount_options* options) {
 }
 
 static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_diag_ctx* diag) {
+    if (options->propagation != 0) {
+        if (mount(NULL, options->target, NULL, options->propagation, NULL) != 0) {
+            bx_diag(diag, "cannot change propagation on '%s': %s", options->target, strerror(errno));
+            return false;
+        }
+        if (options->verbose)
+            printf("%s: changed mount propagation on %s.\n", options->progname, options->target);
+        return true;
+    }
+
     char* resolved_source = NULL;
     const char* source = options->source;
     const char* fstype = options->fstype;
