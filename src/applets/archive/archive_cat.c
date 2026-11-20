@@ -65,6 +65,49 @@ static int decode(const char* name, int source_fd, int output_fd, const char* ou
     return status;
 }
 
+static bool encode_input(void* user, const struct bx_archive_codec_stream_sink* sink,
+                          struct bx_diag_ctx* diag) {
+    const int fd = *(const int*)user;
+    unsigned char buffer[16384];
+    for (;;) {
+        ssize_t n = bx_xread(fd, buffer, sizeof(buffer));
+        if (n == 0)
+            return true;
+        if (n < 0) {
+            bx_perror_path(diag, "read");
+            return false;
+        }
+        if (!sink->write(sink->user, buffer, (size_t)n))
+            return false; // The codec callback diagnoses output errors.
+    }
+}
+
+static bool encode_output(void* user, const void* data, size_t len) {
+    bool* output_error = user;
+    if (bx_xwrite_all(STDOUT_FILENO, data, len))
+        return true;
+    *output_error = true;
+    return false;
+}
+
+static int encode(const char* name, const struct bx_archive_codec* codec,
+                  const struct bx_archive_codec_encode_options* options, struct bx_diag_ctx* diag,
+                  bool* output_error) {
+    bool standard = strcmp(name, "-") == 0;
+    int fd = standard ? STDIN_FILENO : bx_fd_open_read(name, diag);
+    if (fd < 0)
+        return 1;
+    const char* label = standard ? "(stdin)" : name;
+    struct bx_diag_ctx codec_diag = {
+        .progname = diag->progname, .emit = input_error, .emit_user = &label,
+    };
+    const struct bx_archive_codec_stream_sink sink = {.user = output_error, .write = encode_output};
+    bool ok = bx_archive_codec_run_encode_stream(codec, options, encode_input, &fd, &sink, &codec_diag);
+    if (!standard && !bx_fd_close(&fd, name, diag))
+        ok = false;
+    return ok ? 0 : 1;
+}
+
 static bool same_source(const struct stat* a, const struct stat* b) {
     return S_ISREG(b->st_mode) && a->st_dev == b->st_dev && a->st_ino == b->st_ino &&
            a->st_size == b->st_size && a->st_ctim.tv_sec == b->st_ctim.tv_sec &&
@@ -150,8 +193,9 @@ done:
     return status;
 }
 
-static int archive_cat(int argc, char** argv, const char* progname,
-                       const struct bx_archive_codec* codec, const char* suffix) {
+static int archive_command(int argc, char** argv, const char* progname,
+                           const struct bx_archive_codec* codec, const char* suffix,
+                           bool compress) {
     struct bx_diag_ctx diag = {.progname = progname};
     static const struct option options[] = {
         {"decompress", no_argument, NULL, 'd'},
@@ -162,21 +206,35 @@ static int archive_cat(int argc, char** argv, const char* progname,
     };
     int opt, operand = 1;
     bool to_stdout = suffix == NULL;
+    bool writer = compress;
     bool keep = false;
+    struct bx_archive_codec_encode_options encoding = {0};
     bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:cdhk", options, &operand)) != -1) {
+    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:cdhk0123456789", options, &operand)) != -1) {
+        if (opt >= '0' && opt <= '9' && writer) {
+            encoding.level_set = true;
+            encoding.level = opt - '0';
+            continue;
+        }
         switch (opt) {
         case 'c':
             to_stdout = true;
             break;
         case 'd':
+            compress = false;
             break;
         case 'k':
             keep = true;
             break;
         case 'h':
-            printf("Usage: %s [-cdk] [--] [FILE...]\n", progname);
-            if (suffix)
+            printf("Usage: %s %s [--] [FILE...]\n", progname,
+                   writer ? "[-cdk] [-LEVEL]" : "[-cdk]");
+            if (writer)
+                printf("Use -c to compress %s data to stdout or -dc to decode it.\n"
+                       "With -d -k, decode to a new file without deleting the input.\n"
+                       "Use a single-digit compression level (%d to 9).\n",
+                       bx_archive_codec_name(codec), codec == bx_archive_codec_xz() ? 0 : 1);
+            else if (suffix)
                 printf("Use -k to decode %s files to new files (without their suffix).\n"
                        "Use -c for standard output. Replacement and source deletion are not supported.\n",
                        suffix);
@@ -190,21 +248,32 @@ static int archive_cat(int argc, char** argv, const char* progname,
             return 1;
         }
     }
+    if (encoding.level_set &&
+        (!compress || !bx_archive_codec_level_valid(codec, encoding.level))) {
+        bx_diag(&diag, "invalid compression level for this mode: %d", encoding.level);
+        return 1;
+    }
     bool output_error = false;
     if (optind == argc)
-        return decode("-", -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
-    if (!to_stdout && !keep) {
+        return compress ? encode("-", codec, &encoding, &diag, &output_error) :
+                          decode("-", -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
+    if (!to_stdout && (compress || !keep)) {
         for (int i = optind; i < argc; i++)
             if (strcmp(argv[i], "-") != 0) {
-                bx_diag(&diag, "use -k to keep the input or -c for standard output");
+                bx_diag(&diag, "%s", compress ? "use -c for standard output" :
+                        "use -k to keep the input or -c for standard output");
                 return 1;
             }
     }
     int status = 0;
     for (int i = optind; i < argc && !output_error; i++) {
-        int result = to_stdout || strcmp(argv[i], "-") == 0 ?
-                     decode(argv[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error) :
-                     decode_to_new_file(argv[i], suffix, codec, &diag);
+        int result;
+        if (compress)
+            result = encode(argv[i], codec, &encoding, &diag, &output_error);
+        else if (to_stdout || strcmp(argv[i], "-") == 0)
+            result = decode(argv[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
+        else
+            result = decode_to_new_file(argv[i], suffix, codec, &diag);
         if (status < result)
             status = result;
     }
@@ -212,17 +281,25 @@ static int archive_cat(int argc, char** argv, const char* progname,
 }
 
 int bx_bzcat_main(int argc, char** argv) {
-    return archive_cat(argc, argv, "bzcat", bx_archive_codec_bzip2(), NULL);
+    return archive_command(argc, argv, "bzcat", bx_archive_codec_bzip2(), NULL, false);
 }
 
 int bx_xzcat_main(int argc, char** argv) {
-    return archive_cat(argc, argv, "xzcat", bx_archive_codec_xz(), NULL);
+    return archive_command(argc, argv, "xzcat", bx_archive_codec_xz(), NULL, false);
 }
 
 int bx_bunzip2_main(int argc, char** argv) {
-    return archive_cat(argc, argv, "bunzip2", bx_archive_codec_bzip2(), ".bz2");
+    return archive_command(argc, argv, "bunzip2", bx_archive_codec_bzip2(), ".bz2", false);
 }
 
 int bx_unxz_main(int argc, char** argv) {
-    return archive_cat(argc, argv, "unxz", bx_archive_codec_xz(), ".xz");
+    return archive_command(argc, argv, "unxz", bx_archive_codec_xz(), ".xz", false);
+}
+
+int bx_bzip2_main(int argc, char** argv) {
+    return archive_command(argc, argv, "bzip2", bx_archive_codec_bzip2(), ".bz2", true);
+}
+
+int bx_xz_main(int argc, char** argv) {
+    return archive_command(argc, argv, "xz", bx_archive_codec_xz(), ".xz", true);
 }

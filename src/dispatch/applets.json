@@ -1456,6 +1456,18 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "bzip2",
+      "main": "bx_bzip2_main",
+      "capabilities": ["filesystem-read", "filesystem-write", "raw-output"],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "xz",
+      "main": "bx_xz_main",
+      "capabilities": ["filesystem-read", "filesystem-write", "raw-output"],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "cpio",
       "main": "bx_cpio_main",
       "capabilities": [
