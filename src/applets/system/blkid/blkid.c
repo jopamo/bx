@@ -3,6 +3,7 @@
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -12,7 +13,7 @@
 #include "lib/fs_probe.h"
 #include "scan.h"
 
-enum output { FULL, EXPORT, VALUE };
+enum output { FULL, EXPORT, VALUE, DEVICE };
 enum tag { FAT_BOOT_LABEL, LABEL, UUID, BLOCK_SIZE, TYPE, USAGE, TAG_COUNT };
 
 static const char *const tag_names[TAG_COUNT] = {
@@ -21,10 +22,11 @@ static const char *const tag_names[TAG_COUNT] = {
 
 static void usage(FILE *out)
 {
-    fputs("Usage: blkid [-p] [-u filesystem] [-o full|export|value]"
-          " [-s TAG]... [--] [DEVICE...]\n"
+    fputs("Usage: blkid [-p | [-l] -t TAG=value] [-u filesystem]"
+          " [-o full|export|value|device] [-s TAG]... [--] [DEVICE...]\n"
           "Probe block devices or images for FAT and ext filesystems.\n"
-          "With no devices, scan Linux block devices. -p requires a device.\n", out);
+          "With no devices, scan Linux block devices. -p requires a device.\n"
+          "-t matches an exact LABEL or UUID. -l requires one matching path.\n", out);
 }
 
 /* Keep full/export records on one line even for untrusted volume labels
@@ -53,6 +55,11 @@ static bool print_signature(const char *path, const struct bx_fs_signature *fs,
                             unsigned tags, enum output format, bool lowlevel,
                             bool prior_record)
 {
+    if (format == DEVICE) {
+        puts(path);
+        return true;
+    }
+
     char size[16];
     snprintf(size, sizeof(size), "%u", fs->block_size);
     const char *const values[TAG_COUNT] = {
@@ -95,8 +102,33 @@ struct probe_run {
     struct bx_diag_ctx diag;
     enum output format;
     unsigned tags;
-    bool lowlevel, scanning, found, ambiguous, prior_record;
+    const char *match_value;
+    enum tag match_tag;
+    bool list_one, lowlevel, scanning, found, ambiguous, prior_record;
+    bool duplicate, failed;
+    char *first_path;
+    struct bx_fs_signature first_signature;
 };
+
+static bool remember_match(struct probe_run *run, const char *path,
+                           const struct bx_fs_signature *fs)
+{
+    if (run->first_path) {
+        if (strcmp(run->first_path, path) == 0)
+            return true;
+        run->duplicate = true;
+        bx_diag(&run->diag, "multiple matching device paths");
+        return false;
+    }
+    run->first_path = strdup(path);
+    if (!run->first_path) {
+        bx_perror_path(&run->diag, path);
+        run->failed = true;
+        return false;
+    }
+    run->first_signature = *fs;
+    return true;
+}
 
 static bool probe_device(int fd, const char *path, void *ctx)
 {
@@ -106,6 +138,14 @@ static bool probe_device(int fd, const char *path, void *ctx)
     if (match < 0 && !run->scanning)
         bx_perror_path(&run->diag, path);
     if (match == 1) {
+        if (run->match_value) {
+            const char *actual = run->match_tag == LABEL ? fs.label : fs.uuid;
+            if (strcmp(actual, run->match_value) != 0)
+                return true;
+        }
+        if (run->list_one)
+            return remember_match(run, path, &fs);
+
         run->found = true;
         if (print_signature(path, &fs, run->tags, run->format,
                             run->lowlevel, run->prior_record))
@@ -117,6 +157,30 @@ static bool probe_device(int fd, const char *path, void *ctx)
     return !ferror(stdout);
 }
 
+static bool parse_match(struct probe_run *run, const char *token)
+{
+    if (run->match_value) {
+        bx_diag(&run->diag, "only one match token may be specified");
+        return false;
+    }
+    const char *value = strchr(token, '=');
+    if (!value || value == token || !value[1]) {
+        bx_diag(&run->diag, "match token requires a nonempty TAG=value pair");
+        return false;
+    }
+    size_t len = (size_t)(value - token);
+    if (len == 5 && memcmp(token, "LABEL", len) == 0)
+        run->match_tag = LABEL;
+    else if (len == 4 && memcmp(token, "UUID", len) == 0)
+        run->match_tag = UUID;
+    else {
+        bx_diag(&run->diag, "unsupported match tag; expected LABEL or UUID");
+        return false;
+    }
+    run->match_value = value + 1;
+    return true;
+}
+
 int bx_blkid_main(int argc, char **argv)
 {
     static const struct option options[] = {
@@ -125,18 +189,27 @@ int bx_blkid_main(int argc, char **argv)
         {"usages", required_argument, NULL, 'u'},
         {"output", required_argument, NULL, 'o'},
         {"match-tag", required_argument, NULL, 's'},
+        {"match-token", required_argument, NULL, 't'},
+        {"list-one", no_argument, NULL, 'l'},
         {NULL, 0, NULL, 0},
     };
     struct probe_run run = {.diag = {.progname = "blkid"}, .format = FULL};
     bool filtered = false;
     int opt;
-    while ((opt = getopt_long(argc, argv, "+hpu:o:s:", options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "+hlpu:o:s:t:", options, NULL)) != -1) {
         switch (opt) {
         case 'h':
             usage(stdout);
             return 0;
         case 'p':
             run.lowlevel = true;
+            break;
+        case 'l':
+            run.list_one = true;
+            break;
+        case 't':
+            if (!parse_match(&run, optarg))
+                return 4;
             break;
         case 'u':
             if (strcmp(optarg, "filesystem") != 0) {
@@ -151,6 +224,8 @@ int bx_blkid_main(int argc, char **argv)
                 run.format = EXPORT;
             else if (strcmp(optarg, "value") == 0)
                 run.format = VALUE;
+            else if (strcmp(optarg, "device") == 0)
+                run.format = DEVICE;
             else {
                 bx_diag(&run.diag, "unsupported output format: '%s'", optarg);
                 return 4;
@@ -168,7 +243,8 @@ int bx_blkid_main(int argc, char **argv)
         }
     }
     run.scanning = optind == argc;
-    if (run.scanning && run.lowlevel) {
+    if ((run.lowlevel && (run.scanning || run.match_value)) ||
+        (run.list_one && !run.match_value)) {
         usage(stderr);
         return 4;
     }
@@ -177,7 +253,7 @@ int bx_blkid_main(int argc, char **argv)
 
     if (run.scanning && bx_blkid_scan(probe_device, &run) < 0) {
         bx_perror_path(&run.diag, "scan block devices");
-        return 4;
+        run.failed = true;
     }
     for (int i = optind; i < argc; i++) {
         const char *path = argv[i];
@@ -191,9 +267,17 @@ int bx_blkid_main(int argc, char **argv)
         if (!more)
             break;
     }
+    if (run.first_path) {
+        if (!run.duplicate && !run.failed) {
+            run.found = true;
+            print_signature(run.first_path, &run.first_signature, run.tags,
+                            run.format, false, false);
+        }
+        free(run.first_path);
+    }
     if (fflush(stdout) == EOF || ferror(stdout)) {
         bx_perror_path(&run.diag, "standard output");
         return 4;
     }
-    return run.ambiguous ? 8 : run.found ? 0 : 2;
+    return run.failed ? 4 : run.ambiguous ? 8 : run.found ? 0 : 2;
 }
