@@ -32,6 +32,8 @@ static const char* bx_archive_xz_ret_detail(lzma_ret rc) {
             return NULL;
         case LZMA_MEM_ERROR:
             return "memory allocation failed";
+        case LZMA_MEMLIMIT_ERROR:
+            return "decoder memory limit exceeded";
         case LZMA_FORMAT_ERROR:
             return "file format not recognized";
         case LZMA_OPTIONS_ERROR:
@@ -291,8 +293,11 @@ out:
 
 bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
                               size_t thread_count,
+                              uint64_t memory_limit,
                               struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBLZMA
+    if (!memory_limit)
+        memory_limit = UINT64_MAX;
     if (!reader_out || thread_count > UINT32_MAX) {
         bx_diag(diag, "invalid xz reader configuration");
         return false;
@@ -307,8 +312,8 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
         lzma_mt options = {
             .flags = LZMA_CONCATENATED,
             .threads = (uint32_t)thread_count,
-            .memlimit_threading = UINT64_MAX,
-            .memlimit_stop = UINT64_MAX,
+            .memlimit_threading = memory_limit,
+            .memlimit_stop = memory_limit,
         };
         rc = lzma_stream_decoder_mt(&reader->stream, &options);
 #else
@@ -317,7 +322,7 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
         return false;
 #endif
     } else {
-        rc = lzma_stream_decoder(&reader->stream, UINT64_MAX, LZMA_CONCATENATED);
+        rc = lzma_stream_decoder(&reader->stream, memory_limit, LZMA_CONCATENATED);
     }
     if (rc != LZMA_OK) {
         lzma_end(&reader->stream);
@@ -331,6 +336,7 @@ bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
 #else
     (void)reader_out;
     (void)thread_count;
+    (void)memory_limit;
     bx_diag(diag, "xz support is unavailable in this build");
     return false;
 #endif

@@ -42,6 +42,8 @@ struct bx_archive_codec_input {
     bool decoder_end;
     void* codec_reader;
     size_t thread_count;
+    uint64_t xz_memory_limit;
+    int zstd_window_log_max;
     const struct bx_archive_codec* required_codec;
     bool checked_mode;
     bool detect_all;
@@ -440,8 +442,8 @@ static bool bx_archive_codec_bytes_have_magic(const unsigned char* data,
     return data_len >= magic_len && memcmp(data, magic, magic_len) == 0;
 }
 
-static const struct bx_archive_codec* bx_archive_codec_detect_magic(const unsigned char* data,
-                                                                    size_t data_len) {
+const struct bx_archive_codec* bx_archive_codec_detect_magic(const unsigned char* data,
+                                                              size_t data_len) {
     static const unsigned char gzip_magic[] = {0x1f, 0x8b};
     static const unsigned char bzip2_magic[] = {'B', 'Z', 'h'};
     static const unsigned char xz_magic[] = {0xfd, '7', 'z', 'X', 'Z', 0x00};
@@ -487,14 +489,96 @@ static bool bx_archive_codec_input_start_decoder(struct bx_archive_codec_input* 
         input->kind = BX_ARCHIVE_CODEC_INPUT_XZ;
         return bx_archive_xz_reader_open((struct bx_archive_xz_reader**)&input->codec_reader,
                                          input->thread_count,
+                                         input->xz_memory_limit,
                                          diag);
     }
     if (codec == bx_archive_codec_zstd()) {
         input->kind = BX_ARCHIVE_CODEC_INPUT_ZSTD;
-        return bx_archive_zstd_reader_open((struct bx_archive_zstd_reader**)&input->codec_reader, diag);
+        return bx_archive_zstd_reader_open((struct bx_archive_zstd_reader**)&input->codec_reader,
+                                           input->zstd_window_log_max, diag);
     }
     input->kind = BX_ARCHIVE_CODEC_INPUT_GZIP;
     return bx_archive_gzip_reader_open((struct bx_archive_gzip_reader**)&input->codec_reader, diag);
+}
+
+static enum bx_archive_decode_result bx_archive_codec_decode_chunk(struct bx_archive_codec_input* input,
+                                                                   struct bx_archive_decode_chunk* chunk) {
+    if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP)
+        return bx_archive_gzip_reader_decode(input->codec_reader, chunk);
+    if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2)
+        return bx_archive_bzip2_reader_decode(input->codec_reader, chunk);
+    if (input->kind == BX_ARCHIVE_CODEC_INPUT_XZ)
+        return bx_archive_xz_reader_decode(input->codec_reader, chunk);
+    return bx_archive_zstd_reader_decode(input->codec_reader, chunk);
+}
+
+static void bx_archive_codec_close_decoder(struct bx_archive_codec_input* input) {
+    if (input->kind == BX_ARCHIVE_CODEC_INPUT_XZ)
+        bx_archive_xz_reader_close(input->codec_reader);
+    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2)
+        bx_archive_bzip2_reader_close(input->codec_reader);
+    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_ZSTD)
+        bx_archive_zstd_reader_close(input->codec_reader);
+    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP)
+        bx_archive_gzip_reader_close(input->codec_reader);
+}
+
+bool bx_archive_codec_decode_buffer_limited(const struct bx_archive_codec* codec,
+                                            const struct bx_archive_buffer* input,
+                                            struct bx_archive_buffer* output,
+                                            size_t output_limit,
+                                            struct bx_diag_ctx* diag) {
+    if (input->len == 0 || bx_archive_codec_detect_magic(input->data, input->len) != codec ||
+        codec == NULL) {
+        bx_diag(diag, "unexpected compressed input");
+        return false;
+    }
+    struct bx_archive_codec_input decoder = {
+        .xz_memory_limit = UINT64_C(64) << 20,
+        .zstd_window_log_max = 26,
+    };
+    if (!bx_archive_codec_input_start_decoder(&decoder, codec, diag))
+        return false;
+    bool success = false;
+    unsigned char buffer[8192];
+    size_t pos = 0;
+    for (;;) {
+        struct bx_archive_decode_chunk chunk = {
+            .input = input->data + pos,
+            .input_size = input->len - pos,
+            .output = buffer,
+            .output_size = sizeof(buffer),
+            .input_eof = true,
+        };
+        enum bx_archive_decode_result rc = bx_archive_codec_decode_chunk(&decoder, &chunk);
+        if (rc == BX_ARCHIVE_DECODE_ERROR) {
+            bx_diag(diag, "%s decompression failed: %s", bx_archive_codec_name(codec),
+                    chunk.error_detail ? chunk.error_detail : "invalid input");
+            break;
+        }
+        pos += chunk.input_used;
+        if (output->len > output_limit || chunk.output_used > output_limit - output->len) {
+            bx_diag(diag, "%s decoded data exceeds the size limit", bx_archive_codec_name(codec));
+            break;
+        }
+        if (!bx_archive_buffer_append(output, buffer, chunk.output_used)) {
+            bx_diag(diag, "cannot buffer decoded data: %s", strerror(errno));
+            break;
+        }
+        if (rc == BX_ARCHIVE_DECODE_END) {
+            if (pos == input->len)
+                success = true;
+            else
+                bx_diag(diag, "%s compressed data has trailing bytes", bx_archive_codec_name(codec));
+            break;
+        }
+        if (!chunk.input_used && !chunk.output_used) {
+            bx_diag(diag, "%s decompression made no progress", bx_archive_codec_name(codec));
+            break;
+        }
+    }
+    bx_archive_codec_close_decoder(&decoder);
+    return success;
 }
 
 static bool bx_archive_codec_input_check_mode(struct bx_archive_codec_input* input, struct bx_diag_ctx* diag) {
@@ -624,15 +708,7 @@ static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* i
             .output_size = len > sizeof(input->decode_buffer) ? sizeof(input->decode_buffer) : len,
             .input_eof = input->source_eof,
         };
-        enum bx_archive_decode_result result;
-        if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP)
-            result = bx_archive_gzip_reader_decode(input->codec_reader, &chunk);
-        else if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2)
-            result = bx_archive_bzip2_reader_decode(input->codec_reader, &chunk);
-        else if (input->kind == BX_ARCHIVE_CODEC_INPUT_XZ)
-            result = bx_archive_xz_reader_decode(input->codec_reader, &chunk);
-        else
-            result = bx_archive_zstd_reader_decode(input->codec_reader, &chunk);
+        enum bx_archive_decode_result result = bx_archive_codec_decode_chunk(input, &chunk);
         if (bx_archive_temp_pending_signal()) {
             errno = EINTR;
             bx_diag(diag, "read error: %s", strerror(errno));
@@ -824,18 +900,7 @@ void bx_archive_codec_input_close(struct bx_archive_codec_input* input) {
     if (input == NULL) {
         return;
     }
-    if (input->kind == BX_ARCHIVE_CODEC_INPUT_XZ) {
-        bx_archive_xz_reader_close((struct bx_archive_xz_reader*)input->codec_reader);
-    }
-    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2) {
-        bx_archive_bzip2_reader_close((struct bx_archive_bzip2_reader*)input->codec_reader);
-    }
-    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_ZSTD) {
-        bx_archive_zstd_reader_close((struct bx_archive_zstd_reader*)input->codec_reader);
-    }
-    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_GZIP) {
-        bx_archive_gzip_reader_close(input->codec_reader);
-    }
+    bx_archive_codec_close_decoder(input);
     bx_fd_input_close(&input->source);
     free(input);
 }

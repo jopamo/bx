@@ -335,7 +335,8 @@ out:
 #endif
 }
 
-bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out, struct bx_diag_ctx* diag) {
+bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out, int window_log_max,
+                                struct bx_diag_ctx* diag) {
 #if BX_HAVE_LIBZSTD
     if (!reader_out) {
         bx_diag(diag, "invalid zstd reader configuration");
@@ -355,10 +356,19 @@ bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out, str
         bx_archive_zstd_diag_failed("decompression", (size_t)-1, "decoder initialization failed", diag);
         return false;
     }
+    if (window_log_max) {
+        size_t rc = ZSTD_DCtx_setParameter(reader->stream, ZSTD_d_windowLogMax, window_log_max);
+        if (ZSTD_isError(rc)) {
+            bx_archive_zstd_reader_close(reader);
+            bx_archive_zstd_diag_failed("decompression", rc, "failed to set window limit", diag);
+            return false;
+        }
+    }
     *reader_out = reader;
     return true;
 #else
     (void)reader_out;
+    (void)window_log_max;
     bx_diag(diag, "zstd support is unavailable in this build");
     return false;
 #endif

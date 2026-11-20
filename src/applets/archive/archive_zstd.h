@@ -29,7 +29,8 @@ bool bx_archive_run_zstd_filter_stream(bx_archive_zstd_stream_producer_fn produc
                                        int level,
                                        struct bx_diag_ctx* diag);
 
-bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out, struct bx_diag_ctx* diag);
+bool bx_archive_zstd_reader_open(struct bx_archive_zstd_reader** reader_out, int window_log_max,
+                                struct bx_diag_ctx* diag);
 enum bx_archive_decode_result bx_archive_zstd_reader_decode(struct bx_archive_zstd_reader* reader, struct bx_archive_decode_chunk* chunk);
 void bx_archive_zstd_reader_close(struct bx_archive_zstd_reader* reader);
 

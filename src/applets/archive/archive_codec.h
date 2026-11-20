@@ -57,6 +57,7 @@ bool bx_archive_codec_supports_mt_encode(const struct bx_archive_codec* codec);
 bool bx_archive_codec_matches_path_suffix(const struct bx_archive_codec* codec, const char* path);
 const struct bx_archive_codec* bx_archive_codec_detect_path_suffix(const char* path);
 bool bx_archive_codec_detect_fd(int fd, const struct bx_archive_codec** codec_out);
+const struct bx_archive_codec* bx_archive_codec_detect_magic(const unsigned char* data, size_t len);
 
 bool bx_archive_codec_encode_buffer(const struct bx_archive_codec* codec,
                                     const struct bx_archive_buffer* input,
@@ -66,6 +67,13 @@ bool bx_archive_codec_decode_buffer(const struct bx_archive_codec* codec,
                                     const struct bx_archive_buffer* input,
                                     struct bx_archive_buffer* output,
                                     struct bx_diag_ctx* diag);
+/* Require complete compressed input and bound output, XZ memory and Zstd window.
+ * On failure the caller still owns the (possibly partially filled) output. */
+bool bx_archive_codec_decode_buffer_limited(const struct bx_archive_codec* codec,
+                                            const struct bx_archive_buffer* input,
+                                            struct bx_archive_buffer* output,
+                                            size_t output_limit,
+                                            struct bx_diag_ctx* diag);
 
 bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
                                         const struct bx_archive_codec_encode_options* options,

@@ -7,7 +7,7 @@
 
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s [-F FIELD] [--] FILE...\n"
-                 "Print metadata from explicit, uncompressed Linux module files.\n", name);
+                 "Print metadata from Linux module files (plain, gzip, xz, or zstd).\n", name);
 }
 
 #ifdef __linux__
@@ -15,9 +15,12 @@ static void usage(FILE* out, const char* name) {
 #include <stdlib.h>
 #include <string.h>
 
+#include "applets/archive/archive_codec.h"
 #include "lib/fd_ops.h"
 #include "lib/xreadwrite.h"
 #include "module_elf.h"
+
+enum { MODULE_SIZE_LIMIT = 128 * 1024 * 1024 };
 
 static unsigned char* read_module(const char* path, size_t* size) {
     int fd = bx_fd_open_cloexec(path, O_RDONLY | O_NONBLOCK, 0);
@@ -27,8 +30,8 @@ static unsigned char* read_module(const char* path, size_t* size) {
     struct stat st;
     if (fstat(fd, &st) < 0)
         goto fail;
-    if (!S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > 128 * 1024 * 1024) {
-        errno = st.st_size > 128 * 1024 * 1024 ? EFBIG : EINVAL;
+    if (!S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > MODULE_SIZE_LIMIT) {
+        errno = st.st_size > MODULE_SIZE_LIMIT ? EFBIG : EINVAL;
         goto fail;
     }
     *size = (size_t)st.st_size;
@@ -119,8 +122,24 @@ int bx_modinfo_main(int argc, char** argv) {
             status = 1;
             continue;
         }
-        if (!bx_module_elf_info(file, size, &data, &len)) {
-            bx_diag(&diag, "'%s': expected an uncompressed ELF module with valid .modinfo", argv[i]);
+        const struct bx_archive_codec* codec = bx_archive_codec_detect_magic(file, size);
+        struct bx_archive_buffer decoded = {0};
+        bool ready = true;
+        if (codec == bx_archive_codec_bzip2()) {
+            bx_diag(&diag, "'%s': unsupported module compression", argv[i]);
+            ready = false;
+        } else if (codec != NULL) {
+            struct bx_archive_buffer input = {.data = file, .len = size};
+            ready = bx_archive_codec_decode_buffer_limited(codec, &input, &decoded,
+                                                          MODULE_SIZE_LIMIT, &diag);
+            free(file);
+            file = decoded.data;
+            size = decoded.len;
+        }
+        if (!ready) {
+            status = 1;
+        } else if (!bx_module_elf_info(file, size, &data, &len)) {
+            bx_diag(&diag, "'%s': expected an ELF module with valid .modinfo", argv[i]);
             status = 1;
         } else if (!print_info(argv[i], data, len, field) || fflush(stdout) == EOF) {
             bx_perror_path(&diag, "standard output");

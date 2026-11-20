@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "applets/archive/archive_common.h"
 #include "applets/archive/archive_decode.h"
@@ -32,6 +33,7 @@ bool bx_archive_run_xz_filter_stream(bx_archive_xz_stream_producer_fn producer,
 
 bool bx_archive_xz_reader_open(struct bx_archive_xz_reader** reader_out,
                               size_t thread_count,
+                              uint64_t memory_limit,
                               struct bx_diag_ctx* diag);
 enum bx_archive_decode_result bx_archive_xz_reader_decode(struct bx_archive_xz_reader* reader, struct bx_archive_decode_chunk* chunk);
 void bx_archive_xz_reader_close(struct bx_archive_xz_reader* reader);
