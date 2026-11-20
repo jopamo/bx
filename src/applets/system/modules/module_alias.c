@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { ALIAS_LIMIT = 1024, MATCH_LIMIT = 65536, SEARCH_BUDGET = 32 * 1024 * 1024 };
+enum { MATCH_LIMIT = 65536, SEARCH_BUDGET = 32 * 1024 * 1024 };
 
 struct bx_module_alias_match {
     struct bx_module_path name;
@@ -22,8 +22,11 @@ static char normalized(char c) {
 }
 
 bool bx_module_alias_query_valid(const char* query) {
-    size_t len = strlen(query);
-    if (len == 0 || len > ALIAS_LIMIT)
+    return bx_module_alias_span_valid(query, strlen(query));
+}
+
+bool bx_module_alias_span_valid(const char* query, size_t len) {
+    if (len == 0 || len > BX_MODULE_ALIAS_LIMIT)
         return false;
     for (size_t i = 0; i < len; i++) {
         if (!alias_byte(query[i]))
@@ -66,7 +69,7 @@ static bool class_matches(const struct atom* atom, char byte) {
 }
 
 static int parse_pattern(struct bx_module_path pattern, struct atom* atoms, size_t* count) {
-    if (pattern.len == 0 || pattern.len > ALIAS_LIMIT)
+    if (pattern.len == 0 || pattern.len > BX_MODULE_ALIAS_LIMIT)
         goto invalid;
     const char* end = pattern.text + pattern.len;
     for (const char* p = pattern.text; p < end; p++) {
@@ -111,7 +114,7 @@ invalid:
 }
 
 static int match_pattern(const char* query, struct bx_module_path pattern, size_t* budget) {
-    struct atom atoms[ALIAS_LIMIT];
+    struct atom atoms[BX_MODULE_ALIAS_LIMIT];
     size_t n;
     if (parse_pattern(pattern, atoms, &n) < 0)
         return -1;
@@ -247,29 +250,21 @@ static int by_order(const void* a, const void* b) {
     return (left->order > right->order) - (left->order < right->order);
 }
 
-static int compare_names(struct bx_module_path a, struct bx_module_path b) {
-    if (a.len != b.len)
-        return (a.len > b.len) - (a.len < b.len);
-    for (size_t i = 0; i < a.len; i++) {
-        int r = normalized(a.text[i]) - normalized(b.text[i]);
-        if (r != 0)
-            return r;
-    }
-    return 0;
-}
-
 static int by_name(const void* a, const void* b) {
     const struct bx_module_alias_match* left = a;
     const struct bx_module_alias_match* right = b;
-    int r = compare_names(left->name, right->name);
+    int r = bx_module_name_cmp(left->name, right->name);
     return r != 0 ? r : by_order(a, b);
 }
 
 static int exact_match(const char* name, struct bx_module_aliases* aliases) {
-    struct bx_module_alias_match* match = malloc(sizeof(*match));
+    size_t len = strlen(name);
+    struct bx_module_alias_match* match = malloc(sizeof(*match) + len);
     if (match == NULL)
         return -1;
-    *match = (struct bx_module_alias_match) {{name, strlen(name)}, 0};
+    char* copy = (char*)(match + 1);
+    memcpy(copy, name, len);
+    *match = (struct bx_module_alias_match) {{copy, len}, 0};
     *aliases = (struct bx_module_aliases) {match, 1};
     return 0;
 }
@@ -298,7 +293,7 @@ int bx_module_resolve_alias(struct bx_module_tree* tree, const char* query,
     qsort(result.matches, result.count, sizeof(*result.matches), by_name);
     size_t unique = 1;
     for (size_t i = 1; i < result.count; i++) {
-        if (compare_names(result.matches[unique - 1].name, result.matches[i].name) != 0)
+        if (bx_module_name_cmp(result.matches[unique - 1].name, result.matches[i].name) != 0)
             result.matches[unique++] = result.matches[i];
     }
     qsort(result.matches, unique, sizeof(*result.matches), by_order);

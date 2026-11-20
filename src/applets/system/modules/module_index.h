@@ -19,6 +19,7 @@ struct bx_module_tree {
     struct bx_module_index builtins;
     struct bx_module_index info;
     struct bx_module_index aliases;
+    struct bx_module_index softdeps;
 };
 
 struct bx_module_path {
@@ -40,6 +41,7 @@ struct bx_module_dep_iter {
 bool bx_module_name_valid(const char* name);
 bool bx_module_name_matches(const char* name, const char* key, size_t len);
 bool bx_module_name_span_valid(const char* name, size_t len);
+int bx_module_name_cmp(struct bx_module_path a, struct bx_module_path b);
 bool bx_module_release_valid(const char* release);
 char* bx_module_read_regular(int fd, size_t limit, size_t* size);
 
@@ -57,9 +59,12 @@ struct bx_module_path bx_module_path_name(struct bx_module_path path, bool compr
 /* Dependency records borrow their text from the tree. next returns 1, 0 at EOF, or -1. */
 int bx_module_tree_deps(struct bx_module_tree* tree, struct bx_module_dep_iter* iter);
 int bx_module_dep_next(struct bx_module_dep_iter* iter, struct bx_module_dep* record);
+int bx_module_tree_builtins(struct bx_module_tree* tree, struct bx_module_dep_iter* iter);
+bool bx_module_builtin_next(struct bx_module_dep_iter* iter, struct bx_module_path* path);
 /* Return borrowed, validated module.key=value records (NUL-delimited). */
 int bx_module_tree_builtin_info(struct bx_module_tree* tree, const char** data, size_t* size);
 int bx_module_tree_aliases(struct bx_module_tree* tree, const char** data, size_t* size);
+int bx_module_tree_softdeps(struct bx_module_tree* tree, const char** data, size_t* size);
 #endif
 
 #endif

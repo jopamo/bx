@@ -36,13 +36,20 @@ bool bx_module_name_span_valid(const char* name, size_t len) {
 }
 
 bool bx_module_name_matches(const char* name, const char* key, size_t len) {
-    if (strlen(name) != len)
-        return false;
-    for (size_t i = 0; i < len; i++) {
-        if ((name[i] == '-' ? '_' : name[i]) != (key[i] == '-' ? '_' : key[i]))
-            return false;
+    return bx_module_name_cmp((struct bx_module_path) {name, strlen(name)},
+                              (struct bx_module_path) {key, len}) == 0;
+}
+
+int bx_module_name_cmp(struct bx_module_path a, struct bx_module_path b) {
+    if (a.len != b.len)
+        return (a.len > b.len) - (a.len < b.len);
+    for (size_t i = 0; i < a.len; i++) {
+        int ca = a.text[i] == '-' ? '_' : a.text[i];
+        int cb = b.text[i] == '-' ? '_' : b.text[i];
+        if (ca != cb)
+            return ca - cb;
     }
-    return true;
+    return 0;
 }
 
 bool bx_module_release_valid(const char* release) {
@@ -119,6 +126,7 @@ void bx_module_tree_close(struct bx_module_tree* tree) {
     free(tree->builtins.data);
     free(tree->info.data);
     free(tree->aliases.data);
+    free(tree->softdeps.data);
 }
 
 int bx_module_tree_open_file(const struct bx_module_tree* tree, const char* path, int flags) {
@@ -285,23 +293,35 @@ int bx_module_tree_find_loadable(struct bx_module_tree* tree, const char* name, 
     return r;
 }
 
-int bx_module_tree_has_builtin(struct bx_module_tree* tree, const char* name) {
+int bx_module_tree_builtins(struct bx_module_tree* tree, struct bx_module_dep_iter* iter) {
     int r = load_index(tree, &tree->builtins, "modules.builtin", false);
     if (r < 0)
         return -1;
-    if (r > 0) {
-        const char* data = tree->builtins.data;
-        struct bx_module_dep_iter iter = {data, data + tree->builtins.size};
-        const char* p;
-        const char* end;
-        while (next_line(&iter, &p, &end)) {
-            size_t len = (size_t)(end - p);
-            if (module_path_matches(name, (struct bx_module_path) {p, len}, false)) {
-                if (bx_module_path_valid(p, len))
-                    return 1;
-                errno = EINVAL;
-                return -1;
-            }
+    const char* data = r == 0 ? "" : tree->builtins.data;
+    *iter = (struct bx_module_dep_iter) {data, data + tree->builtins.size};
+    return 0;
+}
+
+bool bx_module_builtin_next(struct bx_module_dep_iter* iter, struct bx_module_path* path) {
+    const char* p;
+    const char* end;
+    if (!next_line(iter, &p, &end))
+        return false;
+    *path = (struct bx_module_path) {p, (size_t)(end - p)};
+    return true;
+}
+
+int bx_module_tree_has_builtin(struct bx_module_tree* tree, const char* name) {
+    struct bx_module_dep_iter iter;
+    if (bx_module_tree_builtins(tree, &iter) < 0)
+        return -1;
+    struct bx_module_path path;
+    while (bx_module_builtin_next(&iter, &path)) {
+        if (module_path_matches(name, path, false)) {
+            if (bx_module_path_valid(path.text, path.len))
+                return 1;
+            errno = EINVAL;
+            return -1;
         }
     }
     return 0;
@@ -334,5 +354,9 @@ int bx_module_tree_builtin_info(struct bx_module_tree* tree, const char** data, 
 
 int bx_module_tree_aliases(struct bx_module_tree* tree, const char** data, size_t* size) {
     return index_contents(tree, &tree->aliases, "modules.alias", false, data, size);
+}
+
+int bx_module_tree_softdeps(struct bx_module_tree* tree, const char** data, size_t* size) {
+    return index_contents(tree, &tree->softdeps, "modules.softdep", false, data, size);
 }
 #endif

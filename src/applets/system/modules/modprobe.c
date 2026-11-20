@@ -8,7 +8,7 @@
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE\n"
                  "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
-                 "Show hard dependencies or resolve aliases from installed module metadata.\n"
+                 "Show dependencies or resolve aliases from installed module metadata.\n"
                  "Does not load modules or read modprobe configuration.\n", name, name);
 }
 
@@ -127,13 +127,13 @@ int bx_modprobe_main(int argc, char** argv) {
         goto out;
     }
     bool printed = true;
-    if (plan.builtin)
-        printed = print_name("builtin ", name, strlen(name));
     for (size_t i = 0; printed && i < plan.count; i++) {
-        struct bx_module_path path = plan.files[i];
-        printed = printf("insmod %s/%.*s\n", tree.path, (int)path.len, path.text) >= 0;
+        struct bx_module_step step = plan.steps[i];
+        struct bx_module_path target = step.target;
+        printed = step.builtin ? print_name("builtin ", target.text, target.len)
+                               : printf("insmod %s/%.*s\n", tree.path, (int)target.len, target.text) >= 0;
     }
-    free(plan.files);
+    free(plan.steps);
     if (!printed || fflush(stdout) == EOF)
         bx_perror_path(&diag, "standard output");
     else
