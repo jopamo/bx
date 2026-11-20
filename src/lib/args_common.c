@@ -77,8 +77,22 @@ int bx_args_getopt_long(
 int bx_args_getopt_long_interspersed(int argc, char* argv[], const char* short_options,
                                     const struct option* long_options, int* next_operand) {
     int option;
-    while ((option = bx_args_getopt_long(argc, argv, short_options, long_options, NULL)) == 1)
-        argv[(*next_operand)++] = optarg;
+    for (;;) {
+        int previous_optind = optind;
+        option = bx_args_getopt_long(argc, argv, short_options, long_options, NULL);
+        if (option == 1) {
+            argv[(*next_operand)++] = optarg;
+        }
+        else if (option == -1 && optind == previous_optind && optind < argc
+                 && strcmp(argv[optind], "-") == 0) {
+            /* musl stops at a lone '-' even in return-in-order mode.
+             * A real '--' advances optind, so its tail stays literal. */
+            argv[(*next_operand)++] = argv[optind++];
+        }
+        else {
+            break;
+        }
+    }
     if (option == -1) {
         int tail = argc - optind;
         memmove(argv + *next_operand, argv + optind, (size_t)tail * sizeof(*argv));

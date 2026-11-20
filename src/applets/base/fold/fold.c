@@ -16,6 +16,11 @@
 #include "lib/args_common.h"
 #include "lib/line_writer.h"
 
+enum {
+    BX_FOLD_OPT_HELP = 256,
+    BX_FOLD_OPT_VERSION,
+};
+
 struct bx_fold_options {
     const char* progname;
     size_t width;
@@ -40,8 +45,12 @@ static void bx_fold_print_help(FILE* stream, const char* progname) {
 
 static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"bytes", no_argument, NULL, 'b'}, {"spaces", no_argument, NULL, 's'}, {"width", required_argument, NULL, 'w'},
-        {"help", no_argument, NULL, 1},    {"version", no_argument, NULL, 2},  {NULL, 0, NULL, 0},
+        {"bytes", no_argument, NULL, 'b'},
+        {"spaces", no_argument, NULL, 's'},
+        {"width", required_argument, NULL, 'w'},
+        {"help", no_argument, NULL, BX_FOLD_OPT_HELP},
+        {"version", no_argument, NULL, BX_FOLD_OPT_VERSION},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -50,10 +59,10 @@ static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options*
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "bsw:", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-bsw:", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -71,10 +80,10 @@ static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options*
                     return false;
                 }
                 break;
-            case 1:
+            case BX_FOLD_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_FOLD_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

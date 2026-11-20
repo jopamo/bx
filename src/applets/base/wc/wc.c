@@ -234,7 +234,8 @@ int bx_wc_main(int argc, char** argv) {
     bool opt_c = false, opt_m = false, opt_l = false, opt_w = false, opt_L = false;
     int c;
     bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "cmwlL", long_options, NULL)) != -1) {
+    int next_operand = 1;
+    while ((c = bx_args_getopt_long_interspersed(argc, argv, "-cmwlL", long_options, &next_operand)) != -1) {
         switch (c) {
             case 'c':
                 opt_c = true;

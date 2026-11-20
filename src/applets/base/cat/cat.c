@@ -14,6 +14,11 @@
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
 
+enum {
+    BX_CAT_OPT_HELP = 256,
+    BX_CAT_OPT_VERSION,
+};
+
 struct bx_cat_options {
     const char* progname;
     bool show_nonprinting;
@@ -247,8 +252,8 @@ static bool bx_cat_parse_options(int argc, char** argv, struct bx_cat_options* o
         {"squeeze-blank", no_argument, NULL, 's'},
         {"show-tabs", no_argument, NULL, 'T'},
         {"show-nonprinting", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_CAT_OPT_HELP},
+        {"version", no_argument, NULL, BX_CAT_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -256,10 +261,10 @@ static bool bx_cat_parse_options(int argc, char** argv, struct bx_cat_options* o
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "cat");
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "AbeEnstTuv", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-AbeEnstTuv", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -298,10 +303,10 @@ static bool bx_cat_parse_options(int argc, char** argv, struct bx_cat_options* o
             case 'v':
                 options->show_nonprinting = true;
                 break;
-            case 1:
+            case BX_CAT_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_CAT_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

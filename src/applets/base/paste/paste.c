@@ -15,6 +15,11 @@
 #include "lib/args_common.h"
 #include "lib/line_writer.h"
 
+enum {
+    BX_PASTE_OPT_HELP = 256,
+    BX_PASTE_OPT_VERSION,
+};
+
 struct bx_paste_options {
     const char* progname;
     int* delimiters;
@@ -118,8 +123,8 @@ static enum bx_paste_parse_status bx_paste_parse_options(
         {"delimiters", required_argument, NULL, 'd'},
         {"serial", no_argument, NULL, 's'},
         {"zero-terminated", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_PASTE_OPT_HELP},
+        {"version", no_argument, NULL, BX_PASTE_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -129,10 +134,10 @@ static enum bx_paste_parse_status bx_paste_parse_options(
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "d:sz", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-d:sz", long_options, &next_operand);
         if (c == -1)
             break;
 
@@ -146,10 +151,10 @@ static enum bx_paste_parse_status bx_paste_parse_options(
             case 'z':
                 options->zero_terminated = true;
                 break;
-            case 1:
+            case BX_PASTE_OPT_HELP:
                 options->show_help = true;
                 return BX_PASTE_PARSE_OK;
-            case 2:
+            case BX_PASTE_OPT_VERSION:
                 options->show_version = true;
                 return BX_PASTE_PARSE_OK;
             case '?':
