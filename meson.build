@@ -246,6 +246,7 @@ acl_dep = dependency('libacl', static : use_static_binary)
 libcurl_dep = dependency('libcurl', static : use_static_binary)
 fetch_native_html_dep = dependency(
   'liblexa-html-candidate',
+  version : '>=0.1.0',
   required : true,
   static : use_static_binary,
 )
