@@ -51,6 +51,17 @@ struct elf_layout {
     bool big_endian;
 };
 
+struct elf_sections {
+    struct elf_layout layout;
+    const unsigned char* file;
+    size_t size;
+    const unsigned char* table;
+    size_t section_size;
+    size_t count;
+    const unsigned char* names;
+    size_t names_size;
+};
+
 static uint64_t elf_number(const struct elf_layout* elf, const unsigned char* field, size_t width) {
     uint64_t number = 0;
     for (size_t i = 0; i < width; i++)
@@ -85,7 +96,7 @@ static bool metadata_records_valid(const char* data, size_t len) {
     return true;
 }
 
-bool bx_module_elf_info(const unsigned char* file, size_t size, const char** data, size_t* length) {
+static bool elf_sections_read(const unsigned char* file, size_t size, struct elf_sections* sections) {
     if (size < EI_NIDENT || memcmp(file, ELFMAG, SELFMAG) != 0 ||
         (file[EI_CLASS] != ELFCLASS32 && file[EI_CLASS] != ELFCLASS64) ||
         (file[EI_DATA] != ELFDATA2LSB && file[EI_DATA] != ELFDATA2MSB) ||
@@ -125,30 +136,105 @@ bool bx_module_elf_info(const unsigned char* file, size_t size, const char** dat
     if (names[0] != '\0' || names[strsize - 1] != '\0')
         return false;
 
+    for (size_t i = 1; i < (size_t)entries; i++)
+        if (ELF_FIELD(&elf, table + i * shsize, Shdr, sh_name) >= strsize)
+            return false;
+    *sections = (struct elf_sections){
+        .layout = elf, .file = file, .size = size, .table = table,
+        .section_size = shsize, .count = (size_t)entries,
+        .names = names, .names_size = (size_t)strsize,
+    };
+    return true;
+}
+
+static const unsigned char* elf_section_bytes(const struct elf_sections* sections,
+                                              const unsigned char* header, size_t* size) {
+    uint64_t start = ELF_FIELD(&sections->layout, header, Shdr, sh_offset);
+    uint64_t len = ELF_FIELD(&sections->layout, header, Shdr, sh_size);
+    if ((ELF_FIELD(&sections->layout, header, Shdr, sh_flags) & SHF_COMPRESSED) ||
+        start > sections->size || len > sections->size - (size_t)start)
+        return NULL;
+    *size = (size_t)len;
+    return sections->file + (size_t)start;
+}
+
+bool bx_module_elf_info(const unsigned char* file, size_t size, const char** data, size_t* length) {
+    struct elf_sections sections;
+    if (!elf_sections_read(file, size, &sections))
+        return false;
     static const char section[] = ".modinfo";
     const char* result = NULL;
     size_t result_len = 0;
-    for (size_t i = 1; i < (size_t)entries; i++) {
-        const unsigned char* sh = table + i * shsize;
-        uint64_t name = ELF_FIELD(&elf, sh, Shdr, sh_name);
-        if (name >= strsize)
-            return false;
-        if (strsize - name < sizeof(section) ||
-            memcmp(names + (size_t)name, section, sizeof(section)) != 0)
+    for (size_t i = 1; i < sections.count; i++) {
+        const unsigned char* sh = sections.table + i * sections.section_size;
+        size_t name = (size_t)ELF_FIELD(&sections.layout, sh, Shdr, sh_name);
+        if (sections.names_size - name < sizeof(section) ||
+            memcmp(sections.names + name, section, sizeof(section)) != 0)
             continue;
-        uint64_t start = ELF_FIELD(&elf, sh, Shdr, sh_offset);
-        uint64_t len = ELF_FIELD(&elf, sh, Shdr, sh_size);
-        if (result != NULL || ELF_FIELD(&elf, sh, Shdr, sh_type) != SHT_PROGBITS ||
-            (ELF_FIELD(&elf, sh, Shdr, sh_flags) & SHF_COMPRESSED) ||
-            start > size || len == 0 || len > size - (size_t)start)
+        if (result != NULL || ELF_FIELD(&sections.layout, sh, Shdr, sh_type) != SHT_PROGBITS)
             return false;
-        result = (const char*)file + (size_t)start;
-        result_len = (size_t)len;
+        result = (const char*)elf_section_bytes(&sections, sh, &result_len);
+        if (result == NULL || result_len == 0)
+            return false;
     }
     if (result == NULL || !metadata_records_valid(result, result_len))
         return false;
     *data = result;
     *length = result_len;
+    return true;
+}
+
+bool bx_module_elf_undefined(const unsigned char* file, size_t size,
+                             bx_module_elf_undefined_fn visit, void* user) {
+    enum { SYMBOLS_MAX = 262144, SYMBOL_NAME_MAX = 4096 };
+    struct elf_sections sections;
+    if (!visit || !elf_sections_read(file, size, &sections))
+        return false;
+    const struct elf_layout* elf = &sections.layout;
+    const unsigned char* header = NULL;
+    for (size_t i = 1; i < sections.count; i++) {
+        const unsigned char* sh = sections.table + i * sections.section_size;
+        if (ELF_FIELD(elf, sh, Shdr, sh_type) == SHT_SYMTAB) {
+            if (header != NULL)
+                return false;
+            header = sh;
+        }
+    }
+    const size_t symsize = elf->wide ? sizeof(Elf64_Sym) : sizeof(Elf32_Sym);
+    if (!header || ELF_FIELD(elf, header, Shdr, sh_entsize) != symsize)
+        return false;
+    size_t sym_bytes;
+    const unsigned char* symbols = elf_section_bytes(&sections, header, &sym_bytes);
+    if (!symbols || sym_bytes < symsize || sym_bytes % symsize != 0 ||
+        sym_bytes / symsize > SYMBOLS_MAX)
+        return false;
+    uint64_t link = ELF_FIELD(elf, header, Shdr, sh_link);
+    if (link == SHN_UNDEF || link >= sections.count)
+        return false;
+    const unsigned char* strings_header = sections.table + (size_t)link * sections.section_size;
+    if (ELF_FIELD(elf, strings_header, Shdr, sh_type) != SHT_STRTAB)
+        return false;
+    size_t names_size;
+    const unsigned char* names = elf_section_bytes(&sections, strings_header, &names_size);
+    if (!names || names_size == 0 || names[0] != '\0' || names[names_size - 1] != '\0')
+        return false;
+    for (size_t offset = symsize; offset < sym_bytes; offset += symsize) {
+        const unsigned char* sym = symbols + offset;
+        uint64_t name = ELF_FIELD(elf, sym, Sym, st_name);
+        uint64_t section = ELF_FIELD(elf, sym, Sym, st_shndx);
+        if (name >= names_size || (section < SHN_LORESERVE && section >= sections.count))
+            return false;
+        unsigned binding = ELF64_ST_BIND(ELF_FIELD(elf, sym, Sym, st_info));
+        if (section != SHN_UNDEF || (binding != STB_GLOBAL && binding != STB_WEAK))
+            continue;
+        const unsigned char* start = names + (size_t)name;
+        size_t available = names_size - (size_t)name;
+        const unsigned char* end = memchr(start, '\0',
+            available > SYMBOL_NAME_MAX + 1u ? SYMBOL_NAME_MAX + 1u : available);
+        if (!end || end == start ||
+            !visit((const char*)start, (size_t)(end - start), binding == STB_WEAK, user))
+            return false;
+    }
     return true;
 }
 #endif
