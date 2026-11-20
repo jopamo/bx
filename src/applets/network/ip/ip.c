@@ -3,7 +3,8 @@
 #include "bx/diag.h"
 
 static void ip_help(FILE* out) {
-    fputs("usage: ip link set [dev] IFACE {up|down}\n"
+    fputs("usage: ip {l|link} [show [dev IFACE]]\n"
+          "       ip link set [dev] IFACE {up|down}\n"
           "       ip [-4] {a|addr|address} [show [dev IFACE]]\n"
           "       ip [-4] {addr|address} {replace|del} IPV4/PREFIX dev IFACE\n"
           "       ip [-4] {r|route} [show [dev IFACE]]\n"
@@ -56,9 +57,7 @@ static int ip_apply(void* request, const char* action, const char* interface, st
     return 1;
 }
 
-static int ip_link(int argc, char** argv, struct bx_diag_ctx* diag) {
-    if (argc < 1 || strcmp(argv[0], "set") != 0)
-        return ip_usage(diag);
+static int ip_set_link(int argc, char** argv, struct bx_diag_ctx* diag) {
     if (argc == 4 && strcmp(argv[1], "dev") == 0) {
         argc--;
         argv++;
@@ -205,6 +204,72 @@ static int ip_show(void* request, unsigned short type, int (*record)(const struc
         return 1;
     }
     return 0;
+}
+
+static int ip_link_record(const struct nlmsghdr* header, void* context) {
+    unsigned int selected = *(const unsigned int*)context;
+    struct ifinfomsg link;
+    const size_t offset = NLMSG_LENGTH(sizeof(link));
+    if (header->nlmsg_len < offset)
+        goto invalid;
+    const unsigned char* data = (const void*)header;
+    memcpy(&link, data + NLMSG_HDRLEN, sizeof(link));
+    if (link.ifi_index <= 0)
+        goto invalid;
+    if (selected && selected != (unsigned int)link.ifi_index)
+        return 0;
+
+    const unsigned char* cursor = data + offset;
+    size_t left = header->nlmsg_len - offset;
+    const char* name = NULL;
+    uint32_t mtu = 0;
+    bool has_mtu = false;
+    int carrier = -1;
+    while (left) {
+        struct rtattr attr;
+        const unsigned char* value;
+        if (!bx_rtnl_next_attr(&cursor, &left, &attr, &value))
+            return -1;
+        if (attr.rta_type == IFLA_IFNAME) {
+            size_t len = attr.rta_len - RTA_LENGTH(0);
+            if (name || len < 2 || len > IF_NAMESIZE || memchr(value, '\0', len) != value + len - 1)
+                goto invalid;
+            name = (const char*)value;
+        } else if (attr.rta_type == IFLA_MTU) {
+            if (has_mtu || attr.rta_len != RTA_LENGTH(sizeof(mtu)))
+                goto invalid;
+            has_mtu = true;
+            memcpy(&mtu, value, sizeof(mtu));
+        } else if (attr.rta_type == IFLA_CARRIER) {
+            if (carrier >= 0 || attr.rta_len != RTA_LENGTH(1) || *value > 1)
+                goto invalid;
+            carrier = *value;
+        }
+    }
+    if (!name || !has_mtu)
+        goto invalid;
+    return printf("%d: %s mtu %u admin %s carrier %s\n", link.ifi_index, name, (unsigned int)mtu,
+                  link.ifi_flags & IFF_UP ? "up" : "down",
+                  carrier < 0 ? "unknown" : carrier ? "up" : "down") < 0 ? -1 : 0;
+invalid:
+    errno = EPROTO;
+    return -1;
+}
+
+static int ip_link(int argc, char** argv, struct bx_diag_ctx* diag) {
+    if (argc && strcmp(argv[0], "set") == 0)
+        return ip_set_link(argc, argv, diag);
+    unsigned int index;
+    if (ip_show_index(argc, argv, &index, diag))
+        return 1;
+    struct {
+        struct nlmsghdr header;
+        struct ifinfomsg link;
+    } request = {
+        .header = {.nlmsg_len = NLMSG_LENGTH(sizeof(request.link)), .nlmsg_type = RTM_GETLINK},
+        .link = {.ifi_family = AF_UNSPEC},
+    };
+    return ip_show(&request, RTM_NEWLINK, ip_link_record, index, "link dump", diag);
 }
 
 static int ip_show_addresses(int argc, char** argv, struct bx_diag_ctx* diag) {
@@ -406,7 +471,7 @@ int bx_ip_main(int argc, char** argv) {
         argv++;
     }
     if (argc >= 2) {
-        if (strcmp(argv[1], "link") == 0)
+        if (strcmp(argv[1], "l") == 0 || strcmp(argv[1], "link") == 0)
             return ip_link(argc - 2, argv + 2, &diag);
         if (strcmp(argv[1], "a") == 0 || strcmp(argv[1], "addr") == 0 || strcmp(argv[1], "address") == 0)
             return ip_address(argc - 2, argv + 2, &diag);
