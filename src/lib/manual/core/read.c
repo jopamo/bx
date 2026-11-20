@@ -506,7 +506,8 @@ read_compressed_file(int fd, const struct bx_archive_codec *codec, struct buf *f
 	fb->buf = NULL;
 	retval = -1;
 
-	if ( ! bx_archive_codec_input_open_fd(&input, fd, codec, &diag)) {
+	struct bx_archive_codec_input_options options = { .required_codec = codec };
+	if ( ! bx_archive_codec_input_open_fd(&input, fd, &options, &diag)) {
 		mandoc_msg(MANDOCERR_OPEN, 0, 0, "%s",
 		    capture.message != NULL ? capture.message :
 		    "failed to initialize compressed manual page reader");

@@ -95,7 +95,7 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
                                  struct bx_diag_ctx* diag);
 bool bx_archive_codec_input_open_fd(struct bx_archive_codec_input** input_out,
                                     int fd,
-                                    const struct bx_archive_codec* required_codec,
+                                    const struct bx_archive_codec_input_options* options,
                                     struct bx_diag_ctx* diag);
 bool bx_archive_codec_input_read_some(struct bx_archive_codec_input* input,
                                       unsigned char* buffer,

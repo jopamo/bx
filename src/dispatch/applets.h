@@ -160,6 +160,8 @@ int bx_ping_main(int argc, char** argv);
 int bx_tar_main(int argc, char** argv);
 int bx_bzcat_main(int argc, char** argv);
 int bx_xzcat_main(int argc, char** argv);
+int bx_bunzip2_main(int argc, char** argv);
+int bx_unxz_main(int argc, char** argv);
 int bx_cpio_main(int argc, char** argv);
 int bx_zip_main(int argc, char** argv);
 int bx_unzip_main(int argc, char** argv);

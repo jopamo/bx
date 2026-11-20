@@ -611,10 +611,7 @@ static bool bx_archive_codec_input_check_mode(struct bx_archive_codec_input* inp
 static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** input_out,
                                                int fd,
                                                enum bx_fd_input_ownership ownership,
-                                               const struct bx_archive_codec* required_codec,
-                                               enum bx_archive_codec_seek_mode seek_mode,
-                                               size_t thread_count,
-                                               uint64_t xz_memory_limit,
+                                               const struct bx_archive_codec_input_options* options,
                                                struct bx_diag_ctx* diag) {
     struct bx_archive_codec_input* input;
 
@@ -624,12 +621,13 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
     }
 
     *input_out = NULL;
+    const struct bx_archive_codec* required_codec = options->required_codec;
     input = xmalloc(sizeof(*input));
     memset(input, 0, sizeof(*input));
     input->source = (struct bx_fd_input)BX_FD_INPUT_INIT;
-    input->force_seek = seek_mode == BX_ARCHIVE_CODEC_SEEK_FORCE;
-    input->thread_count = thread_count;
-    input->xz_memory_limit = xz_memory_limit;
+    input->force_seek = options->seek_mode == BX_ARCHIVE_CODEC_SEEK_FORCE;
+    input->thread_count = options->thread_count;
+    input->xz_memory_limit = options->xz_memory_limit;
     if (bx_fd_input_init(&input->source, fd, ownership) != 0) {
         int error = errno;
         if (ownership == BX_FD_INPUT_OWNED)
@@ -645,7 +643,7 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
         off_t offset = lseek(fd, 0, SEEK_CUR);
         input->detect_all = required_codec == NULL;
         if (offset >= 0 && offset <= st.st_size) {
-            input->plain_seekable = seek_mode != BX_ARCHIVE_CODEC_SEEK_DISABLE;
+            input->plain_seekable = options->seek_mode != BX_ARCHIVE_CODEC_SEEK_DISABLE;
             input->plain_size = (uint64_t)(st.st_size - offset);
         }
     }
@@ -663,13 +661,13 @@ static bool bx_archive_codec_input_open_source(struct bx_archive_codec_input** i
 
 bool bx_archive_codec_input_open_fd(struct bx_archive_codec_input** input_out,
                                     int fd,
-                                    const struct bx_archive_codec* required_codec,
+                                    const struct bx_archive_codec_input_options* options,
                                     struct bx_diag_ctx* diag) {
-    if (input_out == NULL || fd < 0) {
+    if (input_out == NULL || fd < 0 || options == NULL) {
         bx_diag(diag, "invalid archive codec reader configuration");
         return false;
     }
-    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_DUPLICATE_BORROWED, required_codec, BX_ARCHIVE_CODEC_SEEK_AUTO, 0u, 0u, diag);
+    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_DUPLICATE_BORROWED, options, diag);
 }
 
 bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
@@ -683,7 +681,7 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
     }
 
     if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
-        return bx_archive_codec_input_open_source(input_out, STDIN_FILENO, BX_FD_INPUT_DUPLICATE_BORROWED, options->required_codec, options->seek_mode, options->thread_count, options->xz_memory_limit, diag);
+        return bx_archive_codec_input_open_source(input_out, STDIN_FILENO, BX_FD_INPUT_DUPLICATE_BORROWED, options, diag);
     }
     else {
         fd = bx_fd_open_cloexec(options->archive_path, O_RDONLY, 0);
@@ -693,7 +691,7 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
         }
     }
 
-    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_OWNED, options->required_codec, options->seek_mode, options->thread_count, options->xz_memory_limit, diag);
+    return bx_archive_codec_input_open_source(input_out, fd, BX_FD_INPUT_OWNED, options, diag);
 }
 
 static bool bx_archive_codec_input_read_decoded(struct bx_archive_codec_input* input, unsigned char* buffer, size_t len, size_t* nread_out, struct bx_diag_ctx* diag) {

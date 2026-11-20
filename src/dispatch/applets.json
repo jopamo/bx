@@ -1444,6 +1444,18 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "bunzip2",
+      "main": "bx_bunzip2_main",
+      "capabilities": ["filesystem-read", "filesystem-write", "raw-output"],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "unxz",
+      "main": "bx_unxz_main",
+      "capabilities": ["filesystem-read", "filesystem-write", "raw-output"],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "cpio",
       "main": "bx_cpio_main",
       "capabilities": [

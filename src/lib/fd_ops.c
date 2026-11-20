@@ -474,6 +474,10 @@ int bx_fd_open_anonymous_file_at(int dirfd) {
     return bx_fd_openat_cloexec(dirfd, ".", O_TMPFILE | O_RDWR, 0600);
 }
 
+int bx_fd_publish_anonymous_file_at(int fd, int dirfd, const char* name) {
+    return linkat(fd, "", dirfd, name, AT_EMPTY_PATH);
+}
+
 int bx_fd_openat_cloexec(int dirfd, const char* path, int flags, mode_t mode) {
     int fd;
 
