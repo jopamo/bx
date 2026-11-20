@@ -95,26 +95,26 @@ enum bx_ls_quoting_style {
 };
 
 enum bx_ls_option_code {
-    BX_LS_OPT_HELP = 1,
-    BX_LS_OPT_VERSION = 2,
-    BX_LS_OPT_FORMAT = 3,
-    BX_LS_OPT_COLOR = 4,
-    BX_LS_OPT_SI = 5,
-    BX_LS_OPT_AUTHOR = 6,
-    BX_LS_OPT_BLOCK_SIZE = 7,
-    BX_LS_OPT_FULL_TIME = 8,
-    BX_LS_OPT_GROUP_DIRECTORIES_FIRST = 9,
-    BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR = 10,
-    BX_LS_OPT_HIDE = 11,
-    BX_LS_OPT_HYPERLINK = 12,
-    BX_LS_OPT_INDICATOR_STYLE = 13,
-    BX_LS_OPT_SHOW_CONTROL_CHARS = 14,
-    BX_LS_OPT_QUOTING_STYLE = 15,
-    BX_LS_OPT_SORT = 16,
-    BX_LS_OPT_TIME = 17,
-    BX_LS_OPT_TIME_STYLE = 18,
-    BX_LS_OPT_ZERO = 19,
-    BX_LS_OPT_FILE_TYPE = 20,
+    BX_LS_OPT_HELP = 256,
+    BX_LS_OPT_VERSION,
+    BX_LS_OPT_FORMAT,
+    BX_LS_OPT_COLOR,
+    BX_LS_OPT_SI,
+    BX_LS_OPT_AUTHOR,
+    BX_LS_OPT_BLOCK_SIZE,
+    BX_LS_OPT_FULL_TIME,
+    BX_LS_OPT_GROUP_DIRECTORIES_FIRST,
+    BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR,
+    BX_LS_OPT_HIDE,
+    BX_LS_OPT_HYPERLINK,
+    BX_LS_OPT_INDICATOR_STYLE,
+    BX_LS_OPT_SHOW_CONTROL_CHARS,
+    BX_LS_OPT_QUOTING_STYLE,
+    BX_LS_OPT_SORT,
+    BX_LS_OPT_TIME,
+    BX_LS_OPT_TIME_STYLE,
+    BX_LS_OPT_ZERO,
+    BX_LS_OPT_FILE_TYPE,
 };
 
 enum bx_ls_color_when {
@@ -996,13 +996,14 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
     unsigned long option_order = 0u;
     unsigned long explicit_sort_order = 0u;
     unsigned long short_time_sort_order = 0u;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+1ABCDfFGHI:kLNQRST:UXZabcdghilmnopqrstuvw:x", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(
+            argc, argv, "-1ABCDfFGHI:kLNQRST:UXZabcdghilmnopqrstuvw:x", long_options, &next_operand);
         if (c == -1) {
             break;
         }
