@@ -2995,7 +2995,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCefinpPsuvx] "
+            "Usage: %s [--standalone-applets] [-aCefilnpPsuvx] "
             "[-o option-name] [-c command] [script [arg ...]]\n",
             progname
         );
@@ -3035,12 +3035,12 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -C           prevent output redirection from replacing files\n");
     fprintf(stream, "  -f           disable pathname expansion\n");
     fprintf(stream, "  -i           force interactive mode\n");
+    fprintf(stream, "  -l           make the shell a login shell\n");
     fprintf(stream, "  -n           parse without execution (ignored when interactive)\n");
     fprintf(stream, "  -p           enable privileged mode\n");
     fprintf(stream, "  -P           use physical directory paths by default\n");
     fprintf(stream, "  -s           read commands from stdin\n");
     if (strcmp(progname, "bash") == 0) {
-        fprintf(stream, "  -l           make the shell a login shell\n");
         fprintf(stream, "  -t           exit after one top-level input unit\n");
     }
     fprintf(stream, "  -e           exit on unsuppressed command failure\n");

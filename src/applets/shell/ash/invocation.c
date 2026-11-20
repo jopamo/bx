@@ -150,7 +150,7 @@ static bool ash_invocation_apply_short(
             candidate->force_interactive = enabled;
             return true;
         case 'l':
-            if (strcmp(candidate->progname, "bash") == 0) {
+            if (enabled || strcmp(candidate->progname, "bash") == 0) {
                 candidate->login_shell = true;
                 return true;
             }

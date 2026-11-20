@@ -53,8 +53,7 @@ static bool ash_startup_should_read_profiles(
     const struct ash_shell* shell,
     const struct ash_startup_request* request
 ) {
-    return ash_shell_policy_is_bash(&shell->policy) &&
-        ash_shell_policy_allows_startup(&shell->policy) &&
+    return ash_shell_policy_allows_startup(&shell->policy) &&
         ash_shell_policy_has(
             &shell->policy,
             ASH_SHELL_POLICY_LOGIN
@@ -166,7 +165,9 @@ static enum ash_startup_outcome ash_startup_execute_profiles(
         return ash_startup_file_outcome(result);
     }
 
-    for (size_t i = 0u;
+    size_t first = ash_shell_policy_is_bash(&shell->policy) ? 0u :
+        sizeof(ash_home_profiles) / sizeof(ash_home_profiles[0]) - 1u;
+    for (size_t i = first;
          i < sizeof(ash_home_profiles) / sizeof(ash_home_profiles[0]);
          i++) {
         char* path = ash_startup_expand_path(
