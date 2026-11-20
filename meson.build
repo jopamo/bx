@@ -632,6 +632,7 @@ bx_base_applet_sources = [
   'src/applets/base/seq/seq.c',
   'src/applets/base/sha1sum/sha1sum.c',
   'src/applets/base/sha256sum/sha256sum.c',
+  'src/applets/base/sha512sum/sha512sum.c',
   'src/applets/base/shred/shred.c',
   'src/applets/base/shuf/shuf.c',
   'src/applets/base/sleep/sleep.c',

@@ -1271,6 +1271,12 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "sha512sum",
+      "main": "bx_sha512sum_main",
+      "capabilities": ["filesystem-read"],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "base64",
       "main": "bx_base64_main",
       "capabilities": [
