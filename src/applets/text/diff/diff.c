@@ -19,11 +19,16 @@
 #include "lib/text_buffer.h"
 
 /* Bound the input and per-line memory of the interactive editor's engine. */
-enum { DIFF_BYTES_MAX = 8 * 1024 * 1024, DIFF_LINES_MAX = 100000 };
+enum {
+    DIFF_BYTES_MAX = 8 * 1024 * 1024,
+    DIFF_LINES_MAX = 100000,
+    DIFF_MINIMAL_LINES_MAX = 4096,
+};
 
 static void usage(FILE* stream) {
-    fputs("Usage: diff [-u | -U LINES] [--] FILE1 FILE2\n"
+    fputs("Usage: diff [-d] [-u | -U LINES] [--] FILE1 FILE2\n"
           "Compare two files in unified format (default: three context lines).\n"
+          "-d (or --minimal) performs a minimal comparison, limited to 4096 text lines.\n"
           "One operand may be '-' for standard input. Directories are not supported.\n"
           "Limits per input: 8 MiB and 100000 text lines.\n", stream);
 }
@@ -72,7 +77,7 @@ static bool read_input(const char* path, struct bx_text_buffer* data, struct bx_
     return success;
 }
 
-static bool within_line_limit(const struct bx_text_buffer* data) {
+static bool within_line_limit(const struct bx_text_buffer* data, size_t limit) {
     size_t lines = data->length != 0 && data->data[data->length - 1] != '\n';
     const char* next = data->data;
     size_t remaining = data->length;
@@ -80,7 +85,7 @@ static bool within_line_limit(const struct bx_text_buffer* data) {
         const char* found = memchr(next, '\n', remaining);
         if (!found)
             break;
-        if (++lines > DIFF_LINES_MAX)
+        if (++lines > limit)
             return false;
         remaining -= (size_t)(found - next) + 1u;
         next = found + 1;
@@ -123,14 +128,19 @@ int bx_diff_main(int argc, char** argv) {
     struct bx_diag_ctx diag = {.progname = "diff"};
     static const struct option options[] = {
         {"help", no_argument, NULL, 'h'},
+        {"minimal", no_argument, NULL, 'd'},
         {"unified", required_argument, NULL, 'U'},
         {NULL, 0, NULL, 0},
     };
     int opt, operand = 1;
     size_t context = 3;
+    bool minimal = false;
     bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:huU:", options, &operand)) != -1) {
+    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:dhuU:", options, &operand)) != -1) {
         switch (opt) {
+        case 'd':
+            minimal = true;
+            break;
         case 'h':
             usage(stdout);
             return 0;
@@ -163,6 +173,8 @@ int bx_diff_main(int argc, char** argv) {
     char* left_label = NULL;
     char* right_label = NULL;
     int status = 2;
+    // Minimal search skips xdiff's early cutoffs, so it needs a lower line cap.
+    size_t line_limit = minimal ? DIFF_MINIMAL_LINES_MAX : DIFF_LINES_MAX;
     if (!read_input(left, &a, &diag) || !read_input(right, &b, &diag))
         goto done;
     if (a.length == b.length && (!a.length || memcmp(a.data, b.data, a.length) == 0)) {
@@ -180,14 +192,14 @@ int bx_diff_main(int argc, char** argv) {
         if (printf("Binary files %s and %s differ\n", left_label, right_label) >= 0)
             status = 1;
     }
-    else if (!within_line_limit(&a) || !within_line_limit(&b)) {
-        bx_diag(&diag, "input exceeds 100000 text lines");
+    else if (!within_line_limit(&a, line_limit) || !within_line_limit(&b, line_limit)) {
+        bx_diag(&diag, "input exceeds %zu text lines", line_limit);
         goto done;
     }
     else {
         mmfile_t old = {.ptr = a.data ? a.data : "", .size = (long)a.length};
         mmfile_t new = {.ptr = b.data ? b.data : "", .size = (long)b.length};
-        xpparam_t params = {0};
+        xpparam_t params = {.flags = minimal ? XDF_NEED_MINIMAL : 0};
         xdemitconf_t config = {.ctxlen = (long)context};
         struct diff_output output = {.left = left_label, .right = right_label};
         xdemitcb_t callbacks = {.priv = &output, .out_line = emit_lines};
