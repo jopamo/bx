@@ -142,7 +142,7 @@ int bx_signal_pending_take(struct bx_signal_pending* pending, int* number) {
     return 0;
 }
 
-int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd) {
+int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd, const struct timespec* timeout) {
     if (fd < 0) {
         errno = EBADF;
         return -1;
@@ -162,8 +162,12 @@ int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd) {
         }
     }
     struct pollfd input = {.fd = fd, .events = POLLIN};
-    if (error == 0 && ppoll(&input, 1, NULL, pending != NULL ? &original_mask : NULL) < 0)
-        error = errno;
+    int ready = 0;
+    if (error == 0) {
+        ready = ppoll(&input, 1, timeout, pending != NULL ? &original_mask : NULL);
+        if (ready < 0)
+            error = errno;
+    }
     if (error == 0 && (input.revents & POLLNVAL) != 0)
         error = EBADF;
     if (pending != NULL && sigprocmask(SIG_SETMASK, &original_mask, NULL) < 0) {
@@ -175,7 +179,7 @@ int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd) {
         errno = error;
         return -1;
     }
-    return 0;
+    return ready == 0;
 }
 
 static void bx_signal_pending_child_notification(int number) {

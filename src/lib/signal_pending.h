@@ -3,6 +3,7 @@
 
 #include <signal.h>
 #include <sys/types.h>
+#include <time.h>
 
 struct bx_signal_pending;
 
@@ -27,7 +28,8 @@ int bx_signal_pending_take(struct bx_signal_pending* pending, int* number);
  */
 int bx_signal_pending_wait_child(struct bx_signal_pending* pending, pid_t pid, int* number);
 /* Wait for readable input, returning -1/EINTR for a caught signal without consuming it. */
-int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd);
+/* Return 1 on timeout, 0 when readable or at EOF, -1 on error. */
+int bx_signal_pending_wait_readable(struct bx_signal_pending* pending, int fd, const struct timespec* timeout);
 /* Call only after the fork boundary has reset caught kernel dispositions. */
 void bx_signal_pending_detach_after_fork(struct bx_signal_pending* pending);
 

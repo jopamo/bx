@@ -281,7 +281,7 @@ static int ash_input_execute_current(
             extending_logical_input ?
                 &physical_line :
                 &logical_input;
-        if (prompt && ash_trap_signal_wait_readable(shell, fileno(shell->input_stack->source.file.stream)) < 0) {
+        if (prompt && ash_trap_signal_wait_readable(shell, fileno(shell->input_stack->source.file.stream), NULL) < 0) {
             if (errno == EINTR) {
                 char* action = NULL;
                 if (ash_trap_signal_prepare(shell, &action)) {

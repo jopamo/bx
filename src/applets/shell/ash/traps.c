@@ -338,10 +338,10 @@ int ash_trap_signal_wait_child(struct ash_shell* shell, pid_t pid, int* number) 
     return result < 0 && errno == ENOTSUP ? 0 : result;
 }
 
-int ash_trap_signal_wait_readable(struct ash_shell* shell, int fd) {
+int ash_trap_signal_wait_readable(struct ash_shell* shell, int fd, const struct timespec* timeout) {
     assert(ash_traps_invariants(shell));
     struct ash_trap_table* table = shell->traps;
-    return bx_signal_pending_wait_readable(table == NULL || table->signal_running || table->signals == NULL ? NULL : table->signals->pending, fd);
+    return bx_signal_pending_wait_readable(table == NULL || table->signal_running || table->signals == NULL ? NULL : table->signals->pending, fd, timeout);
 }
 
 void ash_traps_detach_after_fork(struct ash_shell* shell) {

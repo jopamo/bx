@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <sys/types.h>
+#include <time.h>
 
 struct ash_shell;
 struct ash_signal_traps;
@@ -38,7 +39,7 @@ int ash_trap_signal_set(struct ash_shell* shell, int number, const char* action)
 bool ash_trap_signal_prepare(struct ash_shell* shell, char** action);
 void ash_trap_signal_finish(struct ash_shell* shell);
 int ash_trap_signal_wait_child(struct ash_shell* shell, pid_t pid, int* number);
-int ash_trap_signal_wait_readable(struct ash_shell* shell, int fd);
+int ash_trap_signal_wait_readable(struct ash_shell* shell, int fd, const struct timespec* timeout);
 void ash_traps_detach_after_fork(struct ash_shell* shell);
 void ash_traps_destroy(struct ash_shell* shell);
 

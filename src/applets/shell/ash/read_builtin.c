@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -10,6 +11,7 @@
 #include "applets/shell/ash/traps.h"
 #include "applets/shell/ash/variables.h"
 #include "lib/text_buffer.h"
+#include "lib/time_parse.h"
 
 struct ash_read_line {
     struct bx_text_buffer text;
@@ -56,27 +58,43 @@ static bool ash_read_field(const struct ash_read_line* line, size_t* cursor, siz
     return true;
 }
 
-static int ash_read_input(struct ash_shell* shell, struct ash_read_line* line, bool raw) {
+static int ash_read_input(struct ash_shell* shell, struct ash_read_line* line, bool raw, char delimiter,
+                          const struct timespec* deadline) {
     bool escaped = false;
     for (;;) {
         /* Do not read ahead into the next command when stdin also holds the script. */
         char byte;
-        if (ash_trap_signal_wait_readable(shell, STDIN_FILENO) < 0)
+        struct timespec remaining;
+        if (deadline != NULL) {
+            struct timespec now;
+            if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+                return -1;
+            if (!bx_time_timespec_remaining(deadline, &now, &remaining)) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            if (remaining.tv_sec == 0 && remaining.tv_nsec == 0)
+                return 128 + SIGALRM;
+        }
+        int wait = ash_trap_signal_wait_readable(shell, STDIN_FILENO, deadline ? &remaining : NULL);
+        if (wait < 0)
             return -1;
+        if (wait > 0)
+            return 128 + SIGALRM;
         ssize_t count = read(STDIN_FILENO, &byte, 1u);
         if (count < 0)
             return -1;
         if (count == 0)
             return 1;
+        if (!escaped && byte == delimiter)
+            return 0;
         if (byte == '\0')
             continue;
         if (!raw && !escaped && byte == '\\') {
             escaped = true;
             continue;
         }
-        if (byte == '\n') {
-            if (!escaped)
-                return 0;
+        if (escaped && byte == '\n') {
             escaped = false;
             continue;
         }
@@ -88,6 +106,9 @@ static int ash_read_input(struct ash_shell* shell, struct ash_read_line* line, b
 
 int ash_read_builtin(struct ash_shell* shell, const struct ash_command* command) {
     bool raw = false;
+    char delimiter = '\n';
+    bool timed = false;
+    uint64_t timeout_ns = 0u;
     size_t index = 1u;
     for (; index < command->word_count; index++) {
         const char* option = command->words[index];
@@ -98,16 +119,63 @@ int ash_read_builtin(struct ash_shell* shell, const struct ash_command* command)
         if (option[0] != '-' || option[1] == '\0')
             break;
         for (size_t i = 1u; option[i]; i++) {
-            if (option[i] != 'r') {
-                ash_diag(shell, "read: usage: read [-r] [--] [NAME...]");
+            if (option[i] == 'r') {
+                raw = true;
+            }
+            else if (option[i] == 'd' || option[i] == 't') {
+                const char* value = option[i + 1u] ? option + i + 1u :
+                    ++index < command->word_count ? command->words[index] : NULL;
+                if (value == NULL) {
+                    ash_diag(shell, "read: -%c requires an argument", option[i]);
+                    return 2;
+                }
+                if (option[i] == 'd') {
+                    delimiter = value[0];
+                }
+                else {
+                    struct bx_time_duration_parse_result parsed;
+                    struct timespec duration;
+                    if (strspn(value, "0123456789.") != strlen(value) ||
+                        !bx_time_parse_duration_seconds(value, NULL, &parsed) ||
+                        !bx_time_seconds_to_timespec(parsed.seconds, &duration) ||
+                        !bx_time_timespec_to_nanoseconds_u64(&duration, &timeout_ns)) {
+                        ash_diag(shell, "read: invalid timeout '%s'", value);
+                        return 2;
+                    }
+                    if (parsed.seconds > 0.0 && timeout_ns == 0u)
+                        timeout_ns = 1u;
+                    timed = true;
+                }
+                break;
+            }
+            else {
+                ash_diag(shell, "read: usage: read [-r] [-d DELIM] [-t SECONDS] [--] [NAME...]");
                 return 2;
             }
-            raw = true;
         }
     }
     for (size_t i = index; i < command->word_count; i++) {
         if (!ash_is_valid_name_span(command->words[i], strlen(command->words[i]))) {
             ash_diag(shell, "read: invalid name '%s'", command->words[i]);
+            return 2;
+        }
+    }
+    struct timespec deadline;
+    if (timed) {
+        if (timeout_ns == 0u) {
+            const struct timespec immediate = {0};
+            int wait = ash_trap_signal_wait_readable(shell, STDIN_FILENO, &immediate);
+            if (wait < 0 && errno != EINTR)
+                ash_exec_error(shell, "read", errno);
+            return wait == 0 ? 0 : 1;
+        }
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            ash_exec_error(shell, "read: clock", errno);
+            return 1;
+        }
+        if (!bx_time_timespec_add_nanoseconds(&now, timeout_ns, &deadline)) {
+            ash_diag(shell, "read: timeout exceeds clock range");
             return 2;
         }
     }
@@ -121,7 +189,7 @@ int ash_read_builtin(struct ash_shell* shell, const struct ash_command* command)
         goto done;
     }
     line.ifs_length = strlen(line.ifs);
-    status = ash_read_input(shell, &line, raw);
+    status = ash_read_input(shell, &line, raw, delimiter, timed ? &deadline : NULL);
     if (status < 0) {
         if (errno != EINTR)
             ash_exec_error(shell, "read", errno);
@@ -147,7 +215,8 @@ int ash_read_builtin(struct ash_shell* shell, const struct ash_command* command)
     }
     for (size_t i = 0u; i < (count != 0u ? count : 1u); i++) {
         const char* name = count != 0u ? command->words[index + i] : "REPLY";
-        if (!ash_var_builtin_assignment_allowed(shell, name, strlen(name)) || !ash_var_set_caller(shell, name, values[i], false))
+        if ((!ash_var_builtin_assignment_allowed(shell, name, strlen(name)) ||
+             !ash_var_set_caller(shell, name, values[i], false)) && status == 0)
             status = 1;
     }
 done:
