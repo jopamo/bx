@@ -1112,6 +1112,15 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "blockdev",
+      "main": "bx_blockdev_main",
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "losetup",
       "main": "bx_losetup_main",
       "capabilities": [
