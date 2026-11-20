@@ -61,6 +61,8 @@ enum cksum_longopt {
     CKSUM_OPT_UNTAGGED,
     CKSUM_OPT_WARN,
     CKSUM_OPT_ZERO,
+    CKSUM_OPT_HELP,
+    CKSUM_OPT_VERSION,
 };
 
 enum cksum_algorithm_parse_status {
@@ -267,8 +269,8 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
         {"untagged", no_argument, NULL, CKSUM_OPT_UNTAGGED},
         {"warn", no_argument, NULL, CKSUM_OPT_WARN},
         {"zero", no_argument, NULL, CKSUM_OPT_ZERO},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, CKSUM_OPT_HELP},
+        {"version", no_argument, NULL, CKSUM_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -278,9 +280,10 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
     options->output_mode = CKSUM_OUTPUT_AUTO;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+:a:cl:wz", long_options, NULL);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-:a:cl:wz", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -350,10 +353,10 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
             case CKSUM_OPT_ZERO:
                 options->zero_terminated = true;
                 break;
-            case 1:
+            case CKSUM_OPT_HELP:
                 options->show_help = true;
                 break;
-            case 2:
+            case CKSUM_OPT_VERSION:
                 options->show_version = true;
                 break;
             case ':':

@@ -14,6 +14,15 @@
 #include "lib/args_common.h"
 #include "lib/line_writer.h"
 
+enum {
+    BX_COMM_OPT_CHECK_ORDER = 256,
+    BX_COMM_OPT_NOCHECK_ORDER,
+    BX_COMM_OPT_OUTPUT_DELIMITER,
+    BX_COMM_OPT_TOTAL,
+    BX_COMM_OPT_HELP,
+    BX_COMM_OPT_VERSION,
+};
+
 struct bx_comm_options {
     const char* progname;
     bool suppress_1;
@@ -60,13 +69,13 @@ static void bx_comm_print_help(FILE* stream, const char* progname) {
 
 static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"check-order", no_argument, NULL, 1},
-        {"nocheck-order", no_argument, NULL, 2},
-        {"output-delimiter", required_argument, NULL, 3},
-        {"total", no_argument, NULL, 4},
+        {"check-order", no_argument, NULL, BX_COMM_OPT_CHECK_ORDER},
+        {"nocheck-order", no_argument, NULL, BX_COMM_OPT_NOCHECK_ORDER},
+        {"output-delimiter", required_argument, NULL, BX_COMM_OPT_OUTPUT_DELIMITER},
+        {"total", no_argument, NULL, BX_COMM_OPT_TOTAL},
         {"zero-terminated", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 5},
-        {"version", no_argument, NULL, 6},
+        {"help", no_argument, NULL, BX_COMM_OPT_HELP},
+        {"version", no_argument, NULL, BX_COMM_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -76,10 +85,10 @@ static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options*
     diag->progname = options->progname;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+123z", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-123z", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -97,24 +106,24 @@ static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options*
             case 'z':
                 options->zero_terminated = true;
                 break;
-            case 1:
+            case BX_COMM_OPT_CHECK_ORDER:
                 options->check_order = true;
                 options->no_check_order = false;
                 break;
-            case 2:
+            case BX_COMM_OPT_NOCHECK_ORDER:
                 options->no_check_order = true;
                 options->check_order = false;
                 break;
-            case 3:
+            case BX_COMM_OPT_OUTPUT_DELIMITER:
                 options->output_delimiter = optarg;
                 break;
-            case 4:
+            case BX_COMM_OPT_TOTAL:
                 options->total = true;
                 break;
-            case 5:
+            case BX_COMM_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 6:
+            case BX_COMM_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

@@ -21,6 +21,13 @@
 
 enum cut_mode { CUT_MODE_BYTES, CUT_MODE_CHARS, CUT_MODE_FIELDS, CUT_MODE_NONE };
 
+enum {
+    BX_CUT_OPT_COMPLEMENT = 256,
+    BX_CUT_OPT_OUTPUT_DELIMITER,
+    BX_CUT_OPT_HELP,
+    BX_CUT_OPT_VERSION,
+};
+
 struct range {
     size_t start;
     size_t end;
@@ -214,12 +221,12 @@ static bool bx_cut_parse_options(int argc, char** argv, struct bx_cut_options* o
         {"characters", required_argument, NULL, 'c'},
         {"delimiter", required_argument, NULL, 'd'},
         {"fields", required_argument, NULL, 'f'},
-        {"complement", no_argument, NULL, 1},
+        {"complement", no_argument, NULL, BX_CUT_OPT_COMPLEMENT},
         {"only-delimited", no_argument, NULL, 's'},
-        {"output-delimiter", required_argument, NULL, 2},
+        {"output-delimiter", required_argument, NULL, BX_CUT_OPT_OUTPUT_DELIMITER},
         {"zero-terminated", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 3},
-        {"version", no_argument, NULL, 4},
+        {"help", no_argument, NULL, BX_CUT_OPT_HELP},
+        {"version", no_argument, NULL, BX_CUT_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -232,10 +239,10 @@ static bool bx_cut_parse_options(int argc, char** argv, struct bx_cut_options* o
     const char* list_str = NULL;
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+b:c:d:f:nsz", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-b:c:d:f:nsz", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -280,16 +287,16 @@ static bool bx_cut_parse_options(int argc, char** argv, struct bx_cut_options* o
             case 'z':
                 options->zero_terminated = true;
                 break;
-            case 1:
+            case BX_CUT_OPT_COMPLEMENT:
                 options->complement = true;
                 break;
-            case 2:
+            case BX_CUT_OPT_OUTPUT_DELIMITER:
                 options->output_delimiter = optarg;
                 break;
-            case 3:
+            case BX_CUT_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 4:
+            case BX_CUT_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':

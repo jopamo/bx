@@ -20,6 +20,11 @@ enum {
     BASE64_EXIT_USAGE = 2,
 };
 
+enum {
+    BASE64_OPT_HELP = 256,
+    BASE64_OPT_VERSION,
+};
+
 struct base64_options {
     const char* progname;
     bool decode;
@@ -119,8 +124,12 @@ static bool base64_parse_wrap_cols(const char* text, size_t* out_cols) {
 
 static bool base64_parse_options(int argc, char** argv, struct base64_options* options) {
     static const struct option long_options[] = {
-        {"decode", no_argument, NULL, 'd'}, {"ignore-garbage", no_argument, NULL, 'i'}, {"wrap", required_argument, NULL, 'w'},
-        {"help", no_argument, NULL, 1},     {"version", no_argument, NULL, 2},          {NULL, 0, NULL, 0},
+        {"decode", no_argument, NULL, 'd'},
+        {"ignore-garbage", no_argument, NULL, 'i'},
+        {"wrap", required_argument, NULL, 'w'},
+        {"help", no_argument, NULL, BASE64_OPT_HELP},
+        {"version", no_argument, NULL, BASE64_OPT_VERSION},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -129,10 +138,10 @@ static bool base64_parse_options(int argc, char** argv, struct base64_options* o
     options->input_path = "-";
 
     bx_args_getopt_reset();
+    int next_operand = 1;
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+:diw:", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, "-:diw:", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -150,10 +159,10 @@ static bool base64_parse_options(int argc, char** argv, struct base64_options* o
                     return false;
                 }
                 break;
-            case 1:
+            case BASE64_OPT_HELP:
                 options->show_help = true;
                 break;
-            case 2:
+            case BASE64_OPT_VERSION:
                 options->show_version = true;
                 break;
             case ':':
