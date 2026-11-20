@@ -11,9 +11,9 @@ static void usage(FILE* out, const char* name) {
                  "       %s --write-bx-index [-ae] -F SYSTEM_MAP -b ROOT RELEASE\n"
                  "       %s --show-bx-aliases [-b ROOT] [RELEASE]\n"
                  "       %s --show-bx-softdeps [-b ROOT] [RELEASE]\n"
-                 "Print dependencies with -n, create a new modules.dep without clobbering,\n"
-                 "or print loadable-module aliases or soft dependencies from ELF metadata.\n",
-                 name, name, name, name);
+                 "       %s (--write-bx-aliases | --write-bx-softdeps) -b ROOT RELEASE\n"
+                 "Each write mode creates one BX text index without replacing any entry.\n",
+                 name, name, name, name, name);
 }
 
 #ifdef __linux__
@@ -393,18 +393,18 @@ done:
     return ok;
 }
 
-static bool publish_dep_index(const struct bx_module_tree* tree,
-                              const struct bx_text_buffer* index, struct bx_diag_ctx* diag) {
+static bool publish_index(const struct bx_module_tree* tree, const char* name,
+                          const struct bx_text_buffer* index, struct bx_diag_ctx* diag) {
     int fd = bx_fd_open_anonymous_file_at(tree->fd);
     bool ok = fd >= 0 &&
               bx_xwrite_all(fd, index->data, index->length) &&
               fchmod(fd, 0644) == 0 &&
               bx_fd_fsync(fd) == 0 &&
-              bx_fd_publish_anonymous_file_at(fd, tree->fd, "modules.dep") == 0;
+              bx_fd_publish_anonymous_file_at(fd, tree->fd, name) == 0;
     if (!ok) {
-        bx_perror_path(diag, "modules.dep");
+        bx_perror_path(diag, name);
     } else if (bx_fd_fsync(tree->fd) < 0) {
-        bx_diag(diag, "modules.dep published, but directory sync failed: %s", bx_strerror(errno));
+        bx_diag(diag, "%s published, but directory sync failed: %s", name, bx_strerror(errno));
         ok = false;
     }
     bx_fd_cleanup(&fd);
@@ -418,7 +418,8 @@ int bx_depmod_main(int argc, char** argv) {
     if (handled >= 0)
         return handled;
 #ifdef __linux__
-    enum { WRITE_BX_INDEX = 256, SHOW_BX_ALIASES, SHOW_BX_SOFTDEPS };
+    enum { WRITE_BX_INDEX = 256, SHOW_BX_ALIASES, SHOW_BX_SOFTDEPS,
+           WRITE_BX_ALIASES, WRITE_BX_SOFTDEPS };
     static const struct option opts[] = {
         {"all", no_argument, NULL, 'a'}, {"errsyms", no_argument, NULL, 'e'},
         {"show", no_argument, NULL, 'n'}, {"dry-run", no_argument, NULL, 'n'},
@@ -426,26 +427,29 @@ int bx_depmod_main(int argc, char** argv) {
         {"write-bx-index", no_argument, NULL, WRITE_BX_INDEX},
         {"show-bx-aliases", no_argument, NULL, SHOW_BX_ALIASES},
         {"show-bx-softdeps", no_argument, NULL, SHOW_BX_SOFTDEPS},
+        {"write-bx-aliases", no_argument, NULL, WRITE_BX_ALIASES},
+        {"write-bx-softdeps", no_argument, NULL, WRITE_BX_SOFTDEPS},
         {0},
     };
     const char* base = "/";
     const char* map = NULL;
-    bool dry_run = false;
-    bool write_index = false;
-    bool show_aliases = false;
-    bool show_softdeps = false;
+    int operation = 0;
     bool base_set = false;
     int operand = 1;
     bx_args_getopt_reset();
     for (int opt; (opt = bx_args_getopt_long_interspersed(argc, argv, "-:aenb:F:", opts, &operand)) != -1;) {
         switch (opt) {
         case 'a': case 'e': break;
-        case 'n': dry_run = true; break;
         case 'b': base = optarg; base_set = true; break;
         case 'F': map = optarg; break;
-        case WRITE_BX_INDEX: write_index = true; break;
-        case SHOW_BX_ALIASES: show_aliases = true; break;
-        case SHOW_BX_SOFTDEPS: show_softdeps = true; break;
+        case 'n': case WRITE_BX_INDEX: case SHOW_BX_ALIASES: case SHOW_BX_SOFTDEPS:
+        case WRITE_BX_ALIASES: case WRITE_BX_SOFTDEPS:
+            if (operation != 0 && operation != opt) {
+                bx_diag(&diag, "select exactly one output mode");
+                return 1;
+            }
+            operation = opt;
+            break;
         case ':':
             bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
             return 1;
@@ -454,8 +458,10 @@ int bx_depmod_main(int argc, char** argv) {
             return 1;
         }
     }
-    enum metadata_format format = show_aliases ? ALIASES : show_softdeps ? SOFTDEPS : SYMBOLS;
-    if (dry_run + write_index + show_aliases + show_softdeps != 1 ||
+    enum metadata_format format = operation == SHOW_BX_ALIASES || operation == WRITE_BX_ALIASES ? ALIASES :
+                                  operation == SHOW_BX_SOFTDEPS || operation == WRITE_BX_SOFTDEPS ? SOFTDEPS : SYMBOLS;
+    bool write_index = operation == WRITE_BX_INDEX || operation == WRITE_BX_ALIASES || operation == WRITE_BX_SOFTDEPS;
+    if (operation == 0 ||
         (format != SYMBOLS ? map != NULL : !map || !*map) || !*base ||
         argc - optind > 1 || (write_index && (!base_set || argc - optind != 1))) {
         usage(stderr, "depmod");
@@ -479,8 +485,11 @@ int bx_depmod_main(int argc, char** argv) {
     if (ready) {
         if (format == SYMBOLS && !render_deps(&scan, &index))
             bx_perror_path(&diag, "build modules.dep");
-        else if (write_index)
-            status = publish_dep_index(&tree, &index, &diag) ? 0 : 1;
+        else if (write_index) {
+            const char* leaf = format == ALIASES ? "modules.alias" :
+                               format == SOFTDEPS ? "modules.softdep" : "modules.dep";
+            status = publish_index(&tree, leaf, &index, &diag) ? 0 : 1;
+        }
         else if ((!index.length || fwrite(index.data, 1, index.length, stdout) == index.length) &&
                  fflush(stdout) == 0)
             status = 0;
