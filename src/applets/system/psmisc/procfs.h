@@ -71,6 +71,7 @@ bool bx_proc_read_text_file(pid_t pid, const char* leaf, char** text_out, bool* 
 bool bx_proc_readlink_leaf(pid_t pid, const char* leaf, char** target_out, bool* vanished_out);
 bool bx_proc_read_stat(pid_t pid, struct bx_proc_stat* stat_out, bool* vanished_out);
 bool bx_proc_read_uid(pid_t pid, uid_t* uid_out, bool* vanished_out);
+bool bx_proc_read_gid(pid_t pid, gid_t* gid_out, bool* vanished_out);
 bool bx_proc_read_cmdline(pid_t pid, char** cmdline_out, bool* vanished_out);
 bool bx_proc_read_exe(pid_t pid, char** exe_out, bool* vanished_out);
 bool bx_proc_read_ns_pid(pid_t pid, pid_t* ns_pid_out, bool* vanished_out);

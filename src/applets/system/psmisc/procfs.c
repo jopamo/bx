@@ -139,25 +139,62 @@ static bool bx_proc_parse_int_number(const char* text, int* value_out) {
     return true;
 }
 
-static bool bx_proc_parse_uid_token(const char* text, uid_t* uid_out) {
+static bool bx_proc_parse_id_token(const char* text, uintmax_t limit, uintmax_t* id_out) {
     char* end = NULL;
     uintmax_t value;
 
-    if (text == NULL || text[0] == '\0' || uid_out == NULL) {
+    if (text == NULL || text[0] == '\0' || id_out == NULL) {
         return false;
     }
 
     errno = 0;
     value = strtoumax(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL || value > (uintmax_t)((uid_t)-1)) {
+    if (errno == ERANGE || end == text || end == NULL || value > limit) {
         return false;
     }
     if (*end != '\0' && !isspace((unsigned char)*end)) {
         return false;
     }
 
-    *uid_out = (uid_t)value;
+    *id_out = value;
     return true;
+}
+
+static bool bx_proc_read_status_id(pid_t pid, const char* key, uintmax_t limit,
+                                   uintmax_t* id_out, bool* vanished_out) {
+    char* text = NULL;
+    char* line;
+    size_t key_len;
+    bool ok = false;
+
+    *id_out = 0u;
+    if (!bx_proc_read_text_file(pid, "status", &text, vanished_out)) {
+        return false;
+    }
+
+    key_len = strlen(key);
+    line = strtok(text, "\n");
+    while (line != NULL) {
+        if (strncmp(line, key, key_len) == 0) {
+            const char* cursor = line + key_len;
+            uintmax_t value = 0u;
+
+            while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
+                cursor++;
+            }
+            if (bx_proc_parse_id_token(cursor, limit, &value)) {
+                *id_out = value;
+                ok = true;
+            }
+            break;
+        }
+        line = strtok(NULL, "\n");
+    }
+    free(text);
+    if (!ok) {
+        errno = EINVAL;
+    }
+    return ok;
 }
 
 bool bx_proc_parse_pid_arg(const char* text, pid_t* pid_out) {
@@ -487,35 +524,25 @@ bool bx_proc_read_stat(pid_t pid, struct bx_proc_stat* stat_out, bool* vanished_
 }
 
 bool bx_proc_read_uid(pid_t pid, uid_t* uid_out, bool* vanished_out) {
-    char* text = NULL;
-    char* line;
-    bool ok = false;
+    uintmax_t value;
 
     *uid_out = (uid_t)-1;
-    if (!bx_proc_read_text_file(pid, "status", &text, vanished_out)) {
+    if (!bx_proc_read_status_id(pid, "Uid:", (uintmax_t)((uid_t)-1), &value, vanished_out)) {
         return false;
     }
-    line = strtok(text, "\n");
-    while (line != NULL) {
-        if (strncmp(line, "Uid:", 4u) == 0) {
-            char* cursor = line + 4;
-            while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
-                cursor++;
-            }
-            uid_t value = (uid_t)-1;
-            if (bx_proc_parse_uid_token(cursor, &value)) {
-                *uid_out = value;
-                ok = true;
-            }
-            break;
-        }
-        line = strtok(NULL, "\n");
+    *uid_out = (uid_t)value;
+    return true;
+}
+
+bool bx_proc_read_gid(pid_t pid, gid_t* gid_out, bool* vanished_out) {
+    uintmax_t value;
+
+    *gid_out = (gid_t)-1;
+    if (!bx_proc_read_status_id(pid, "Gid:", (uintmax_t)((gid_t)-1), &value, vanished_out)) {
+        return false;
     }
-    free(text);
-    if (!ok) {
-        errno = EINVAL;
-    }
-    return ok;
+    *gid_out = (gid_t)value;
+    return true;
 }
 
 bool bx_proc_read_cmdline(pid_t pid, char** cmdline_out, bool* vanished_out) {
