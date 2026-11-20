@@ -744,6 +744,7 @@ bx_system_applet_sources = [
   'src/applets/system/modules/insmod.c',
   'src/applets/system/modules/modinfo.c',
   'src/applets/system/modules/module_elf.c',
+  'src/applets/system/modules/module_index.c',
   'src/applets/system/modules/lsmod.c',
   'src/applets/system/modules/rmmod.c',
   'src/applets/system/swapoff/swapoff.c',
