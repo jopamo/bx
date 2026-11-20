@@ -8,13 +8,15 @@
 static void usage(FILE* out, const char* name) {
     fprintf(out, "Usage: %s --show-depends [-d ROOT] [-S RELEASE] MODULE_OR_ALIAS\n"
                  "       %s --resolve-alias [-d ROOT] [-S RELEASE] ALIAS\n"
+                 "       %s --dry-run [-d ROOT] [-S RELEASE] [-C FILE] MODULE_OR_ALIAS [PARAMETER ...]\n"
                  "       %s [-C FILE] MODULE_OR_ALIAS [PARAMETER ...]\n"
                  "       %s -r MODULE\n"
                  "Load by name or installed alias for the running kernel. Read modprobe.d\n"
                  "or FILE for blacklist and options directives. Also honors\n"
                  "modprobe.blacklist= on the kernel command line. No hooks run.\n"
+                 "--dry-run checks the load plan without asking the kernel to load it.\n"
                  "-r removes an exact name and then its unused installed hard dependencies.\n",
-                 name, name, name, name);
+                 name, name, name, name, name);
 }
 
 #ifdef __linux__
@@ -59,7 +61,7 @@ static int show_aliases(struct bx_module_tree* tree, const char* query, struct b
 
 static int load_plan(const struct bx_module_tree* tree, const struct bx_module_plan* plan,
                      const struct bx_module_policy* policy, const char* parameters,
-                     struct bx_diag_ctx* diag) {
+                     bool dry_run, struct bx_diag_ctx* diag) {
     enum { LOAD_LIMIT = 256 };
     size_t count = 0;
     for (size_t i = 0; i < plan->count; i++) {
@@ -126,7 +128,7 @@ static int load_plan(const struct bx_module_tree* tree, const struct bx_module_p
             goto out;
         }
     }
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; !dry_run && i < n; i++) {
         const struct input* input = &inputs[i];
         if (bx_module_load_fd(input->fd, &input->st, input->args) < 0 && errno != EEXIST) {
             struct bx_module_path target = input->step->target;
@@ -189,6 +191,8 @@ int bx_modprobe_main(int argc, char** argv) {
         {"show-depends", no_argument, NULL, 'D'},
         {"resolve-alias", no_argument, NULL, 'R'},
         {"remove", no_argument, NULL, 'r'},
+        {"dry-run", no_argument, NULL, 'n'},
+        {"show", no_argument, NULL, 'n'},
         {"dirname", required_argument, NULL, 'd'},
         {"set-version", required_argument, NULL, 'S'},
         {"config", required_argument, NULL, 'C'},
@@ -200,10 +204,11 @@ int bx_modprobe_main(int argc, char** argv) {
     bool show = false;
     bool alias = false;
     bool remove = false;
+    bool dry_run = false;
     opterr = 0;
     optind = 1;
     bool alternate_root = false;
-    for (int opt; (opt = getopt_long(argc, argv, ":DRrd:S:C:", opts, NULL)) != -1;) {
+    for (int opt; (opt = getopt_long(argc, argv, ":DRrnd:S:C:", opts, NULL)) != -1;) {
         switch (opt) {
         case 'D':
             show = true;
@@ -213,6 +218,9 @@ int bx_modprobe_main(int argc, char** argv) {
             break;
         case 'r':
             remove = true;
+            break;
+        case 'n':
+            dry_run = true;
             break;
         case 'd':
             if (*optarg == '\0' || strpbrk(optarg, "\r\n") != NULL) {
@@ -245,12 +253,13 @@ int bx_modprobe_main(int argc, char** argv) {
         }
     }
     bool load = !show && !alias && !remove;
-    if ((load || remove) && (alternate_root || release != NULL)) {
+    if (((load && !dry_run) || remove) && (alternate_root || release != NULL)) {
         bx_diag(&diag, "%s is only supported for the running kernel's installed module tree",
                 remove ? "removal" : "loading");
         return 1;
     }
-    if ((show && alias) || (remove && (show || alias)) || (!load && config != NULL) || optind == argc ||
+    if ((show && alias) || (remove && (show || alias)) || (!load && (config != NULL || dry_run)) ||
+        optind == argc ||
         (!load && argc - optind != 1) ||
         !bx_module_alias_query_valid(argv[optind])) {
         usage(stderr, diag.progname);
@@ -292,7 +301,7 @@ int bx_modprobe_main(int argc, char** argv) {
         if (parameters == NULL)
             bx_perror_path(&diag, "module parameters");
         else
-            status = load_plan(&tree, &plan, &policy, parameters, &diag);
+            status = load_plan(&tree, &plan, &policy, parameters, dry_run, &diag);
         free(parameters);
         free(plan.steps);
         goto out;
