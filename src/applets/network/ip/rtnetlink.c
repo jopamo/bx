@@ -31,6 +31,22 @@ bool bx_rtnl_attr(void* buffer, size_t capacity, unsigned short type,
     return true;
 }
 
+bool bx_rtnl_next_attr(const unsigned char** cursor, size_t* left, struct rtattr* attr,
+                       const unsigned char** data) {
+    if (*left >= sizeof(*attr)) {
+        memcpy(attr, *cursor, sizeof(*attr));
+        size_t length = RTA_ALIGN(attr->rta_len);
+        if (attr->rta_len >= RTA_LENGTH(0) && length <= *left) {
+            *data = *cursor + RTA_LENGTH(0);
+            *cursor += length;
+            *left -= length;
+            return true;
+        }
+    }
+    errno = EPROTO;
+    return false;
+}
+
 static ssize_t rtnl_receive(int fd, void* buffer, size_t capacity) {
     struct sockaddr_nl sender = {0};
     struct iovec vec = {.iov_base = buffer, .iov_len = capacity};

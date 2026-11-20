@@ -9,6 +9,9 @@
 /* Append one attribute to a request with capacity bytes of writable storage. */
 bool bx_rtnl_attr(void* buffer, size_t capacity, unsigned short type,
                   const void* data, size_t size);
+/* Validate and advance over an attribute in a nonempty payload. */
+bool bx_rtnl_next_attr(const unsigned char** cursor, size_t* left, struct rtattr* attr,
+                       const unsigned char** data);
 /* Send one mutation and wait for the matching kernel ACK. No retries of the
  * mutation after an ambiguous result. On failure returns -1 with errno set. */
 int bx_rtnl_apply(void* buffer);

@@ -6,6 +6,7 @@ static void ip_help(FILE* out) {
     fputs("usage: ip link set [dev] IFACE {up|down}\n"
           "       ip [-4] {a|addr|address} [show [dev IFACE]]\n"
           "       ip [-4] {addr|address} {replace|del} IPV4/PREFIX dev IFACE\n"
+          "       ip [-4] {r|route} [show [dev IFACE]]\n"
           "       ip [-4] route {replace|del} default via IPV4 dev IFACE [metric NUMBER]\n"
           "PREFIX is a CIDR length or a contiguous dotted netmask. Linux only.\n", out);
 }
@@ -138,22 +139,17 @@ static int ip_address_record(const struct nlmsghdr* header, void* context) {
     size_t left = header->nlmsg_len - offset;
     while (left) {
         struct rtattr attribute;
-        if (left < sizeof(attribute))
-            goto invalid;
-        memcpy(&attribute, cursor, sizeof(attribute));
-        size_t size = RTA_ALIGN(attribute.rta_len);
-        if (attribute.rta_len < RTA_LENGTH(0) || size > left)
-            goto invalid;
+        const unsigned char* value;
+        if (!bx_rtnl_next_attr(&cursor, &left, &attribute, &value))
+            return -1;
         if (attribute.rta_type == IFA_LOCAL || attribute.rta_type == IFA_ADDRESS) {
             bool is_local = attribute.rta_type == IFA_LOCAL;
             bool* seen = is_local ? &has_local : &has_peer;
             if (*seen || attribute.rta_len != RTA_LENGTH(sizeof(local)))
                 goto invalid;
             *seen = true;
-            memcpy(is_local ? &local : &peer, cursor + RTA_LENGTH(0), sizeof(local));
+            memcpy(is_local ? &local : &peer, value, sizeof(local));
         }
-        cursor += size;
-        left -= size;
     }
     if (!has_local && !has_peer)
         goto invalid;
@@ -181,29 +177,27 @@ invalid:
     return -1;
 }
 
-static int ip_show_addresses(int argc, char** argv, struct bx_diag_ctx* diag) {
+static int ip_show_index(int argc, char** argv, unsigned int* index, struct bx_diag_ctx* diag) {
+    *index = 0;
     if (argc && (strcmp(argv[0], "show") == 0 || strcmp(argv[0], "list") == 0 ||
                  strcmp(argv[0], "lst") == 0)) {
         argc--;
         argv++;
     }
-    unsigned int index = 0;
     if (argc) {
         if (argc != 2 || strcmp(argv[0], "dev") != 0)
             return ip_usage(diag);
-        index = ip_ifindex(argv[1], diag);
-        if (!index)
+        *index = ip_ifindex(argv[1], diag);
+        if (!*index)
             return 1;
     }
-    struct {
-        struct nlmsghdr header;
-        struct ifaddrmsg address;
-    } request = {
-        .header = {.nlmsg_len = NLMSG_LENGTH(sizeof(request.address)), .nlmsg_type = RTM_GETADDR},
-        .address = {.ifa_family = AF_INET},
-    };
-    if (bx_rtnl_dump(&request, RTM_NEWADDR, ip_address_record, &index) < 0) {
-        bx_perror_path(diag, ferror(stdout) ? "standard output" : "address dump");
+    return 0;
+}
+
+static int ip_show(void* request, unsigned short type, int (*record)(const struct nlmsghdr*, void*),
+                   unsigned int index, const char* label, struct bx_diag_ctx* diag) {
+    if (bx_rtnl_dump(request, type, record, &index) < 0) {
+        bx_perror_path(diag, ferror(stdout) ? "standard output" : label);
         return 1;
     }
     if (fflush(stdout) == EOF) {
@@ -211,6 +205,20 @@ static int ip_show_addresses(int argc, char** argv, struct bx_diag_ctx* diag) {
         return 1;
     }
     return 0;
+}
+
+static int ip_show_addresses(int argc, char** argv, struct bx_diag_ctx* diag) {
+    unsigned int index;
+    if (ip_show_index(argc, argv, &index, diag))
+        return 1;
+    struct {
+        struct nlmsghdr header;
+        struct ifaddrmsg address;
+    } request = {
+        .header = {.nlmsg_len = NLMSG_LENGTH(sizeof(request.address)), .nlmsg_type = RTM_GETADDR},
+        .address = {.ifa_family = AF_INET},
+    };
+    return ip_show(&request, RTM_NEWADDR, ip_address_record, index, "address dump", diag);
 }
 
 static int ip_address(int argc, char** argv, struct bx_diag_ctx* diag) {
@@ -248,9 +256,104 @@ static int ip_address(int argc, char** argv, struct bx_diag_ctx* diag) {
     return ip_apply(&request, action == IP_REPLACE ? "address replace" : "address del", argv[3], diag);
 }
 
+static int ip_route_record(const struct nlmsghdr* header, void* context) {
+    unsigned int selected = *(const unsigned int*)context;
+    struct rtmsg route;
+    const size_t offset = NLMSG_LENGTH(sizeof(route));
+    if (header->nlmsg_len < offset)
+        goto invalid;
+    const unsigned char* data = (const void*)header;
+    memcpy(&route, data + NLMSG_HDRLEN, sizeof(route));
+    if (route.rtm_family != AF_INET || route.rtm_type != RTN_UNICAST)
+        return 0;
+    if (route.rtm_dst_len > 32)
+        goto invalid;
+
+    struct in_addr destination = {0}, gateway, source;
+    uint32_t index = 0, metric, table = route.rtm_table;
+    struct route_field { void* value; size_t size; bool seen; };
+    struct route_field fields[] = {
+        [RTA_DST] = {&destination, sizeof(destination), false},
+        [RTA_GATEWAY] = {&gateway, sizeof(gateway), false},
+        [RTA_PREFSRC] = {&source, sizeof(source), false},
+        [RTA_OIF] = {&index, sizeof(index), false},
+        [RTA_PRIORITY] = {&metric, sizeof(metric), false},
+        [RTA_TABLE] = {&table, sizeof(table), false},
+    };
+    bool complex = false;
+    const unsigned char* cursor = data + offset;
+    size_t left = header->nlmsg_len - offset;
+    while (left) {
+        struct rtattr attr;
+        const unsigned char* value;
+        if (!bx_rtnl_next_attr(&cursor, &left, &attr, &value))
+            return -1;
+        if (attr.rta_type == RTA_MULTIPATH || attr.rta_type == RTA_NH_ID || attr.rta_type == RTA_VIA)
+            complex = true;
+        if (attr.rta_type >= sizeof(fields) / sizeof(*fields) || !fields[attr.rta_type].value)
+            continue;
+        struct route_field* field = &fields[attr.rta_type];
+        if (field->seen || attr.rta_len != RTA_LENGTH(field->size))
+            goto invalid;
+        field->seen = true;
+        memcpy(field->value, value, field->size);
+    }
+    if (table != RT_TABLE_MAIN)
+        return 0;
+    if (complex) {
+        errno = EOPNOTSUPP;
+        return -1;
+    }
+    if (selected && selected != index)
+        return 0;
+    if (route.rtm_dst_len && !fields[RTA_DST].seen)
+        goto invalid;
+
+    char dst[INET_ADDRSTRLEN], via[INET_ADDRSTRLEN], src[INET_ADDRSTRLEN], name[IF_NAMESIZE];
+    if (!inet_ntop(AF_INET, &destination, dst, sizeof(dst)) ||
+        (fields[RTA_GATEWAY].seen && !inet_ntop(AF_INET, &gateway, via, sizeof(via))) ||
+        (fields[RTA_PREFSRC].seen && !inet_ntop(AF_INET, &source, src, sizeof(src))))
+        return -1;
+    if (index && !if_indextoname(index, name))
+        return errno == ENODEV || errno == ENXIO ? 0 : -1;
+
+    char prefix[sizeof(dst) + 3], priority[sizeof(" metric 4294967295")];
+    const char* scope = ip_scope(route.rtm_scope);
+    snprintf(prefix, sizeof(prefix), "%s/%u", dst, (unsigned int)route.rtm_dst_len);
+    if (fields[RTA_PRIORITY].seen)
+        snprintf(priority, sizeof(priority), " metric %u", (unsigned int)metric);
+    return printf("%s%s%s%s%s%s%s%s%s%s\n",
+                  route.rtm_dst_len ? prefix : "default",
+                  fields[RTA_GATEWAY].seen ? " via " : "", fields[RTA_GATEWAY].seen ? via : "",
+                  index ? " dev " : "", index ? name : "",
+                  scope && route.rtm_scope != RT_SCOPE_UNIVERSE ? " scope " : "",
+                  scope && route.rtm_scope != RT_SCOPE_UNIVERSE ? scope : "",
+                  fields[RTA_PREFSRC].seen ? " src " : "", fields[RTA_PREFSRC].seen ? src : "",
+                  fields[RTA_PRIORITY].seen ? priority : "") < 0 ? -1 : 0;
+invalid:
+    errno = EPROTO;
+    return -1;
+}
+
+static int ip_show_routes(int argc, char** argv, struct bx_diag_ctx* diag) {
+    unsigned int index;
+    if (ip_show_index(argc, argv, &index, diag))
+        return 1;
+    struct {
+        struct nlmsghdr header;
+        struct rtmsg route;
+    } request = {
+        .header = {.nlmsg_len = NLMSG_LENGTH(sizeof(request.route)), .nlmsg_type = RTM_GETROUTE},
+        .route = {.rtm_family = AF_INET},
+    };
+    return ip_show(&request, RTM_NEWROUTE, ip_route_record, index, "route dump", diag);
+}
+
 static int ip_route(int argc, char** argv, struct bx_diag_ctx* diag) {
     enum ip_action action;
-    if ((argc != 6 && argc != 8) || !ip_action(argv[0], &action) ||
+    if (!argc || !ip_action(argv[0], &action))
+        return ip_show_routes(argc, argv, diag);
+    if ((argc != 6 && argc != 8) ||
         strcmp(argv[1], "default") != 0 || strcmp(argv[2], "via") != 0 ||
         strcmp(argv[4], "dev") != 0 || (argc == 8 && strcmp(argv[6], "metric") != 0))
         return ip_usage(diag);
@@ -307,7 +410,7 @@ int bx_ip_main(int argc, char** argv) {
             return ip_link(argc - 2, argv + 2, &diag);
         if (strcmp(argv[1], "a") == 0 || strcmp(argv[1], "addr") == 0 || strcmp(argv[1], "address") == 0)
             return ip_address(argc - 2, argv + 2, &diag);
-        if (strcmp(argv[1], "route") == 0)
+        if (strcmp(argv[1], "r") == 0 || strcmp(argv[1], "route") == 0)
             return ip_route(argc - 2, argv + 2, &diag);
     }
     return ip_usage(&diag);
