@@ -22,9 +22,9 @@ static const char *const tag_names[TAG_COUNT] = {
 
 static void usage(FILE *out)
 {
-    fputs("Usage: blkid [-p | [-l] -t TAG=value] [-u filesystem]"
+    fputs("Usage: blkid [-p | [-l] -t TAG=value] [-u filesystem|other]"
           " [-o full|export|value|device] [-s TAG]... [--] [DEVICE...]\n"
-          "Probe block devices or images for FAT, ext and ISO 9660 filesystems.\n"
+          "Probe block devices or images for FAT, ext, ISO 9660, or Linux swap.\n"
           "With no devices, scan Linux block devices. -p requires a device.\n"
           "-t matches an exact LABEL or UUID. -l requires one matching path.\n", out);
 }
@@ -61,10 +61,13 @@ static bool print_signature(const char *path, const struct bx_fs_signature *fs,
     }
 
     char size[16];
-    snprintf(size, sizeof(size), "%u", fs->block_size);
+    if (fs->block_size)
+        snprintf(size, sizeof(size), "%u", fs->block_size);
+    else
+        size[0] = 0;
     const char *const values[TAG_COUNT] = {
         fs->fat_boot_label, fs->label, fs->uuid, size, fs->type,
-        lowlevel ? "filesystem" : "",
+        lowlevel ? (fs->usage == BX_PROBE_FILESYSTEM ? "filesystem" : "other") : "",
     };
     bool printed = false;
     for (unsigned i = 0; i < TAG_COUNT; i++) {
@@ -101,7 +104,7 @@ static bool print_signature(const char *path, const struct bx_fs_signature *fs,
 struct probe_run {
     struct bx_diag_ctx diag;
     enum output format;
-    unsigned tags;
+    unsigned tags, usages;
     const char *match_value;
     enum tag match_tag;
     bool list_one, lowlevel, scanning, found, ambiguous, prior_record;
@@ -134,7 +137,7 @@ static bool probe_device(int fd, const char *path, void *ctx)
 {
     struct probe_run *run = ctx;
     struct bx_fs_signature fs;
-    int match = bx_fs_probe(fd, &fs);
+    int match = bx_fs_probe(fd, run->usages, &fs);
     if (match < 0 && !run->scanning)
         bx_perror_path(&run->diag, path);
     if (match == 1) {
@@ -152,7 +155,7 @@ static bool probe_device(int fd, const char *path, void *ctx)
             run->prior_record = true;
     } else if (match == 2 && run->lowlevel) {
         run->ambiguous = true;
-        bx_diag(&run->diag, "%s: conflicting filesystem signatures", path);
+        bx_diag(&run->diag, "%s: conflicting volume signatures", path);
     }
     return !ferror(stdout);
 }
@@ -211,12 +214,23 @@ int bx_blkid_main(int argc, char **argv)
             if (!parse_match(&run, optarg))
                 return 4;
             break;
-        case 'u':
-            if (strcmp(optarg, "filesystem") != 0) {
+        case 'u': {
+            unsigned selected;
+            if (strcmp(optarg, "filesystem") == 0)
+                selected = BX_PROBE_FILESYSTEM;
+            else if (strcmp(optarg, "other") == 0)
+                selected = BX_PROBE_OTHER;
+            else {
                 bx_diag(&run.diag, "unsupported usage: '%s'", optarg);
                 return 4;
             }
+            if (run.usages && run.usages != selected) {
+                bx_diag(&run.diag, "only one usage may be specified");
+                return 4;
+            }
+            run.usages = selected;
             break;
+        }
         case 'o':
             if (strcmp(optarg, "full") == 0)
                 run.format = FULL;
@@ -250,6 +264,8 @@ int bx_blkid_main(int argc, char **argv)
     }
     if (!filtered)
         run.tags = (1u << TAG_COUNT) - 1;
+    if (!run.usages)
+        run.usages = BX_PROBE_FILESYSTEM | BX_PROBE_OTHER;
 
     if (run.scanning && bx_blkid_scan(probe_device, &run) < 0) {
         bx_perror_path(&run.diag, "scan block devices");

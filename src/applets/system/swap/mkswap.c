@@ -22,15 +22,10 @@ static void usage(FILE* out, const char* name) {
 #include "lib/path_ops.h"
 #include "lib/random_bytes.h"
 #include "lib/size_parse.h"
+#include "lib/swap_format.h"
 #include "lib/xreadwrite.h"
 
-enum {
-    SWAP_VERSION_OFFSET = 1024,
-    SWAP_UUID_OFFSET = 1036,
-    SWAP_LABEL_OFFSET = 1052,
-    SWAP_LABEL_BYTES = 16,
-    SWAP_MIN_PAGES = 10,
-};
+enum { SWAP_MIN_PAGES = 10 };
 
 static int hex_digit(char c) {
     if (c >= '0' && c <= '9')
@@ -150,7 +145,7 @@ int bx_mkswap_main(int argc, char** argv) {
         return 1;
     }
     long page_size = sysconf(_SC_PAGESIZE);
-    if (page_size < 2048 || page_size > 65536) {
+    if (page_size < BX_SWAP_MIN_PAGE_SIZE || page_size > BX_SWAP_MAX_PAGE_SIZE) {
         bx_diag(&diag, "unsupported Linux page size");
         return 1;
     }
@@ -161,8 +156,8 @@ int bx_mkswap_main(int argc, char** argv) {
         return 1;
     }
     size_t label_len = strlen(label);
-    if (label_len > SWAP_LABEL_BYTES) {
-        bx_diag(&diag, "swap label exceeds %d bytes", SWAP_LABEL_BYTES);
+    if (label_len > BX_SWAP_LABEL_BYTES) {
+        bx_diag(&diag, "swap label exceeds %d bytes", BX_SWAP_LABEL_BYTES);
         return 1;
     }
     unsigned char uuid[16];
@@ -186,10 +181,11 @@ int bx_mkswap_main(int argc, char** argv) {
     }
     /* Linux swap v1 uses host byte order for its numeric fields. */
     uint32_t fields[] = {1, (uint32_t)(pages - 1), 0};
-    memcpy(header + SWAP_VERSION_OFFSET, fields, sizeof(fields));
-    memcpy(header + SWAP_UUID_OFFSET, uuid, sizeof(uuid));
-    memcpy(header + SWAP_LABEL_OFFSET, label, label_len);
-    memcpy(header + page - 10, "SWAPSPACE2", 10);
+    memcpy(header + BX_SWAP_VERSION_OFFSET, fields, sizeof(fields));
+    memcpy(header + BX_SWAP_UUID_OFFSET, uuid, sizeof(uuid));
+    memcpy(header + BX_SWAP_LABEL_OFFSET, label, label_len);
+    memcpy(header + page - (sizeof(BX_SWAP_V1_MAGIC) - 1),
+           BX_SWAP_V1_MAGIC, sizeof(BX_SWAP_V1_MAGIC) - 1);
     bool ok = create_swap(argv[optind], header, page, (off_t)bytes, &diag);
     free(header);
     return ok ? 0 : 1;

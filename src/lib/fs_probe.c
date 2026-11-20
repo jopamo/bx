@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "lib/fat/compat.h"
+#include "lib/swap_format.h"
 
 static int read_at(int fd, void *buf, size_t size, uint64_t offset)
 {
@@ -20,6 +21,21 @@ static int read_at(int fd, void *buf, size_t size, uint64_t offset)
     if (n >= 0)
         errno = EIO;
     return -1;
+}
+
+static void format_uuid(char *out, const uint8_t *uuid)
+{
+    static const uint8_t zero_uuid[16];
+    static const char hex[] = "0123456789abcdef";
+    if (memcmp(uuid, zero_uuid, sizeof(zero_uuid)) == 0)
+        return;
+    for (size_t i = 0; i < sizeof(zero_uuid); i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10)
+            *out++ = '-';
+        *out++ = hex[uuid[i] >> 4];
+        *out++ = hex[uuid[i] & 0x0f];
+    }
+    *out = 0;
 }
 
 static void fat_label(char *out, const uint8_t *name)
@@ -201,18 +217,7 @@ static int probe_ext(int fd, uint64_t bytes, struct bx_fs_signature *fs)
         ? "ext4" : (compat & 0x04) ? "ext3" : "ext2";
     fs->block_size = block_size;
     memcpy(fs->label, sb + 120, 16);
-    const uint8_t *uuid = sb + 104;
-    static const uint8_t zero_uuid[16];
-    if (memcmp(uuid, zero_uuid, sizeof(zero_uuid))) {
-        static const char hex[] = "0123456789abcdef";
-        size_t out = 0;
-        for (size_t i = 0; i < sizeof(zero_uuid); i++) {
-            if (i == 4 || i == 6 || i == 8 || i == 10)
-                fs->uuid[out++] = '-';
-            fs->uuid[out++] = hex[uuid[i] >> 4];
-            fs->uuid[out++] = hex[uuid[i] & 0x0f];
-        }
-    }
+    format_uuid(fs->uuid, sb + 104);
     return 1;
 }
 
@@ -300,26 +305,84 @@ static int probe_iso9660(int fd, uint64_t bytes, struct bx_fs_signature *fs)
     return 1;
 }
 
-int bx_fs_probe(int fd, struct bx_fs_signature *result)
+static uint32_t swap_u32(const uint8_t *value, bool little)
+{
+    if (little)
+        return bx_fat_le32dec(value);
+    return (uint32_t)value[0] << 24 | (uint32_t)value[1] << 16 |
+           (uint32_t)value[2] << 8 | value[3];
+}
+
+static int probe_swap(int fd, uint64_t bytes, struct bx_fs_signature *fs)
+{
+    enum {
+        HEADER_LEN = BX_SWAP_LABEL_OFFSET + BX_SWAP_LABEL_BYTES - BX_SWAP_VERSION_OFFSET,
+        MAGIC_LEN = sizeof(BX_SWAP_V1_MAGIC) - 1,
+    };
+    uint8_t header[HEADER_LEN];
+    if (bytes < 2 * BX_SWAP_MIN_PAGE_SIZE)
+        return 0;
+    if (read_at(fd, header, sizeof(header), BX_SWAP_VERSION_OFFSET) < 0)
+        return -1;
+
+    /* The numeric fields use the byte order of the machine that made
+     * the header. The swap UUID is stored as bytes in either case. */
+    bool little = swap_u32(header, true) == 1;
+    if (!little && swap_u32(header, false) != 1)
+        return 0;
+    uint32_t last = swap_u32(header + (BX_SWAP_LAST_PAGE_OFFSET - BX_SWAP_VERSION_OFFSET), little);
+    uint32_t bad = swap_u32(header + (BX_SWAP_BADPAGE_COUNT_OFFSET - BX_SWAP_VERSION_OFFSET), little);
+    if (!last || bad > last)
+        return 0;
+
+    int matches = 0;
+    for (unsigned page = BX_SWAP_MIN_PAGE_SIZE; page <= BX_SWAP_MAX_PAGE_SIZE; page *= 2) {
+        if ((uint64_t)last + 1 > bytes / page)
+            break;
+        if (bad > (page - MAGIC_LEN - BX_SWAP_BADPAGES_OFFSET) / sizeof(uint32_t))
+            continue;
+        uint8_t magic[MAGIC_LEN];
+        if (read_at(fd, magic, sizeof(magic), page - MAGIC_LEN) < 0)
+            return -1;
+        if (memcmp(magic, BX_SWAP_V1_MAGIC, sizeof(magic)) == 0 && ++matches > 1)
+            return 2;
+    }
+    if (!matches)
+        return 0;
+    fs->type = "swap";
+    format_uuid(fs->uuid, header + (BX_SWAP_UUID_OFFSET - BX_SWAP_VERSION_OFFSET));
+    memcpy(fs->label, header + (BX_SWAP_LABEL_OFFSET - BX_SWAP_VERSION_OFFSET), BX_SWAP_LABEL_BYTES);
+    return 1;
+}
+
+int bx_fs_probe(int fd, unsigned usages, struct bx_fs_signature *result)
 {
     uint64_t bytes;
     unsigned sector;
     if (bx_fat_geometry(fd, &bytes, &sector) < 0)
         return -1;
 
-    static int (*const probes[])(int, uint64_t, struct bx_fs_signature *) = {
-        probe_fat, probe_ext, probe_iso9660,
+    static const struct {
+        enum bx_probe_usage usage;
+        int (*probe)(int, uint64_t, struct bx_fs_signature *);
+    } probes[] = {
+        {BX_PROBE_FILESYSTEM, probe_fat},
+        {BX_PROBE_FILESYSTEM, probe_ext},
+        {BX_PROBE_FILESYSTEM, probe_iso9660},
+        {BX_PROBE_OTHER, probe_swap},
     };
     struct bx_fs_signature found;
     bool matched = false;
     for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
-        struct bx_fs_signature candidate = {0};
-        int match = probes[i](fd, bytes, &candidate);
+        if (!(usages & probes[i].usage))
+            continue;
+        struct bx_fs_signature candidate = {.usage = probes[i].usage};
+        int match = probes[i].probe(fd, bytes, &candidate);
         if (match < 0)
             return -1;
         if (!match)
             continue;
-        if (matched)
+        if (matched || match > 1)
             return 2;
         found = candidate;
         matched = true;
