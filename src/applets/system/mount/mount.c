@@ -57,6 +57,8 @@ struct bx_mount_options {
     bool no_mtab;
     bool verbose;
     bool option_list_set;
+    bool loop;
+    bool loop_geometry;
     const char* fstype;
     const char* source;
     const char* target;
@@ -84,6 +86,7 @@ static void bx_mount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -o, --options LIST    comma-separated mount options\n");
     fprintf(stream, "  -r, --read-only       mount read-only\n");
     fprintf(stream, "  -w, --read-write      mount read-write\n");
+    fprintf(stream, "      -o ro,loop        attach a regular image read-only (Linux)\n");
     fprintf(stream, "  -B, --bind            bind mount\n");
     fprintf(stream, "  -R, --rbind           recursive bind mount\n");
     fprintf(stream, "  -M, --move            move mount\n");
@@ -144,7 +147,8 @@ static void bx_mount_append_data_option(struct bx_mount_options* options, const 
     options->data = resized;
 }
 
-static bool bx_mount_parse_option_token(const char* token, struct bx_mount_options* options) {
+static bool bx_mount_parse_option_token(const char* token, struct bx_mount_options* options,
+                                        struct bx_diag_ctx* diag) {
     if (strcmp(token, "defaults") == 0) {
         return true;
     }
@@ -157,6 +161,16 @@ static bool bx_mount_parse_option_token(const char* token, struct bx_mount_optio
         bx_mount_clear_flag(options, MS_RDONLY);
         return true;
     }
+    if (strcmp(token, "loop") == 0) {
+        options->loop = true;
+        return true;
+    }
+    if (strncmp(token, "loop=", 5) == 0) {
+        bx_diag(diag, "selecting a loop device with 'loop=' is not supported; use losetup");
+        return false;
+    }
+    if (strncmp(token, "offset=", 7) == 0 || strncmp(token, "sizelimit=", 10) == 0)
+        options->loop_geometry = true;
     if (strcmp(token, "nosuid") == 0) {
         bx_mount_set_flag(options, MS_NOSUID);
         return true;
@@ -291,8 +305,9 @@ static bool bx_mount_parse_option_list(const char* text, struct bx_mount_options
         }
 
         token = bx_mount_trim_token(token);
-        if (token[0] != '\0') {
-            bx_mount_parse_option_token(token, options);
+        if (token[0] != '\0' && !bx_mount_parse_option_token(token, options, diag)) {
+            free(copy);
+            return false;
         }
 
         if (comma == NULL) {
@@ -741,6 +756,17 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
         return bx_mount_validate_operand("target", options->target, diag);
     }
 
+    if (options->loop) {
+        if (has_move || has_bind || has_remount) {
+            bx_diag(diag, "'loop' is only supported for a new mount");
+            return false;
+        }
+        if (!(options->flag_values & MS_RDONLY)) {
+            bx_diag(diag, "'loop' requires -r or -o ro");
+            return false;
+        }
+    }
+
     if (!options->explicit_source && !options->explicit_target && remaining == 0 && !has_bind && !has_move && !has_remount && !bx_mount_data_present(options) && options->flag_mentions == 0ul) {
         *print_only = true;
         return true;
@@ -881,8 +907,9 @@ struct bx_mount_detected {
     const char* type;
 };
 
-static bool bx_mount_detect(const char* source, bool read_only, struct bx_mount_detected* detected,
-                             struct bx_diag_ctx* diag) {
+static bool bx_mount_prepare_source(const char* source, const struct bx_mount_options* options,
+                                    bool probe, struct bx_mount_detected* detected,
+                                    struct bx_diag_ctx* diag) {
 #ifdef __linux__
     /* Check the source type before opening the underlying device. Keep
      * this path descriptor for mount(2) rather than resolving source again. */
@@ -893,12 +920,20 @@ static bool bx_mount_detect(const char* source, bool read_only, struct bx_mount_
         return false;
     }
     bool image = S_ISREG(expected.st_mode);
+    if (options->loop && !image) {
+        bx_diag(diag, "'loop' requires a regular image: '%s'", source);
+        return false;
+    }
     if (!S_ISBLK(expected.st_mode) && !image) {
         bx_diag(diag, "cannot detect filesystem on '%s': not a block device or regular image", source);
         return false;
     }
-    if (image && !read_only) {
+    if (image && !(options->flag_values & MS_RDONLY)) {
         bx_diag(diag, "mounting regular image '%s' requires -r or -o ro", source);
+        return false;
+    }
+    if (image && options->loop_geometry) {
+        bx_diag(diag, "loop image offsets and size limits are not supported; use losetup");
         return false;
     }
 
@@ -908,7 +943,7 @@ static bool bx_mount_detect(const char* source, bool read_only, struct bx_mount_
         return false;
     }
     if (procfs.f_type != PROC_SUPER_MAGIC) {
-        bx_diag(diag, "filesystem detection requires /proc/self/fd on procfs");
+        bx_diag(diag, "mount source preparation requires /proc/self/fd on procfs");
         return false;
     }
     snprintf(detected->fd_path, sizeof(detected->fd_path), "/proc/self/fd/%d", detected->path_fd);
@@ -922,36 +957,42 @@ static bool bx_mount_detect(const char* source, bool read_only, struct bx_mount_
         return false;
     }
 
-    struct bx_fs_signature fs;
-    int match = bx_fs_probe(detected->data_fd, BX_PROBE_ALL, &fs);
-    if (match < 0)
-        bx_diag(diag, "cannot probe filesystem on '%s': %s", source, strerror(errno));
-    else if (match == 0)
-        bx_diag(diag, "no supported filesystem signature on '%s'; use -t TYPE", source);
-    else if (match == 2)
-        bx_diag(diag, "conflicting volume signatures on '%s'; use -t TYPE", source);
-    else if (fs.usage != BX_PROBE_FILESYSTEM)
-        bx_diag(diag, "'%s' identifies as '%s', not a filesystem", source, fs.type);
-    else {
-        if (image) {
-            detected->loop_fd = bx_loop_attach_readonly(detected->data_fd, source);
-            if (detected->loop_fd < 0) {
-                bx_diag(diag, "cannot attach read-only loop device for '%s': %s", source, strerror(errno));
-                return false;
-            }
-            snprintf(detected->fd_path, sizeof(detected->fd_path), "/proc/self/fd/%d",
-                     detected->loop_fd);
-        }
-        detected->type = fs.type;
-        return true;
+    if (probe) {
+        struct bx_fs_signature fs;
+        int match = bx_fs_probe(detected->data_fd, BX_PROBE_ALL, &fs);
+        if (match < 0)
+            bx_diag(diag, "cannot probe filesystem on '%s': %s", source, strerror(errno));
+        else if (match == 0)
+            bx_diag(diag, "no supported filesystem signature on '%s'; use -t TYPE", source);
+        else if (match == 2)
+            bx_diag(diag, "conflicting volume signatures on '%s'; use -t TYPE", source);
+        else if (fs.usage != BX_PROBE_FILESYSTEM)
+            bx_diag(diag, "'%s' identifies as '%s', not a filesystem", source, fs.type);
+        else
+            detected->type = fs.type;
+        if (!detected->type)
+            return false;
     }
+    if (image) {
+        detected->loop_fd = bx_loop_attach_readonly(detected->data_fd, source);
+        if (detected->loop_fd < 0) {
+            bx_diag(diag, "cannot attach read-only loop device for '%s': %s", source, strerror(errno));
+            return false;
+        }
+        snprintf(detected->fd_path, sizeof(detected->fd_path), "/proc/self/fd/%d",
+                 detected->loop_fd);
+    }
+    return true;
 #else
     (void)source;
-    (void)read_only;
     (void)detected;
-    bx_diag(diag, "filesystem detection is not supported on this platform; use -t TYPE");
-#endif
+    (void)probe;
+    if (options->loop)
+        bx_diag(diag, "'loop' is not supported on this platform");
+    else
+        bx_diag(diag, "filesystem detection is not supported on this platform; use -t TYPE");
     return false;
+#endif
 }
 
 static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_diag_ctx* diag) {
@@ -970,6 +1011,7 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
     const char* fstype = options->fstype;
     const void* data = bx_mount_data_present(options) ? options->data : NULL;
     unsigned long flags = options->op_flags | options->flag_values;
+    bool probe = !fstype || strcmp(fstype, "auto") == 0;
     struct bx_mount_detected detected = {.path_fd = -1, .data_fd = -1, .loop_fd = -1};
     bool success = false;
 
@@ -988,11 +1030,12 @@ static bool bx_mount_perform(const struct bx_mount_options* options, struct bx_d
         fstype = NULL;
         data = NULL;
     }
-    else if (!bx_mount_has_remount(options) && (!fstype || strcmp(fstype, "auto") == 0)) {
-        if (!bx_mount_detect(source, (flags & MS_RDONLY) != 0, &detected, diag))
+    else if (!bx_mount_has_remount(options) && (probe || options->loop)) {
+        if (!bx_mount_prepare_source(source, options, probe, &detected, diag))
             goto done;
         source = detected.fd_path;
-        fstype = detected.type;
+        if (probe)
+            fstype = detected.type;
     }
 
     if (mount(source, options->target, fstype, flags, data) != 0) {
