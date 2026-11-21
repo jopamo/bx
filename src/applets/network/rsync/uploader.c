@@ -2249,6 +2249,7 @@ rsync_uploader(struct upload *u, struct sess *sess, int revents,
 	struct blkset	    blk;
 	void		   *mbuf, *bufp;
 	ssize_t		    msz;
+	size_t		    blocks_per_read, readsz;
 	size_t		    i, pos, sz;
 	size_t		    linklen = 0;
 	off_t		    offs, filesize;
@@ -2591,7 +2592,17 @@ rsync_uploader(struct upload *u, struct sess *sess, int revents,
 			return -1;
 		}
 
-		if ((mbuf = malloc(blk.len)) == NULL) {
+		/*
+		 * Read several blocks at a time.  A small --block-size would
+		 * otherwise turn checksum generation into one syscall per block.
+		 */
+		blocks_per_read = MAX_CHUNK / blk.len;
+		if (blocks_per_read == 0)
+			blocks_per_read = 1;
+		if (blocks_per_read > blk.blksz)
+			blocks_per_read = blk.blksz;
+		readsz = blocks_per_read * blk.len;
+		if ((mbuf = malloc(readsz)) == NULL) {
 			ERR("malloc");
 			close(*fileinfd);
 			*fileinfd = -1;
@@ -2601,9 +2612,16 @@ rsync_uploader(struct upload *u, struct sess *sess, int revents,
 
 		offs = 0;
 		i = 0;
-		do {
-			msz = pread(*fileinfd, mbuf, blk.len, offs);
-			if ((size_t)msz != blk.len && (size_t)msz != blk.rem) {
+		while (i < blk.blksz) {
+			size_t chunk_offs = offs, expected = 0, j, nblocks;
+
+			nblocks = MINIMUM(blocks_per_read, blk.blksz - i);
+			for (j = 0; j < nblocks; j++)
+				expected += (i + j == blk.blksz - 1 && blk.rem) ?
+				    blk.rem : blk.len;
+
+			msz = pread(*fileinfd, mbuf, expected, offs);
+			if ((size_t)msz != expected) {
 				if (msz == -1) {
 					ERR("pread");
 				} else {
@@ -2611,7 +2629,7 @@ rsync_uploader(struct upload *u, struct sess *sess, int revents,
 					    IFLAG_TRANSFER;
 					WARNX1(
 					    "%s: destination file truncated; falling back to whole file transfer",
-						u->fl[u->idx].path);
+					    u->fl[u->idx].path);
 				}
 				close(*fileinfd);
 				*fileinfd = -1;
@@ -2630,13 +2648,18 @@ rsync_uploader(struct upload *u, struct sess *sess, int revents,
 				 */
 				goto skipmap;
 			}
-			init_blk(&blk.blks[i], &blk, offs, i, mbuf, sess);
-			offs += blk.len;
-			LOG4(
-			    "i=%ld, offs=%lld, msz=%ld, blk.len=%lu, blk.rem=%lu",
-			    i, (long long)offs, msz, blk.len, blk.rem);
-			i++;
-		} while (i < blk.blksz);
+
+			for (j = 0; j < nblocks; j++) {
+				init_blk(&blk.blks[i], &blk, offs, i,
+				    (char *)mbuf + (offs - chunk_offs), sess);
+				offs += blk.blks[i].len;
+				LOG4(
+				    "i=%zu, offs=%lld, msz=%zu, blk.len=%lu, blk.rem=%lu",
+				    i, (long long)offs, blk.blks[i].len,
+				    blk.len, blk.rem);
+				i++;
+			}
+		}
 
 		free(mbuf);
 
