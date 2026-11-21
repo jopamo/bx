@@ -73,6 +73,17 @@ preserve_executability_check(const mode_t srcmode, const mode_t dstmode)
 	return mode;
 }
 
+static int
+metadata_stat(int fd, int rootfd, const char *path, int pinned, struct stat *st)
+{
+
+	if (fd != -1)
+		return fstat(fd, st);
+	if (pinned != -1)
+		return fstat(pinned, st);
+	return fstatat(rootfd, path, st, AT_SYMLINK_NOFOLLOW);
+}
+
 int
 rsync_set_metadata(struct sess *sess, int newfile,
 	int fd, const struct flist *f, const char *path)
@@ -82,7 +93,7 @@ rsync_set_metadata(struct sess *sess, int newfile,
 	mode_t		 mode;
 	struct timespec	 ts[2];
 	struct stat      st;
-	bool		 pres_exec;
+	bool		 pres_exec, changed_owner = false;
 
 	if (sess->opts->dry_run || (f->flstate & FLIST_SKIP_METADATA) != 0)
 		return 1;
@@ -90,24 +101,29 @@ rsync_set_metadata(struct sess *sess, int newfile,
 	pres_exec = !newfile && S_ISREG(f->st.mode) &&
 	    (sess->opts->preserve_executability && !sess->opts->preserve_perms);
 
-	if (pres_exec) {
-		if (fstat(fd, &st) == -1)
-			if (errno == ENOENT)
-				return 1;
+	if (metadata_stat(fd, -1, path, -1, &st) == -1) {
+		if (errno == ENOENT && sess->opts->ign_non_exist)
+			return 1;
+		ERR("%s: stat metadata target", path);
+		return 0;
 	}
 
 	/* Conditionally adjust file modification time. */
 
 	if (sess->opts->preserve_times &&
 	    (!S_ISDIR(f->st.mode) || !sess->opts->omit_dir_times)) {
-		ts[0].tv_nsec = UTIME_NOW;
-		ts[1].tv_sec = f->st.mtime;
-		ts[1].tv_nsec = 0;
-		if (futimens(fd, ts) == -1) {
-			ERR("%s: futimens", path);
-			return 0;
+		if (st.st_mtime == f->st.mtime)
+			LOG4("%s: date unchanged", f->path);
+		else {
+			ts[0].tv_nsec = UTIME_NOW;
+			ts[1].tv_sec = f->st.mtime;
+			ts[1].tv_nsec = 0;
+			if (futimens(fd, ts) == -1) {
+				ERR("%s: futimens", path);
+				return 0;
+			}
+			LOG4("%s: updated date", f->path);
 		}
-		LOG4("%s: updated date", f->path);
 	}
 
 	/*
@@ -128,16 +144,22 @@ rsync_set_metadata(struct sess *sess, int newfile,
 	mode = f->st.mode;
 
 	if (uid != (uid_t)-1 || gid != (gid_t)-1) {
-		if (fchown(fd, uid, gid) == -1) {
-			if (errno != EPERM || sess->opts->bx_protocol) {
-				ERR("%s: fchown", path);
-				return 0;
-			}
-			if (geteuid() == 0)
-				WARNX("%s: identity unknown or not available "
-				    "to user.group: %u.%u", f->path, uid, gid);
-		} else
-			LOG4("%s: updated uid and/or gid", f->path);
+		if ((uid == (uid_t)-1 || st.st_uid == uid) &&
+		    (gid == (gid_t)-1 || st.st_gid == gid)) {
+			LOG4("%s: uid and gid unchanged", f->path);
+		} else {
+			changed_owner = true;
+			if (fchown(fd, uid, gid) == -1) {
+				if (errno != EPERM || sess->opts->bx_protocol) {
+					ERR("%s: fchown", path);
+					return 0;
+				}
+				if (geteuid() == 0)
+					WARNX("%s: identity unknown or not available "
+					    "to user.group: %u.%u", f->path, uid, gid);
+			} else
+				LOG4("%s: updated uid and/or gid", f->path);
+		}
 	}
 
 	if (!bx_rsync_meta_apply(sess, fd, -1, f, path, 1))
@@ -146,7 +168,9 @@ rsync_set_metadata(struct sess *sess, int newfile,
 	/* Conditionally adjust file permissions. */
 
 	if (newfile || sess->opts->preserve_perms) {
-		if (mode != 0) {
+		if (mode != 0 &&
+		    (changed_owner || bx_rsync_meta_count(f->metadata) != 0 ||
+		     (st.st_mode & 07777) != (mode & 07777))) {
 			if (fchmod(fd, mode) == -1) {
 				ERR("%s: fchmod", path);
 				return 0;
@@ -155,7 +179,9 @@ rsync_set_metadata(struct sess *sess, int newfile,
 		}
 	} else if (pres_exec) {
 		mode = preserve_executability_check(mode, st.st_mode);
-		if (mode != 0) {
+		if (mode != 0 &&
+		    (changed_owner || bx_rsync_meta_count(f->metadata) != 0 ||
+		     (st.st_mode & 07777) != (mode & 07777))) {
 			if (fchmod(fd, mode) == -1) {
 				ERR("%s: fchmod", path);
 				return 0;
@@ -176,7 +202,7 @@ set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	mode_t		 mode;
 	struct timespec	 ts[2];
 	struct stat      st;
-	bool		 pres_exec;
+	bool		 pres_exec, changed_owner = false;
 	int		 flags = pinned == -1 ? AT_SYMLINK_NOFOLLOW : 0;
 
 	if (sess->opts->dry_run || (f->flstate & FLIST_SKIP_METADATA) != 0)
@@ -185,33 +211,35 @@ set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	pres_exec = !newfile && S_ISREG(f->st.mode) &&
 	    (sess->opts->preserve_executability && !sess->opts->preserve_perms);
 
-	if (pres_exec || sess->opts->ign_non_exist) {
-		int rc = pinned == -1 ?
-		    fstatat(rootfd, f->path, &st, AT_SYMLINK_NOFOLLOW) :
-		    fstat(pinned, &st);
-		if (rc == -1) {
-			if (errno == ENOENT)
-				return 1;
-			ERR("%s: stat metadata target", path);
-			return 0;
-		}
+	if (metadata_stat(-1, rootfd, path, pinned, &st) == -1) {
+		int save = errno;
+
+		if (errno == ENOENT && sess->opts->ign_non_exist)
+			return 1;
+		ERR("%s: stat metadata target", path);
+		errno = save;
+		return 0;
 	}
 
 	/* Conditionally adjust file modification time. */
 
 	if (sess->opts->preserve_times &&
 	    (!S_ISDIR(f->st.mode) || !sess->opts->omit_dir_times)) {
-		ts[0].tv_nsec = UTIME_NOW;
-		ts[1].tv_sec = f->st.mtime;
-		ts[1].tv_nsec = 0;
-		if (utimensat(rootfd, path, ts, flags) == -1) {
-			int save = errno;
+		if (st.st_mtime == f->st.mtime)
+			LOG4("%s: date unchanged", f->path);
+		else {
+			ts[0].tv_nsec = UTIME_NOW;
+			ts[1].tv_sec = f->st.mtime;
+			ts[1].tv_nsec = 0;
+			if (utimensat(rootfd, path, ts, flags) == -1) {
+				int save = errno;
 
-			ERR("%s: utimensat (2)", path);
-			errno = save;
-			return 0;
+				ERR("%s: utimensat (2)", path);
+				errno = save;
+				return 0;
+			}
+			LOG4("%s: updated date", f->path);
 		}
-		LOG4("%s: updated date", f->path);
 	}
 
 	/*
@@ -232,19 +260,25 @@ set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	mode = f->st.mode;
 
 	if (uid != (uid_t)-1 || gid != (gid_t)-1) {
-		if (fchownat(rootfd, path, uid, gid, flags) == -1) {
-			if (errno != EPERM || sess->opts->bx_protocol) {
-				int save = errno;
+		if ((uid == (uid_t)-1 || st.st_uid == uid) &&
+		    (gid == (gid_t)-1 || st.st_gid == gid)) {
+			LOG4("%s: uid and gid unchanged", f->path);
+		} else {
+			changed_owner = true;
+			if (fchownat(rootfd, path, uid, gid, flags) == -1) {
+				if (errno != EPERM || sess->opts->bx_protocol) {
+					int save = errno;
 
-				ERR("%s: fchownat", path);
-				errno = save;
-				return 0;
-			}
-			if (geteuid() == 0)
-				WARNX("%s: identity unknown or not available "
-				    "to user.group: %u.%u", f->path, uid, gid);
-		} else
-			LOG4("%s: updated uid and/or gid", f->path);
+					ERR("%s: fchownat", path);
+					errno = save;
+					return 0;
+				}
+				if (geteuid() == 0)
+					WARNX("%s: identity unknown or not available "
+					    "to user.group: %u.%u", f->path, uid, gid);
+			} else
+				LOG4("%s: updated uid and/or gid", f->path);
+		}
 	}
 
 	if (!bx_rsync_meta_apply(sess, pinned, rootfd, f, path, 1))
@@ -253,7 +287,9 @@ set_metadata_at(struct sess *sess, int newfile, int rootfd,
 	/* Conditionally adjust file permissions. */
 
 	if (newfile || sess->opts->preserve_perms) {
-		if (mode != 0 && !(pinned != -1 && S_ISLNK(f->st.mode))) {
+		if (mode != 0 && !(pinned != -1 && S_ISLNK(f->st.mode)) &&
+		    (changed_owner || bx_rsync_meta_count(f->metadata) != 0 ||
+		     (st.st_mode & 07777) != (mode & 07777))) {
 			if (fchmodat(rootfd, path, mode, flags) == -1) {
 				if (!(S_ISLNK(f->st.mode) && errno == EOPNOTSUPP)) {
 					int save = errno;
@@ -267,7 +303,9 @@ set_metadata_at(struct sess *sess, int newfile, int rootfd,
 		}
 	} else if (pres_exec) {
 		mode = preserve_executability_check(mode, st.st_mode);
-		if (mode != 0) {
+		if (mode != 0 &&
+		    (changed_owner || bx_rsync_meta_count(f->metadata) != 0 ||
+		     (st.st_mode & 07777) != (mode & 07777))) {
 			if (fchmodat(rootfd, path, mode, flags) == -1) {
 				int save = errno;
 

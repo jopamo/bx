@@ -187,6 +187,13 @@ bx_rsync_meta_free(struct bx_rsync_meta *m)
 	free(m);
 }
 
+size_t
+bx_rsync_meta_count(const struct bx_rsync_meta *m)
+{
+
+	return m == NULL ? 0 : m->count;
+}
+
 void
 bx_rsync_meta_cleanup(struct sess *sess)
 {

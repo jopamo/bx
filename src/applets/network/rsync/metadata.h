@@ -12,6 +12,7 @@ struct ident;
 int bx_rsync_meta_negotiate(struct sess *, int, int);
 int bx_rsync_meta_prepare(struct sess *, const struct flist *, struct bx_rsync_meta **);
 void bx_rsync_meta_free(struct bx_rsync_meta *);
+size_t bx_rsync_meta_count(const struct bx_rsync_meta *);
 int bx_rsync_meta_send(struct sess *, int, const struct bx_rsync_meta *,
     struct ident **, size_t *, struct ident **, size_t *);
 int bx_rsync_meta_recv(struct sess *, int, struct flist *);
