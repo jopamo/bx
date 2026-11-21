@@ -57,6 +57,9 @@
  */
 #define	OBUF_SIZE	(1024 * 1024)
 
+/* Flush matched output periodically to retain sender/receiver overlap. */
+#define	OBUF_BATCH_SIZE	(4 * 1024)
+
 enum	downloadst {
 	DOWNLOAD_READ_NEXT = 0,
 	DOWNLOAD_READ_LOCAL,
@@ -1134,12 +1137,15 @@ protocol_token_ff(struct sess *sess, struct download *p, size_t tok)
 		}
 
 		fmap_untrap(p->map);
+
+		if (!sess->opts->dry_run &&
+		    p->obufsz >= OBUF_BATCH_SIZE &&
+		    !buf_copy(NULL, 0, p, sess)) {
+			ERRX("buf_copy");
+			return TOKEN_ERROR;
+		}
 	}
 
-	if (!sess->opts->dry_run && !buf_copy(NULL, 0, p, sess)) {
-		ERRX("buf_copy");
-		return TOKEN_ERROR;
-	}
 	if (sess->opts->compress) {
 		if (protocol_token_ff_compress(p, tok) == TOKEN_ERROR) {
 			ERRX1("protocol_token_ff_compress");
