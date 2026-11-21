@@ -43,6 +43,9 @@
 
 #define PHASE_MAX	2
 
+/* Fill at most this much before yielding to the event loop. */
+#define SENDER_BATCH_SIZE	(MAX_CHUNK / 8)
+
 struct	success_ctx {
 	struct sess	*sess;
 	const struct fl	*fl;
@@ -1374,6 +1377,8 @@ rsync_sender(struct sess *sess, int fdin,
 	for (;;) {
 #define	READ_AVAIL(pfd, iobuf) \
 	(((pfd)[0].revents & POLLIN) != 0 || iobuf_get_readsz((iobuf)) != 0)
+		if (phase > (size_t)max_phase && wbufsz == 0)
+			break;
 		assert(pfd[0].fd != -1 || iobuf_seen_eof(&rbuf));
 
 		if (iobuf_get_readsz(&rbuf) > 0) {
@@ -1690,33 +1695,44 @@ rsync_sender(struct sess *sess, int fdin,
 
 		if (((up.stat.curst == BLKSTAT_PHASE && READ_AVAIL(pfd, &rbuf)) ||
 		    (pfd[1].revents & POLLOUT)) && up.cur != NULL) {
-			struct flist *curfl;
-			size_t curidx;
+			size_t batch_phase = phase;
 
 			assert(pfd[2].fd == -1);
-			assert(wbufpos == 0 && wbufsz == 0);
-			curidx = up.cur->idx;
-			if (sess->opts->compress) {
-				res = send_up_fsm_compressed(sess, &phase, &up,
-				    &wbuf, &wbufsz, &wbufmax, fl.flp);
-			} else {
-				res = send_up_fsm(sess, &phase, &up,
-				    &wbuf, &wbufsz, &wbufmax, fl.flp);
-			}
+			do {
+				struct flist *curfl;
+				size_t curidx = up.cur->idx;
 
-			if (curidx != -1) {
-				curfl = &fl.flp[curidx];
-				rsync_progress(sess, curfl->st.size,
-				    up.stat.curpos,
-				    up.stat.curst == BLKSTAT_DONE, curidx,
-				    fl.sz);
-			}
+				if (sess->opts->compress) {
+					res = send_up_fsm_compressed(sess, &phase,
+					    &up, &wbuf, &wbufsz, &wbufmax, fl.flp);
+				} else {
+					res = send_up_fsm(sess, &phase, &up,
+					    &wbuf, &wbufsz, &wbufmax, fl.flp);
+				}
 
-			if (!res) {
-				ERRX1("send_up_fsm");
-				goto out;
-			} else if (phase > (size_t)max_phase) {
-				break;
+				if (curidx != (size_t)-1) {
+					curfl = &fl.flp[curidx];
+					rsync_progress(sess, curfl->st.size,
+					    up.stat.curpos,
+					    up.stat.curst == BLKSTAT_DONE,
+					    curidx, fl.sz);
+				}
+
+				if (!res) {
+					ERRX1("send_up_fsm");
+					goto out;
+				}
+				if (phase > (size_t)max_phase || up.cur == NULL ||
+				    phase != batch_phase ||
+				    wbufsz >= SENDER_BATCH_SIZE)
+					break;
+			} while (pfd[1].revents & POLLOUT);
+
+			if (phase > (size_t)max_phase) {
+				if (wbufsz == 0)
+					break;
+				pfd[1].fd = fdout;
+				continue;
 			}
 		}
 
