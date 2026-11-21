@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
+/* glibc exposes O_PATH only with _GNU_SOURCE; musl exposes it directly. */
+#define _GNU_SOURCE
+
 #include "scan.h"
 
 #include <errno.h>
