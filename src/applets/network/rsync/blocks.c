@@ -165,7 +165,7 @@ blk_find(struct sess *sess, struct blkstat *st,
 	uint32_t	 fhash;
 	off_t		 remain, osz;
 	int		 have_md = 0;
-	char		*map;
+	signed char	*map; /* matches hash_fast() signed-byte arithmetic */
 	const struct blkhashq *q;
 	const struct blkhash *ent;
 
