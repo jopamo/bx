@@ -686,6 +686,14 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "free",
+      "main": "bx_free_main",
+      "capabilities": [
+        "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "pslog",
       "main": "bx_pslog_main",
       "capabilities": [
@@ -708,6 +716,14 @@
       "main": "bx_prtstat_main",
       "capabilities": [
         "filesystem-read"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
+      "name": "logger",
+      "main": "bx_logger_main",
+      "capabilities": [
+        "network-access"
       ],
       "execution_class": "exec-only"
     },

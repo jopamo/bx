@@ -785,6 +785,7 @@ bx_system_applet_sources = [
   'src/applets/system/init/init_config.c',
   'src/applets/system/init/init_runtime.c',
   'src/applets/system/syslogd/syslogd.c',
+  'src/applets/system/logger/logger.c',
   'src/applets/system/install/install.c',
   'src/applets/system/kill/kill.c',
   'src/applets/system/killall/killall.c',
@@ -792,6 +793,7 @@ bx_system_applet_sources = [
   'src/applets/system/nice/nice.c',
   'src/applets/system/peekfd/peekfd.c',
   'src/applets/system/prtstat/prtstat.c',
+  'src/applets/system/free/free.c',
   'src/applets/system/ps/ps.c',
   'src/applets/system/pslog/pslog.c',
   'src/applets/system/psmisc/procfs.c',
@@ -1551,7 +1553,7 @@ endif
 if not install_bash_shortcut
   disabled_shell_shortcut_names += ['bash']
 endif
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'blkid', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip', 'pidof', 'sysctl', 'swapon', 'mkswap', 'pivot_root', 'modinfo', 'modprobe']
+system_conflict_applet_names = ['ps', 'free', 'logger', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount', 'blockdev', 'blkid', 'findfs', 'losetup', 'insmod', 'lsmod', 'rmmod', 'ip', 'pidof', 'sysctl', 'swapon', 'mkswap', 'pivot_root', 'modinfo', 'modprobe']
 systemwide_disabled_applet_names = ['ps', 'find', 'xargs', 'diff', 'hexdump', 'bzcat', 'xzcat', 'bunzip2', 'unxz', 'bzip2', 'xz', 'depmod']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
