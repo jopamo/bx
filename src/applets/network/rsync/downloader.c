@@ -1070,7 +1070,6 @@ protocol_token_ff(struct sess *sess, struct download *p, size_t tok)
 	char		*buf = NULL;
 	size_t		 sz;
 	off_t		 off;
-	int		 c;
 
 	assert(p->state != DOWNLOAD_FLUSH_REMOTE);
 
@@ -1165,14 +1164,6 @@ protocol_token_ff(struct sess *sess, struct download *p, size_t tok)
 	}
 	MD4_Update(&p->ctx, buf, sz);
 	fmap_untrap(p->map);
-
-	/* Fast-track more reads as they arrive. */
-	if ((c = io_read_check(sess, p->fdin)) < 0) {
-		ERRX1("io_read_check");
-		return TOKEN_ERROR;
-	} else if (c > 0) {
-		return TOKEN_RETRY;
-	}
 
 	return TOKEN_RETRY;
 }
