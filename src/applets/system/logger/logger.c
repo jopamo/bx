@@ -211,25 +211,24 @@ static bool bx_logger_parse_options(int argc, char** argv, struct bx_logger_opti
     return true;
 }
 
-static int bx_logger_open_socket(const char* path, struct bx_diag_ctx* diag) {
+static int bx_logger_open_socket(const char* path) {
     struct sockaddr_un address;
     memset(&address, 0, sizeof(address));
     address.sun_family = AF_UNIX;
     if (strlen(path) >= sizeof(address.sun_path)) {
-        bx_diag(diag, "socket path is too long: '%s'", path);
+        errno = ENAMETOOLONG;
         return -1;
     }
     memcpy(address.sun_path, path, strlen(path) + 1u);
 
     int fd = bx_fd_socket_cloexec(AF_UNIX, SOCK_DGRAM, 0);
     if (fd < 0) {
-        bx_diag(diag, "cannot create syslog socket: %s", strerror(errno));
         return -1;
     }
     if (connect(fd, (const struct sockaddr*)&address, sizeof(address)) != 0) {
         int saved_errno = errno;
         bx_fd_cleanup(&fd);
-        bx_diag(diag, "cannot connect to %s: %s", path, strerror(saved_errno));
+        errno = saved_errno;
         return -1;
     }
     return fd;
@@ -237,16 +236,23 @@ static int bx_logger_open_socket(const char* path, struct bx_diag_ctx* diag) {
 
 static int bx_logger_connect(struct bx_logger_options* options, const char** path_out,
                              struct bx_diag_ctx* diag) {
-    int fd = bx_logger_open_socket(options->socket_path, diag);
-    *path_out = options->socket_path;
-    if (fd >= 0 || options->socket_explicit || errno != ENOENT) {
+    const char* path = options->socket_path;
+    int fd = bx_logger_open_socket(path);
+    if (fd >= 0) {
+        *path_out = path;
         return fd;
     }
+    if (!options->socket_explicit && errno == ENOENT) {
+        path = BX_LOGGER_FALLBACK_SOCKET;
+        fd = bx_logger_open_socket(path);
+        if (fd >= 0) {
+            *path_out = path;
+            return fd;
+        }
+    }
 
-    diag->exit_status = 0;
-    fd = bx_logger_open_socket(BX_LOGGER_FALLBACK_SOCKET, diag);
-    *path_out = BX_LOGGER_FALLBACK_SOCKET;
-    return fd;
+    bx_diag(diag, "cannot connect to %s: %s", path, strerror(errno));
+    return -1;
 }
 
 static bool bx_logger_send(int fd, const char* path, int priority, const char* tag,
