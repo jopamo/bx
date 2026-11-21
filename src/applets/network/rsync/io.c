@@ -174,40 +174,51 @@ io_write_nonblocking(int fd, const void *buf, size_t bsz,
 	pfd.fd = fd;
 	pfd.events = POLLOUT;
 
-	/* Poll and check for all possible errors. */
+	for (;;) {
+		/*
+		 * All rsync I/O descriptors are nonblocking.  Try the write
+		 * before polling so local pipes do not pay a poll syscall for
+		 * every protocol message.
+		 */
+		wsz = write(fd, buf, bsz);
+		if (wsz >= 0) {
+			*sz = (size_t)wsz;
+			return 1;
+		}
+		if (errno == EINTR)
+			continue;
+		if (errno != EAGAIN && errno != EWOULDBLOCK) {
+			if (raise_errors)
+				ERR("write");
+			return 0;
+		}
 
-	if ((c = poll(&pfd, 1, poll_timeout)) == -1) {
-		if (raise_errors)
-			ERR("poll");
-		return 0;
-	} else if (c == 0) {
-		if (raise_errors)
-			ERRX("poll: timeout");
-		return 0;
-	} else if ((pfd.revents & (POLLERR|POLLNVAL))) {
-		if (raise_errors)
-			ERRX("poll: bad fd");
-		return 0;
-	} else if ((pfd.revents & POLLHUP)) {
-		if (raise_errors)
-			ERRX("poll: hangup on nonblocking write");
-		return 0;
-	} else if (!(pfd.revents & POLLOUT)) {
-		if (raise_errors)
-			ERRX("poll: unknown event");
-		return 0;
+		/* Poll and check for all possible errors. */
+		c = poll(&pfd, 1, poll_timeout);
+		if (c == -1) {
+			if (errno == EINTR)
+				continue;
+			if (raise_errors)
+				ERR("poll");
+			return 0;
+		} else if (c == 0) {
+			if (raise_errors)
+				ERRX("poll: timeout");
+			return 0;
+		} else if ((pfd.revents & (POLLERR|POLLNVAL))) {
+			if (raise_errors)
+				ERRX("poll: bad fd");
+			return 0;
+		} else if ((pfd.revents & POLLHUP)) {
+			if (raise_errors)
+				ERRX("poll: hangup on nonblocking write");
+			return 0;
+		} else if (!(pfd.revents & POLLOUT)) {
+			if (raise_errors)
+				ERRX("poll: unknown event");
+			return 0;
+		}
 	}
-
-	/* Now the non-blocking write. */
-
-	if ((wsz = write(fd, buf, bsz)) == -1) {
-		if (raise_errors)
-			ERR("write");
-		return 0;
-	}
-
-	*sz = wsz;
-	return 1;
 }
 
 /*
@@ -476,34 +487,46 @@ io_read_nonblocking(int fd, void *buf, size_t bsz, size_t *sz, bool eof_ok)
 	pfd.fd = fd;
 	pfd.events = POLLIN;
 
-	/* Poll and check for all possible errors. */
+	for (;;) {
+		/*
+		 * All rsync I/O descriptors are nonblocking.  Try the read
+		 * before polling so data already in a local pipe is consumed
+		 * without an extra poll syscall.
+		 */
+		rsz = read(fd, buf, bsz);
+		if (rsz >= 0) {
+			if (rsz == 0 && !eof_ok) {
+				ERRX("unexpected end of file");
+				return 0;
+			}
+			*sz = (size_t)rsz;
+			return 1;
+		}
+		if (errno == EINTR)
+			continue;
+		if (errno != EAGAIN && errno != EWOULDBLOCK) {
+			ERR("read");
+			return 0;
+		}
 
-	if ((c = poll(&pfd, 1, poll_timeout)) == -1) {
-		ERR("poll");
-		return 0;
-	} else if (c == 0) {
-		ERRX("poll: timeout");
-		return 0;
-	} else if ((pfd.revents & (POLLERR|POLLNVAL))) {
-		ERRX("poll: bad fd");
-		return 0;
-	} else if (!(pfd.revents & (POLLIN|POLLHUP))) {
-		ERRX("poll: unknown event");
-		return 0;
+		/* Poll and check for all possible errors. */
+		c = poll(&pfd, 1, poll_timeout);
+		if (c == -1) {
+			if (errno == EINTR)
+				continue;
+			ERR("poll");
+			return 0;
+		} else if (c == 0) {
+			ERRX("poll: timeout");
+			return 0;
+		} else if ((pfd.revents & (POLLERR|POLLNVAL))) {
+			ERRX("poll: bad fd");
+			return 0;
+		} else if (!(pfd.revents & (POLLIN|POLLHUP))) {
+			ERRX("poll: unknown event");
+			return 0;
+		}
 	}
-
-	/* Now the non-blocking read, checking for EOF. */
-
-	if ((rsz = read(fd, buf, bsz)) == -1) {
-		ERR("read");
-		return 0;
-	} else if (rsz == 0 && !eof_ok) {
-		ERRX("unexpected end of file");
-		return 0;
-	}
-
-	*sz = rsz;
-	return 1;
 }
 
 /*
