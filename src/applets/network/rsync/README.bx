@@ -27,7 +27,6 @@ Local changes to Apple's files:
   ALLPERMS.
 - Apple-private tracing is optional when its SDK header is unavailable.
 
-This is openrsync, not a GNU rsync CLI clone. The private protocol extension
-is documented in bx-tests/docs/rsync-protocol-29.5.md.
+This is openrsync, not a GNU rsync CLI clone.
 The bx executable is still Linux-only due to its fetch subsystem; building
 the standalone openrsync on a Unix host does not remove that restriction.
