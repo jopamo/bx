@@ -22,6 +22,7 @@ static void usage(FILE* out, const char* name) {
 #include <sys/uio.h>
 #include <sys/vfs.h>
 
+#include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/open_resolve.h"
 #include "lib/xreadwrite.h"
@@ -158,9 +159,8 @@ int bx_sysctl_main(int argc, char** argv) {
         {NULL, 0, NULL, 0},
     };
     bool writing = false, quiet = false, values = false, names = false;
-    optind = 1;
-    opterr = 0;
-    for (int opt; (opt = getopt_long(argc, argv, "+nNqw", opts, NULL)) != -1;) {
+    bx_args_getopt_reset();
+    for (int opt; (opt = bx_args_getopt_long(argc, argv, "+nNqw", opts, NULL)) != -1;) {
         switch (opt) {
         case 'n': values = true; break;
         case 'N': names = true; break;

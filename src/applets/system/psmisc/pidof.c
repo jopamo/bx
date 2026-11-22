@@ -19,6 +19,7 @@ static void usage(FILE* out, const char* name) {
 #include <string.h>
 
 #include "applets/system/psmisc/procfs.h"
+#include "lib/args_common.h"
 #include "lib/path_ops.h"
 
 struct pidof_query {
@@ -56,9 +57,8 @@ int bx_pidof_main(int argc, char** argv) {
         {NULL, 0, NULL, 0},
     };
     bool quiet = false, single = false;
-    opterr = 0;
-    optind = 1;
-    for (int opt; (opt = getopt_long(argc, argv, "qs", long_options, NULL)) != -1;) {
+    bx_args_getopt_reset();
+    for (int opt; (opt = bx_args_getopt_long(argc, argv, "qs", long_options, NULL)) != -1;) {
         switch (opt) {
         case 'q': quiet = true; break;
         case 's': single = true; break;
