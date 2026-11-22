@@ -57,25 +57,9 @@
 
 /*
  * SET reads 4 input bytes in little-endian byte order and stores them in a
- * properly aligned word in host byte order.
- *
- * The check for little-endian architectures that tolerate unaligned memory
- * accesses is just an optimization.  Nothing will break if it fails to detect
- * a suitable architecture.
- *
- * Unfortunately, this optimization may be a C strict aliasing rules violation
- * if the caller's data buffer has effective type that cannot be aliased by
- * MD4_u32plus.  In practice, this problem may occur if these MD4 routines are
- * inlined into a calling function, or with future and dangerously advanced
- * link-time optimizations.  For the time being, keeping these MD4 routines in
- * their own translation unit avoids the problem.
+ * properly aligned word in host byte order. The input may be unaligned
+ * and need not have the effective type of MD4_u32plus.
  */
-#if defined(__i386__) || defined(__x86_64__) || defined(__vax__)
-#define SET(n) \
-	(*(MD4_u32plus *)&ptr[(n) * 4])
-#define GET(n) \
-	SET(n)
-#else
 #define SET(n) \
 	(ctx->block[(n)] = \
 	(MD4_u32plus)ptr[(n) * 4] | \
@@ -84,7 +68,6 @@
 	((MD4_u32plus)ptr[(n) * 4 + 3] << 24))
 #define GET(n) \
 	(ctx->block[(n)])
-#endif
 
 /*
  * This processes one or more 64-byte data blocks, but does NOT update the bit
