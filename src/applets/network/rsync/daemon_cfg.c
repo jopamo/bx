@@ -803,10 +803,12 @@ cfg_param_long(struct daemon_cfg *dcfg, const char *which_mod, const char *key,
 
 	errno = 0;
 	lval = strtol(valuestr, &endp, 10);
-	if (errno != 0 || *endp != '\0') {
+	if (endp == valuestr || *endp != '\0') {
 		errno = EINVAL;
 		return -1;
 	}
+	if (errno != 0)
+		return -1;
 
 	*val = lval;
 	return 0;
