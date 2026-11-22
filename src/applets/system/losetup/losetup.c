@@ -216,8 +216,10 @@ out:
     bx_fd_cleanup(&control);
     return status;
 }
+#endif
 
 int bx_losetup_main(int argc, char** argv) {
+#ifdef __linux__
     static const struct option long_options[] = {
         {"find", no_argument, NULL, 'f'}, {"show", no_argument, NULL, 256},
         {"detach", no_argument, NULL, 'd'}, {"read-only", no_argument, NULL, 'r'},
@@ -308,12 +310,10 @@ int bx_losetup_main(int argc, char** argv) {
         return status;
     }
     return attach_loop(argv[optind], argv[optind + 1], &opts, &diag);
-}
 #else
-int bx_losetup_main(int argc, char** argv) {
     (void)argc;
     (void)argv;
     fputs("losetup: Linux loop devices are not supported on this platform\n", stderr);
     return 1;
-}
 #endif
+}

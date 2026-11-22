@@ -2142,13 +2142,11 @@ child_exited(pid_t pid, int st)
 	}
 }
 
-#ifdef BX_RSYNC_APPLET
+#ifndef BX_RSYNC_APPLET
+#define bx_rsync_main main
+#endif
 int
 bx_rsync_main(int argc, char *argv[])
-#else
-int
-main(int argc, char *argv[])
-#endif
 {
 	pid_t		 child;
 	int		 fds[2], sd = -1, rc, rc2, st, i;

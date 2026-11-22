@@ -7,8 +7,10 @@
 #ifdef __linux__
 #include "lib/fd_ops.h"
 #include "module_load.h"
+#endif
 
 int bx_insmod_main(int argc, char** argv) {
+#ifdef __linux__
     struct bx_diag_ctx diag = {.progname = "insmod"};
     int operand = 1;
     if (argc > 1 && strcmp(argv[1], "--help") == 0) {
@@ -49,12 +51,10 @@ int bx_insmod_main(int argc, char** argv) {
     bx_fd_cleanup(&fd);
     free(parameters);
     return status;
-}
 #else
-int bx_insmod_main(int argc, char** argv) {
     (void)argc;
     (void)argv;
     fputs("insmod: Linux module loading is not supported on this platform\n", stderr);
     return 1;
-}
 #endif
+}
