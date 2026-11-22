@@ -31,19 +31,12 @@
 #include <time.h>
 #include <unistd.h>
 #include "dispatch/applets.h"
+#include "lib/size_parse.h"
 
 struct knock_port {
     char service[6];
     bool udp;
 };
-
-static bool number(const char *text, unsigned long limit, unsigned long *value) {
-    if (*text < '0' || *text > '9') return false;
-    char *end;
-    errno = 0;
-    *value = strtoul(text, &end, 10);
-    return !errno && !*end && *value <= limit;
-}
 
 static void usage(FILE *out) {
     fputs("Usage: knock [options] host port[:tcp|udp] ...\n"
@@ -65,7 +58,7 @@ int bx_knock_main(int argc, char **argv) {
     };
     bool udp = false, verbose = false;
     int family = AF_UNSPEC, opt;
-    unsigned long delay = 0;
+    uintmax_t delay = 0;
     while ((opt = getopt_long(argc, argv, "ud:46vhV", options, NULL)) != -1) {
         switch (opt) {
         case 'u': udp = true; break;
@@ -73,7 +66,7 @@ int bx_knock_main(int argc, char **argv) {
         case '4': family = AF_INET; break;
         case '6': family = AF_INET6; break;
         case 'd':
-            if (!number(optarg, INT_MAX, &delay)) {
+            if (!bx_size_parse_uint(optarg, &delay) || delay > INT_MAX) {
                 fputs("knock: invalid delay\n", stderr);
                 return 1;
             }
@@ -99,8 +92,8 @@ int bx_knock_main(int argc, char **argv) {
             goto done;
         }
         memcpy(ports[i].service, arg, len);
-        unsigned long port;
-        if (!number(ports[i].service, 65535, &port) || !port) {
+        uintmax_t port;
+        if (!bx_size_parse_uint(ports[i].service, &port) || !port || port > UINT16_MAX) {
             fprintf(stderr, "knock: invalid port: %s\n", arg);
             goto done;
         }
