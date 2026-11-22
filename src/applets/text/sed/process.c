@@ -364,7 +364,7 @@ resetstate(void)
 	 */
 	for (cp = prog; cp; cp = cp->code == '{' ? cp->u.c : cp->next)
 		if (cp->a2)
-			cp->startline = 0;
+			cp->startline = cp->a1->type == AT_LINE && cp->a1->u.l == 0;
 
 	/*
 	 * Clear out the hold space.

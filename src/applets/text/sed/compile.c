@@ -68,7 +68,7 @@ static char	 *compile_delimited(char *, char *, int);
 static char	 *compile_flags(char *, struct s_subst *);
 static regex_t	 *compile_re(char *, int);
 static char	 *compile_subst(char *, struct s_subst *);
-static char	 *compile_text(void);
+static char	 *compile_text(char *);
 static char	 *compile_tr(char *, struct s_tr **);
 static struct s_command
 		**compile_stream(struct s_command **);
@@ -205,6 +205,12 @@ semicolon:	EATSPACE();
 		} else
 			cmd->a1 = cmd->a2 = NULL;
 
+		if (cmd->a1 && cmd->a1->type == AT_LINE && cmd->a1->u.l == 0) {
+			if (!cmd->a2 || cmd->a2->type != AT_RE)
+				errx(1, "%lu: %s: address 0 requires a regex range", linenum, fname);
+			cmd->startline = 1;
+		}
+
 nonsel:		/* Now parse the command */
 		if (!*p)
 			errx(1, "%lu: %s: command expected", linenum, fname);
@@ -248,8 +254,8 @@ nonsel:		/* Now parse the command */
 		case EMPTY:		/* d D g G h H l n N p P q x = \0 */
 			p++;
 			EATSPACE();
-			if (*p == ';') {
-				p++;
+			if (*p == ';' || *p == '}') {
+				if (*p == ';') p++;
 				link = &cmd->next;
 				goto semicolon;
 			}
@@ -259,17 +265,13 @@ nonsel:		/* Now parse the command */
 			break;
 		case TEXT:			/* a c i */
 			p++;
-			EATSPACE();
-			if (*p != '\\')
-				errx(1,
-"%lu: %s: command %c expects \\ followed by text", linenum, fname, cmd->code);
-			p++;
-			EATSPACE();
-			if (*p)
-				errx(1,
-				"%lu: %s: extra characters after \\ at the end of %c command",
-				linenum, fname, cmd->code);
-			cmd->t = compile_text();
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (*p == '\\')
+				p++;
+			else if (!*p || *p == '\n')
+				errx(1, "%lu: %s: missing text for %c command", linenum, fname, cmd->code);
+			cmd->t = compile_text(*p && *p != '\n' ? p : NULL);
 			break;
 		case COMMENT:			/* \0 # */
 			break;
@@ -295,21 +297,23 @@ nonsel:		/* Now parse the command */
 				cmd->t = duptoeol(p, "read command");
 			break;
 		case BRANCH:			/* b t */
+		case LABEL: {			/* : */
+			char *start;
 			p++;
 			EATSPACE();
-			if (*p == '\0')
-				cmd->t = NULL;
-			else
-				cmd->t = duptoeol(p, "branch");
-			break;
-		case LABEL:			/* : */
-			p++;
-			EATSPACE();
-			cmd->t = duptoeol(p, "label");
-			if (strlen(p) == 0)
-				errx(1, "%lu: %s: empty label", linenum, fname);
-			enterlabel(cmd);
-			break;
+			start = p;
+			while (*p && !isspace((unsigned char)*p) && *p != ';' && *p != '}')
+				p++;
+			cmd->t = NULL;
+			if (p != start && (cmd->t = strndup(start, p - start)) == NULL)
+				err(1, "strndup");
+			if (fp->args == LABEL) {
+				if (!cmd->t)
+					errx(1, "%lu: %s: empty label", linenum, fname);
+				enterlabel(cmd);
+			}
+			goto semicolon;
+		}
 		case SUBST:			/* s */
 			p++;
 			if (*p == '\0' || *p == '\\')
@@ -338,8 +342,8 @@ nonsel:		/* Now parse the command */
 			else
 				cmd->u.s->re = compile_re(re, cmd->u.s->icase);
 			EATSPACE();
-			if (*p == ';') {
-				p++;
+			if (*p == ';' || *p == '}') {
+				if (*p == ';') p++;
 				link = &cmd->next;
 				goto semicolon;
 			}
@@ -348,8 +352,8 @@ nonsel:		/* Now parse the command */
 			p++;
 			p = compile_tr(p, &cmd->u.y);
 			EATSPACE();
-			if (*p == ';') {
-				p++;
+			if (*p == ';' || *p == '}') {
+				if (*p == ';') p++;
 				link = &cmd->next;
 				goto semicolon;
 			}
@@ -697,6 +701,7 @@ compile_flags(char *p, struct s_subst *s)
 		case '\0':
 		case '\n':
 		case ';':
+		case '}':
 			return (p);
 		case 'p':
 			s->p = 1;
@@ -852,7 +857,7 @@ compile_tr(char *p, struct s_tr **py)
  * Compile the text following an a, c, or i command.
  */
 static char *
-compile_text(void)
+compile_text(char *first)
 {
 	int asize, esc_nl, size;
 	char *text, *p, *op, *s;
@@ -862,15 +867,20 @@ compile_text(void)
 	if ((text = malloc(asize)) == NULL)
 		err(1, "malloc");
 	size = 0;
-	while (cu_fgets(lbuf, sizeof(lbuf), NULL) != NULL) {
+	while ((p = first ? first : cu_fgets(lbuf, sizeof(lbuf), NULL)) != NULL) {
 		op = s = text + size;
-		p = lbuf;
+		first = NULL;
 #ifdef LEGACY_BSDSED_COMPAT
 		EATSPACE();
 #endif
 		for (esc_nl = 0; *p != '\0'; p++) {
-			if (*p == '\\' && p[1] != '\0' && *++p == '\n')
-				esc_nl = 1;
+			if (*p == '\\' && p[1] != '\0') {
+				p++;
+				if (*p == '\n') esc_nl = 1;
+				else if (*p == 'n') { *s++ = '\n'; continue; }
+				else if (*p == 't') { *s++ = '\t'; continue; }
+				else if (*p == 'r') { *s++ = '\r'; continue; }
+			}
 			*s++ = *p;
 		}
 		size += s - op;

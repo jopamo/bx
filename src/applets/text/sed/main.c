@@ -40,6 +40,7 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <libgen.h>
 #include <limits.h>
 #include <locale.h>
@@ -131,7 +132,9 @@ bx_sed_main(int argc, char *argv[])
 	fflagstdin = 0;
 	inplace = NULL;
 
-	while ((c = getopt(argc, argv, "+EI:ae:f:i::lnru")) != -1)
+	/* Permit options after the script or input names, as used in bp. */
+	static const struct option longopts[] = {{0}};
+	while ((c = getopt_long(argc, argv, "EI:ae:f:i::lnru", longopts, NULL)) != -1)
 		switch (c) {
 		case 'r':		/* Gnu sed compat */
 		case 'E':
