@@ -58,7 +58,7 @@ option(
   'install_system_conflict_shortcuts',
   type : 'boolean',
   value : false,
-  description : 'Install applet shortcuts that can replace system providers, including sed and awk'
+  description : 'Install applet shortcuts that can replace system providers'
 )
 option(
   'init_kill_removed',
