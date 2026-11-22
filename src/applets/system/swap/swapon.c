@@ -24,16 +24,15 @@ static void usage(FILE* out, const char* name) {
 #include "lib/args_common.h"
 #include "lib/disk_tag.h"
 #include "lib/mount_table.h"
+#include "lib/size_parse.h"
 #include "lib/swap_table.h"
 
 static int swap_priority_flags(const char* text) {
     if (strcmp(text, "-1") == 0)
         return 0;
-    if (*text == '\0' || text[strspn(text, "0123456789")] != '\0')
-        return -1;
-    errno = 0;
-    unsigned long priority = strtoul(text, NULL, 10);
-    if (errno == ERANGE || priority > (SWAP_FLAG_PRIO_MASK >> SWAP_FLAG_PRIO_SHIFT))
+    uintmax_t priority;
+    if (!bx_size_parse_uint(text, &priority) ||
+        priority > (SWAP_FLAG_PRIO_MASK >> SWAP_FLAG_PRIO_SHIFT))
         return -1;
     return SWAP_FLAG_PREFER | (int)(priority << SWAP_FLAG_PRIO_SHIFT);
 }
