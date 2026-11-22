@@ -2,6 +2,7 @@
 #include "dos.h"
 #include "lib/fat/format/mkfs_msdos.h"
 
+#include <ctype.h>
 #include <err.h>
 #include <errno.h>
 #include <getopt.h>
@@ -14,10 +15,10 @@ static uint64_t number(const char *text, int base, uint64_t min, uint64_t max)
 {
     char *end;
     errno = 0;
-    if (!*text || *text == '-' || *text == '+' || *text == ' ')
+    if (!*text || *text == '-' || *text == '+' || isspace((unsigned char)*text))
         errx(1, "invalid number: %s", text);
     unsigned long long value = strtoull(text, &end, base);
-    if (errno || *end || value < min || value > max)
+    if (errno || end == text || *end || value < min || value > max)
         errx(1, "number out of range: %s", text);
     return value;
 }
