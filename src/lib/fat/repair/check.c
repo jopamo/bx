@@ -43,6 +43,7 @@ __RCSID("$NetBSD: check.c,v 1.14 2006/06/05 16:51:18 christos Exp $");
 
 #include "ext.h"
 #include "fsutil.h"
+#include "lib/fd_ops.h"
 
 int
 checkfilesys(const char *fname, bool dos_compat)
@@ -191,7 +192,7 @@ checkfilesys(const char *fname, bool dos_compat)
 		releasefat(fat);
 		free(fat);
 	}
-	if (!rdonly && fsync(dosfs) < 0) {
+	if (!rdonly && bx_fd_fsync(dosfs) < 0) {
 		perr("Unable to flush filesystem\n");
 		ret = 8;
 	}

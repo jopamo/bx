@@ -92,7 +92,7 @@ static bool create_swap(const char* target, const unsigned char* header, size_t 
         goto fail;
     }
     /* linkat is the commit point. It cannot replace an existing name. */
-    if (fsync(fd) < 0 || bx_fd_publish_anonymous_file_at(fd, dir, parts.basename) < 0)
+    if (bx_fd_fsync(fd) < 0 || bx_fd_publish_anonymous_file_at(fd, dir, parts.basename) < 0)
         goto fail;
     ok = true;
     goto done;

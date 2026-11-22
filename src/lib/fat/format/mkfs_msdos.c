@@ -47,6 +47,7 @@
 #include <unistd.h>
 
 #include "mkfs_msdos.h"
+#include "lib/fd_ops.h"
 
 #define	MAXU16	  0xffff	/* maximum unsigned 16-bit quantity */
 #define	BPN	  4		/* bits per nibble */
@@ -759,7 +760,7 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 done:
     free(physbuf);
     if (fd != -1) {
-	if (rv == 0 && !o.no_create && fsync(fd) < 0) {
+	if (rv == 0 && !o.no_create && bx_fd_fsync(fd) < 0) {
 	    warn("%s: flush", fname);
 	    rv = -1;
 	}

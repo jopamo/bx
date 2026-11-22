@@ -368,6 +368,7 @@
 #include <dirent.h>     // opendir(), readdir(), closedir(), DIR,
                         // struct dirent
 #include <limits.h>     // UINT_MAX, INT_MAX
+#include "lib/fd_ops.h"
 #if __STDC_VERSION__-0 >= 199901L || __GNUC__-0 >= 3
 #  include <inttypes.h> // intmax_t, uintmax_t
    typedef uintmax_t length_t;
@@ -3723,7 +3724,7 @@ local void out_push(void) {
 #elif defined(_WIN32)
     int ret = _commit(g.outd);
 #else
-    int ret = fsync(g.outd);
+    int ret = bx_fd_fsync(g.outd);
 #endif
     if (ret == -1)
         throw(errno, "sync error on %s (%s)", g.outf, strerror(errno));
