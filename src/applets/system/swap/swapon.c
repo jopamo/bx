@@ -21,6 +21,7 @@ static void usage(FILE* out, const char* name) {
 #include <sys/stat.h>
 #include <sys/swap.h>
 
+#include "lib/args_common.h"
 #include "lib/disk_tag.h"
 #include "lib/mount_table.h"
 #include "lib/swap_table.h"
@@ -169,9 +170,8 @@ int bx_swapon_main(int argc, char** argv) {
     bool all = false;
     bool priority = false;
     const char* fstab = NULL;
-    optind = 1;
-    opterr = 0;
-    for (int opt; (opt = getopt_long(argc, argv, "+:aT:p:", opts, NULL)) != -1;) {
+    bx_args_getopt_reset();
+    for (int opt; (opt = bx_args_getopt_long(argc, argv, "+:aT:p:", opts, NULL)) != -1;) {
         if (opt == 'a') {
             all = true;
         } else if (opt == 'T') {

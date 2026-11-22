@@ -18,6 +18,7 @@ static void usage(FILE* out, const char* name) {
 #include <stdlib.h>
 #include <string.h>
 
+#include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/random_bytes.h"
@@ -119,9 +120,8 @@ int bx_mkswap_main(int argc, char** argv) {
     const char* label = "", *uuid_text = NULL;
     uintmax_t bytes = 0;
     bool create = false;
-    optind = 1;
-    opterr = 0;
-    for (int opt; (opt = getopt_long(argc, argv, "+:Fs:L:U:", opts, NULL)) != -1;) {
+    bx_args_getopt_reset();
+    for (int opt; (opt = bx_args_getopt_long(argc, argv, "+:Fs:L:U:", opts, NULL)) != -1;) {
         switch (opt) {
         case 'F': create = true; break;
         case 's':
