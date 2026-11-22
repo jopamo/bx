@@ -58,7 +58,7 @@ option(
   'install_system_conflict_shortcuts',
   type : 'boolean',
   value : false,
-  description : 'Install applet shortcuts that can collide with procps/systemd/iputils/iproute2/util-linux binaries'
+  description : 'Install applet shortcuts that can replace system providers, including sed and awk'
 )
 option(
   'init_kill_removed',
