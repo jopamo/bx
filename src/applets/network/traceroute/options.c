@@ -415,11 +415,13 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
         {NULL, 0, NULL, 0},
     };
     bool posix = getenv("POSIXLY_CORRECT") != NULL;
+    /* Some libcs only stop at the first operand when '+' is explicit. */
+    const char short_options[] = "+:46dFnreAf:m:N:t:l:q:i:M:ITULDp:g:s:O:P:w:z:V";
     bx_args_getopt_reset();
     while (true) {
         int index = optind > 0 ? optind : 1;
         const char* spelling = index < argc ? argv[index] : "";
-        int c = bx_args_getopt_long(argc, argv, ":46dFnreAf:m:N:t:l:q:i:M:ITULDp:g:s:O:P:w:z:V", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, posix ? short_options : short_options + 1, long_options, NULL);
         if (c == -1)
             break;
         if (spelling[0] != '-' || !spelling[1]) {
