@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 #include <err.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <paths.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,6 +42,7 @@
 #include "lib/fat/format/mkfs_msdos.h"
 #include "applets.h"
 #include "dos.h"
+#include "lib/checked_math.h"
 
 #define	argto1(arg, lo, msg)  argtou(arg, lo, 0xff, msg)
 #define	argto2(arg, lo, msg)  argtou(arg, lo, 0xffff, msg)
@@ -56,16 +58,16 @@ get_tstamp(const char *b)
 {
     struct stat st;
     char *eb;
-    long long l;
+    time_t timestamp;
 
     if (stat(b, &st) != -1)
         return (time_t)st.st_mtime;
 
     errno = 0;
-    l = strtoll(b, &eb, 0);
-    if (b == eb || *eb || errno)
+    intmax_t l = strtoimax(b, &eb, 0);
+    if (b == eb || *eb || errno || !bx_checked_intmax_to_time_t(l, &timestamp))
         errx(EXIT_FAILURE, "Can't parse timestamp '%s'", b);
-    return (time_t)l;
+    return timestamp;
 }
 
 /*

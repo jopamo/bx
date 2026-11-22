@@ -227,7 +227,7 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
     struct stat sb;
     struct timeval tv;
     struct bpb bpb;
-    struct tm *tm;
+    struct tm timestamp, *tm = &timestamp;
     struct bs *bs;
     struct bsbpb *bsbpb;
     struct bsxbpb *bsxbpb;
@@ -259,6 +259,26 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
     if (o.create_size && o.no_create) {
         warnx("create (-C) is incompatible with -N");
         goto done;
+    }
+    if (!o.no_create) {
+        if (o.timestamp_set) {
+            now = o.timestamp;
+            tv.tv_usec = 0;
+            if (!gmtime_r(&now, tm)) {
+                warn("invalid format timestamp");
+                goto done;
+            }
+        } else {
+            if (gettimeofday(&tv, NULL) != 0) {
+                warn("cannot get format timestamp");
+                goto done;
+            }
+            now = tv.tv_sec;
+            if (!localtime_r(&now, tm)) {
+                warn("invalid format timestamp");
+                goto done;
+            }
+        }
     }
     fd = bx_fat_open(fname, !o.no_create, o.create_size, o.dos_compat);
     if (fd == -1) {
@@ -580,16 +600,6 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
     }
     print_bpb(&bpb);
     if (!o.no_create) {
-	if (o.timestamp_set) {
-	    tv.tv_sec = now = o.timestamp;
-	    tv.tv_usec = 0;
-	    tm = gmtime(&now);
-	} else {
-	    gettimeofday(&tv, NULL);
-	    now = tv.tv_sec;
-	    tm = localtime(&now);
-	}
-
 	chunksize = getchunksize();
 	physbuf = malloc(chunksize);
 	if (physbuf == NULL) {
@@ -678,7 +688,7 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 			  (u_int)tm->tm_mday) +
 			 ((u_int)tm->tm_sec << 8 |
 			  (u_int)(tv.tv_usec / 10))) << 16 |
-			((u_int)(1900 + tm->tm_year) +
+			((1900U + (u_int)tm->tm_year) +
 			 ((u_int)tm->tm_hour << 8 |
 			  (u_int)tm->tm_min));
 		mk4(bsx->exVolumeID, x);
@@ -723,7 +733,7 @@ mkfs_msdos(const char *fname, const char *dtype, const struct msdos_options *op)
 		    (u_int)tm->tm_min << 5 |
 		    (u_int)tm->tm_sec >> 1;
 		mk2(de->deMTime, x);
-		x = (u_int)(tm->tm_year - 80) << 9 |
+		x = ((u_int)tm->tm_year - 80U) << 9 |
 		    (u_int)(tm->tm_mon + 1) << 5 |
 		    (u_int)tm->tm_mday;
 		mk2(de->deMDate, x);
