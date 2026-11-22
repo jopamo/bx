@@ -13,6 +13,53 @@
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
 
+#define SEQ_MAX_FORMAT_FIELD 4096
+
+static bool seq_skip_format_field(const char** cursor) {
+    unsigned value = 0;
+    const char* p = *cursor;
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10 + (unsigned)(*p++ - '0');
+        if (value > SEQ_MAX_FORMAT_FIELD)
+            return false;
+    }
+    *cursor = p;
+    return true;
+}
+
+/* snprintf receives one double. Allow at most one conversion, and only
+ * if it consumes that argument without reading any others. */
+static bool seq_valid_format(const char* p) {
+    bool converted = false;
+    while (*p) {
+        if (*p++ != '%')
+            continue;
+        if (*p == '%') {
+            p++;
+            continue;
+        }
+        if (converted)
+            return false;
+        if (p[0] == '1' && p[1] == '$')
+            p += 2;
+        p += strspn(p, "#0- +'");
+        if (!seq_skip_format_field(&p))
+            return false;
+        if (*p == '.') {
+            p++;
+            if (!seq_skip_format_field(&p))
+                return false;
+        }
+        if (*p == 'l')
+            p++;
+        if (!*p || !strchr("aAeEfFgG", *p))
+            return false;
+        p++;
+        converted = true;
+    }
+    return true;
+}
+
 static int count_decimal_places(const char* s) {
     const char* dot = strchr(s, '.');
     if (!dot) return 0;
@@ -109,7 +156,8 @@ int bx_seq_main(int argc, char** argv) {
                 printf("  or:  %s [OPTION]... FIRST INCREMENT LAST\n", argv[0]);
                 printf("Print numbers from FIRST to LAST, in steps of INCREMENT.\n");
                 printf("\n");
-                printf("  -f, --format=FORMAT    use printf style floating-point FORMAT\n");
+                printf("  -f, --format=FORMAT    use at most one printf style floating-point conversion\n");
+                printf("                         width and precision at most %d; incompatible with -w\n", SEQ_MAX_FORMAT_FIELD);
                 printf("  -s, --separator=STRING use STRING to separate numbers (default: \\n)\n");
                 printf("  -w, --equal-width      equalize width by padding with leading zeroes\n");
                 printf("      --help              display this help and exit\n");
@@ -131,6 +179,16 @@ int bx_seq_main(int argc, char** argv) {
     if (num_args < 1 || num_args > 3) {
         bx_cli_diag_missing_operand(&diag);
         return 1;
+    }
+    if (format != NULL) {
+        if (equal_width) {
+            bx_diag(&diag, "--format and --equal-width are incompatible");
+            return 1;
+        }
+        if (!seq_valid_format(format)) {
+            bx_diag(&diag, "invalid floating-point format");
+            return 1;
+        }
     }
     double values[3];
     for (int i = 0; i < num_args; i++) {
@@ -161,7 +219,7 @@ int bx_seq_main(int argc, char** argv) {
         if (num_args >= 3) { int p = count_decimal_places(argv[optind + 2]); if (p > max_prec) max_prec = p; }
     }
 
-    static char fmt_buf[64];
+    char fmt_buf[64];
     if (format == NULL) {
         if (max_prec > 0)
             snprintf(fmt_buf, sizeof(fmt_buf), "%%.%df", max_prec);
@@ -179,16 +237,8 @@ int bx_seq_main(int argc, char** argv) {
         if (n == 0) int_digits = 1;
         else { while (n) { int_digits++; n /= 10; } }
 
-        int total_width = int_digits;
-        if (strchr(format, '.') || max_prec > 0) {
-            int prec = max_prec;
-            const char* dot = strchr(format, '.');
-            if (dot) prec = atoi(dot + 1);
-            if (prec > 0)
-                total_width = int_digits + 1 + prec;
-        }
-
-        snprintf(fmt_buf, sizeof(fmt_buf), "%%0%d.%df", total_width, max_prec > 0 ? max_prec : 0);
+        int total_width = int_digits + (max_prec > 0 ? 1 + max_prec : 0);
+        snprintf(fmt_buf, sizeof(fmt_buf), "%%0%d.%df", total_width, max_prec);
     }
 
     char output_buffer[8192];
