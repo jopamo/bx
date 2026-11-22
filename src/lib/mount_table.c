@@ -14,6 +14,7 @@
 
 #ifdef __linux__
 #include "path_ops.h"
+#include "size_parse.h"
 #include "statx_compat.h"
 #endif
 
@@ -268,21 +269,32 @@ bool bx_mount_table_is_target_or_child(const char* parent, const char* candidate
 /* Match both the path and its visible mount: a covered mount can still
  * appear in mountinfo at a path below the covering mount. */
 static int lookup_mount(int fd) {
+    static const char id_field[] = "mnt_id:";
     char proc_path[64];
     snprintf(proc_path, sizeof(proc_path), "/proc/self/fdinfo/%d", fd);
     FILE* fp = fopen(proc_path, "r");
     if (!fp)
         return -1;
-    unsigned long mount_id;
+    uintmax_t mount_id;
     char field[128];
     bool found = false;
+    int err = EOPNOTSUPP;
     while (fgets(field, sizeof(field), fp)) {
-        if (sscanf(field, "mnt_id: %lu", &mount_id) == 1) {
-            found = true;
-            break;
+        if (strncmp(field, id_field, sizeof(id_field) - 1) != 0)
+            continue;
+        char* value = field + sizeof(id_field) - 1;
+        value += strspn(value, " \t");
+        char* newline = strchr(value, '\n');
+        if (newline) {
+            *newline = '\0';
+            found = bx_size_parse_uint(value, &mount_id) && mount_id != 0;
         }
+        if (!found)
+            err = EINVAL;
+        break;
     }
-    int err = ferror(fp) ? errno : EOPNOTSUPP;
+    if (ferror(fp))
+        err = errno;
     fclose(fp);
     if (!found) {
         errno = err;
@@ -297,19 +309,27 @@ static int lookup_mount(int fd) {
     if (fp) {
         char* line = NULL;
         size_t cap = 0;
+        err = EOPNOTSUPP;
         while (getline(&line, &cap, fp) >= 0) {
-            unsigned long id;
-            int start = 0;
-            if (sscanf(line, "%lu %*s %*s %*s %n", &id, &start) != 1 ||
-                !start || id != mount_id)
+            char* rest;
+            char* token = strtok_r(line, " \t\n", &rest);
+            uintmax_t id;
+            if (!bx_size_parse_uint(token, &id) || id != mount_id)
                 continue;
-            line[start + strcspn(line + start, " ")] = '\0';
-            char* target = bx_mount_unescape_field(line + start);
+            /* Skip parent ID, device number, and root to reach mountpoint. */
+            for (int i = 0; i < 4 && token; i++)
+                token = strtok_r(NULL, " \t\n", &rest);
+            if (!token) {
+                err = EINVAL;
+                break;
+            }
+            char* target = bx_mount_unescape_field(token);
             result = strcmp(path, target) == 0;
             free(target);
             break;
         }
-        err = feof(fp) ? EOPNOTSUPP : errno;
+        if (ferror(fp))
+            err = errno;
         free(line);
         fclose(fp);
     }
