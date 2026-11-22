@@ -415,19 +415,27 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
         {NULL, 0, NULL, 0},
     };
     bool posix = getenv("POSIXLY_CORRECT") != NULL;
-    /* Some libcs only stop at the first operand when '+' is explicit. */
-    const char short_options[] = "+:46dFnreAf:m:N:t:l:q:i:M:ITULDp:g:s:O:P:w:z:V";
+    /* Keep option positions stable across libc implementations. */
+    char short_options[] = "-:46dFnreAf:m:N:t:l:q:i:M:ITULDp:g:s:O:P:w:z:V";
+    if (posix)
+        short_options[0] = '+';
+    int next_operand = 1;
     bx_args_getopt_reset();
     while (true) {
         int index = optind > 0 ? optind : 1;
         const char* spelling = index < argc ? argv[index] : "";
-        int c = bx_args_getopt_long(argc, argv, posix ? short_options : short_options + 1, long_options, NULL);
+        int c = posix
+                    ? bx_args_getopt_long(argc, argv, short_options, long_options, NULL)
+                    : bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
         if (c == -1)
             break;
         if (spelling[0] != '-' || !spelling[1]) {
             index = optind - 1;
             if (optarg && index > 1 && optarg == argv[index])
                 index--;
+            /* A partially scanned short-option group has not advanced optind. */
+            if ((argv[index][0] != '-' || !argv[index][1]) && optind < argc)
+                index = optind;
             spelling = argv[index];
         }
         bool ok = true;
