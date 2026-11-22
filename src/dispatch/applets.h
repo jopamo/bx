@@ -3,6 +3,8 @@
 
 int bx_awk_main(int argc, char **argv);
 
+int bx_sed_main(int argc, char **argv);
+
 int bx_crunch_main(int argc, char **argv);
 
 int bx_symlinks_main(int argc, char **argv);

@@ -52,6 +52,16 @@
   ],
   "applets": [
     {
+      "name": "sed",
+      "main": "bx_sed_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "awk",
       "main": "bx_awk_main",
       "capabilities": [

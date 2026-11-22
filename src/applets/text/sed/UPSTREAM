@@ -1,0 +1,10 @@
+https://github.com/freebsd/freebsd-src/tree/2cc3f14701c9309d18f24069d2b1bea6f3bb3df8/usr.bin/sed
+
+bx uses libc regex. On libc without REG_STARTEND, regex operations on
+input containing NUL fail rather than silently matching truncated lines.
+-i takes an optional attached suffix (-i.bak); -i alone and -i '' both
+mean no backup. -I retains FreeBSD's required argument. In-place editing
+rejects symlinks, uses mkstemp in the same directory, preserves owner,
+group and ordinary permission bits, and drops set-id bits. Backup creation
+requires hard-link support. This is not GNU sed; no shell execution or
+GNU long options are provided.

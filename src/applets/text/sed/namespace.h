@@ -1,0 +1,26 @@
+/* Keep editor symbols private to bx sed. */
+#define aflag bx_sed_aflag
+#define appendnum bx_sed_appendnum
+#define appends bx_sed_appends
+#define cfclose bx_sed_cfclose
+#define compile bx_sed_compile
+#define cspace bx_sed_cspace
+#define cu_fgets bx_sed_cu_fgets
+#define eflag bx_sed_eflag
+#define fname bx_sed_fname
+#define infile bx_sed_infile
+#define inplace bx_sed_inplace
+#define lastline bx_sed_lastline
+#define linenum bx_sed_linenum
+#define match bx_sed_match
+#define maxnsub bx_sed_maxnsub
+#define mf_fgets bx_sed_mf_fgets
+#define nflag bx_sed_nflag
+#define outfile bx_sed_outfile
+#define outfname bx_sed_outfname
+#define process bx_sed_process
+#define prog bx_sed_prog
+#define quit bx_sed_quit
+#define resetstate bx_sed_resetstate
+#define rflags bx_sed_rflags
+#define strregerror bx_sed_strregerror

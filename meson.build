@@ -1767,6 +1767,8 @@ sources += files('src/applets/text/crunch/crunch.c')
 
 subdir('src/applets/text/awk')
 
+subdir('src/applets/text/sed')
+
 bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
@@ -1787,6 +1789,7 @@ bx_exe = executable('bx',
     rsync_lib,
     fat_lib,
     pigz_lib,
+    sed_lib,
     awk_lib,
   ],
   link_args : bx_link_args,
