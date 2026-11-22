@@ -18,6 +18,7 @@ static void usage(FILE* out, const char* name) {
 #include <stdlib.h>
 #include <string.h>
 
+#include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "module_elf.h"
 #include "module_index.h"
@@ -74,9 +75,8 @@ int bx_modinfo_main(int argc, char** argv) {
     const char* field = NULL;
     const char* base = "/";
     const char* release = NULL;
-    opterr = 0;
-    optind = 1;
-    for (int opt; (opt = getopt_long(argc, argv, ":F:b:k:", opts, NULL)) != -1;) {
+    bx_args_getopt_reset();
+    for (int opt; (opt = bx_args_getopt_long(argc, argv, ":F:b:k:", opts, NULL)) != -1;) {
         if (opt == 'F') {
             if (*optarg == '\0') {
                 bx_diag(&diag, "field must not be empty");

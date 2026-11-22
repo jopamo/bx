@@ -29,6 +29,7 @@ static void usage(FILE* out, const char* name) {
 #include <stdlib.h>
 #include <string.h>
 
+#include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "module_alias.h"
 #include "module_load.h"
@@ -216,10 +217,9 @@ int bx_modprobe_main(int argc, char** argv) {
     bool all = false;
     bool use_blacklist = false;
     bool quiet = false;
-    opterr = 0;
-    optind = 1;
     bool alternate_root = false;
-    for (int opt; (opt = getopt_long(argc, argv, ":DRrnabqd:S:C:", opts, NULL)) != -1;) {
+    bx_args_getopt_reset();
+    for (int opt; (opt = bx_args_getopt_long(argc, argv, ":DRrnabqd:S:C:", opts, NULL)) != -1;) {
         switch (opt) {
         case 'D':
             show = true;
