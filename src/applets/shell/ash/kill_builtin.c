@@ -12,6 +12,7 @@
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/kill_builtin.h"
 #include "lib/signal_names.h"
+#include "lib/size_parse.h"
 
 static int ash_kill_usage(struct ash_shell* shell) {
     ash_diag(shell, "kill: usage: kill [-s SIGNAL | -n SIGNAL | -SIGNAL] [--] PID...; kill -l [SIGNAL...]");
@@ -77,11 +78,8 @@ int ash_kill_builtin(struct ash_shell* shell, const struct ash_command* command)
     int status = 0;
     for (; index < command->word_count; index++) {
         const char* text = command->words[index];
-        const char* digits = text + (text[0] == '-' || text[0] == '+');
-        char* end;
-        errno = 0;
-        intmax_t parsed = strtoimax(text, &end, 10);
-        if (!isdigit((unsigned char)digits[0]) || errno == ERANGE || *end != '\0' || parsed < INT_MIN || parsed > INT_MAX) {
+        intmax_t parsed;
+        if (!bx_size_parse_signed_count(text, &parsed) || parsed < INT_MIN || parsed > INT_MAX) {
             ash_diag(shell, "kill: invalid pid '%s'", text);
             status = 1;
             continue;
