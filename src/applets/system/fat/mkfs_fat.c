@@ -30,6 +30,7 @@
 #include "lib/fat/compat.h"
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <ctype.h>
 #include <err.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -201,9 +202,11 @@ argtou(const char *arg, u_int lo, u_int hi, const char *msg)
     char *s;
     u_long x;
 
+    while (isspace((unsigned char)*arg))
+	arg++;
     errno = 0;
     x = strtoul(arg, &s, 0);
-    if (errno || !*arg || *s || x < lo || x > hi)
+    if (*arg == '-' || errno || s == arg || *s || x < lo || x > hi)
 	errx(1, "%s: bad %s", arg, msg);
     return x;
 }
@@ -215,7 +218,7 @@ static off_t
 argtooff(const char *arg, const char *msg)
 {
     char *s;
-    off_t x;
+    long long x;
     unsigned shift = 0;
 
     errno = 0;
@@ -257,10 +260,11 @@ argtooff(const char *arg, const char *msg)
 	    /* notreached */
 	}
     }
-    if ((uint64_t)x > (uint64_t)INT64_MAX >> shift)
+    off_t result;
+    if ((uint64_t)x > (uint64_t)INT64_MAX >> shift ||
+        __builtin_mul_overflow(x, (uint64_t)1 << shift, &result))
 	errx(1, "%s: bad %s", arg, msg);
-    x *= (off_t)1 << shift;
-    return x;
+    return result;
 }
 
 /*
