@@ -1279,6 +1279,21 @@ usage(int exitcode)
 	exit(exitcode);
 }
 
+static long long
+rsync_parse_numeric_option(const char *option, const char *text)
+{
+	char *end;
+	long long value;
+
+	errno = 0;
+	value = strtoll(text, &end, 0);
+	if (end == text || *end != '\0')
+		errx(1, "--%s=%s: invalid numeric value", option, text);
+	if (errno == ERANGE)
+		errx(1, "--%s=%s: numeric value out of range", option, text);
+	return value;
+}
+
 /*
  * Parse options out of argv; this is shared with daemon mode to parse options
  * sent over the wire from clients.  Filtering is primarily so that the daemon
@@ -1295,7 +1310,6 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
     struct sess *sess)
 {
 	long long	 tmplong;
-	int		 tmpint;
 	size_t		 basedir_cnt = 0;
 	const char	*errstr;
 	int		 c, cvs_excl, lidx;
@@ -1743,13 +1757,7 @@ basedir:
 			break;
 		case OP_CHECKSUM_SEED:
 			if (*optarg != '\0') {
-				char *endptr;
-
-				errno = 0;
-				tmplong = strtoll(optarg, &endptr, 0);
-				if (*endptr != '\0')
-					errx(1, "--checksum-seed=%s: invalid numeric value",
-					     optarg);
+				tmplong = rsync_parse_numeric_option("checksum-seed", optarg);
 				if (tmplong < INT_MIN)
 					errx(1, "--checksum-seed=%s: must be no less than %d",
 					     optarg, INT_MIN);
@@ -1814,28 +1822,22 @@ basedir:
 				break;
 			}
 			if (*optarg != '\0') {
-				char *endptr;
-
-				tmpint = (int)strtoll(optarg, &endptr, 0);
-				if (*endptr != '\0') {
-					errx(1, "--protocol=%s: invalid value",
-					    optarg);
-				}
-				if (tmpint < RSYNC_PROTOCOL_MIN ||
-				    tmpint > RSYNC_PROTOCOL_MAX) {
+				tmplong = rsync_parse_numeric_option("protocol", optarg);
+				if (tmplong < RSYNC_PROTOCOL_MIN ||
+				    tmplong > RSYNC_PROTOCOL_MAX) {
 					errx(1, "--protocol=%s: out of range, "
 					    "min: %d, max: %d", optarg,
 					    RSYNC_PROTOCOL_MIN,
 					    RSYNC_PROTOCOL_MAX);
 				}
-				if (tmpint > RSYNC_PROTOCOL) {
+				if (tmplong > RSYNC_PROTOCOL) {
 					WARNX("--protocol=%s: is not supported "
 					    "by this version of openrsync. "
 					    "min: %d, max: %d", optarg,
 					    RSYNC_PROTOCOL_MIN,
 					    RSYNC_PROTOCOL_MAX);
 				}
-				opts.protocol = tmpint;
+				opts.protocol = (int)tmplong;
 			}
 			break;
 		case OP_STATS:
@@ -1849,21 +1851,15 @@ basedir:
 			break;
 		case OP_COMPLEVEL:
 			if (*optarg != '\0') {
-				char *endptr;
-
-				errno = 0;
-				tmpint = (int)strtoll(optarg, &endptr, 0);
-				if (*endptr != '\0')
-					errx(1, "--compress-level=%s: invalid numeric value",
-					     optarg);
-				if (tmpint < Z_DEFAULT_COMPRESSION)
+				tmplong = rsync_parse_numeric_option("compress-level", optarg);
+				if (tmplong < Z_DEFAULT_COMPRESSION)
 					errx(1, "--compress-level=%s: must be no less than %d",
 					     optarg, Z_DEFAULT_COMPRESSION);
-				if (tmpint > Z_BEST_COMPRESSION)
+				if (tmplong > Z_BEST_COMPRESSION)
 					errx(1, "--compress-level=%s: must be no greater than %d",
 					     optarg, Z_BEST_COMPRESSION);
 
-				opts.compression_level = tmpint;
+				opts.compression_level = (int)tmplong;
 				if (opts.compression_level == Z_NO_COMPRESSION)
 					opts.compress = 0;
 			}
@@ -1889,21 +1885,15 @@ basedir:
 			break;
 		case OP_MAX_DELETE:
 			if (*optarg != '\0') {
-				char *endptr;
-
-				errno = 0;
-				tmpint = (int)strtoll(optarg, &endptr, 0);
-				if (*endptr != '\0')
-					errx(1, "--max-delete=%s: invalid numeric value",
-					     optarg);
-				if (tmpint < INT_MIN)
+				tmplong = rsync_parse_numeric_option("max-delete", optarg);
+				if (tmplong < INT_MIN)
 					errx(1, "--max-delete=%s: must be no less than %d",
 					     optarg, INT_MIN);
-				if (tmpint > INT_MAX)
+				if (tmplong > INT_MAX)
 					errx(1, "--max-delete=%s: must be no greater than %d",
 					     optarg, INT_MAX);
 
-				opts.max_delete = tmpint;
+				opts.max_delete = (int)tmplong;
 			}
 			break;
 		case 'V':
