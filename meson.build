@@ -1765,6 +1765,8 @@ sources += files('src/applets/filesystem/symlinks/symlinks.c')
 
 sources += files('src/applets/text/crunch/crunch.c')
 
+subdir('src/applets/text/awk')
+
 bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
@@ -1785,6 +1787,7 @@ bx_exe = executable('bx',
     rsync_lib,
     fat_lib,
     pigz_lib,
+    awk_lib,
   ],
   link_args : bx_link_args,
   install : true,

@@ -1,0 +1,11 @@
+https://github.com/onetrueawk/awk at 72e9b56caddb4a6f8d1405315a5183c26b8650a4
+
+The checked-in parser uses the public-domain Berkeley Yacc 2.0 (20260126)
+parser skeleton, not GNU Bison. Regenerate in this directory:
+
+  byacc -l -d -b awkgram awkgram.y
+  cc -D_GNU_SOURCE maketab.c -o maketab
+  ./maketab awkgram.tab.h >proctab.c
+
+bx prefixes interpreter globals and does not run shell commands from system()
+or pipes. Ordinary file redirection and ENVIRON remain available.

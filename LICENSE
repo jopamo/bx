@@ -18,6 +18,8 @@ areas include:
 - src/applets/network/traceroute/ — GPL-2.0-or-later, with clif.[ch] under
   LGPL-2.1-or-later
 - src/applets/system/init/ — BusyBox init-derived policy, GPL-2.0-or-later
+- src/applets/text/awk/ — One True Awk (Lucent permissive license), with a
+  public-domain Berkeley Yacc parser skeleton
 - src/applets/text/ed/ — GNU ed, GPL-2.0-or-later
 - src/applets/text/edit/vim/ — Vim license
 - src/applets/text/edit/runtime/ — curated Vim runtime subset; some files carry

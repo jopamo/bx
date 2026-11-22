@@ -1,6 +1,8 @@
 #ifndef BX_APPLETS_H
 #define BX_APPLETS_H
 
+int bx_awk_main(int argc, char **argv);
+
 int bx_crunch_main(int argc, char **argv);
 
 int bx_symlinks_main(int argc, char **argv);

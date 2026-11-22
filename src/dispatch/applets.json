@@ -52,6 +52,16 @@
   ],
   "applets": [
     {
+      "name": "awk",
+      "main": "bx_awk_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "ash",
       "main": "bx_ash_main",
       "capabilities": [
