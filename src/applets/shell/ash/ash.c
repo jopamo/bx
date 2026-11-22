@@ -3019,6 +3019,9 @@ static int ash_execute_ast_function(
 int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     ash_shell_context_assert_invariants(shell);
     (void)ash_dispatch_signal_traps(shell, shell->last_status);
+    if (shell->should_exit) {
+        return shell->requested_exit_status;
+    }
     if (ash_control_unit_discarded(shell)) {
         return shell->control.status;
     }
