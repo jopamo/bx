@@ -33,8 +33,6 @@
 
 #include "daemon.h"
 
-_Static_assert(sizeof(id_t) <= INT_MAX, "{u,g}id_t larger than expected");
-
 static int daemon_rangelock(struct sess *, const char *, const char *, int);
 
 #define	RSYNCD_LOG_FILE_PREFIX	"%t [%p]"
@@ -227,32 +225,27 @@ daemon_chuser_resolve_name(const char *name, bool is_gid, id_t *oid)
 {
 	struct passwd *pwd;
 	struct group *grp;
-	char *endp;
-	long long rid;
+	const char *error;
 
-	if (is_gid) {
-		grp = getgrnam(name);
-		if (grp != NULL) {
-			*oid = grp->gr_gid;
-			return 1;
-		}
-	} else {
-		pwd = getpwnam(name);
-		if (pwd != NULL) {
-			*oid = pwd->pw_uid;
-			return 1;
-		}
+	if (is_gid && (grp = getgrnam(name)) != NULL) {
+		*oid = grp->gr_gid;
+		return 1;
+	}
+	if (!is_gid && (pwd = getpwnam(name)) != NULL) {
+		*oid = pwd->pw_uid;
+		return 1;
 	}
 
-	errno = 0;
-	rid = strtoll(name, &endp, 10);
-	if (errno != 0 || *endp != '\0')
+	long long rid = strtonum(name, 0, INT_MAX, &error);
+	if (error != NULL)
+		return 0;
+	id_t id = (id_t)rid;
+	if ((long long)id != rid ||
+	    (is_gid ? (gid_t)id == (gid_t)-1 || (long long)(gid_t)id != rid
+		    : (uid_t)id == (uid_t)-1 || (long long)(uid_t)id != rid))
 		return 0;
 
-	if (rid < INT_MIN || rid > INT_MAX)
-		return 0;
-
-	*oid = (id_t)rid;
+	*oid = id;
 	return 1;
 }
 
