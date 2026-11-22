@@ -65,7 +65,7 @@ struct bx_dhcp_options {
     bool show_help;
     bool show_version;
     const char* ifname;
-    const char* script;
+    char* script;
     int stop_fd;
     sigset_t caller_mask;
     unsigned int timeout_ms;
@@ -812,7 +812,7 @@ static void bx_dhcp_print_lease(const struct bx_dhcp_options* options, const str
 struct bx_dhcp_event {
     const struct bx_dhcp_options* options;
     const struct bx_dhcp_message* lease;
-    const char* name;
+    char* name;
 };
 
 static bool bx_dhcp_event_addr(const char* key, const struct in_addr* address) {
@@ -846,12 +846,13 @@ static int bx_dhcp_exec_script(void* data) {
         !bx_dhcp_event_addr("subnet", lease && lease->have_subnet_mask ? &lease->subnet_mask : NULL) || !bx_dhcp_event_addrs("router", lease ? &lease->router : NULL) ||
         !bx_dhcp_event_addrs("dns", lease ? &lease->dns : NULL))
         return 1;
-    execl(event->options->script, event->options->script, event->name, (char*)NULL);
+    char* argv[] = {event->options->script, event->name, NULL};
+    errno = bx_child_exec_file_argv_exact(argv[0], argv);
     perror(event->options->script);
     return 1;
 }
 
-static bool bx_dhcp_notify(const struct bx_dhcp_options* options, const char* name, const struct bx_dhcp_message* lease, struct bx_diag_ctx* diag) {
+static bool bx_dhcp_notify(const struct bx_dhcp_options* options, char* name, const struct bx_dhcp_message* lease, struct bx_diag_ctx* diag) {
     struct bx_dhcp_event event = {options, lease, name};
     int status;
     if (bx_child_fork_callback_wait(bx_dhcp_exec_script, &event, BX_CHILD_SIGNALS_RESET_CAUGHT, &status) < 0) {
@@ -889,7 +890,7 @@ static bool bx_dhcp_sleep_until(int stop_fd, uint64_t when, struct bx_diag_ctx* 
 
 /* Return to discovery on expiry or NAK. Never extend a deadline without an ACK. */
 static bool bx_dhcp_maintain(int fd, const unsigned char hwaddr[6], const struct bx_dhcp_options* options, struct bx_dhcp_message lease, uint64_t start, struct bx_diag_ctx* diag) {
-    const char* event = "bound";
+    char* event = "bound";
     for (;;) {
         if (!lease.have_lease_time || !lease.lease_time) {
             bx_diag(diag, "server did not grant a lease duration");
