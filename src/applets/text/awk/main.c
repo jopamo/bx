@@ -134,6 +134,14 @@ getarg(int *argc, char ***argv, const char *msg)
 	}
 }
 
+bool bx_awk_gawk_compat;
+
+int bx_gawk_main(int argc, char *argv[])
+{
+	bx_awk_gawk_compat = true;
+	return bx_awk_main(argc, argv);
+}
+
 int bx_awk_main(int argc, char *argv[])
 {
 	const char *fs = NULL;
@@ -170,7 +178,7 @@ int bx_awk_main(int argc, char *argv[])
 	symtab = makesymtab(NSYMTAB/NSYMTAB);
 	while (argc > 1 && argv[1][0] == '-' && argv[1][1] != '\0') {
 		if (strcmp(argv[1], "-version") == 0 || strcmp(argv[1], "--version") == 0) {
-			printf("awk %s\n", version);
+			printf("%s %s\n", bx_awk_gawk_compat ? "bx gawk (One True Awk)" : "awk", version);
 			return 0;
 		}
 		if (strcmp(argv[1], "--") == 0) {	/* explicit end of args */
@@ -184,6 +192,9 @@ int bx_awk_main(int argc, char *argv[])
 			argv++;
 			continue;
 		}
+		/* These letters have different meanings in GNU awk. */
+		if (bx_awk_gawk_compat && strchr("fFv", argv[1][1]) == NULL)
+			FATAL("unsupported gawk option %s", argv[1]);
 		switch (argv[1][1]) {
 		case 's':
 			if (strcmp(argv[1], "-safe") == 0)

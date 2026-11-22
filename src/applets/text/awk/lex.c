@@ -505,6 +505,10 @@ int word(char *w)
 	const Keyword *kp;
 	int c, n;
 
+	if (bx_awk_gawk_compat && strcmp(w, "strftime") == 0) {
+		yylval.i = FSTRFTIME;
+		RET(BLTIN);
+	}
 	n = binsearch(w, keywords, sizeof(keywords)/sizeof(keywords[0]));
 	if (n != -1) {	/* found in table */
 		kp = keywords + n;

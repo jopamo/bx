@@ -1,6 +1,7 @@
 #ifndef BX_APPLETS_H
 #define BX_APPLETS_H
 
+int bx_gawk_main(int argc, char **argv);
 int bx_awk_main(int argc, char **argv);
 
 int bx_sed_main(int argc, char **argv);

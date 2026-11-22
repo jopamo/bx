@@ -62,6 +62,7 @@ extern enum compile_states {
 	ERROR_PRINTING
 } compile_time;
 
+extern bool bx_awk_gawk_compat;
 extern bool	safe;		/* false => unsafe, true => safe */
 
 #define	RECSIZE	(8 * 1024)	/* sets limit on records, fields, etc., etc. */
@@ -161,6 +162,7 @@ extern Cell	*symtabloc;	/* SYMTAB */
 #define	FTOUPPER 12
 #define	FTOLOWER 13
 #define	FFLUSH	14
+#define FSTRFTIME 15
 
 /* Node:  parse tree is made of nodes, with Cell's at bottom */
 

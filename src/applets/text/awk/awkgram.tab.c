@@ -4712,13 +4712,13 @@ case 143:
 	{ yyval.p = op1(NOT, notnull(yystack.l_mark[0].p)); }
 break;
 case 144:
-	{ yyval.p = op2(BLTIN, itonp(yystack.l_mark[-2].i), rectonode()); }
+	{ yyval.p = op2(BLTIN, itonp(yystack.l_mark[-2].i), yystack.l_mark[-2].i == FSTRFTIME ? NIL : rectonode()); }
 break;
 case 145:
 	{ yyval.p = op2(BLTIN, itonp(yystack.l_mark[-3].i), yystack.l_mark[-1].p); }
 break;
 case 146:
-	{ yyval.p = op2(BLTIN, itonp(yystack.l_mark[0].i), rectonode()); }
+	{ yyval.p = op2(BLTIN, itonp(yystack.l_mark[0].i), yystack.l_mark[0].i == FSTRFTIME ? NIL : rectonode()); }
 break;
 case 147:
 	{ yyval.p = op2(CALL, celltonode(yystack.l_mark[-2].cp,CVAR), NIL); }

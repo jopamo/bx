@@ -2051,6 +2051,67 @@ static char *nawk_tolower(const char *s)
 
 
 
+/* Prefix a literal so strftime returning zero means the buffer didn't fit,
+ * not that the requested format produced an empty string. */
+static Cell *format_time(Node *arg)
+{
+	const char *fmt = "%a %b %e %H:%M:%S %Z %Y";
+	Cell *x = NULL;
+	if (arg != NULL) {
+		x = execute(arg);
+		fmt = getsval(x);
+		arg = arg->nnext;
+	}
+	size_t len = strlen(fmt);
+	if (len > SIZE_MAX - 2)
+		FATAL("strftime format too large");
+	char *pattern = malloc(len + 2);
+	if (pattern == NULL)
+		FATAL("out of memory in strftime");
+	pattern[0] = ':';
+	memcpy(pattern + 1, fmt, len + 1);
+	if (x != NULL)
+		tempfree(x);
+
+	time_t stamp = time(NULL);
+	bool utc = false;
+	if (arg != NULL) {
+		x = execute(arg);
+		Awkfloat seconds = getfval(x);
+		/* bx targets Linux with signed time_t. Check before conversion. */
+		double bound = ldexp(1.0, sizeof(time_t) * CHAR_BIT - 1);
+		if (!(seconds >= -bound && seconds < bound))
+			FATAL("strftime timestamp out of range");
+		stamp = (time_t)seconds;
+		tempfree(x);
+		arg = arg->nnext;
+	}
+	if (arg != NULL) {
+		if (arg->nnext != NULL)
+			FATAL("strftime takes at most three arguments");
+		x = execute(arg);
+		utc = getfval(x) != 0;
+		tempfree(x);
+	}
+	struct tm tm;
+	if ((utc ? gmtime_r(&stamp, &tm) : localtime_r(&stamp, &tm)) == NULL)
+		FATAL("strftime timestamp out of range");
+	for (size_t size = 128; size <= 1024 * 1024; size *= 2) {
+		char *buf = malloc(size);
+		if (buf == NULL)
+			FATAL("out of memory in strftime");
+		if (strftime(buf, size, pattern, &tm) != 0) {
+			x = gettemp();
+			setsval(x, buf + 1);
+			free(buf);
+			free(pattern);
+			return x;
+		}
+		free(buf);
+	}
+	FATAL("strftime output too large or invalid format");
+}
+
 Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg list */
 {
 	Cell *x, *y;
@@ -2062,6 +2123,8 @@ Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg lis
 	FILE *fp;
 
 	t = ptoi(a[0]);
+	if (t == FSTRFTIME)
+		return format_time(a[1]);
 	x = execute(a[1]);
 	nextarg = a[1]->nnext;
 	switch (t) {
