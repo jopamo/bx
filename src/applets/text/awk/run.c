@@ -25,6 +25,7 @@ THIS SOFTWARE.
 #define DEBUG
 #include <stdio.h>
 #include <ctype.h>
+#include <wchar.h>
 #include <wctype.h>
 #include <fcntl.h>
 #include <setjmp.h>
@@ -1995,20 +1996,19 @@ static char *nawk_convert(const char *s, int (*fun_c)(int),
 
 		return buf;
 	} else {
+		mbstate_t input_state = { 0 }, output_state = { 0 };
+
 		/* upper/lower character may be shorter/longer */
 		buf = tostringN(s, strlen(s) * sz + 1);
 
-		(void) mbtowc(NULL, NULL, 0);	/* reset internal state */
-		(void) wctomb(NULL, L'\0');	/* reset internal state */
-
 		ps   = s;
 		pbuf = buf;
-		while (n = mbtowc(&wc, ps, sz),
+		while (n = mbrtowc(&wc, ps, sz, &input_state),
 		       n > 0 && n != (size_t)-1 && n != (size_t)-2)
 		{
 			ps += n;
 
-			n = wctomb(pbuf, fun_wc(wc));
+			n = wcrtomb(pbuf, fun_wc(wc), &output_state);
 			if (n == (size_t)-1)
 				FATAL("illegal wide character %s", s);
 

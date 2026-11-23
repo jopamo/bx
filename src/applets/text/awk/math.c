@@ -22,8 +22,6 @@ ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ****************************************************************/
 
-#pragma STDC FENV_ACCESS ON
-
 #include <errno.h>
 #include <fenv.h>
 #include <math.h>
