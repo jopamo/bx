@@ -159,8 +159,8 @@ int bx_uname_main(int argc, char** argv) {
         }
     }
     if (opt_o) {
-        printf("%s%s", first ? "" : " ", "GNU/Linux");
-        first = 0;
+        const char* os_name = strcmp(u.sysname, "k1g4") == 0 ? "k1g4" : "GNU/Linux";
+        printf("%s%s", first ? "" : " ", os_name);
     }
     printf("\n");
 
