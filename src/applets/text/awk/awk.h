@@ -114,6 +114,7 @@ typedef struct Cell {
 } Cell;
 
 typedef struct Array {		/* symbol table array */
+	uint64_t id;		/* changes when an array is replaced */
 	int	nelem;		/* elements in table right now */
 	int	size;		/* size of tab */
 	Cell	**tab;		/* hash table pointers */
@@ -163,6 +164,7 @@ extern Cell	*symtabloc;	/* SYMTAB */
 #define	FTOLOWER 13
 #define	FFLUSH	14
 #define FSTRFTIME 15
+#define FASORTI 16
 
 /* Node:  parse tree is made of nodes, with Cell's at bottom */
 

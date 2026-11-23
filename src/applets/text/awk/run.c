@@ -1954,7 +1954,7 @@ Cell *instat(Node **a, int n)	/* for (a[0] in a[1]) a[2] */
 		return True;
 	}
 	tp = (Array *) arrayp->sval;
-	tempfree(arrayp);
+	uint64_t id = tp->id;
 	for (i = 0; i < tp->size; i++) {	/* this routine knows too much */
 		for (cp = tp->tab[i]; cp != NULL; cp = ncp) {
 			setsval(vp, cp->nval);
@@ -1969,6 +1969,9 @@ Cell *instat(Node **a, int n)	/* for (a[0] in a[1]) a[2] */
 				return(x);
 			}
 			tempfree(x);
+			/* An in-place asorti, split, or delete can replace the table. */
+			if (((Array *) arrayp->sval)->id != id)
+				return True;
 		}
 	}
 	return True;
@@ -2112,6 +2115,75 @@ static Cell *format_time(Node *arg)
 	FATAL("strftime output too large or invalid format");
 }
 
+static Cell *asorti_array(Node *arg)
+{
+	if (!isargument(arg) &&
+	    !(isvalue(arg) && ((Cell *) arg->narg[0])->csub == CVAR))
+		FATAL("asorti arguments must be array variables");
+
+	Cell *x = execute(arg);
+	if (x == symtabloc)
+		FATAL("asorti cannot sort SYMTAB");
+	/* An unset variable (including an omitted function parameter) can
+	 * become an array. Do not reinterpret an assigned scalar as one. */
+	if (!isarr(x) && ((x->tval & (STR | NUM)) != (STR | NUM) ||
+	    x->fval != 0 || x->sval[0] != '\0'))
+		FATAL("asorti arguments must be arrays");
+	return x;
+}
+
+static int compare_indices(const void *left, const void *right)
+{
+	return strcmp(*(const char *const *) left, *(const char *const *) right);
+}
+
+static Cell *sort_indices(Node *args)
+{
+	/* Bare/empty regular builtin calls supply an implicit $0 node. */
+	if (args == NULL || (args->nnext != NULL && args->nnext->nnext != NULL))
+		FATAL("asorti expects an array and an optional destination array");
+	Cell *src = asorti_array(args);
+	Cell *dst = args->nnext == NULL ? src : asorti_array(args->nnext);
+	if (!isarr(src)) {
+		if (freeable(src))
+			free(src->sval);
+		src->sval = (char *) makesymtab(NSYMTAB);
+		src->tval = ARR;
+	}
+
+	Array *table = (Array *) src->sval;
+	size_t count = table->nelem;
+	Array *result = makesymtab(NSYMTAB);
+	if (count != 0) {
+		const char **keys = calloc(count, sizeof(*keys));
+		if (keys == NULL)
+			FATAL("out of memory in asorti");
+		size_t i = 0;
+		for (int bucket = 0; bucket < table->size; bucket++)
+			for (Cell *item = table->tab[bucket]; item; item = item->cnext)
+				keys[i++] = item->nval;
+		qsort(keys, count, sizeof(*keys), compare_indices);
+		for (i = 0; i < count; i++) {
+			char index[sizeof(count) * CHAR_BIT + 1];
+			snprintf(index, sizeof(index), "%zu", i + 1);
+			setsymtab(index, keys[i], 0, STR, result);
+		}
+		free(keys);
+	}
+
+	/* Copy the sorted keys before destroying any aliased source table. */
+	if (isarr(dst))
+		freesymtab(dst);
+	else if (freeable(dst))
+		free(dst->sval);
+	dst->sval = (char *) result;
+	dst->tval = ARR;
+
+	Cell *value = gettemp();
+	setfval(value, count);
+	return value;
+}
+
 Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg list */
 {
 	Cell *x, *y;
@@ -2125,6 +2197,8 @@ Cell *bltin(Node **a, int n)	/* builtin functions. a[0] is type, a[1] is arg lis
 	t = ptoi(a[0]);
 	if (t == FSTRFTIME)
 		return format_time(a[1]);
+	if (t == FASORTI)
+		return sort_indices(a[1]);
 	x = execute(a[1]);
 	nextarg = a[1]->nnext;
 	switch (t) {

@@ -157,6 +157,7 @@ void envinit(char **envp)	/* set up ENVIRON variable */
 
 Array *makesymtab(int n)	/* make a new symbol table */
 {
+	static uint64_t next_id;
 	Array *ap;
 	Cell **tp;
 
@@ -164,6 +165,7 @@ Array *makesymtab(int n)	/* make a new symbol table */
 	tp = (Cell **) calloc(n, sizeof(*tp));
 	if (ap == NULL || tp == NULL)
 		FATAL("out of space in makesymtab");
+	ap->id = next_id++;
 	ap->nelem = 0;
 	ap->size = n;
 	ap->tab = tp;
