@@ -554,14 +554,14 @@ print_7_or_8_bit(const struct sess *sess, const char *fmt, const char *s,
 	}
 
 	for (p = s; *p; p++) {
-		unsigned char c = *(unsigned char *)p;
+		unsigned char c = (unsigned char)p[0];
 
 		if (isprint(c) || c == '\t' || c == 0x7f) {
 			if (c == '\\' &&
-			    *(unsigned char *)(p + 1) == '#' &&
-			    isdigit(*(unsigned char *)(p + 2)) &&
-			    isdigit(*(unsigned char *)(p + 3)) &&
-			    isdigit(*(unsigned char *)(p + 4))) {
+			    p[1] == '#' &&
+			    isdigit((unsigned char)p[2]) &&
+			    isdigit((unsigned char)p[3]) &&
+			    isdigit((unsigned char)p[4])) {
 				sbuf_printf(innerbuf, "\\#%03o", '\\');
 			} else {
 				sbuf_putc(innerbuf, c);
@@ -571,7 +571,7 @@ print_7_or_8_bit(const struct sess *sess, const char *fmt, const char *s,
 		} else if (sess->opts->bit8) {
                         sbuf_putc(innerbuf, c);
 		} else if (c >= 0xc2 && c <= 0xdf) {
-			unsigned char c2 = *(unsigned char *)(p + 1);
+			unsigned char c2 = (unsigned char)p[1];
 
 			/* TODO: Use iconv() */
 			if (c2 >= 0x80 && c2 <= 0xdf) {
@@ -983,12 +983,11 @@ printf_doformat(const char *fmt, int *rval, struct sess *sess,
 		if (sbuf != NULL) {
 			if (fl->link != NULL &&
 			    (fl->iflags & IFLAG_BASIS_FOLLOWS) == 0) {
-				const char *fmt = " -> %s";
+				const char *arrow =
+				    (fl->iflags & IFLAG_HLINK_FOLLOWS) != 0 ?
+				    " => " : " -> ";
 
-				if ((fl->iflags & IFLAG_HLINK_FOLLOWS) != 0)
-					fmt = " => %s";
-
-				snprintf(buf, sizeof(buf), fmt, fl->link);
+				snprintf(buf, sizeof(buf), "%s%s", arrow, fl->link);
 				widthstring[l + 1] = 's';
 				widthstring[l + 2] = '\0';
 				if (!print_7_or_8_bit(sess, widthstring, buf,

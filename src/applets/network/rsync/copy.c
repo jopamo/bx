@@ -380,10 +380,12 @@ mk_backup_dir(struct sess *sess, int rootfd, const char *fname)
 				ERR("%s: stat", rpath);
 				goto out;
 			} else {
-				fchownat(rootfd, bpath, st.st_uid, st.st_gid,
-				    AT_SYMLINK_NOFOLLOW);
-				fchmodat(rootfd, bpath, st.st_mode,
-				    AT_SYMLINK_NOFOLLOW);
+				if (fchownat(rootfd, bpath, st.st_uid, st.st_gid,
+				    AT_SYMLINK_NOFOLLOW) == -1)
+					WARN1("%s: set backup directory owner", bpath);
+				if (fchmodat(rootfd, bpath, st.st_mode,
+				    AT_SYMLINK_NOFOLLOW) == -1)
+					WARN1("%s: set backup directory mode", bpath);
 			}
 		}
 		*bpp = '/';

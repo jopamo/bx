@@ -546,7 +546,7 @@ struct	opts {
 	char            *filesfrom;             /* --files-from */
 	int		 from0;			/* -0 */
 	int		 itemize;		/* --itemize-changes, -i */
-	const char	*outformat;             /* --out-format */
+	char		*outformat;             /* --out-format */
 	const char	*sockopts;		/* --sockopts */
 	off_t		 bwlimit;		/* --bwlimit */
 	int		 size_only;		/* --size-only */

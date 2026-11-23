@@ -1792,6 +1792,9 @@ pre_file(struct upload *p, int *filefd, off_t *size,
 		dry_run = dry_full = true;
 		dry_xfer = false;
 		break;
+	default:
+		ERRX("invalid dry-run mode");
+		return -1;
 	}
 
 	*size = 0;

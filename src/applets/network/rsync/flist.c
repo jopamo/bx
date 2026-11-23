@@ -2067,10 +2067,10 @@ rsync_lstat(const char *path, struct stat *sb)
  * Returns zero on failure, non-zero on success.
  */
 static int
-flist_gen_dirent(struct sess *sess, const char *root, struct fl *fl,
+flist_gen_dirent(struct sess *sess, char *root, struct fl *fl,
     ssize_t stripdir, const char *prefix, struct froot *froot)
 {
-	const char	*cargv[2];
+	char		*cargv[2];
 	int		 fts_options;
 	int		 rc = 0, flag;
 	FTS		*fts;
@@ -2214,7 +2214,7 @@ flist_gen_dirent(struct sess *sess, const char *root, struct fl *fl,
 	if (sess->opts->one_file_system)
 		fts_options |= FTS_XDEV;
 
-	if ((fts = fts_open((char * const *)cargv, fts_options, NULL)) == NULL) {
+	if ((fts = fts_open(cargv, fts_options, NULL)) == NULL) {
 		if (froot != NULL)
 			froot_release(froot);
 		sess->total_errors++;
@@ -3459,9 +3459,9 @@ append_filesfrom(struct sess *sess, const char *basedir, char *file)
 		return 0;
 	}
 
-	asprintf(&(sess->filesfrom[sess->filesfrom_n]), "%s", file);
+	sess->filesfrom[sess->filesfrom_n] = strdup(file);
 	if (sess->filesfrom[sess->filesfrom_n] == NULL) {
-		ERR("asprintf");
+		ERR("strdup");
 		cleanup_filesfrom(sess);
 		return 0;
 	}

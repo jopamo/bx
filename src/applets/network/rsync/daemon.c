@@ -1216,7 +1216,11 @@ rsync_daemon_handler(struct sess *sess, int fd, struct sockaddr_storage *saddr,
 	/*
 	 * We don't currently support the /./ chroot syntax of rsync 3.x.
 	 */
-	chdir(role->module_path);
+	if (chdir(role->module_path) == -1) {
+		daemon_client_error(sess, "cannot enter module directory");
+		ERR("%s: chdir", role->module_path);
+		goto fail;
+	}
 	if (use_chroot && chroot(".") == -1) {
 		if (errno != EPERM || use_chroot == 1) {
 			/* XXX Fail it. */
@@ -1532,11 +1536,8 @@ rsync_daemon(int argc, char *argv[], struct opts *daemon_opts)
 
 	poll_timeout = -1;
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 	if (!role.socket_initiator && detach && daemon(1, 0) == -1)
 		err(ERR_IPC, "daemon");
-#pragma clang diagnostic pop
 
 #ifdef __APPLE__
 	/*

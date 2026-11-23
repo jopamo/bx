@@ -168,7 +168,7 @@ const struct command {
 const struct modifier {
 	unsigned int		modifier;
 	char			sopt;
-} modifiers[] = {
+} modifier_table[] = {
 	{ MOD_ABSOLUTE,			'/' },
 	{ MOD_NEGATE,			'!' },
 	{ MOD_CVSEXCLUDE | MOD_MERGE_CVSCOMPAT,		'C' },
@@ -223,9 +223,9 @@ parse_modifiers(const char *command, size_t *len)
 		mod = command[idx];
 
 		modparsed = 0;
-		for (size_t i = 0; modifiers[i].modifier != 0; i++) {
-			if (modifiers[i].sopt == mod) {
-				modparsed = modifiers[i].modifier;
+		for (size_t i = 0; modifier_table[i].modifier != 0; i++) {
+			if (modifier_table[i].sopt == mod) {
+				modparsed = modifier_table[i].modifier;
 				break;
 			}
 		}
@@ -836,9 +836,9 @@ send_command(struct rule *r)
 		err(ERR_SYNTAX, "unknown rule type %d", r->type);
 	}
 
-	for (int i = 0; modifiers[i].modifier != 0; i++) {
-		if (r->omodifiers & modifiers[i].modifier)
-			*b++ = modifiers[i].sopt;
+	for (int i = 0; modifier_table[i].modifier != 0; i++) {
+		if (r->omodifiers & modifier_table[i].modifier)
+			*b++ = modifier_table[i].sopt;
 		if (b >= ep - 3)
 			err(ERR_SYNTAX, "rule modifiers overflow");
 	}
@@ -991,7 +991,7 @@ void
 recv_rules(struct sess *sess, int fd)
 {
 	char line[8192];
-	char *rule;
+	const char *rule;
 	size_t len;
 	enum rule_type type;
 	unsigned int modifiers;
@@ -1010,7 +1010,7 @@ recv_rules(struct sess *sess, int fd)
 
 		rule = &line[0];
 		modifiers = 0;
-		type = rule_xfer_type((const char **)&rule, &modifiers);
+		type = rule_xfer_type(&rule, &modifiers);
 		if (parse_rule_impl(&global_ruleset, rule, type,
 		    modifiers, 0) == -1)
 			errx(ERR_PROTOCOL, "syntax error in received rules");
@@ -1151,7 +1151,8 @@ rules_base(const char *root)
 	}
 
 	if (rule_base_cwdend == NULL) {
-		getcwd(rule_base, sizeof(rule_base) - 1);
+		if (getcwd(rule_base, sizeof(rule_base) - 1) == NULL)
+			err(ERR_FILEGEN, "getcwd");
 		rule_base_cwdend = &rule_base[strlen(rule_base)];
 	}
 

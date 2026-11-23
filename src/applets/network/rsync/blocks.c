@@ -397,8 +397,8 @@ blk_match(struct sess *sess, const struct blkset *blks,
 		st->dirty = st->total = st->mapsz;
 		sess->total_unmatched += st->mapsz;
 
-		LOG4("%s: flushing whole file %llu B",
-		    path, st->mapsz);
+		LOG4("%s: flushing whole file %jd B",
+		    path, (intmax_t)st->mapsz);
 	}
 
 	return 1;

@@ -150,20 +150,20 @@ static int
 inet_setsockopts(int sock, const char *options)
 {
 	const struct sockopt *soptdef;
-	char *name, *part, *sockopts, *value;
+	char *name, *part, *option_list, *value;
 	int error, sockval;
 
 	if (options == NULL || options[0] == '\0')
 		return 0;
 
-	sockopts = strdup(options);
-	if (sockopts == NULL) {
+	option_list = strdup(options);
+	if (option_list == NULL) {
 		ERR("strdup");
 		return -1;
 	}
 
 	error = -1;
-	part = sockopts;
+	part = option_list;
 	while ((name = strsep(&part, ",")) != NULL) {
 		/* Empty fields are OK. */
 		if (*name == '\0')
@@ -216,7 +216,7 @@ inet_setsockopts(int sock, const char *options)
 	error = 0;
 
 out:
-	free(sockopts);
+	free(option_list);
 	return error;
 }
 

@@ -1040,7 +1040,7 @@ static int
 file_success(void *cookie, const void *data, size_t datasz)
 {
 	struct success_ctx *sctx = cookie;
-	struct opts *opts;
+	const struct opts *opts;
 	size_t pos = 0;
 	int32_t idx;
 
@@ -1172,7 +1172,6 @@ rsync_sender(struct sess *sess, int fdin,
 	struct role	    sender;
 	struct success_ctx  sctx;
 	struct fl	    fl;
-	const struct flist *f;
 	size_t		    flinfosz, i, phase = 0;
 	int		    rc = 0, c, metadata_phase = 0, res = 0;
 	int32_t		    idx;
@@ -1578,6 +1577,8 @@ rsync_sender(struct sess *sess, int fdin,
 
 	  check_other:
 		if (pfd[2].revents & POLLIN) {
+			const struct flist *f;
+
 			assert(up.cur != NULL);
 			assert(up.stat.fd != -1);
 			assert(up.stat.map == NULL);
@@ -1630,6 +1631,7 @@ rsync_sender(struct sess *sess, int fdin,
 
 		if ((pfd[1].revents & POLLOUT) && wbufsz > 0) {
 			int writefd = fdout;
+			const unsigned char *next = (const unsigned char *)wbuf + wbufpos;
 
 			assert(pfd[2].fd == -1);
 			assert(wbufsz - wbufpos);
@@ -1644,14 +1646,13 @@ rsync_sender(struct sess *sess, int fdin,
 			    sess->wbatch_fd != -1 &&
 			    sess->opts->dry_run == DRY_XFER)
 				writefd = sess->wbatch_fd;
-			ssz = write(writefd, wbuf + wbufpos, wbufsz - wbufpos);
+			ssz = write(writefd, next, wbufsz - wbufpos);
 			if (ssz == -1) {
 				ERR("write");
 				goto out;
 			}
 
-			if (!io_data_written(sess, writefd,
-			    wbuf + wbufpos, ssz)) {
+			if (!io_data_written(sess, writefd, next, ssz)) {
 				ERRX1("io_data_written");
 				goto out;
 			}
@@ -1972,7 +1973,8 @@ out:
 			ssize_t writesz;
 
 			assert(wbufsz > wbufpos);
-			writesz = write(fdout, wbuf + wbufpos, wbufsz - wbufpos);
+			writesz = write(fdout, (const unsigned char *)wbuf +
+			    wbufpos, wbufsz - wbufpos);
 			if (writesz == -1) {
 				if (errno == EINTR)
 					continue;

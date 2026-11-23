@@ -1035,8 +1035,8 @@ protocol_token_ff_compress(struct download *p, size_t tok)
 		 * changing in between the two, so we have to cope with
 		 * possibilities like this and trigger redo.
 		 */
-		WARNX1("%s: block at %lld outside of local file sized %llu",
-		    p->fname, off, fmap_size(p->map));
+		WARNX1("%s: block at %jd outside of local file sized %jd",
+		    p->fname, (intmax_t)off, (intmax_t)fmap_size(p->map));
 		p->state = DOWNLOAD_FLUSH_REMOTE;
 		return TOKEN_NEXT;
 	} else if (!fmap_trap(p->map)) {
@@ -1095,8 +1095,8 @@ protocol_token_ff(struct sess *sess, struct download *p, size_t tok)
 		 * changing in between the two, so we have to cope with
 		 * possibilities like this and trigger redo.
 		 */
-		WARNX1("%s: block at %lld outside of local file sized %llu",
-		    p->fname, off, fmap_size(p->map));
+		WARNX1("%s: block at %jd outside of local file sized %jd",
+		    p->fname, (intmax_t)off, (intmax_t)fmap_size(p->map));
 		p->state = DOWNLOAD_FLUSH_REMOTE;
 		return TOKEN_NEXT;
 	} else if (!fmap_trap(p->map)) {

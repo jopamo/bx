@@ -320,7 +320,7 @@ batch_close(struct sess *sess, const struct fargs *f, int rc)
 	 * use the first argument with a default value of what was provided to
 	 * this script.
 	 */
-	for (const char **arg = (const char **)args; *(arg + 1) != NULL;
+	for (char *const *arg = args; *(arg + 1) != NULL;
 	    arg++) {
 		if (strcmp(*arg, ".") == 0)
 			break;
@@ -351,7 +351,7 @@ batch_close(struct sess *sess, const struct fargs *f, int rc)
 	if (rules != NULL) {
 		fprintf(fp, " <<@REOF@\n");
 
-		for (const char **rule = (const char **)rules; *rule != NULL;
+		for (char *const *rule = rules; *rule != NULL;
 		    rule++) {
 			fprintf(fp, "%s\n", *rule);
 		}

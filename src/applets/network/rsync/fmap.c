@@ -38,7 +38,7 @@ static int mapped_files;
 static struct sigaction sigbus_init;
 
 struct fmap {
-	void		*map;
+	unsigned char	*map;
 	unsigned char	*buf;
 	int		 fd;
 	off_t		 mapsz;
@@ -67,8 +67,9 @@ static void
 fmap_sigbus_handler(int sig, siginfo_t *siginfo,
     void *uap __attribute__((__unused__)))
 {
-	struct fmap *fm;
-	void *uva;
+	const volatile struct fmap *fm = fmap_trapped;
+	uintptr_t uva = (uintptr_t)siginfo->si_addr;
+	uintptr_t start = fm == NULL ? 0 : (uintptr_t)fm->map;
 
 	assert(sig == SIGBUS);
 
@@ -77,9 +78,7 @@ fmap_sigbus_handler(int sig, siginfo_t *siginfo,
 	 * access to the segment we're trapping; otherwise, we just re-raise it
 	 * for the operator to deal with.
 	 */
-	fm = (void *)fmap_trapped;
-	uva = siginfo->si_addr;
-	if (fm == NULL || uva < fm->map || uva >= fm->map + fm->mapsz) {
+	if (fm == NULL || uva < start || uva - start >= (size_t)fm->mapsz) {
 		fmap_reraise();
 
 		/*
@@ -328,7 +327,7 @@ fmap_buf_slide(struct fmap *fm, off_t offset, size_t datasz)
 static bool
 fmap_buf_resize(struct fmap *fm, size_t datasz)
 {
-	char *lbuf;
+	unsigned char *lbuf;
 
 	if (fm->bufsz >= datasz)
 		return true;

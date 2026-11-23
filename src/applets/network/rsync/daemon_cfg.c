@@ -443,7 +443,7 @@ cfg_parse(const struct sess *sess, const char *cfg_file, int module)
 	char *key, *tail, *value;
 	char *line = NULL;
 	size_t linesize = 0, valuelen;
-	ssize_t linecnt, linelen;
+	ssize_t linelen;
 	int error;
 	bool continued;
 
@@ -477,13 +477,11 @@ cfg_parse(const struct sess *sess, const char *cfg_file, int module)
 	continued = false;
 	error = 0;
 	dparam = NULL;
-	linecnt = 0;
 	key = value = NULL;
 	valuelen = 0;
 	while ((linelen = getline(&line, &linesize, fp)) != -1) {
 		char *start;
 
-		linecnt++;
 		line[--linelen] = '\0';
 
 		/*

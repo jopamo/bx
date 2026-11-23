@@ -483,8 +483,7 @@ find_hl_impl(const struct flist *const this, const struct hardlinks *const hl,
 	assert(found->device == this->st.device);
 	assert(found->inode == this->st.inode);
 
-	i = ((void *)found - (void *)hl->infos) /
-		sizeof(struct info_for_hardlink);
+	i = found - hl->infos;
 	/* Go back to the first match */
 	while (i > 0 && this->st.inode == hl->infos[i - 1].inode &&
 	    this->st.device == hl->infos[i - 1].device) {
@@ -571,8 +570,7 @@ num_hl(const struct flist *const this, const struct hardlinks *const hl)
 	assert(found->device == this->st.device);
 	assert(found->inode == this->st.inode);
 
-	i = ((void *)found - (void *)hl->infos) /
-		sizeof(struct info_for_hardlink);
+	i = found - hl->infos;
 	/* Go back to the first match */
 	while (i > 0 && this->st.inode == hl->infos[i - 1].inode &&
 	    this->st.device == hl->infos[i - 1].device) {

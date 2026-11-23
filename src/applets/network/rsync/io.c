@@ -230,11 +230,12 @@ io_write_nonblocking(int fd, const void *buf, size_t bsz,
 static int
 io_write_blocking_impl(int fd, const void *buf, size_t sz, bool raise_errors)
 {
+	const unsigned char *next = buf;
 	size_t		wsz;
 	int		c;
 
 	while (sz > 0) {
-		c = io_write_nonblocking(fd, buf, sz, &wsz, raise_errors);
+		c = io_write_nonblocking(fd, next, sz, &wsz, raise_errors);
 		if (!c) {
 			if (raise_errors)
 				ERRX1("io_write_nonblocking");
@@ -244,7 +245,7 @@ io_write_blocking_impl(int fd, const void *buf, size_t sz, bool raise_errors)
 				ERRX("io_write_nonblocking: short write");
 			return 0;
 		}
-		buf += wsz;
+		next += wsz;
 		sz -= wsz;
 	}
 
@@ -291,7 +292,7 @@ io_writev_blocking(int fd, struct iovec *iov, int iovcnt, bool raise_errors)
 
 		for (i = 0; i < iovcnt && cc >= 0; ++i) {
 			if ((size_t)cc < iov[i].iov_len) {
-				iov[i].iov_base += cc;
+				iov[i].iov_base = (unsigned char *)iov[i].iov_base + cc;
 				iov[i].iov_len -= cc;
 				break;
 			}
@@ -366,6 +367,7 @@ static int
 io_write_buf_tagged_impl(struct sess *sess, int fd, const void *buf, size_t sz,
     enum iotag iotag, bool raise_errors)
 {
+	const unsigned char *next = buf;
 	int32_t	 tag, tagbuf;
 	size_t	 wsz;
 	int	 c;
@@ -411,7 +413,8 @@ io_write_buf_tagged_impl(struct sess *sess, int fd, const void *buf, size_t sz,
 		iov[0].iov_base = &tagbuf;
 		iov[0].iov_len = sizeof(tagbuf);
 
-		iov[1].iov_base = (void *)buf;
+		/* writev only reads the payload, despite iov_base's type. */
+		iov[1].iov_base = (void *)(uintptr_t)next;
 		iov[1].iov_len = wsz;
 
 		if (!io_writev_blocking(fd, iov, 2, raise_errors)) {
@@ -422,7 +425,7 @@ io_write_buf_tagged_impl(struct sess *sess, int fd, const void *buf, size_t sz,
 
 		sess->total_write += wsz;
 		sz -= wsz;
-		buf += wsz;
+		next += wsz;
 	}
 	return 1;
 }
@@ -538,11 +541,12 @@ io_read_nonblocking(int fd, void *buf, size_t bsz, size_t *sz, bool eof_ok)
 static int
 io_read_blocking(int fd, void *buf, size_t sz)
 {
+	unsigned char *next = buf;
 	size_t	 rsz;
 	int	 c;
 
 	while (sz > 0) {
-		c = io_read_nonblocking(fd, buf, sz, &rsz, false);
+		c = io_read_nonblocking(fd, next, sz, &rsz, false);
 		if (!c) {
 			ERRX1("io_read_nonblocking");
 			return 0;
@@ -550,7 +554,7 @@ io_read_blocking(int fd, void *buf, size_t sz)
 			ERRX("io_read_nonblocking: short read");
 			return 0;
 		}
-		buf += rsz;
+		next += rsz;
 		sz -= rsz;
 	}
 
@@ -752,7 +756,7 @@ io_read_line(struct sess *sess, int fd, char *buf, size_t *sz)
 int
 io_read_buf(struct sess *sess, int fd, void *buf, size_t sz)
 {
-	char	*inbuf = buf;
+	unsigned char *next = buf;
 	size_t	 rsz, totalsz = sz;
 	int	 c;
 
@@ -775,13 +779,13 @@ io_read_buf(struct sess *sess, int fd, void *buf, size_t sz)
 			if (sess->mplex_read_remain) {
 				rsz = sess->mplex_read_remain < sz ?
 					sess->mplex_read_remain : sz;
-				if (!io_read_blocking(fd, buf, rsz)) {
+				if (!io_read_blocking(fd, next, rsz)) {
 					ERRX1("io_read_blocking");
 					return 0;
 				}
 				sz -= rsz;
 				sess->mplex_read_remain -= rsz;
-				buf += rsz;
+				next += rsz;
 				sess->total_read += rsz;
 				continue;
 			}
@@ -796,7 +800,7 @@ io_read_buf(struct sess *sess, int fd, void *buf, size_t sz)
 
 	/* Snatch the sender's output if we're the receiver. */
 	if (sess->wbatch_fd != -1 && sess->mode == FARGS_RECEIVER) {
-		if (!io_write_blocking(sess->wbatch_fd, inbuf, totalsz)) {
+		if (!io_write_blocking(sess->wbatch_fd, buf, totalsz)) {
 			ERRX("write incoming to batch");
 			return 0;
 		}
@@ -922,7 +926,7 @@ io_buffer_buf(void *buf, size_t *bufpos, size_t buflen, const void *val,
 
 	assert(*bufpos + valsz <= buflen);
 	if (valsz != 0)
-		memcpy(buf + *bufpos, val, valsz);
+		memcpy((unsigned char *)buf + *bufpos, val, valsz);
 	*bufpos += valsz;
 }
 
@@ -1242,7 +1246,7 @@ io_unbuffer_buf(const void *buf, size_t *bufpos, size_t bufsz, void *val,
 {
 
 	assert(*bufpos + valsz <= bufsz);
-	memcpy(val, buf + *bufpos, valsz);
+	memcpy(val, (const unsigned char *)buf + *bufpos, valsz);
 	*bufpos += valsz;
 }
 

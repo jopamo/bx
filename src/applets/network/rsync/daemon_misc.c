@@ -960,7 +960,8 @@ daemon_do_execcmds_post(struct sess *sess, const char *module, const char *cmd)
 	daemon_do_execcmds_num_env("RSYNC_EXIT_STATUS", status);
 
 	/* Execute the command, but propagate the child status either way. */
-	system(cmd);
+	if (system(cmd) == -1)
+		WARN("post-xfer exec");
 	_exit(status);
 }
 
@@ -1310,9 +1311,6 @@ daemon_normalize_paths(const char *module, int argc, char *argv[])
 int
 daemon_open_logfile(struct sess *sess, const char *logfile, bool printerr)
 {
-	struct daemon_role *role;
-
-	role = (void *)sess->role;
 	if (logfile != NULL && *logfile == '\0')
 		logfile = NULL;
 	if (logfile != NULL) {
@@ -1332,6 +1330,8 @@ daemon_open_logfile(struct sess *sess, const char *logfile, bool printerr)
 		rsync_set_logfile(fp, sess);
 	} else {
 #ifdef __APPLE__
+		struct daemon_role *role = (void *)sess->role;
+
 		if (!role->socket_initiator) {
 			fprintf(stderr,
 			    "The syslog(3) facility is not currently available in the standalone rsyncd.\n"
@@ -1455,25 +1455,25 @@ daemon_add_long_refuse_name(struct sess *sess, const struct option ***lopts,
 }
 
 static int
-daemon_can_refuse_wildcard(const char *option, char shopt)
+daemon_can_refuse_short_wildcard(char option)
 {
 	static const char no_wildcard_shopts[] = { 'e', 'n', '0' };
+
+	for (size_t i = 0; i < nitems(no_wildcard_shopts); i++) {
+		if (option == no_wildcard_shopts[i])
+			return 0;
+	}
+
+	return 1;
+}
+
+static int
+daemon_can_refuse_long_wildcard(const char *option)
+{
 	static const char *no_wildcard_lopts[] = {
 	    "server", "sender", "rsh", "out-format", "log-format",
 	    "dry-run", "from0"
 	};
-
-	assert(option != NULL || shopt != 0);
-	assert((option != NULL) ^ (shopt != 0));
-
-	if (shopt != 0) {
-		for (size_t i = 0; i < nitems(no_wildcard_shopts); i++) {
-			if (shopt == no_wildcard_shopts[i])
-				return 0;
-		}
-
-		return 1;
-	}
 
 	for (size_t i = 0; i < nitems(no_wildcard_lopts); i++) {
 		if (strcmp(option, no_wildcard_lopts[i]) == 0)
@@ -1523,7 +1523,7 @@ daemon_parse_refuse(struct sess *sess, const char *module)
     (token[1] == '\0' || (token[1] == '*' && token[2] == '\0')))
 
 		if (SHORT_OPTION(token) && (token[1] != '*' ||
-		    daemon_can_refuse_wildcard(NULL, token[0]))) {
+		    daemon_can_refuse_short_wildcard(token[0]))) {
 			shopt = token[0];
 
 			if (!daemon_add_short_refuse(sess, &shopts, &shoptlen,
@@ -1560,7 +1560,7 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 			 */
 			if (chkopt->flag == NULL && isprint(chkopt->val)) {
 				if (wildcard &&
-				    !daemon_can_refuse_wildcard(NULL,
+				    !daemon_can_refuse_short_wildcard(
 				    chkopt->val))
 					continue;
 				if (chkopt->val == 'a' &&
@@ -1577,7 +1577,7 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 
 				continue;
 			} else if (wildcard &&
-			    !daemon_can_refuse_wildcard(chkopt->name, 0))
+			    !daemon_can_refuse_long_wildcard(chkopt->name))
 				continue;
 
 			if (!daemon_add_long_refuse(sess, &lopts, &loptlen,
@@ -1610,8 +1610,6 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 		 * we refuse all of the implied options as well.
 		 */
 		if (explicit_archive) {
-			int rc;
-
 			for (const char *shoptchk = "rlptgoD"; *shoptchk != '\0';
 			    shoptchk++) {
 				rc = daemon_add_short_refuse(sess, &shopts,

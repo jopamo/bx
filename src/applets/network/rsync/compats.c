@@ -2023,8 +2023,16 @@ restart:
 	(void)sigaction(SIGTTIN, &sa, &savettin);
 	(void)sigaction(SIGTTOU, &sa, &savettou);
 
-	if (!(flags & RPP_STDIN))
-		(void)write(output, prompt, strlen(prompt));
+	if (!(flags & RPP_STDIN)) {
+		size_t len = strlen(prompt);
+		ssize_t written = write(output, prompt, len);
+
+		if (written < 0 || (size_t)written != len) {
+			save_errno = written < 0 ? errno : EIO;
+			buf[0] = '\0';
+			goto restore_terminal;
+		}
+	}
 	end = buf + bufsiz - 1;
 	p = buf;
 	while ((nr = read(input, &ch, 1)) == 1 && ch != '\n' && ch != '\r') {
@@ -2042,9 +2050,16 @@ restart:
 	}
 	*p = '\0';
 	save_errno = errno;
-	if (!(term.c_lflag & ECHO))
-		(void)write(output, "\n", 1);
+	if (!(term.c_lflag & ECHO)) {
+		ssize_t written = write(output, "\n", 1);
 
+		if (written != 1 && nr != -1) {
+			save_errno = written < 0 ? errno : EIO;
+			nr = -1;
+		}
+	}
+
+restore_terminal:
 	/* Restore old terminal settings and signals. */
 	if (memcmp(&term, &oterm, sizeof(term)) != 0) {
 		const int sigttou = readpassphrase_signo[SIGTTOU];
@@ -2439,6 +2454,7 @@ fmt_scaled(long long number, char *result)
 {
 	long long abval, fract = 0;
 	unsigned int i;
+	int len;
 	unit_type unit = NONE;
 
 	/* Not every negative long long has a positive representation. */
@@ -2480,21 +2496,28 @@ fmt_scaled(long long number, char *result)
 		fract = 0;
 	}
 
-	if (number == 0)
+	if (number == 0) {
 		strlcpy(result, "0B", FMT_SCALED_STRSIZE);
-	else if (unit == NONE || number >= 100 || number <= -100) {
+		return 0;
+	}
+	if (unit == NONE || number >= 100 || number <= -100) {
 		if (fract >= 5) {
 			if (number >= 0)
 				number++;
 			else
 				number--;
 		}
-		(void)snprintf(result, FMT_SCALED_STRSIZE, "%lld%c",
+		len = snprintf(result, FMT_SCALED_STRSIZE, "%lld%c",
 			number, scale_chars[unit]);
-	} else
-		(void)snprintf(result, FMT_SCALED_STRSIZE, "%lld.%1lld%c",
+	} else {
+		len = snprintf(result, FMT_SCALED_STRSIZE, "%lld.%1lld%c",
 			number, fract, scale_chars[unit]);
+	}
 
+	if (len < 0 || len >= FMT_SCALED_STRSIZE) {
+		errno = ERANGE;
+		return -1;
+	}
 	return 0;
 }
 

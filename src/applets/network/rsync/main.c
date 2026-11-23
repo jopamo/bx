@@ -514,8 +514,7 @@ scan_scaled_def(char *maybe_scaled, long long *result, char def)
 	if (length > 0) {
 		if (isascii(maybe_scaled[length - 1]) &&
 			isdigit(maybe_scaled[length - 1])) {
-			asprintf(&s, "%s%c", maybe_scaled, def);
-			if (s == NULL) {
+			if (asprintf(&s, "%s%c", maybe_scaled, def) < 0) {
 				err(ERR_NOMEM, NULL);
 			}
 		}
@@ -530,12 +529,7 @@ scan_scaled_def(char *maybe_scaled, long long *result, char def)
  * 2k = 2048, but 2kb = 2000
  * And additionally allows +1 and -1 (for --max-size etc)
  */
-typedef enum {
-	NONE = 0, KILO = 1, MEGA = 2, GIGA = 3, TERA = 4, PETA = 5, EXA = 6
-} unit_type;
-
 /* These three arrays MUST be in sync!  XXX make a struct */
-static const unit_type units[] = { NONE, KILO, MEGA, GIGA, TERA, PETA, EXA };
 static const char scale_chars[] = "BKMGTPE";
 static const long long scale_factors[] = {
 	1LL,
@@ -556,7 +550,7 @@ static const long long scale_factors_1000[] = {
 	1000LL*1000*1000*1000*1000*1000,
 };
 
-#define	SCALE_LENGTH (sizeof(units)/sizeof(units[0]))
+#define	SCALE_LENGTH (sizeof(scale_chars) - 1)
 
 #define MAX_DIGITS (SCALE_LENGTH * 3)	/* XXX strlen(sprintf("%lld", -1)? */
 
@@ -1730,11 +1724,11 @@ basedir:
 			opts.logfile = optarg;
 			break;
 		case OP_LOGFORMAT:
-			free((void *)opts.logformat);
+			free(opts.logformat);
 		        opts.logformat = strdup(optarg);
 			break;
 		case OP_OUTFORMAT:
-			free((void *)opts.outformat);
+			free(opts.outformat);
 		        opts.outformat = strdup(optarg);
 			break;
 		case 'i':
@@ -2447,7 +2441,7 @@ bx_rsync_main(int argc, char *argv[])
 	opts.filesfrom_host = NULL;
 	free(opts.filesfrom_path);
 	opts.filesfrom_path = NULL;
-	free((void *)opts.outformat);
+	free(opts.outformat);
 	opts.outformat = NULL;
 
 	exit(MAX(rc, rc2));

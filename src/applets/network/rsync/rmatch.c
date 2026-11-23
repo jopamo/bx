@@ -299,7 +299,7 @@ matchsub(const char **pp, const char **ss, const char *end, int wild)
 int
 rmatch(const char *pattern, const char *string, int leading_dir)
 {
-	const char *segend, *segnext, *mismatch = NULL;
+	const char *segend, *segnext = NULL, *mismatch = NULL;
 	int wild, starstar;
 
 	/*
