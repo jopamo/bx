@@ -2,17 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <signal.h>
 #include <fcntl.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/xreadwrite.h"
-#include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 struct tee_output {
     int fd;
@@ -33,17 +32,42 @@ static void tee_print_help(const char* progname) {
 }
 
 int bx_tee_main(int argc, char** argv) {
-    static const struct option long_options[] = {
-        {"append", no_argument, NULL, 'a'}, {"ignore-interrupts", no_argument, NULL, 'i'}, {"help", no_argument, NULL, 'h'}, {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "append", BX_OPTION_NO_VALUE},
+        {'i', 'i', "ignore-interrupts", BX_OPTION_NO_VALUE},
+        {'h', 0, "help", BX_OPTION_NO_VALUE},
+        {'v', 0, "version", BX_OPTION_NO_VALUE},
+    };
 
     const char* progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "tee");
     struct bx_diag_ctx diag = {.progname = progname, .exit_status = 0};
     bool append = false;
     bool ignore_interrupts = false;
-    int c;
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "ai", long_options, NULL)) != -1) {
-        switch (c) {
+    /* At most argc - 1 operands, plus the standard output entry. */
+    const char** paths = calloc((size_t)argc, sizeof(*paths));
+    if (paths == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
+    }
+    int num_files = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            paths[num_files++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            free(paths);
+            return diag.exit_status;
+        }
+        switch (option.spec->id) {
             case 'a':
                 append = true;
                 break;
@@ -52,32 +76,32 @@ int bx_tee_main(int argc, char** argv) {
                 break;
             case 'h':
                 tee_print_help(progname);
+                free(paths);
                 return 0;
             case 'v':
                 printf("tee (bx) %s\n", BX_VERSION);
+                free(paths);
                 return 0;
-            default:
-                if (optopt != 0) {
-                    fprintf(stderr, "%s: invalid option -- '%c'\n", progname, optopt);
-                }
-                else if (optind > 0 && argv[optind - 1]) {
-                    fprintf(stderr, "%s: unrecognized option '%s'\n", progname, argv[optind - 1]);
-                }
-                else {
-                    fprintf(stderr, "%s: invalid option\n", progname);
-                }
-                return 1;
         }
     }
 
-    if (ignore_interrupts) {
-        signal(SIGINT, SIG_IGN);
+    for (int i = 0; i < num_files; i++) {
+        if (paths[i][0] == '\0') {
+            bx_diag(&diag, "empty file operand");
+            free(paths);
+            return diag.exit_status;
+        }
+    }
+    if (ignore_interrupts && signal(SIGINT, SIG_IGN) == SIG_ERR) {
+        bx_perror_path(&diag, "cannot ignore SIGINT");
+        free(paths);
+        return diag.exit_status;
     }
 
-    int num_files = argc - optind;
     struct tee_output* outputs = calloc((size_t)num_files + 1u, sizeof(*outputs));
     if (!outputs) {
         bx_diag(&diag, "memory exhausted");
+        free(paths);
         return diag.exit_status;
     }
 
@@ -85,6 +109,7 @@ int bx_tee_main(int argc, char** argv) {
     if (!output_buffers) {
         bx_diag(&diag, "memory exhausted");
         free(outputs);
+        free(paths);
         return diag.exit_status;
     }
 
@@ -98,7 +123,7 @@ int bx_tee_main(int argc, char** argv) {
     int output_count = 1;
 
     for (int i = 0; i < num_files; i++) {
-        const char* path = argv[optind + i];
+        const char* path = paths[i];
         int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
         int fd = bx_fd_open_cloexec(path, flags, 0666);
         if (fd >= 0) {
@@ -119,6 +144,7 @@ int bx_tee_main(int argc, char** argv) {
             bx_perror_path(&diag, path);
         }
     }
+    free(paths);
 
     char buf[8192];
     ssize_t n;
