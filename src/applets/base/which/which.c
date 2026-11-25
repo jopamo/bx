@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <limits.h>
@@ -12,7 +11,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 
 struct which_opts {
@@ -21,7 +20,6 @@ struct which_opts {
     bool skip_tilde;
     bool show_dot;
     bool show_tilde;
-    bool tty_only;
     bool read_alias;
     bool skip_alias;
     bool read_functions;
@@ -53,7 +51,7 @@ static void print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  --skip-tilde          skip directories in PATH that start with a tilde\n");
     fprintf(stream, "  --show-dot            don't expand dot to current directory in output\n");
     fprintf(stream, "  --show-tilde          output a tilde for HOME directory for non-root\n");
-    fprintf(stream, "  --tty-only            stop processing options on the right if not on tty\n");
+    fprintf(stream, "  --tty-only            accepted for compatibility; options still apply\n");
     fprintf(stream, "  -i, --read-alias      read alias definitions from stdin\n");
     fprintf(stream, "  --skip-alias          do not read alias definitions (default)\n");
     fprintf(stream, "  --read-functions      read function definitions from stdin\n");
@@ -171,7 +169,7 @@ static void print_path(const char* path, const struct which_opts* opts, const ch
     printf("%s\n", path);
 }
 
-static bool has_operand_name(int operand_count, char** operands, const char* name) {
+static bool has_operand_name(int operand_count, const char* const* operands, const char* name) {
     for (int i = 0; i < operand_count; i++) {
         if (strcmp(operands[i], name) == 0) {
             return true;
@@ -180,7 +178,7 @@ static bool has_operand_name(int operand_count, char** operands, const char* nam
     return false;
 }
 
-static bool consume_first_matching_operand(int operand_count, char** operands, bool* consumed, const char* name) {
+static bool consume_first_matching_operand(int operand_count, const char* const* operands, bool* consumed, const char* name) {
     for (int i = 0; i < operand_count; i++) {
         if (!consumed[i] && strcmp(operands[i], name) == 0) {
             consumed[i] = true;
@@ -190,7 +188,7 @@ static bool consume_first_matching_operand(int operand_count, char** operands, b
     return false;
 }
 
-static void emit_aliases_for_operands(struct alias* aliases, int operand_count, char** operands, bool all, bool* consumed) {
+static void emit_aliases_for_operands(struct alias* aliases, int operand_count, const char* const* operands, bool all, bool* consumed) {
     for (struct alias* a = aliases; a; a = a->next) {
         bool matched = all ? has_operand_name(operand_count, operands, a->name) : consume_first_matching_operand(operand_count, operands, consumed, a->name);
         if (!matched) {
@@ -558,30 +556,52 @@ static bool find_command(const char* cmd, const struct which_opts* opts, struct 
 
 int bx_which_main(int argc, char** argv) {
     struct which_opts opts = {0};
-    int c;
     struct alias* aliases = NULL;
     struct function* functions = NULL;
-    struct bx_diag_ctx diag = {0};
+    struct bx_diag_ctx diag = {.progname = which_progname(argc > 0 ? argv[0] : NULL)};
+    const char** operands = NULL;
+    int operand_count = 0;
+    int status = 255;
 
-    diag.progname = which_progname(argv[0]);
-
-    static struct option long_options[] = {{"all", no_argument, 0, 'a'},
-                                           {"skip-dot", no_argument, 0, 1001},
-                                           {"skip-tilde", no_argument, 0, 1002},
-                                           {"show-dot", no_argument, 0, 1003},
-                                           {"show-tilde", no_argument, 0, 1004},
-                                           {"tty-only", no_argument, 0, 1005},
-                                           {"read-alias", no_argument, 0, 'i'},
-                                           {"skip-alias", no_argument, 0, 1006},
-                                           {"read-functions", no_argument, 0, 1007},
-                                           {"skip-functions", no_argument, 0, 1008},
-                                           {"version", no_argument, 0, 'v'},
-                                           {"help", no_argument, 0, 1009},
-                                           {0, 0, 0, 0}};
-
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "aivV", long_options, NULL)) != -1) {
-        switch (c) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {1001, 0, "skip-dot", BX_OPTION_NO_VALUE},
+        {1002, 0, "skip-tilde", BX_OPTION_NO_VALUE},
+        {1003, 0, "show-dot", BX_OPTION_NO_VALUE},
+        {1004, 0, "show-tilde", BX_OPTION_NO_VALUE},
+        {1005, 0, "tty-only", BX_OPTION_NO_VALUE},
+        {'i', 'i', "read-alias", BX_OPTION_NO_VALUE},
+        {1006, 0, "skip-alias", BX_OPTION_NO_VALUE},
+        {1007, 0, "read-functions", BX_OPTION_NO_VALUE},
+        {1008, 0, "skip-functions", BX_OPTION_NO_VALUE},
+        {'v', 'v', "version", BX_OPTION_NO_VALUE},
+        {1009, 0, "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', NULL, BX_OPTION_NO_VALUE},
+    };
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!operands) {
+                operands = calloc((size_t)argc - option.index, sizeof(*operands));
+                if (!operands) {
+                    bx_perror_path(&diag, "allocate command names");
+                    goto done;
+                }
+            }
+            operands[operand_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            print_help(stderr, diag.progname);
+            goto done;
+        }
+        switch (option.spec->id) {
             case 'a':
                 opts.all = true;
                 break;
@@ -593,7 +613,8 @@ int bx_which_main(int argc, char** argv) {
             case 'v':
             case 'V':
                 print_version(diag.progname);
-                return 0;
+                status = 0;
+                goto done;
             case 1001:
                 opts.skip_dot = true;
                 break;
@@ -607,7 +628,6 @@ int bx_which_main(int argc, char** argv) {
                 opts.show_tilde = true;
                 break;
             case 1005:
-                opts.tty_only = true;
                 break;
             case 1006:
                 opts.read_alias = false;
@@ -624,53 +644,33 @@ int bx_which_main(int argc, char** argv) {
                 break;
             case 1009:
                 print_help(stdout, diag.progname);
-                return 0;
-            case '?':
-                if (opts.tty_only) {
-                    if (optopt != 0) {
-                        fprintf(stderr, "%s: invalid option -- '%c'\n", diag.progname, optopt);
-                    }
-                    else {
-                        fprintf(stderr, "%s: unrecognized option '%s'\n", diag.progname, argv[optind - 1]);
-                    }
-                    break;
-                }
-                if (optopt != 0) {
-                    fprintf(stderr, "%s: invalid option -- '%c'\n", diag.progname, optopt);
-                    print_help(stderr, diag.progname);
-                    return 255;
-                }
-                fprintf(stderr, "%s: unrecognized option '%s'\n", diag.progname, argv[optind - 1]);
-                print_help(stderr, diag.progname);
-                return 255;
-            default:
-                return 255;
+                status = 0;
+                goto done;
         }
     }
 
-    if (optind >= argc) {
+    if (operand_count == 0) {
         print_help(stderr, diag.progname);
-        return 255;
+        goto done;
     }
 
     parse_stdin(&opts, &aliases, &functions);
-
-    int operand_count = argc - optind;
     bool* alias_consumed = xmalloc((size_t)operand_count * sizeof(bool));
     memset(alias_consumed, 0, (size_t)operand_count * sizeof(bool));
-    emit_aliases_for_operands(aliases, operand_count, argv + optind, opts.all, alias_consumed);
+    emit_aliases_for_operands(aliases, operand_count, operands, opts.all, alias_consumed);
 
     for (int i = 0; i < operand_count; i++) {
-        if (!opts.all && alias_consumed[i]) {
+        if (!opts.all && alias_consumed[i])
             continue;
-        }
-        if (!find_command(argv[optind + i], &opts, NULL, functions)) {
-            print_not_found_diag(&diag, argv[optind + i]);
-        }
+        if (!find_command(operands[i], &opts, NULL, functions))
+            print_not_found_diag(&diag, operands[i]);
     }
 
     free(alias_consumed);
     free_aliases(aliases);
     free_functions(functions);
-    return diag.exit_status > 255 ? 255 : diag.exit_status;
+    status = diag.exit_status > 255 ? 255 : diag.exit_status;
+done:
+    free(operands);
+    return status;
 }
