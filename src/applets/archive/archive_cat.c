@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include <getopt.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <signal.h>
@@ -12,11 +11,10 @@
 #include "applets.h"
 #include "applets/archive/archive_codec.h"
 #include "bx/diag.h"
-#include "lib/args_common.h"
-#include "lib/cli_common.h"
 #include "lib/copy_metadata.h"
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
 
@@ -316,22 +314,52 @@ static int archive_command(int argc, char** argv, const char* progname,
                            const struct bx_archive_codec* codec, const char* suffix,
                            bool compress) {
     struct bx_diag_ctx diag = {.progname = progname};
-    static const struct option options[] = {
-        {"decompress", no_argument, NULL, 'd'},
-        {"stdout", no_argument, NULL, 'c'},
-        {"force", no_argument, NULL, 'f'},
-        {"help", no_argument, NULL, 'h'},
-        {"keep", no_argument, NULL, 'k'},
-        {0},
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "decompress", BX_OPTION_NO_VALUE},
+        {'c', 'c', "stdout", BX_OPTION_NO_VALUE},
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'k', 'k', "keep", BX_OPTION_NO_VALUE},
+        {'0', '0', NULL, BX_OPTION_NO_VALUE},
+        {'1', '1', NULL, BX_OPTION_NO_VALUE},
+        {'2', '2', NULL, BX_OPTION_NO_VALUE},
+        {'3', '3', NULL, BX_OPTION_NO_VALUE},
+        {'4', '4', NULL, BX_OPTION_NO_VALUE},
+        {'5', '5', NULL, BX_OPTION_NO_VALUE},
+        {'6', '6', NULL, BX_OPTION_NO_VALUE},
+        {'7', '7', NULL, BX_OPTION_NO_VALUE},
+        {'8', '8', NULL, BX_OPTION_NO_VALUE},
+        {'9', '9', NULL, BX_OPTION_NO_VALUE},
     };
-    int opt, operand = 1;
     bool to_stdout = suffix == NULL;
     bool writer = compress;
     bool keep = false;
     bool replace = false;
     struct bx_archive_codec_encode_options encoding = {0};
-    bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:cdfhk0123456789", options, &operand)) != -1) {
+    const char** paths = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*paths)) : NULL;
+    if (argc > 1 && paths == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return 1;
+    }
+    size_t count = 0;
+    int status = 1;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            paths[count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        int opt = option.spec->id;
         if (opt >= '0' && opt <= '9' && writer) {
             encoding.level_set = true;
             encoding.level = opt - '0';
@@ -347,7 +375,7 @@ static int archive_command(int argc, char** argv, const char* progname,
         case 'f':
             if (!suffix) {
                 bx_diag(&diag, "unrecognized option '--force'");
-                return 1;
+                goto done;
             }
             replace = true;
             break;
@@ -375,44 +403,52 @@ static int archive_command(int argc, char** argv, const char* progname,
             puts("With no files or a '-' operand, read standard input and write to standard output.");
             if (codec == bx_archive_codec_xz())
                 puts("Named .lzma inputs select the legacy LZMA decoder.");
-            return 0;
+            status = 0;
+            goto done;
         default:
-            bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
+            bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            goto done;
         }
     }
     if (encoding.level_set &&
         (!compress || !bx_archive_codec_level_valid(codec, encoding.level))) {
         bx_diag(&diag, "invalid compression level for this mode: %d", encoding.level);
-        return 1;
+        goto done;
     }
-    if (replace && (to_stdout || optind == argc)) {
+    if (replace && (to_stdout || count == 0)) {
         bx_diag(&diag, "replacement requires named file output");
-        return 1;
+        goto done;
     }
-    if (replace) {
-        for (int i = optind; i < argc; i++)
-            if (strcmp(argv[i], "-") == 0) {
-                bx_diag(&diag, "replacement requires named file output");
-                return 1;
-            }
+    for (size_t i = 0; i < count; i++) {
+        if (!paths[i][0]) {
+            bx_diag(&diag, "empty input path");
+            goto done;
+        }
+        if (replace && strcmp(paths[i], "-") == 0) {
+            bx_diag(&diag, "replacement requires named file output");
+            goto done;
+        }
     }
     bool output_error = false;
-    if (optind == argc)
-        return compress ? encode("-", -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
+    if (count == 0) {
+        status = compress ? encode("-", -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
                           decode("-", -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
-    int status = 0;
-    for (int i = optind; i < argc && !output_error; i++) {
+        goto done;
+    }
+    status = 0;
+    for (size_t i = 0; i < count && !output_error; i++) {
         int result;
-        if (to_stdout || strcmp(argv[i], "-") == 0)
+        if (to_stdout || strcmp(paths[i], "-") == 0)
             result = compress ?
-                encode(argv[i], -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
-                decode(argv[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
+                encode(paths[i], -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
+                decode(paths[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
         else
-            result = transform_to_new_file(argv[i], suffix, codec, compress ? &encoding : NULL, replace, keep, &diag);
+            result = transform_to_new_file(paths[i], suffix, codec, compress ? &encoding : NULL, replace, keep, &diag);
         if (status < result)
             status = result;
     }
+done:
+    free(paths);
     return status;
 }
 
