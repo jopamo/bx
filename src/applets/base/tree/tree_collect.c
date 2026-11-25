@@ -64,15 +64,6 @@ static bool bx_tree_node_append_child(struct bx_tree_node *parent,
     return true;
 }
 
-static char *bx_tree_strdup_range(const char *start, size_t len) {
-    char *s = malloc(len + 1u);
-    if (!s)
-        return NULL;
-    memcpy(s, start, len);
-    s[len] = '\0';
-    return s;
-}
-
 static bool bx_tree_count_dir_entries(const char *path, size_t *count_out) {
     DIR *dir = opendir(path);
     if (!dir)
@@ -126,12 +117,14 @@ static bool bx_tree_pattern_matches(const char *pattern,
     while (true) {
         const char *pipe = strchr(segment, '|');
         size_t len = pipe ? (size_t)(pipe - segment) : strlen(segment);
-        char *one = bx_tree_strdup_range(segment, len);
+        char *one = malloc(len + 2u);
         if (!one)
             return false;
+        memcpy(one, segment, len);
+        one[len] = '\0';
         /* A bracket expression cannot span tree's alternative separator. */
         if (strstr(one, "[^"))
-            bx_glob_normalize_caret(one);
+            bx_glob_normalize_caret_with_spare(one, 1);
         bool matched = one[0] != '\0' && bx_tree_match_segment(one, text, ignore_case);
         free(one);
         if (matched)
