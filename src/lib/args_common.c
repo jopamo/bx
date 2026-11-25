@@ -12,28 +12,24 @@
 #include "update_policy.h"
 #include "bx/libbx.h"
 
-static int bx_args_pending_first_option_index = -1;
+static bool bx_args_getopt_reset_pending;
 static char bx_args_reset_program[] = "bx-getopt-reset";
 static char* bx_args_reset_argv[] = {bx_args_reset_program, NULL};
 
-void bx_args_getopt_reset_at(int first_option_index) {
+void bx_args_getopt_reset(void) {
     /*
      * A full getopt reset must be initialized with the next parser's actual
      * optstring. glibc chooses permutation/POSIX ordering while initializing,
      * so priming it here with an empty optstring would lose a leading '+' and
      * let command operands such as "cmd -d" be permuted back into an applet's
      * option scan. Defer initialization until bx_args_getopt_long() has the
-     * real optstring, then restore the caller's requested starting index.
+     * real optstring.
      */
-    bx_args_pending_first_option_index = first_option_index;
+    bx_args_getopt_reset_pending = true;
     opterr = 0;
-    optind = first_option_index;
+    optind = 1;
     optopt = 0;
     optarg = NULL;
-}
-
-void bx_args_getopt_reset(void) {
-    bx_args_getopt_reset_at(1);
 }
 
 int bx_args_getopt_long(
@@ -43,15 +39,14 @@ int bx_args_getopt_long(
     const struct option* long_options,
     int* long_index
 ) {
-    if (bx_args_pending_first_option_index >= 0) {
-        int first_option_index = bx_args_pending_first_option_index;
-        bx_args_pending_first_option_index = -1;
+    if (bx_args_getopt_reset_pending) {
+        bx_args_getopt_reset_pending = false;
 
         /*
          * Force libc to discard any private grouped-option position and choose
          * its ordering mode from this parser's real optstring. The empty argv
          * prevents consuming caller arguments during initialization. Once the
-         * libc state is fresh, select the caller's requested starting index.
+         * libc state is fresh, start at the first option.
          */
         opterr = 0;
         optind = 0;
@@ -66,7 +61,7 @@ int bx_args_getopt_long(
         );
 
         opterr = 0;
-        optind = first_option_index;
+        optind = 1;
         optopt = 0;
         optarg = NULL;
     }

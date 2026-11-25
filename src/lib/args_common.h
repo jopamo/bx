@@ -7,7 +7,6 @@
 
 #include "update_policy.h"
 
-void bx_args_getopt_reset_at(int first_option_index);
 void bx_args_getopt_reset(void);
 enum { BX_ARGS_OPT_HELP = 512, BX_ARGS_OPT_VERSION };
 int bx_args_getopt_long(
