@@ -53,12 +53,19 @@ static inline void bx_glob_normalize_caret(char* pattern) {
         } else if (*p == '[' && p + 1 < end) {
             const char* after = bx_glob_bracket_end(p, end);
             if (!after) {
-                /* A final hyphen can be an incomplete range, not a
-                 * literal tail in fnmatch(). */
                 if (end - p >= 3 && p[1] == '^' && p[2] == ']' &&
-                    end[-1] != '-' && !strpbrk(p + 3, "[]\\")) {
-                    memmove(p + 1, p, (size_t)(end - p) + 1);
-                    *p = '\\';
+                    !strpbrk(p + 3, "[]\\")) {
+                    if (end[-1] != '-') {
+                        memmove(p + 1, p, (size_t)(end - p) + 1);
+                        *p = '\\';
+                    }
+#ifdef __GLIBC__
+                    /* glibc rejects a single terminal range. A prior
+                     * hyphen could make this one a range endpoint instead. */
+                    else if (memchr(p + 3, '-', (size_t)(end - p - 4)) == NULL) {
+                        p[1] = '!';
+                    }
+#endif
                 }
                 break;
             }
