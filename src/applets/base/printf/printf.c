@@ -620,7 +620,7 @@ static bool bx_printf_parse_spec(const char** cursor, struct bx_printf_spec* spe
     return true;
 }
 
-static const char* bx_printf_get_argument(const char* const* arguments, size_t argument_count, size_t base, int position) {
+static const char* bx_printf_get_argument(char* const* arguments, size_t argument_count, size_t base, int position) {
     if (position <= 0) {
         return NULL;
     }
@@ -1179,7 +1179,13 @@ static bool bx_printf_render_b_conversion(struct bx_printf_output* output, const
     return true;
 }
 
-static bool bx_printf_render_conversion(struct bx_printf_output* output, const struct bx_printf_spec* spec, const char* const* arguments, size_t argument_count, size_t base, bool* stop_output, struct bx_diag_ctx* diag) {
+static bool bx_printf_render_conversion(struct bx_printf_output* output,
+                                        const struct bx_printf_spec* spec,
+                                        char* const* arguments,
+                                        size_t argument_count,
+                                        size_t base,
+                                        bool* stop_output,
+                                        struct bx_diag_ctx* diag) {
     *stop_output = false;
 
     int width = spec->width_value;
@@ -1338,7 +1344,14 @@ static bool bx_printf_render_conversion(struct bx_printf_output* output, const s
     }
 }
 
-static bool bx_printf_render_cycle(struct bx_printf_output* output, const char* format, const char* const* arguments, size_t argument_count, size_t base, int* cycle_argument_count, bool* stop_output, struct bx_diag_ctx* diag) {
+static bool bx_printf_render_cycle(struct bx_printf_output* output,
+                                   const char* format,
+                                   char* const* arguments,
+                                   size_t argument_count,
+                                   size_t base,
+                                   int* cycle_argument_count,
+                                   bool* stop_output,
+                                   struct bx_diag_ctx* diag) {
     const char* p = format;
     int next_auto_position = 1;
     int max_position = 0;
@@ -1414,7 +1427,7 @@ int bx_printf_main(int argc, char** argv) {
         return 0;
     }
 
-    const char* const* arguments = (const char* const*)(argv + options.first_argument);
+    char* const* arguments = argv + options.first_argument;
     size_t argument_count = (size_t)(argc - options.first_argument);
 
     char output_buffer[8192];
