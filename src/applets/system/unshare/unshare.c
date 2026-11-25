@@ -6,9 +6,9 @@
 #include <sys/mount.h>
 
 #include "applets.h"
-#include "lib/args_common.h"
 #include "lib/child_runner.h"
 #include "lib/cli_common.h"
+#include "lib/option_scan.h"
 
 static void usage(FILE* stream) {
     fputs(
@@ -18,20 +18,35 @@ static void usage(FILE* stream) {
 }
 
 int bx_unshare_main(int argc, char** argv) {
-    static const struct option options[] = {
-        {"mount", no_argument, NULL, 'm'}, {"propagation", required_argument, NULL, 'p'}, {"help", no_argument, NULL, 'h'}, {"version", no_argument, NULL, 'V'}, {0}};
+    static const struct bx_option_spec options[] = {
+        {'m', 'm', "mount", BX_OPTION_NO_VALUE},
+        {'p', 0, "propagation", BX_OPTION_REQUIRED_VALUE},
+        {'h', 0, "help", BX_OPTION_NO_VALUE},
+        {'V', 0, "version", BX_OPTION_NO_VALUE},
+    };
     bool mount_namespace = false;
-    int opt;
-    bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long(argc, argv, "+m", options, NULL)) != -1) {
-        switch (opt) {
+    size_t first;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            first = result.index;
+            break;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            usage(stderr);
+            return 1;
+        }
+        switch (result.spec->id) {
             case 'm':
                 mount_namespace = true;
                 break;
             case 'p':
-                if (!strcmp(optarg, "private"))
+                if (!strcmp(result.value, "private"))
                     break;
-                fprintf(stderr, "unshare: unsupported propagation: %s\n", optarg);
+                fprintf(stderr, "unshare: unsupported propagation: %s\n", result.value);
                 return 1;
             case 'h':
                 usage(stdout);
@@ -39,12 +54,9 @@ int bx_unshare_main(int argc, char** argv) {
             case 'V':
                 bx_cli_print_version("unshare");
                 return 0;
-            default:
-                usage(stderr);
-                return 1;
         }
     }
-    if (!mount_namespace || optind == argc) {
+    if (!mount_namespace || first == (size_t)argc || !argv[first][0]) {
         usage(stderr);
         return 1;
     }
@@ -56,7 +68,7 @@ int bx_unshare_main(int argc, char** argv) {
         perror("unshare: make / recursively private");
         return 1;
     }
-    int error = bx_child_exec_argv(argv + optind);
-    fprintf(stderr, "unshare: %s: %s\n", argv[optind], strerror(error));
+    int error = bx_child_exec_argv(argv + first);
+    fprintf(stderr, "unshare: %s: %s\n", argv[first], strerror(error));
     return error == ENOENT ? 127 : 126;
 }
