@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +9,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/byte_transform.h"
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
@@ -479,26 +478,33 @@ static void tr_append_complement(const bool present[256], struct tr_byte_array* 
 }
 
 int bx_tr_main(int argc, char** argv) {
-    static const struct option long_options[] = {
-        {"complement", no_argument, NULL, 'c'},
-        {"delete", no_argument, NULL, 'd'},
-        {"squeeze-repeats", no_argument, NULL, 's'},
-        {"truncate-set1", no_argument, NULL, 't'},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'v'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "complement", BX_OPTION_NO_VALUE},    {'c', 'C', NULL, BX_OPTION_NO_VALUE}, {'d', 'd', "delete", BX_OPTION_NO_VALUE}, {'s', 's', "squeeze-repeats", BX_OPTION_NO_VALUE},
+        {'t', 't', "truncate-set1", BX_OPTION_NO_VALUE}, {'h', 0, "help", BX_OPTION_NO_VALUE}, {'v', 0, "version", BX_OPTION_NO_VALUE},
     };
 
     struct tr_options options = {
         .progname = tr_progname((argc > 0) ? argv[0] : NULL),
     };
 
-    bx_args_getopt_reset();
-    int opt = 0;
-    while ((opt = bx_args_getopt_long(argc, argv, "cCdst", long_options, NULL)) != -1) {
-        switch (opt) {
+    const char* sets[3];
+    size_t remaining = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (remaining < 3)
+                sets[remaining++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                return tr_usage_error(options.progname, "invalid option -- '%c'", option.short_name);
+            return tr_usage_error(options.progname, "unrecognized option '%s'", option.token);
+        }
+        switch (option.spec->id) {
             case 'c':
-            case 'C':
                 options.complement = true;
                 break;
             case 'd':
@@ -516,14 +522,6 @@ int bx_tr_main(int argc, char** argv) {
             case 'v':
                 options.show_version = true;
                 break;
-            case '?':
-                if (optopt != 0) {
-                    return tr_usage_error(options.progname, "invalid option -- '%c'", optopt);
-                }
-                if (optind > 0 && optind - 1 < argc && argv[optind - 1] != NULL) {
-                    return tr_usage_error(options.progname, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                return tr_usage_error(options.progname, "unrecognized option");
             default:
                 return 1;
         }
@@ -539,8 +537,7 @@ int bx_tr_main(int argc, char** argv) {
         return 0;
     }
 
-    int remaining = argc - optind;
-    if (remaining <= 0) {
+    if (remaining == 0) {
         return tr_usage_error(options.progname, "missing operand");
     }
 
@@ -550,18 +547,18 @@ int bx_tr_main(int argc, char** argv) {
         }
     }
     else if (!options.delete_bytes && !options.squeeze && remaining < 2) {
-        return tr_usage_error(options.progname, "missing operand after '%s'", argv[optind]);
+        return tr_usage_error(options.progname, "missing operand after '%s'", sets[0]);
     }
 
     if (remaining > 2) {
-        return tr_usage_error(options.progname, "extra operand '%s'", argv[optind + 2]);
+        return tr_usage_error(options.progname, "extra operand '%s'", sets[2]);
     }
 
     struct tr_byte_array set1 = {0};
     struct tr_byte_array set2 = {0};
     struct tr_byte_array complemented = {0};
 
-    bool ok = tr_parse_array(options.progname, argv[optind], TR_ARRAY_STRING1, 0u, &set1);
+    bool ok = tr_parse_array(options.progname, sets[0], TR_ARRAY_STRING1, 0u, &set1);
     if (!ok) {
         tr_array_destroy(&set1);
         return 1;
@@ -579,7 +576,7 @@ int bx_tr_main(int argc, char** argv) {
     }
 
     if (remaining >= 2) {
-        ok = tr_parse_array(options.progname, argv[optind + 1], TR_ARRAY_STRING2, set1.len, &set2);
+        ok = tr_parse_array(options.progname, sets[1], TR_ARRAY_STRING2, set1.len, &set2);
         if (!ok) {
             tr_array_destroy(&set1);
             tr_array_destroy(&set2);
