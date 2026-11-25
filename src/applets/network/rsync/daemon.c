@@ -381,19 +381,24 @@ daemon_add_glob(struct sess *sess, const char *module, size_t *oargc,
 
 	/* glob() matches path components separately. Keep buf for literal fallback. */
 	if (strstr(buf, "[^") != NULL) {
-		copy = strdup(buf);
+		/* The protocol line is bounded; each component can grow by one. */
+		copy = malloc(2 * strlen(buf) + 1);
 		if (copy == NULL) {
 			daemon_client_error(sess, "daemon out of memory");
 			return false;
 		}
-		for (char *part = copy, *slash;; part = slash + 1) {
+		char *out = copy;
+		for (const char *part = buf, *slash;; part = slash + 1) {
 			slash = strchr(part, '/');
-			if (slash != NULL)
-				*slash = '\0';
-			bx_glob_normalize_caret(part);
+			size_t len = slash ? (size_t)(slash - part) : strlen(part);
+			memcpy(out, part, len);
+			out[len] = '\0';
+			if (len != 0)
+				bx_glob_normalize_caret_with_spare(out, 1);
 			if (slash == NULL)
 				break;
-			*slash = '/';
+			out += strlen(out);
+			*out++ = '/';
 		}
 		pattern = copy;
 	}
