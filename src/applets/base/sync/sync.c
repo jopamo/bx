@@ -2,7 +2,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,8 +10,8 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 
 struct bx_sync_options {
     const char* progname;
@@ -36,45 +35,50 @@ static void bx_sync_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_sync_parse_options(int argc, char** argv, struct bx_sync_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"data", no_argument, NULL, 'd'}, {"file-system", no_argument, NULL, 'f'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
+    enum { OPT_HELP = 256, OPT_VERSION };
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "data", BX_OPTION_NO_VALUE},
+        {'f', 'f', "file-system", BX_OPTION_NO_VALUE},
+        {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sync");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+df", long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case 'd':
                 options->data_only = true;
                 break;
             case 'f':
                 options->file_system = true;
                 break;
-            case 1:
+            case OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    *first_operand = optind;
+    *first_operand = (int)option.index;
     return true;
 }
 
@@ -143,6 +147,13 @@ int bx_sync_main(int argc, char** argv) {
     if (options.data_only && operand_count == 0) {
         bx_diag(&diag, "--data needs at least one argument");
         return diag.exit_status;
+    }
+
+    for (int i = 0; i < operand_count; i++) {
+        if (operands[i][0] == '\0') {
+            bx_diag(&diag, "empty file operand");
+            return diag.exit_status;
+        }
     }
 
     if (operand_count == 0) {
