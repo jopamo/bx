@@ -44,6 +44,11 @@ extern void jv_tsd_dtoa_ctx_init();
 int jq_testsuite(jv lib_dirs, int verbose, int argc, char* argv[]);
 int bx_jq_cli_run(int argc, char* argv[]);
 
+struct jq_file_arg {
+  const char *name, *path;
+  int raw;
+};
+
 /*
  * For a longer help message we could use a better option parsing
  * strategy, one that lets stack options.
@@ -345,6 +350,8 @@ int bx_jq_cli_run(int argc, char* argv[]) {
 
   jv ARGS = jv_array(); /* positional arguments */
   jv program_arguments = jv_object(); /* named arguments */
+  struct jq_file_arg *file_args = NULL;
+  size_t file_arg_count = 0;
 
   jq = jq_init();
   if (jq == NULL) {
@@ -505,16 +512,17 @@ int bx_jq_cli_run(int argc, char* argv[]) {
             die();
           }
           if (!jv_object_has(jv_copy(program_arguments), jv_string(argv[i+1]))) {
-            jv data = jv_load_file(argv[i+2], raw);
-            if (!jv_is_valid(data)) {
-              data = jv_invalid_get_msg(data);
-              fprintf(stderr, "jq: Bad JSON in --%s %s %s: %s\n", which,
-                      argv[i+1], argv[i+2], jv_string_value(data));
-              jv_free(data);
-              ret = JQ_ERROR_SYSTEM;
-              goto out;
+            if (file_args == NULL) {
+              file_args = calloc((size_t)(argc - i) / 3, sizeof(*file_args));
+              if (file_args == NULL) {
+                perror("jq: queue file arguments");
+                ret = JQ_ERROR_SYSTEM;
+                goto out;
+              }
             }
-            program_arguments = jv_object_set(program_arguments, jv_string(argv[i+1]), data);
+            file_args[file_arg_count++] = (struct jq_file_arg){argv[i+1], argv[i+2], raw};
+            // Reserve the name so that the first binding still wins.
+            program_arguments = jv_object_set(program_arguments, jv_string(argv[i+1]), jv_null());
           }
           i += 2; // skip the next two arguments
         } else if (isoption(&text,  0,  "debug-dump-disasm", is_short)) {
@@ -612,6 +620,22 @@ int bx_jq_cli_run(int argc, char* argv[]) {
 #endif
 
   if (!program) usage(2, 1);
+
+  for (size_t i = 0; i < file_arg_count; i++) {
+    const struct jq_file_arg *arg = &file_args[i];
+    jv data = jv_load_file(arg->path, arg->raw);
+    if (!jv_is_valid(data)) {
+      data = jv_invalid_get_msg(data);
+      fprintf(stderr, "jq: Bad JSON in --%s %s %s: %s\n", arg->raw ? "rawfile" : "slurpfile",
+              arg->name, arg->path, jv_string_value(data));
+      jv_free(data);
+      ret = JQ_ERROR_SYSTEM;
+      goto out;
+    }
+    program_arguments = jv_object_set(program_arguments, jv_string(arg->name), data);
+  }
+  free(file_args);
+  file_args = NULL;
 
   if (options & FROM_FILE) {
     char *program_origin = bx_path_dirname_dup(program);
@@ -722,6 +746,7 @@ int bx_jq_cli_run(int argc, char* argv[]) {
     ret = JQ_ERROR_SYSTEM;
 
 out:
+  free(file_args);
   badwrite = ferror(stdout);
   if (fclose(stdout)!=0 || badwrite) {
     fprintf(stderr,"jq: error: writing output failed: %s\n", strerror(errno));
