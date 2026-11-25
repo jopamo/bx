@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -38,6 +39,13 @@ int bx_init_main(int argc, char **argv) {
             bx_init_print_help(stdout, progname);
         }
         return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "-q") == 0) {
+        if (argc != 2) {
+            fprintf(stderr, "%s: -q does not accept operands\n", progname);
+            return 1;
+        }
+        return kill(1, SIGHUP);
     }
     return bx_init_run(argc, argv, progname);
 }

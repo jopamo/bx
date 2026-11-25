@@ -717,9 +717,6 @@ int bx_init_run(int argc, char **argv, const char *progname) {
     bx_init_table_init(&runtime.actions);
     bx_init_mask_delayed_signals(&runtime);
 
-    if (argc > 1 && strcmp(argv[1], "-q") == 0)
-        return kill(1, SIGHUP);
-
     if (getpid() != 1 && strcmp(progname, "linuxrc") != 0) {
         fprintf(stderr, "%s: must be run as PID 1\n", progname);
         return 1;
