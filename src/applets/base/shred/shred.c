@@ -1,7 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -15,8 +14,8 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
 #include "lib/xreadwrite.h"
 
 enum bx_shred_remove_mode {
@@ -47,6 +46,8 @@ struct bx_shred_options {
     bool zero_final;
     bool show_help;
     bool show_version;
+    const char** paths;
+    size_t path_count;
 };
 
 static void bx_shred_print_help(FILE* stream, const char* progname) {
@@ -153,19 +154,19 @@ static const char* bx_shred_remove_mode_name(enum bx_shred_remove_mode remove_mo
     return "unlink";
 }
 
-static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"force", no_argument, NULL, 'f'},
-        {"iterations", required_argument, NULL, 'n'},
-        {"remove", optional_argument, NULL, BX_SHRED_OPT_REMOVE},
-        {"random-source", required_argument, NULL, BX_SHRED_OPT_RANDOM_SOURCE},
-        {"size", required_argument, NULL, 's'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"exact", no_argument, NULL, 'x'},
-        {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, BX_SHRED_OPT_HELP},
-        {"version", no_argument, NULL, BX_SHRED_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'n', 'n', "iterations", BX_OPTION_REQUIRED_VALUE},
+        {BX_SHRED_OPT_REMOVE, 0, "remove", BX_OPTION_OPTIONAL_VALUE},
+        {BX_SHRED_OPT_RANDOM_SOURCE, 0, "random-source", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "size", BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'x', 'x', "exact", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero", BX_OPTION_NO_VALUE},
+        {BX_SHRED_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_SHRED_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {'u', 'u', NULL, BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -175,28 +176,54 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
     options->remove_mode = BX_SHRED_REMOVE_WIPESYNC;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+:fn:s:uvxz", long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->paths == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->paths) ||
+                    (options->paths = malloc(capacity * sizeof(*options->paths))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->paths[options->path_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name != 0)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "option requires an argument -- '%s'", result.token);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        const char* value = result.value;
+        switch (result.spec->id) {
             case 'f':
                 options->force = true;
                 break;
             case 'n':
-                if (!bx_shred_parse_iterations(optarg, &options->iterations)) {
-                    bx_diag(diag, "invalid number of iterations '%s'", (optarg != NULL) ? optarg : "");
+                if (!bx_shred_parse_iterations(value, &options->iterations)) {
+                    bx_diag(diag, "invalid number of iterations '%s'", value);
                     return false;
                 }
                 break;
             case 's':
-                if (!bx_shred_parse_size(optarg, &options->size_bytes)) {
-                    bx_diag(diag, "invalid file size '%s'", (optarg != NULL) ? optarg : "");
+                if (!bx_shred_parse_size(value, &options->size_bytes)) {
+                    bx_diag(diag, "invalid file size '%s'", value);
                     return false;
                 }
                 options->size_specified = true;
@@ -216,17 +243,17 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
                 break;
             case BX_SHRED_OPT_REMOVE:
                 options->remove_file = true;
-                if (optarg == NULL) {
+                if (value == NULL) {
                     options->remove_mode = BX_SHRED_REMOVE_WIPESYNC;
                     break;
                 }
-                if (!bx_shred_parse_remove_mode(optarg, &options->remove_mode)) {
-                    bx_diag(diag, "invalid argument '%s' for '--remove'", optarg);
+                if (!bx_shred_parse_remove_mode(value, &options->remove_mode)) {
+                    bx_diag(diag, "invalid argument '%s' for '--remove'", value);
                     return false;
                 }
                 break;
             case BX_SHRED_OPT_RANDOM_SOURCE:
-                options->random_source_path = optarg;
+                options->random_source_path = value;
                 options->random_source_specified = true;
                 break;
             case BX_SHRED_OPT_HELP:
@@ -235,35 +262,10 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
             case BX_SHRED_OPT_VERSION:
                 options->show_version = true;
                 break;
-            case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
     }
-
-    *first_operand = optind;
-    return true;
 }
 
 static bool bx_shred_fill_random(int random_fd, const char* random_source_path, unsigned char* buffer, size_t count, struct bx_diag_ctx* diag) {
@@ -443,52 +445,50 @@ static bool bx_shred_apply_path(const char* path, const struct bx_shred_options*
     return ok;
 }
 
-int bx_shred_main(int argc, char** argv) {
-    struct bx_shred_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "shred",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
-    };
-    int first_operand = 0;
+static int bx_shred_run(const struct bx_shred_options* options, struct bx_diag_ctx* diag) {
+    diag->verbose = options->verbose;
 
-    if (!bx_shred_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    diag.verbose = options.verbose;
-
-    if (options.show_help) {
-        bx_shred_print_help(stdout, options.progname);
+    if (options->show_help) {
+        bx_shred_print_help(stdout, options->progname);
         return 0;
     }
 
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
 
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        return diag.exit_status;
+    if (options->path_count == 0) {
+        bx_diag(diag, "missing operand");
+        return diag->exit_status;
     }
 
     int random_fd = -1;
-    if (options.iterations > 0 || options.random_source_specified) {
-        random_fd = bx_fd_open_cloexec(options.random_source_path, O_RDONLY, 0);
+    if (options->iterations > 0 || options->random_source_specified) {
+        random_fd = bx_fd_open_cloexec(options->random_source_path, O_RDONLY, 0);
         if (random_fd < 0) {
-            bx_perror_path(&diag, options.random_source_path);
-            return diag.exit_status;
+            bx_perror_path(diag, options->random_source_path);
+            return diag->exit_status;
         }
     }
 
-    for (int i = first_operand; i < argc; i++) {
-        (void)bx_shred_apply_path(argv[i], &options, random_fd, options.random_source_path, &diag);
+    for (size_t i = 0; i < options->path_count; i++) {
+        (void)bx_shred_apply_path(options->paths[i], options, random_fd, options->random_source_path, diag);
     }
 
-    (void)bx_fd_close(&random_fd, options.random_source_path, &diag);
+    (void)bx_fd_close(&random_fd, options->random_source_path, diag);
 
-    return diag.exit_status;
+    return diag->exit_status;
+}
+
+int bx_shred_main(int argc, char** argv) {
+    struct bx_shred_options options;
+    struct bx_diag_ctx diag = {0};
+    int status;
+    if (bx_shred_parse_options(argc, argv, &options, &diag))
+        status = bx_shred_run(&options, &diag);
+    else
+        status = diag.exit_status != 0 ? diag.exit_status : 1;
+    free(options.paths);
+    return status;
 }
