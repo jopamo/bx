@@ -6,7 +6,6 @@
 #include <linux/magic.h>
 #include <linux/openat2.h>
 #include <sys/statfs.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,9 +19,9 @@
 #include "bx/libbx.h"
 #include "lib/child_runner.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/path_ops.h"
 #include "lib/open_resolve.h"
+#include "lib/option_scan.h"
 #include "lib/statx_compat.h"
 #include "lib/fd_ops.h"
 #include "applets/system/switch_root/switch_root.h"
@@ -58,49 +57,45 @@ static void bx_switch_root_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_switch_root_parse_options(int argc, char** argv, struct bx_switch_root_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "switch_root");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+hV", long_options, NULL);
-        if (c == -1) {
+    struct bx_option_cursor cursor;
+    size_t first;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            first = result.index;
             break;
         }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
+        }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'h':
                 options->show_help = true;
                 return true;
             case 'V':
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
-    int remaining = argc - optind;
-    if (remaining <= 0) {
+    size_t remaining = (size_t)argc - first;
+    if (remaining == 0) {
         bx_diag(diag, "missing operands: NEW_ROOT and INIT are required");
         return false;
     }
@@ -109,8 +104,8 @@ static bool bx_switch_root_parse_options(int argc, char** argv, struct bx_switch
         return false;
     }
 
-    options->new_root = argv[optind];
-    options->init_index = optind + 1;
+    options->new_root = argv[first];
+    options->init_index = (int)first + 1;
     return true;
 }
 
