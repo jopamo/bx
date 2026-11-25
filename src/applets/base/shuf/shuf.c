@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -15,8 +16,9 @@
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/line_writer.h"
-#include "lib/size_parse.h"
 #include "lib/option_scan.h"
+#include "lib/same_file.h"
+#include "lib/size_parse.h"
 
 enum {
     BX_SHUF_OPT_HELP = 256,
@@ -357,6 +359,38 @@ static bool bx_shuf_rng_open(struct bx_shuf_rng* rng, const char* source_path, s
     return true;
 }
 
+static int bx_shuf_open_output(const char* path, int rng_fd, struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_cloexec(path, O_WRONLY | O_CREAT, 0666);
+    if (fd < 0) {
+        bx_perror_path(diag, path);
+        return -1;
+    }
+
+    struct stat output;
+    if (fstat(fd, &output) != 0)
+        goto error;
+    if (S_ISREG(output.st_mode)) {
+        if (rng_fd >= 0) {
+            struct stat random_source;
+            if (fstat(rng_fd, &random_source) != 0)
+                goto error;
+            if (bx_same_file(&random_source, &output)) {
+                bx_diag(diag, "%s: random source and output are the same file", path);
+                bx_fd_cleanup(&fd);
+                return -1;
+            }
+        }
+        if (bx_fd_ftruncate(fd, 0) != 0)
+            goto error;
+    }
+    return fd;
+
+error:
+    bx_perror_path(diag, path);
+    bx_fd_cleanup(&fd);
+    return -1;
+}
+
 static void bx_shuf_rng_close(struct bx_shuf_rng* rng, struct bx_diag_ctx* diag) {
     if (rng->fd < 0) {
         return;
@@ -605,8 +639,8 @@ int bx_shuf_main(int argc, char** argv) {
         .source_path = NULL,
     };
 
-    FILE* output_stream = stdout;
-    bool close_output_stream = false;
+    const char* output_name = options.output_path ? options.output_path : "standard output";
+    int named_output = -1;
     char output_buffer[8192];
     struct bx_line_writer writer;
     bool writer_initialized = false;
@@ -638,21 +672,14 @@ int bx_shuf_main(int argc, char** argv) {
         }
     }
 
-    const char* output_name = options.output_path ? options.output_path : "standard output";
+    int output_fd = STDOUT_FILENO;
     if (options.output_path != NULL) {
-        output_stream = fopen(options.output_path, "wb");
-        if (output_stream == NULL) {
-            bx_perror_path(&diag, options.output_path);
+        named_output = bx_shuf_open_output(options.output_path, rng.fd, &diag);
+        if (named_output < 0)
             goto cleanup;
-        }
-        close_output_stream = true;
+        output_fd = named_output;
     }
 
-    int output_fd = fileno(output_stream);
-    if (output_fd < 0) {
-        bx_shuf_write_error(output_name, &diag);
-        goto cleanup;
-    }
     bx_line_writer_init(&writer, output_fd, output_buffer, sizeof(output_buffer));
     writer_initialized = true;
 
@@ -680,22 +707,12 @@ int bx_shuf_main(int argc, char** argv) {
     }
     writer_initialized = false;
 
-    if (close_output_stream) {
-        if (fclose(output_stream) != 0) {
-            bx_perror_path(&diag, options.output_path);
-        }
-        output_stream = NULL;
-        close_output_stream = false;
-    }
-
 cleanup:
     if (writer_initialized && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
         bx_shuf_write_error(output_name, &diag);
         writer_initialized = false;
     }
-    if (close_output_stream && output_stream != NULL) {
-        (void)fclose(output_stream);
-    }
+    bx_fd_close(&named_output, output_name, diag.exit_status == 0 ? &diag : NULL);
     bx_shuf_rng_close(&rng, &diag);
     bx_shuf_records_free(&records);
     return diag.exit_status;
