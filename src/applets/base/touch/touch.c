@@ -204,8 +204,8 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
         {"no-create", no_argument, NULL, 'c'},
         {"no-dereference", no_argument, NULL, 'h'},
         {"reference", required_argument, NULL, 'r'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},
+        {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -213,11 +213,12 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "touch");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
+    char short_options[] = "-:acd:hmr:t:";
+    int next_operand = 1;
+    bx_args_getopt_reset_file_options(short_options);
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+:acd:hmr:t:", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -277,10 +278,10 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
                 options->time_source = BX_TOUCH_TIME_SOURCE_TIMESTAMP;
                 break;
             }
-            case 1:
+            case BX_ARGS_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_ARGS_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case ':':

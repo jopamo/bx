@@ -63,8 +63,8 @@ static bool bx_mkfifo_parse_mode(const char* text, mode_t* mode_out, struct bx_d
 static bool bx_mkfifo_parse_options(int argc, char** argv, struct bx_mkfifo_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"mode", required_argument, NULL, 'm'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},
+        {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -72,11 +72,12 @@ static bool bx_mkfifo_parse_options(int argc, char** argv, struct bx_mkfifo_opti
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mkfifo");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
+    char short_options[] = "-:m:";
+    int next_operand = 1;
+    bx_args_getopt_reset_file_options(short_options);
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+:m:", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -88,10 +89,10 @@ static bool bx_mkfifo_parse_options(int argc, char** argv, struct bx_mkfifo_opti
                 }
                 options->mode_set = true;
                 break;
-            case 1:
+            case BX_ARGS_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_ARGS_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case ':':

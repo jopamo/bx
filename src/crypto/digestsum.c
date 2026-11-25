@@ -584,13 +584,12 @@ static bool bx_digestsum_parse_options(int argc,
     memset(options, 0, sizeof(*options));
     options->progname = bx_digestsum_progname(impl, argv[0]);
 
-    bool posix = getenv("POSIXLY_CORRECT") != NULL;
+    char short_options[] = "-bctwz";
     int next_operand = 1;
-    bx_args_getopt_reset();
+    bx_args_getopt_reset_file_options(short_options);
 
     while (true) {
-        int c = posix ? bx_args_getopt_long(argc, argv, "+bctwz", long_options, NULL)
-                      : bx_args_getopt_long_interspersed(argc, argv, "-bctwz", long_options, &next_operand);
+        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
         if (c == -1) {
             break;
         }

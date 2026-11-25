@@ -36,6 +36,11 @@ void bx_args_getopt_reset(void) {
     bx_args_getopt_reset_at(1);
 }
 
+void bx_args_getopt_reset_file_options(char* short_options) {
+    short_options[0] = getenv("POSIXLY_CORRECT") != NULL ? '+' : '-';
+    bx_args_getopt_reset();
+}
+
 int bx_args_getopt_long(
     int argc,
     char* const argv[],
@@ -76,6 +81,9 @@ int bx_args_getopt_long(
 
 int bx_args_getopt_long_interspersed(int argc, char* argv[], const char* short_options,
                                     const struct option* long_options, int* next_operand) {
+    if (short_options[0] == '+') {
+        return bx_args_getopt_long(argc, argv, short_options, long_options, NULL);
+    }
     int option;
     for (;;) {
         int previous_optind = optind;

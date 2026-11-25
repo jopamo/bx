@@ -89,8 +89,8 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
         {"preserve-root", optional_argument, NULL, BX_RM_OPT_PRESERVE_ROOT},
         {"recursive", no_argument, NULL, 'r'},
         {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},
+        {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -99,11 +99,12 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
     options->preserve_root = true;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
+    char short_options[] = "-dfiIRrvx";
+    int next_operand = 1;
+    bx_args_getopt_reset_file_options(short_options);
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+dfiIRrvx", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -158,10 +159,10 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
                     }
                 }
                 break;
-            case 1:
+            case BX_ARGS_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_ARGS_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':
