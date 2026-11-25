@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,8 +11,8 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 enum {
     BX_PASTE_OPT_HELP = 256,
@@ -21,7 +20,6 @@ enum {
 };
 
 struct bx_paste_options {
-    const char* progname;
     int* delimiters;
     size_t delimiters_len;
     const char* delimiter_spec;
@@ -29,12 +27,6 @@ struct bx_paste_options {
     bool zero_terminated;
     bool show_help;
     bool show_version;
-};
-
-enum bx_paste_parse_status {
-    BX_PASTE_PARSE_OK = 0,
-    BX_PASTE_PARSE_ERROR = 1,
-    BX_PASTE_PARSE_ERROR_TRY_HELP = 2,
 };
 
 static void bx_paste_print_help(FILE* stream, const char* progname) {
@@ -112,38 +104,47 @@ static bool bx_paste_parse_delimiters(const char* spec, struct bx_paste_options*
     return true;
 }
 
-static enum bx_paste_parse_status bx_paste_parse_options(
+static bool bx_paste_parse_options(
     int argc,
     char** argv,
     struct bx_paste_options* options,
-    int* first_operand,
+    const char** filenames,
+    size_t* count,
     struct bx_diag_ctx* diag
 ) {
-    static const struct option long_options[] = {
-        {"delimiters", required_argument, NULL, 'd'},
-        {"serial", no_argument, NULL, 's'},
-        {"zero-terminated", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, BX_PASTE_OPT_HELP},
-        {"version", no_argument, NULL, BX_PASTE_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "delimiters", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "serial", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE},
+        {BX_PASTE_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_PASTE_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "paste");
-    options->delimiter_spec = "\t";
-    diag->progname = options->progname;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            filenames[(*count)++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(diag->progname);
+            return false;
+        }
 
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-d:sz", long_options, &next_operand);
-        if (c == -1)
-            break;
-
-        switch (c) {
+        switch (option.spec->id) {
             case 'd':
-                options->delimiter_spec = optarg;
+                options->delimiter_spec = option.value;
                 break;
             case 's':
                 options->serial = true;
@@ -153,28 +154,14 @@ static enum bx_paste_parse_status bx_paste_parse_options(
                 break;
             case BX_PASTE_OPT_HELP:
                 options->show_help = true;
-                return BX_PASTE_PARSE_OK;
+                return true;
             case BX_PASTE_OPT_VERSION:
                 options->show_version = true;
-                return BX_PASTE_PARSE_OK;
-            case '?':
-                if (optopt == 'd') {
-                    bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                }
-                else {
-                    bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                }
-                return BX_PASTE_PARSE_ERROR_TRY_HELP;
-            default:
-                return BX_PASTE_PARSE_ERROR;
+                return true;
         }
     }
 
-    *first_operand = optind;
-    if (!bx_paste_parse_delimiters(options->delimiter_spec, options, diag)) {
-        return BX_PASTE_PARSE_ERROR;
-    }
-    return BX_PASTE_PARSE_OK;
+    return bx_paste_parse_delimiters(options->delimiter_spec, options, diag);
 }
 
 static bool bx_paste_write_error(struct bx_diag_ctx* diag) {
@@ -198,8 +185,8 @@ static bool bx_paste_emit_delimiter(
 }
 
 static bool paste_serial(
-    int num_files,
-    char** filenames,
+    size_t num_files,
+    const char* const* filenames,
     struct bx_paste_options* options,
     struct bx_diag_ctx* diag,
     struct bx_line_writer* writer
@@ -207,7 +194,7 @@ static bool paste_serial(
     int delimiter = options->zero_terminated ? '\0' : '\n';
     bool ok = true;
 
-    for (int i = 0; i < num_files; i++) {
+    for (size_t i = 0; i < num_files; i++) {
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filenames[i], "r", &is_stdio);
         if (!f) {
@@ -250,8 +237,8 @@ static bool paste_serial(
 }
 
 static bool paste_parallel(
-    int num_files,
-    char** filenames,
+    size_t num_files,
+    const char* const* filenames,
     struct bx_paste_options* options,
     struct bx_diag_ctx* diag,
     struct bx_line_writer* writer
@@ -260,7 +247,7 @@ static bool paste_parallel(
     bool* is_stdio = xmalloc(num_files * sizeof(bool));
     bool open_failed = false;
     bool ok = true;
-    for (int i = 0; i < num_files; i++) {
+    for (size_t i = 0; i < num_files; i++) {
         files[i] = bx_fopen_dash(filenames[i], "r", &is_stdio[i]);
         if (!files[i]) {
             bx_diag(diag, "%s: %s", filenames[i], strerror(errno));
@@ -269,7 +256,7 @@ static bool paste_parallel(
     }
 
     if (open_failed) {
-        for (int i = 0; i < num_files; i++) {
+        for (size_t i = 0; i < num_files; i++) {
             bx_fclose_nonstdio(files[i], is_stdio[i]);
         }
         free(files);
@@ -285,7 +272,7 @@ static bool paste_parallel(
 
     while (true) {
         bool any_active = false;
-        for (int i = 0; i < num_files; i++) {
+        for (size_t i = 0; i < num_files; i++) {
             row_fields[i] = NULL;
             if (files[i]) {
                 ssize_t len = getdelim(&line, &line_cap, delimiter, files[i]);
@@ -305,12 +292,12 @@ static bool paste_parallel(
         if (!any_active)
             break;
 
-        for (int i = 0; i < num_files; i++) {
+        for (size_t i = 0; i < num_files; i++) {
             if (ok && row_fields[i] && !bx_line_writer_puts(writer, row_fields[i])) {
                 ok = bx_paste_write_error(diag);
             }
             if (i + 1 < num_files) {
-                if (ok && !bx_paste_emit_delimiter(writer, options, (size_t)i, diag)) {
+                if (ok && !bx_paste_emit_delimiter(writer, options, i, diag)) {
                     ok = false;
                 }
             }
@@ -324,7 +311,7 @@ static bool paste_parallel(
         }
     }
 
-    for (int i = 0; i < num_files; i++)
+    for (size_t i = 0; i < num_files; i++)
         bx_fclose_nonstdio(files[i], is_stdio[i]);
     free(files);
     free(is_stdio);
@@ -334,44 +321,45 @@ static bool paste_parallel(
 }
 
 int bx_paste_main(int argc, char** argv) {
-    struct bx_paste_options options;
-    struct bx_diag_ctx diag = {.progname = "paste", .exit_status = 0};
-    int first_operand = 0;
-
-    enum bx_paste_parse_status parse_status =
-        bx_paste_parse_options(argc, argv, &options, &first_operand, &diag);
-    if (parse_status != BX_PASTE_PARSE_OK) {
-        if (parse_status == BX_PASTE_PARSE_ERROR_TRY_HELP) {
-            bx_cli_print_try_help(options.progname);
-        }
-        return 1;
+    struct bx_paste_options options = {.delimiter_spec = "\t"};
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "paste"),
+    };
+    const char** operands = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*operands)) : NULL;
+    if (argc > 1 && operands == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
     }
+    size_t count = 0;
+    if (!bx_paste_parse_options(argc, argv, &options, operands, &count, &diag))
+        goto done;
     if (options.show_help) {
-        bx_paste_print_help(stdout, options.progname);
-        return 0;
+        bx_paste_print_help(stdout, diag.progname);
+        goto done;
     }
     if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
+        bx_cli_print_version(diag.progname);
+        goto done;
     }
 
-    int num_files = argc - first_operand;
-    char* default_filenames[] = {"-"};
-    char** filenames = (num_files == 0) ? default_filenames : &argv[first_operand];
-    int real_num_files = (num_files == 0) ? 1 : num_files;
+    const char* default_filenames[] = {"-"};
+    const char* const* filenames = count == 0 ? default_filenames : operands;
+    size_t files = count == 0 ? 1u : count;
 
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
     bool ok = options.serial
-        ? paste_serial(real_num_files, filenames, &options, &diag, &writer)
-        : paste_parallel(real_num_files, filenames, &options, &diag, &writer);
+        ? paste_serial(files, filenames, &options, &diag, &writer)
+        : paste_parallel(files, filenames, &options, &diag, &writer);
 
     if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
         bx_paste_write_error(&diag);
     }
 
+done:
     free(options.delimiters);
+    free(operands);
     return diag.exit_status;
 }
