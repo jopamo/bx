@@ -1093,9 +1093,72 @@ static const struct bx_option_spec grep_long_opts[] = {
     {'p', 'p', NULL, BX_OPTION_NO_VALUE},
 };
 
-int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
-                            enum bx_search_personality personality,
-                            struct bx_search_operands *operands) {
+struct bx_search_list_arg {
+    int id;
+    const char* value;
+};
+
+struct bx_search_list_args {
+    struct bx_search_list_arg* items;
+    size_t count;
+    bool has_pattern;
+};
+
+static int bx_search_read_list(const char* progname, const char* path, struct bx_search_pattern_vec* dest, bool excludes) {
+    bool use_stdin = !excludes && strcmp(path, "-") == 0;
+    FILE* fp = use_stdin ? stdin : fopen(path, "r");
+    if (!fp)
+        return bx_search_parse_path_error(progname, path, errno);
+
+    struct bx_record_stream stream = {0};
+    int read_errno = 0;
+    bx_record_stream_begin(fp, &stream);
+    while (bx_record_stream_read(fp, &stream, '\n') >= 0) {
+        char* line = stream.record;
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || (excludes && line[len - 1] == '\r')))
+            line[--len] = '\0';
+        if (excludes && len == 0)
+            continue;
+        if (!bx_search_pattern_vec_append(dest, line, false, false)) {
+            read_errno = ENOMEM;
+            break;
+        }
+    }
+    if (!read_errno && bx_record_stream_had_error(&stream))
+        read_errno = bx_record_stream_error(&stream);
+    if (!use_stdin && fclose(fp) != 0 && !read_errno)
+        read_errno = errno ? errno : EIO;
+    bx_record_stream_dispose(&stream);
+    return read_errno ? bx_search_parse_path_error(progname, path, read_errno) : 0;
+}
+
+static int bx_search_apply_lists(const char* progname, struct search_opts* opts, const struct bx_search_list_args* lists) {
+    for (size_t i = 0; i < lists->count; i++) {
+        struct bx_search_list_arg list = lists->items[i];
+        bool excludes = list.id == OPT_EXCLUDE || list.id == OPT_EXCLUDE_FROM;
+        struct bx_search_pattern_vec* dest = excludes ? &opts->exclude_patterns : &opts->extra_patterns;
+        if (list.id == 'f' || list.id == OPT_EXCLUDE_FROM) {
+            int status = bx_search_read_list(progname, list.value, dest, excludes);
+            if (status)
+                return status;
+        }
+        else if (!bx_search_pattern_vec_append(dest, list.value, false, false)) {
+            return bx_search_parse_out_of_memory(progname);
+        }
+    }
+    return 0;
+}
+
+static int bx_search_missing_pattern(const char* progname, enum bx_search_personality personality) {
+    if (personality == BX_SEARCH_GREP)
+        bx_grep_print_usage_try_help(progname);
+    else
+        fprintf(stderr, "%s: ripgrep requires at least one pattern to execute a search\n", progname);
+    return -1;
+}
+
+static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum bx_search_personality personality, struct bx_search_operands* operands, struct bx_search_list_args* lists) {
     memset(opts, 0, sizeof(*opts));
     const char *progname = bx_cli_progname(argv[0], "grep");
 
@@ -1177,6 +1240,20 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         int c = option.spec->id;
         char *value = option.value;
         const char *long_name = option.short_name ? NULL : option.spec->long_name;
+        if (c == 'e' || c == 'f' || c == OPT_EXCLUDE || c == OPT_EXCLUDE_FROM) {
+            if (rg && (c == OPT_EXCLUDE || c == OPT_EXCLUDE_FROM))
+                return bx_grep_unrecognized_option(progname, c == OPT_EXCLUDE ? "--exclude" : "--exclude-from");
+            if ((c == 'f' || c == OPT_EXCLUDE_FROM) && !*value)
+                return bx_search_parse_path_error(progname, value, ENOENT);
+            if (!lists->items) {
+                lists->items = calloc((size_t)argc - option.index, sizeof(*lists->items));
+                if (!lists->items)
+                    return bx_search_parse_out_of_memory(progname);
+            }
+            lists->items[lists->count++] = (struct bx_search_list_arg){c, value};
+            lists->has_pattern |= c == 'e' || c == 'f';
+            continue;
+        }
         switch (c) {
         case '0':
             if (bx_search_require_rg_option(progname, personality, token) != 0)
@@ -1621,53 +1698,6 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             }
             break;
-        case 'e':
-            if (!bx_search_pattern_vec_append(&opts->extra_patterns,
-                                              value, false, false))
-                return bx_search_parse_out_of_memory(progname);
-            break;
-        case 'f': {
-            FILE *pf = NULL;
-            bool close_pf = false;
-            int read_errno = 0;
-            struct bx_record_stream pattern_stream = {0};
-            if (strcmp(value, "-") == 0) {
-                pf = stdin;
-            } else {
-                pf = fopen(value, "r");
-                close_pf = true;
-            }
-            if (!pf) {
-                fprintf(stderr, "%s: %s: %s\n", progname, value, strerror(errno));
-                return -1;
-            }
-            bx_record_stream_begin(pf, &pattern_stream);
-            for (;;) {
-                ssize_t line_len;
-
-                line_len = bx_record_stream_read(pf, &pattern_stream, '\n');
-                if (line_len < 0) {
-                    if (bx_record_stream_had_error(&pattern_stream))
-                        read_errno = bx_record_stream_error(&pattern_stream);
-                    break;
-                }
-                char *line = pattern_stream.record;
-                size_t llen = strlen(line);
-                while (llen > 0 && line[llen-1] == '\n')
-                    line[--llen] = '\0';
-                if (!bx_search_pattern_vec_append(&opts->extra_patterns,
-                                                  line, false, false)) {
-                    read_errno = ENOMEM;
-                    break;
-                }
-            }
-            if (close_pf && fclose(pf) != 0 && read_errno == 0)
-                read_errno = errno != 0 ? errno : EIO;
-            bx_record_stream_dispose(&pattern_stream);
-            if (read_errno != 0)
-                return bx_search_parse_path_error(progname, value, read_errno);
-            break;
-        }
         case 'A':
             if (!bx_parse_nonnegative_int(progname, "-A", value, &opts->after_context))
                 return -1;
@@ -1697,52 +1727,6 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                                               value, false, false))
                 return bx_search_parse_out_of_memory(progname);
             break;
-        case OPT_EXCLUDE:
-            if (bx_search_personality_is_rg(personality))
-                return bx_grep_unrecognized_option(progname, "--exclude");
-            if (!bx_search_pattern_vec_append(&opts->exclude_patterns,
-                                              value, false, false))
-                return bx_search_parse_out_of_memory(progname);
-            break;
-        case OPT_EXCLUDE_FROM: {
-            if (bx_search_personality_is_rg(personality))
-                return bx_grep_unrecognized_option(progname, "--exclude-from");
-            FILE *ef = fopen(value, "r");
-            int read_errno = 0;
-            struct bx_record_stream exclude_stream = {0};
-            if (!ef) {
-                fprintf(stderr, "%s: %s: %s\n", progname, value, strerror(errno));
-                return -1;
-            }
-            bx_record_stream_begin(ef, &exclude_stream);
-            for (;;) {
-                ssize_t line_len;
-
-                line_len = bx_record_stream_read(ef, &exclude_stream, '\n');
-                if (line_len < 0) {
-                    if (bx_record_stream_had_error(&exclude_stream))
-                        read_errno = bx_record_stream_error(&exclude_stream);
-                    break;
-                }
-                char *line = exclude_stream.record;
-                size_t len = strlen(line);
-                while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-                    line[--len] = '\0';
-                if (len == 0)
-                    continue;
-                if (!bx_search_pattern_vec_append(&opts->exclude_patterns,
-                                                  line, false, false)) {
-                    read_errno = ENOMEM;
-                    break;
-                }
-            }
-            if (fclose(ef) != 0 && read_errno == 0)
-                read_errno = errno != 0 ? errno : EIO;
-            bx_record_stream_dispose(&exclude_stream);
-            if (read_errno != 0)
-                return bx_search_parse_path_error(progname, value, read_errno);
-            break;
-        }
         case OPT_EXCLUDE_DIR:
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--exclude-dir");
@@ -2358,6 +2342,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_color_set_mode(opts->color_mode);
     }
 
+    if (!opts->files_only && !lists->has_pattern && !operand_count)
+        return bx_search_missing_pattern(progname, personality);
+
+    int status = bx_search_apply_lists(progname, opts, lists);
+    if (status)
+        return status;
+
     int first_file = 0;
     if (opts->files_only) {
         operands->pattern = "";
@@ -2365,17 +2356,19 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         operands->pattern = opts->extra_patterns.items[opts->extra_patterns.len - 1u];
         bx_search_pattern_vec_drop_last(&opts->extra_patterns);
     }
-    else if (operand_count == 0) {
-        if (personality == BX_SEARCH_GREP)
-            bx_grep_print_usage_try_help(progname);
-        else
-            fprintf(stderr, "%s: ripgrep requires at least one pattern to execute a search\n", progname);
-        return -1;
-    }
+    else if (operand_count == 0)
+        return bx_search_missing_pattern(progname, personality);
     else {
         operands->pattern = opts->operand_storage[first_file++];
     }
     operands->files = opts->operand_storage ? opts->operand_storage + first_file : NULL;
     operands->num_files = operand_count - first_file;
     return 0;
+}
+
+int bx_search_parse_options(int argc, char** argv, struct search_opts* opts, enum bx_search_personality personality, struct bx_search_operands* operands) {
+    struct bx_search_list_args lists = {0};
+    int status = bx_search_parse(argc, argv, opts, personality, operands, &lists);
+    free(lists.items);
+    return status;
 }
