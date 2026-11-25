@@ -19,14 +19,13 @@ static void usage(FILE* out, const char* name) {
 #ifdef __linux__
 #include <dirent.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "fswalk/walk.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/text_buffer.h"
 #include "lib/xreadwrite.h"
 #include "module_alias.h"
@@ -489,28 +488,53 @@ int bx_depmod_main(int argc, char** argv) {
 #ifdef __linux__
     enum { WRITE_BX_INDEX = 256, SHOW_BX_ALIASES, SHOW_BX_SOFTDEPS,
            WRITE_BX_ALIASES, WRITE_BX_SOFTDEPS };
-    static const struct option opts[] = {
-        {"all", no_argument, NULL, 'a'}, {"errsyms", no_argument, NULL, 'e'},
-        {"show", no_argument, NULL, 'n'}, {"dry-run", no_argument, NULL, 'n'},
-        {"basedir", required_argument, NULL, 'b'}, {"filesyms", required_argument, NULL, 'F'},
-        {"write-bx-index", no_argument, NULL, WRITE_BX_INDEX},
-        {"show-bx-aliases", no_argument, NULL, SHOW_BX_ALIASES},
-        {"show-bx-softdeps", no_argument, NULL, SHOW_BX_SOFTDEPS},
-        {"write-bx-aliases", no_argument, NULL, WRITE_BX_ALIASES},
-        {"write-bx-softdeps", no_argument, NULL, WRITE_BX_SOFTDEPS},
-        {0},
+    static const struct bx_option_spec options[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'e', 'e', "errsyms", BX_OPTION_NO_VALUE},
+        {'n', 'n', "show", BX_OPTION_NO_VALUE},
+        {'n', 0, "dry-run", BX_OPTION_NO_VALUE},
+        {'b', 'b', "basedir", BX_OPTION_REQUIRED_VALUE},
+        {'F', 'F', "filesyms", BX_OPTION_REQUIRED_VALUE},
+        {WRITE_BX_INDEX, 0, "write-bx-index", BX_OPTION_NO_VALUE},
+        {SHOW_BX_ALIASES, 0, "show-bx-aliases", BX_OPTION_NO_VALUE},
+        {SHOW_BX_SOFTDEPS, 0, "show-bx-softdeps", BX_OPTION_NO_VALUE},
+        {WRITE_BX_ALIASES, 0, "write-bx-aliases", BX_OPTION_NO_VALUE},
+        {WRITE_BX_SOFTDEPS, 0, "write-bx-softdeps", BX_OPTION_NO_VALUE},
     };
     const char* base = "/";
     const char* map = NULL;
     int operation = 0;
     bool base_set = false;
-    int operand = 1;
-    bx_args_getopt_reset();
-    for (int opt; (opt = bx_args_getopt_long_interspersed(argc, argv, "-:aenb:F:", opts, &operand)) != -1;) {
+    const char* release = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (release != NULL) {
+                usage(stderr, "depmod");
+                return 1;
+            }
+            release = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", result.token);
+            return 1;
+        }
+        int opt = result.spec->id;
         switch (opt) {
         case 'a': case 'e': break;
-        case 'b': base = optarg; base_set = true; break;
-        case 'F': map = optarg; break;
+        case 'b': base = result.value; base_set = true; break;
+        case 'F': map = result.value; break;
         case 'n': case WRITE_BX_INDEX: case SHOW_BX_ALIASES: case SHOW_BX_SOFTDEPS:
         case WRITE_BX_ALIASES: case WRITE_BX_SOFTDEPS:
             if (operation != 0 && operation != opt) {
@@ -519,12 +543,6 @@ int bx_depmod_main(int argc, char** argv) {
             }
             operation = opt;
             break;
-        case ':':
-            bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-            return 1;
-        default:
-            bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
         }
     }
     enum metadata_format format = operation == SHOW_BX_ALIASES || operation == WRITE_BX_ALIASES ? ALIASES :
@@ -532,7 +550,7 @@ int bx_depmod_main(int argc, char** argv) {
     bool write_index = operation == WRITE_BX_INDEX || operation == WRITE_BX_ALIASES || operation == WRITE_BX_SOFTDEPS;
     if (operation == 0 ||
         (format != SYMBOLS ? map != NULL : !map || !*map) || !*base ||
-        argc - optind > 1 || (write_index && (!base_set || argc - optind != 1))) {
+        (write_index && (!base_set || release == NULL))) {
         usage(stderr, "depmod");
         return 1;
     }
@@ -544,7 +562,7 @@ int bx_depmod_main(int argc, char** argv) {
         bx_perror_path(&diag, "module tree inventory");
         return 1;
     }
-    if (bx_module_tree_open(&tree, base, optind == argc ? NULL : argv[optind]) < 0) {
+    if (bx_module_tree_open(&tree, base, release) < 0) {
         bx_perror_path(&diag, tree.path ? tree.path : "module tree");
         goto done;
     }
