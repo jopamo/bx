@@ -7,8 +7,8 @@
 
 static void bx_cpio_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s -o [OPTION]... < NAME-LIST > ARCHIVE\n", progname);
-    fprintf(stream, "       %s -i [OPTION]... [PATTERN...]\n", progname);
-    fprintf(stream, "       %s -p [OPTION]... DIRECTORY < NAME-LIST\n", progname);
+    fprintf(stream, "       %s -i [OPTION]... [--] [PATTERN...]\n", progname);
+    fprintf(stream, "       %s -p [OPTION]... [--] DIRECTORY < NAME-LIST\n", progname);
     fprintf(stream, "Copy files to and from cpio archives.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -o, --create          create an archive from standard input names\n");
@@ -32,7 +32,8 @@ static void bx_cpio_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --preserve-all    strictly preserve source metadata during pass-through (-p)\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
-    fprintf(stream, "\nOutput defaults to newc. Input is autodetected unless -H requires a format.\n");
+    fprintf(stream, "\nOptions may follow operands. Put -- before dash-leading patterns or directories.\n");
+    fprintf(stream, "Output defaults to newc. Input is autodetected unless -H requires a format.\n");
     fprintf(stream, "Without -u, newer or equal-age files are retained. Root restores ownership\n");
     fprintf(stream, "unless --no-preserve-owner is selected. Archive modes preserve only cpio fields,\n");
     fprintf(stream, "not ACLs, xattrs, labels, capabilities, flags, or fractional timestamps.\n");
