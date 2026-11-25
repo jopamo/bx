@@ -2,7 +2,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
-#include <getopt.h>
 #include <grp.h>
 #include <inttypes.h>
 #include <pwd.h>
@@ -26,7 +25,7 @@
 #include "lib/output_alloc_counter.h"
 #include "lib/output_policy.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/path_quote.h"
 
@@ -943,72 +942,100 @@ static bool bx_ls_parse_quoting_style_option(const char* text, struct bx_ls_opti
     return false;
 }
 
-static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant variant, struct bx_ls_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"all", no_argument, NULL, 'a'},
-        {"almost-all", no_argument, NULL, 'A'},
-        {"author", no_argument, NULL, BX_LS_OPT_AUTHOR},
-        {"block-size", required_argument, NULL, BX_LS_OPT_BLOCK_SIZE},
-        {"ignore-backups", no_argument, NULL, 'B'},
-        {"color", optional_argument, NULL, BX_LS_OPT_COLOR},
-        {"directory", no_argument, NULL, 'd'},
-        {"dired", no_argument, NULL, 'D'},
-        {"classify", optional_argument, NULL, 'F'},
-        {"file-type", no_argument, NULL, BX_LS_OPT_FILE_TYPE},
-        {"full-time", no_argument, NULL, BX_LS_OPT_FULL_TIME},
-        {"group-directories-first", no_argument, NULL, BX_LS_OPT_GROUP_DIRECTORIES_FIRST},
-        {"no-group", no_argument, NULL, 'G'},
-        {"dereference-command-line", no_argument, NULL, 'H'},
-        {"dereference-command-line-symlink-to-dir", no_argument, NULL, BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR},
-        {"hide", required_argument, NULL, BX_LS_OPT_HIDE},
-        {"hyperlink", optional_argument, NULL, BX_LS_OPT_HYPERLINK},
-        {"indicator-style", required_argument, NULL, BX_LS_OPT_INDICATOR_STYLE},
-        {"inode", no_argument, NULL, 'i'},
-        {"ignore", required_argument, NULL, 'I'},
-        {"kibibytes", no_argument, NULL, 'k'},
-        {"dereference", no_argument, NULL, 'L'},
-        {"numeric-uid-gid", no_argument, NULL, 'n'},
-        {"literal", no_argument, NULL, 'N'},
-        {"hide-control-chars", no_argument, NULL, 'q'},
-        {"show-control-chars", no_argument, NULL, BX_LS_OPT_SHOW_CONTROL_CHARS},
-        {"quote-name", no_argument, NULL, 'Q'},
-        {"quoting-style", required_argument, NULL, BX_LS_OPT_QUOTING_STYLE},
-        {"reverse", no_argument, NULL, 'r'},
-        {"size", no_argument, NULL, 's'},
-        {"sort", required_argument, NULL, BX_LS_OPT_SORT},
-        {"time", required_argument, NULL, BX_LS_OPT_TIME},
-        {"time-style", required_argument, NULL, BX_LS_OPT_TIME_STYLE},
-        {"tabsize", required_argument, NULL, 'T'},
-        {"width", required_argument, NULL, 'w'},
-        {"context", no_argument, NULL, 'Z'},
-        {"zero", no_argument, NULL, BX_LS_OPT_ZERO},
-        {"human-readable", no_argument, NULL, 'h'},
-        {"si", no_argument, NULL, BX_LS_OPT_SI},
-        {"escape", no_argument, NULL, 'b'},
-        {"recursive", no_argument, NULL, 'R'},
-        {"format", required_argument, NULL, BX_LS_OPT_FORMAT},
-        {"help", no_argument, NULL, BX_LS_OPT_HELP},
-        {"version", no_argument, NULL, BX_LS_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant variant, struct bx_ls_options* options,
+                                const char** operands, size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'A', 'A', "almost-all", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_AUTHOR, 0, "author", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_BLOCK_SIZE, 0, "block-size", BX_OPTION_REQUIRED_VALUE},
+        {'B', 'B', "ignore-backups", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_COLOR, 0, "color", BX_OPTION_OPTIONAL_VALUE},
+        {'d', 'd', "directory", BX_OPTION_NO_VALUE},
+        {'D', 'D', "dired", BX_OPTION_NO_VALUE},
+        {'F', 0, "classify", BX_OPTION_OPTIONAL_VALUE},
+        {BX_LS_OPT_FILE_TYPE, 0, "file-type", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_FULL_TIME, 0, "full-time", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_GROUP_DIRECTORIES_FIRST, 0, "group-directories-first", BX_OPTION_NO_VALUE},
+        {'G', 'G', "no-group", BX_OPTION_NO_VALUE},
+        {'H', 'H', "dereference-command-line", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR, 0, "dereference-command-line-symlink-to-dir", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_HIDE, 0, "hide", BX_OPTION_REQUIRED_VALUE},
+        {BX_LS_OPT_HYPERLINK, 0, "hyperlink", BX_OPTION_OPTIONAL_VALUE},
+        {BX_LS_OPT_INDICATOR_STYLE, 0, "indicator-style", BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', "inode", BX_OPTION_NO_VALUE},
+        {'I', 'I', "ignore", BX_OPTION_REQUIRED_VALUE},
+        {'k', 'k', "kibibytes", BX_OPTION_NO_VALUE},
+        {'L', 'L', "dereference", BX_OPTION_NO_VALUE},
+        {'n', 'n', "numeric-uid-gid", BX_OPTION_NO_VALUE},
+        {'N', 'N', "literal", BX_OPTION_NO_VALUE},
+        {'q', 'q', "hide-control-chars", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_SHOW_CONTROL_CHARS, 0, "show-control-chars", BX_OPTION_NO_VALUE},
+        {'Q', 'Q', "quote-name", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_QUOTING_STYLE, 0, "quoting-style", BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', "reverse", BX_OPTION_NO_VALUE},
+        {'s', 's', "size", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_SORT, 0, "sort", BX_OPTION_REQUIRED_VALUE},
+        {BX_LS_OPT_TIME, 0, "time", BX_OPTION_REQUIRED_VALUE},
+        {BX_LS_OPT_TIME_STYLE, 0, "time-style", BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', "tabsize", BX_OPTION_REQUIRED_VALUE},
+        {'w', 'w', "width", BX_OPTION_REQUIRED_VALUE},
+        {'Z', 'Z', "context", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_ZERO, 0, "zero", BX_OPTION_NO_VALUE},
+        {'h', 'h', "human-readable", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_SI, 0, "si", BX_OPTION_NO_VALUE},
+        {'b', 'b', "escape", BX_OPTION_NO_VALUE},
+        {'R', 'R', "recursive", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_FORMAT, 0, "format", BX_OPTION_REQUIRED_VALUE},
+        {BX_LS_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_LS_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {'1', '1', NULL, BX_OPTION_NO_VALUE},
+        {'C', 'C', NULL, BX_OPTION_NO_VALUE},
+        {'f', 'f', NULL, BX_OPTION_NO_VALUE},
+        {'F', 'F', NULL, BX_OPTION_NO_VALUE},
+        {'S', 'S', NULL, BX_OPTION_NO_VALUE},
+        {'U', 'U', NULL, BX_OPTION_NO_VALUE},
+        {'X', 'X', NULL, BX_OPTION_NO_VALUE},
+        {'c', 'c', NULL, BX_OPTION_NO_VALUE},
+        {'g', 'g', NULL, BX_OPTION_NO_VALUE},
+        {'l', 'l', NULL, BX_OPTION_NO_VALUE},
+        {'m', 'm', NULL, BX_OPTION_NO_VALUE},
+        {'o', 'o', NULL, BX_OPTION_NO_VALUE},
+        {'p', 'p', NULL, BX_OPTION_NO_VALUE},
+        {'t', 't', NULL, BX_OPTION_NO_VALUE},
+        {'u', 'u', NULL, BX_OPTION_NO_VALUE},
+        {'v', 'v', NULL, BX_OPTION_NO_VALUE},
+        {'x', 'x', NULL, BX_OPTION_NO_VALUE},
     };
 
     bx_ls_options_init(options, variant, (argc > 0) ? argv[0] : NULL);
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-    int next_operand = 1;
     unsigned long option_order = 0u;
     unsigned long explicit_sort_order = 0u;
     unsigned long short_time_sort_order = 0u;
 
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(
-            argc, argv, "-1ABCDfFGHI:kLNQRST:UXZabcdghilmnopqrstuvw:x", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            operands[(*count)++] = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case '1':
                 bx_ls_set_format(options, BX_LS_FORMAT_SINGLE);
                 break;
@@ -1034,7 +1061,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->dereference_command_line = true;
                 break;
             case 'I':
-                bx_ls_pattern_list_append(&options->ignore_patterns, optarg);
+                bx_ls_pattern_list_append(&options->ignore_patterns, option.value);
                 break;
             case 'L':
                 options->dereference_all = true;
@@ -1052,7 +1079,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 explicit_sort_order = ++option_order;
                 break;
             case 'T':
-                if (!bx_ls_parse_tabsize_option(optarg, options, diag, "-T")) {
+                if (!bx_ls_parse_tabsize_option(option.value, options, diag, "-T")) {
                     return false;
                 }
                 break;
@@ -1083,7 +1110,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->directory_mode = true;
                 break;
             case 'F':
-                if (!bx_ls_parse_classify_when(optarg, options, diag)) {
+                if (!bx_ls_parse_classify_when(option.value, options, diag)) {
                     return false;
                 }
                 break;
@@ -1150,7 +1177,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 explicit_sort_order = ++option_order;
                 break;
             case 'w':
-                if (!bx_ls_parse_width_option(optarg, options, diag, "-w")) {
+                if (!bx_ls_parse_width_option(option.value, options, diag, "-w")) {
                     return false;
                 }
                 break;
@@ -1165,12 +1192,12 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->show_version = true;
                 return true;
             case BX_LS_OPT_FORMAT:
-                if (!bx_ls_parse_format_option(optarg, options, diag)) {
+                if (!bx_ls_parse_format_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
             case BX_LS_OPT_COLOR:
-                if (!bx_ls_parse_color_option(optarg, options, diag)) {
+                if (!bx_ls_parse_color_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
@@ -1182,7 +1209,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->show_author = true;
                 break;
             case BX_LS_OPT_BLOCK_SIZE:
-                if (!bx_ls_parse_block_size_option(optarg, options, diag)) {
+                if (!bx_ls_parse_block_size_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
@@ -1196,15 +1223,15 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->dereference_command_line_symlink_to_dir = true;
                 break;
             case BX_LS_OPT_HIDE:
-                bx_ls_pattern_list_append(&options->hide_patterns, optarg);
+                bx_ls_pattern_list_append(&options->hide_patterns, option.value);
                 break;
             case BX_LS_OPT_HYPERLINK:
-                if (!bx_ls_parse_hyperlink_option(optarg, options, diag)) {
+                if (!bx_ls_parse_hyperlink_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
             case BX_LS_OPT_INDICATOR_STYLE:
-                if (!bx_ls_parse_indicator_style_option(optarg, options, diag)) {
+                if (!bx_ls_parse_indicator_style_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
@@ -1218,23 +1245,23 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->hide_control_chars = false;
                 break;
             case BX_LS_OPT_QUOTING_STYLE:
-                if (!bx_ls_parse_quoting_style_option(optarg, options, diag)) {
+                if (!bx_ls_parse_quoting_style_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
             case BX_LS_OPT_SORT:
-                if (!bx_ls_parse_sort_option(optarg, options, diag)) {
+                if (!bx_ls_parse_sort_option(option.value, options, diag)) {
                     return false;
                 }
                 explicit_sort_order = ++option_order;
                 break;
             case BX_LS_OPT_TIME:
-                if (!bx_ls_parse_time_option(optarg, options, diag)) {
+                if (!bx_ls_parse_time_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
             case BX_LS_OPT_TIME_STYLE:
-                if (!bx_ls_parse_time_style_option(optarg, options, diag)) {
+                if (!bx_ls_parse_time_style_option(option.value, options, diag)) {
                     return false;
                 }
                 break;
@@ -1243,19 +1270,6 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->raw_output_exceptions |=
                     (uint32_t)BX_OUTPUT_POLICY_RAW_MACHINE_DELIMITED_PATHS;
                 break;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
@@ -1267,7 +1281,6 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
         options->hide_control_chars = bx_ls_output_policy_terminal_quote_paths(options);
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -3576,7 +3589,8 @@ static void bx_ls_classify_operand(const char* operand, const struct bx_ls_optio
     bx_ls_add_operand_as_entry(operand, &lst, follow_for_display, file_entries);
 }
 
-static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv, int first_operand, struct bx_diag_ctx* diag, FILE* out) {
+static void bx_ls_run(const struct bx_ls_options* options, size_t count, const char* const* operands,
+                      struct bx_diag_ctx* diag, FILE* out) {
     struct bx_ls_entry_list file_entries = {0};
     struct bx_ls_path_list directory_paths = {0};
     bool use_dired_output = options->dired && options->format == BX_LS_FORMAT_LONG;
@@ -3587,12 +3601,12 @@ static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv
         return;
     }
 
-    if (first_operand >= argc) {
+    if (count == 0) {
         bx_ls_classify_operand(".", options, &file_entries, &directory_paths, diag);
     }
     else {
-        for (int i = first_operand; i < argc; i++) {
-            bx_ls_classify_operand(argv[i], options, &file_entries, &directory_paths, diag);
+        for (size_t i = 0; i < count; i++) {
+            bx_ls_classify_operand(operands[i], options, &file_entries, &directory_paths, diag);
         }
     }
 
@@ -3670,50 +3684,55 @@ static int bx_ls_main_variant(int argc, char** argv, enum bx_ls_variant variant)
         .verbose = false,
         .debug = false,
     };
-    int first_operand = 0;
+    const char** operands = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*operands)) : NULL;
+    if (argc > 1 && operands == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
+    }
+    size_t count = 0;
+    int status;
 
-    if (!bx_ls_parse_options(argc, argv, variant, &options, &first_operand, &diag)) {
-        int status = diag.exit_status != 0 ? diag.exit_status : 1;
-        if (status != 0) {
-            bx_cli_print_try_help(diag.progname);
-        }
-        bx_ls_options_free(&options);
-        return status;
+    if (!bx_ls_parse_options(argc, argv, variant, &options, operands, &count, &diag)) {
+        bx_cli_print_try_help(diag.progname);
+        status = diag.exit_status;
+        goto done;
     }
 
     if (options.show_help) {
         bx_ls_print_help(stdout, &options);
-        bx_ls_options_free(&options);
-        return 0;
+        status = 0;
+        goto done;
     }
 
     if (options.show_version) {
         bx_cli_print_version(options.progname);
-        bx_ls_options_free(&options);
-        return 0;
+        status = 0;
+        goto done;
     }
 
     if (options.dired && options.format == BX_LS_FORMAT_LONG && options.zero_terminated) {
         bx_diag(&diag, "--dired and --zero are incompatible");
-        bx_ls_options_free(&options);
-        return 2;
+        status = 2;
+        goto done;
     }
 
     struct bx_line_writer_file stdout_file = {0};
     if (!bx_line_writer_file_open(&stdout_file, STDOUT_FILENO, false)) {
         bx_diag(&diag, "write error: %s", strerror(bx_line_writer_file_error(&stdout_file)));
-        bx_ls_options_free(&options);
-        return 2;
+        status = 2;
+        goto done;
     }
 
-    bx_ls_run(&options, argc, argv, first_operand, &diag,
+    bx_ls_run(&options, count, operands, &diag,
               bx_line_writer_file_stream(&stdout_file));
 
     if (!bx_line_writer_file_finish(&stdout_file)) {
         bx_diag(&diag, "write error: %s", strerror(bx_line_writer_file_error(&stdout_file)));
     }
 
-    int status = diag.exit_status;
+    status = diag.exit_status;
+done:
+    free(operands);
     bx_ls_options_free(&options);
     return status;
 }
