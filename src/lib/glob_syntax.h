@@ -61,16 +61,15 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                             return;
                     }
                     const char* hyphen = strchr(p + 3, '-');
-                    if (hyphen && strchr(p + 3, '\\'))
-                        break;
-                    if (end[-1] != '-' || (end - p >= 5 && hyphen == end - 2)) {
+                    if (end[-1] != '-' ||
+                        (end - p >= 5 && hyphen == end - 2 && !strchr(p + 3, '\\'))) {
                         memmove(p + 1, p, (size_t)(end - p) + 1);
                         *p = '\\';
                     }
 #ifdef __GLIBC__
                     /* glibc rejects a single terminal range. A prior
                      * hyphen could make this one a range endpoint instead. */
-                    else if (hyphen == end - 1) {
+                    else if (hyphen == end - 1 && !strchr(p + 3, '\\')) {
                         p[1] = '!';
                     }
 #endif
