@@ -1159,16 +1159,36 @@ static int bx_search_missing_pattern(const char* progname, enum bx_search_person
     return -1;
 }
 
-static void bx_search_normalize_globs(struct search_opts *opts) {
-    const struct bx_search_pattern_vec *const vectors[] = {
+static int bx_search_normalize_glob(char **slot) {
+    if (!strstr(*slot, "[^"))
+        return 0;
+    size_t length = strlen(*slot);
+    char *pattern = realloc(*slot, length + 2u);
+    if (!pattern)
+        return -1;
+    *slot = pattern;
+    bx_glob_normalize_caret_with_spare(pattern, 1);
+    return pattern[length] != '\0';
+}
+
+static bool bx_search_normalize_globs(struct search_opts *opts) {
+    struct bx_search_pattern_vec *const vectors[] = {
         &opts->include_patterns, &opts->exclude_patterns, &opts->exclude_dir_patterns,
     };
     for (size_t i = 0; i < sizeof(vectors) / sizeof(vectors[0]); i++) {
-        for (size_t j = 0; j < vectors[i]->len; j++)
-            bx_glob_normalize_caret(vectors[i]->items[j]);
+        struct bx_search_pattern_vec *vec = vectors[i];
+        for (size_t j = 0; j < vec->len; j++) {
+            int added = bx_search_normalize_glob(&vec->items[j]);
+            if (added < 0 || vec->bytes > SIZE_MAX - (size_t)added)
+                return false;
+            vec->bytes += (size_t)added;
+        }
     }
-    for (int i = 0; i < opts->num_pre_globs; i++)
-        bx_glob_normalize_caret(opts->pre_globs[i]);
+    for (int i = 0; i < opts->num_pre_globs; i++) {
+        if (bx_search_normalize_glob(&opts->pre_globs[i]) < 0)
+            return false;
+    }
+    return true;
 }
 
 static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum bx_search_personality personality, struct bx_search_operands* operands, struct bx_search_list_args* lists) {
@@ -2376,7 +2396,8 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
     }
     operands->files = opts->operand_storage ? opts->operand_storage + first_file : NULL;
     operands->num_files = operand_count - first_file;
-    bx_search_normalize_globs(opts);
+    if (!bx_search_normalize_globs(opts))
+        return bx_search_parse_out_of_memory(progname);
     return 0;
 }
 
