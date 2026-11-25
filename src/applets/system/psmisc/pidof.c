@@ -14,12 +14,11 @@ static void usage(FILE* out, const char* name) {
 }
 
 #ifdef __linux__
-#include <getopt.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "applets/system/psmisc/procfs.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 
 struct pidof_query {
@@ -46,46 +45,68 @@ static bool pidof_matches(const struct bx_proc_info* process,
 #endif
 
 int bx_pidof_main(int argc, char** argv) {
-    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "pidof", "-h", "-V", usage);
-    if (handled >= 0)
-        return handled;
-    struct bx_diag_ctx diag = {.progname = "pidof"};
+    struct bx_diag_ctx diag = {.progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "pidof")};
 #ifdef __linux__
-    static const struct option long_options[] = {
-        {"quiet", no_argument, NULL, 'q'},
-        {"single-shot", no_argument, NULL, 's'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'s', 's', "single-shot", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
     bool quiet = false, single = false;
-    bx_args_getopt_reset();
-    for (int opt; (opt = bx_args_getopt_long(argc, argv, "qs", long_options, NULL)) != -1;) {
-        switch (opt) {
-        case 'q': quiet = true; break;
-        case 's': single = true; break;
-        default:
-            bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
-        }
-    }
-    if (optind == argc)
-        return 1;
-
-    size_t count = (size_t)(argc - optind);
-    struct pidof_query* queries = calloc(count, sizeof(*queries));
-    if (queries == NULL) {
-        bx_perror_path(&diag, "process queries");
-        return 1;
-    }
-    for (size_t i = 0; i < count; i++) {
-        const char* arg = argv[(size_t)optind + i];
-        if (strchr(arg, '/') == NULL) {
-            queries[i].name = arg;
-        } else {
-            queries[i].path = realpath(arg, NULL);
-        }
-    }
-
+    struct pidof_query* queries = NULL;
+    size_t count = 0;
     int status = 1;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!queries) {
+                queries = calloc((size_t)argc - option.index, sizeof(*queries));
+                if (!queries) {
+                    bx_perror_path(&diag, "process queries");
+                    goto done;
+                }
+            }
+            queries[count++].name = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
+            case 'q':
+                quiet = true;
+                break;
+            case 's':
+                single = true;
+                break;
+            case 'h':
+                usage(stdout, diag.progname);
+                status = 0;
+                goto done;
+            case 'V':
+                bx_cli_print_version(diag.progname);
+                status = 0;
+                goto done;
+        }
+    }
+    if (count == 0)
+        goto done;
+
+    for (size_t i = 0; i < count; i++) {
+        const char* arg = queries[i].name;
+        if (strchr(arg, '/')) {
+            queries[i].path = realpath(arg, NULL);
+            queries[i].name = NULL;
+        }
+    }
+
     struct bx_proc_list processes;
     if (!bx_proc_list_read(&processes, BX_PROC_READ_EXE)) {
         bx_perror_path(&diag, "/proc");
@@ -120,6 +141,9 @@ done:
     free(queries);
     return status;
 #else
+    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "pidof", "-h", "-V", usage);
+    if (handled >= 0)
+        return handled;
     bx_diag(&diag, "Linux process lookup is not supported on this platform");
     return 1;
 #endif
