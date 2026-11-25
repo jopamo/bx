@@ -1,7 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <float.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -17,10 +16,10 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/child_runner.h"
+#include "lib/option_scan.h"
 #include "lib/output_quote.h"
 #include "lib/signal_names.h"
 #include "lib/time_parse.h"
-#include "lib/args_common.h"
 
 struct bx_timeout_options {
     const char* progname;
@@ -130,12 +129,15 @@ static bool bx_timeout_parse_signal(const char* text, int* signal_out) {
 }
 
 static bool bx_timeout_parse_options(int argc, char** argv, struct bx_timeout_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"foreground", no_argument, NULL, 'f'},   {"signal", required_argument, NULL, 's'},
-        {"kill-after", required_argument, NULL, 'k'},
-        {"preserve-status", no_argument, NULL, 'p'},
-        {"verbose", no_argument, NULL, 'v'},      {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},        {NULL, 0, NULL, 0},
+    enum { HELP = 256, VERSION };
+    static const struct bx_option_spec specs[] = {
+        {'f', 'f', "foreground", BX_OPTION_NO_VALUE},
+        {'s', 's', "signal", BX_OPTION_REQUIRED_VALUE},
+        {'k', 'k', "kill-after", BX_OPTION_REQUIRED_VALUE},
+        {'p', 'p', "preserve-status", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -143,27 +145,39 @@ static bool bx_timeout_parse_options(int argc, char** argv, struct bx_timeout_op
     options->timeout_signal = SIGTERM;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+:fk:ps:v", long_options, NULL);
-        if (c == -1) {
+    struct bx_option_cursor cursor;
+    size_t first;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            first = result.index;
             break;
         }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
+        }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'f':
                 options->foreground = true;
                 break;
             case 's':
-                if (!bx_timeout_parse_signal(optarg, &options->timeout_signal)) {
-                    bx_diag(diag, "'%s': invalid signal", optarg != NULL ? optarg : "");
+                if (!bx_timeout_parse_signal(result.value, &options->timeout_signal)) {
+                    bx_diag(diag, "'%s': invalid signal", result.value);
                     return false;
                 }
                 break;
             case 'k':
-                if (!bx_timeout_parse_duration(optarg, &options->kill_after_seconds)) {
-                    bx_diag(diag, "invalid time interval '%s'", optarg != NULL ? optarg : "");
+                if (!bx_timeout_parse_duration(result.value, &options->kill_after_seconds)) {
+                    bx_diag(diag, "invalid time interval '%s'", result.value);
                     return false;
                 }
                 options->kill_after_specified = true;
@@ -174,55 +188,29 @@ static bool bx_timeout_parse_options(int argc, char** argv, struct bx_timeout_op
             case 'v':
                 options->verbose = true;
                 break;
-            case 1:
+            case HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
-    if (optind >= argc) {
+    if (first == (size_t)argc) {
         return false;
     }
 
-    const char* duration_text = argv[optind];
+    const char* duration_text = argv[first++];
     if (!bx_timeout_parse_duration(duration_text, &options->duration_seconds)) {
         bx_diag(diag, "invalid time interval '%s'", duration_text);
         return false;
     }
-    optind++;
-
-    if (optind >= argc) {
+    if (first == (size_t)argc) {
         return false;
     }
 
-    options->first_operand = optind;
+    options->first_operand = (int)first;
     return true;
 }
 
