@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -11,11 +10,11 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/fmt_engine.h"
 #include "lib/fopen_dash.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 #define BX_FMT_OUTPUT_BUFFER_SIZE 8192u
 
@@ -25,9 +24,11 @@ enum {
 };
 
 struct bx_fmt_options {
-    const char *progname;
+    const char* progname;
     struct bx_fmt_engine_options engine;
-    char *prefix_storage;
+    char* prefix_storage;
+    const char** files;
+    size_t file_count;
     bool show_help;
     bool show_version;
 };
@@ -61,7 +62,7 @@ static void bx_fmt_options_init(struct bx_fmt_options *options, const char *prog
 
 static void bx_fmt_options_dispose(struct bx_fmt_options *options) {
     free(options->prefix_storage);
-    options->prefix_storage = NULL;
+    free(options->files);
 }
 
 static bool bx_fmt_is_legacy_width_arg(const char *arg) {
@@ -80,7 +81,6 @@ static void bx_fmt_set_prefix(struct bx_fmt_options *options, const char *arg) {
     char *prefix;
     char *end;
 
-    free(options->prefix_storage);
     options->prefix_storage = xstrdup(arg);
     prefix = options->prefix_storage;
     options->engine.prefix_lead_space = 0u;
@@ -147,47 +147,49 @@ static void bx_fmt_diag_invalid_width(struct bx_diag_ctx *diag, const char *text
     }
 }
 
-static bool bx_fmt_parse_options(int argc, char **argv, struct bx_fmt_options *options,
-                                 int *first_operand, int *operand_index_adjust,
-                                 struct bx_diag_ctx *diag) {
-    static const struct option long_options[] = {
-        {"crown-margin", no_argument, NULL, 'c'},
-        {"prefix", required_argument, NULL, 'p'},
-        {"split-only", no_argument, NULL, 's'},
-        {"tagged-paragraph", no_argument, NULL, 't'},
-        {"uniform-spacing", no_argument, NULL, 'u'},
-        {"width", required_argument, NULL, 'w'},
-        {"goal", required_argument, NULL, 'g'},
-        {"help", no_argument, NULL, BX_FMT_OPT_HELP},
-        {"version", no_argument, NULL, BX_FMT_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_fmt_parse_options(int argc, char** argv, struct bx_fmt_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "crown-margin", BX_OPTION_NO_VALUE},     {'p', 'p', "prefix", BX_OPTION_REQUIRED_VALUE},    {'s', 's', "split-only", BX_OPTION_NO_VALUE},
+        {'t', 't', "tagged-paragraph", BX_OPTION_NO_VALUE}, {'u', 'u', "uniform-spacing", BX_OPTION_NO_VALUE}, {'w', 'w', "width", BX_OPTION_REQUIRED_VALUE},
+        {'g', 'g', "goal", BX_OPTION_REQUIRED_VALUE},       {BX_FMT_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},  {BX_FMT_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
-    char **prepared = NULL;
-    int prepared_argc = argc;
-    int c;
-    const char *max_width_text = NULL;
-    const char *goal_width_text = NULL;
-    bool consumed_legacy_width = false;
-
-    prepared = xmalloc((size_t)argc * sizeof(*prepared));
-    prepared[0] = argv[0];
-    for (int i = 1; i < argc; i++) {
-        prepared[i] = argv[i];
-    }
-
+    const char* max_width_text = NULL;
+    const char* goal_width_text = NULL;
+    const char* prefix_text = NULL;
+    size_t first = argc > 0 ? 1u : 0u;
     if (argc > 1 && bx_fmt_is_legacy_width_arg(argv[1])) {
-        max_width_text = argv[1] + 1;
-        for (int i = 1; i < argc - 1; i++) {
-            prepared[i] = argv[i + 1];
-        }
-        prepared_argc = argc - 1;
-        consumed_legacy_width = true;
+        max_width_text = argv[first] + 1;
+        first++;
     }
 
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(prepared_argc, prepared, ":0123456789cstuw:p:g:",
-                                    long_options, NULL)) != -1) {
-        switch (c) {
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, first, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!options->files) {
+                options->files = calloc((size_t)argc - option.index, sizeof(*options->files));
+                if (!options->files) {
+                    bx_perror_path(diag, "allocate input operands");
+                    return false;
+                }
+            }
+            options->files[options->file_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.spec)
+                bx_diag(diag, "option requires an argument -- '%c'", option.spec->short_name);
+            else if (option.short_name >= '0' && option.short_name <= '9')
+                bx_diag(diag, "invalid option -- %c; -WIDTH is recognized only when it is the first\noption; use -w N instead", option.short_name);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(options->progname);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'c':
                 options->engine.crown_margin = true;
                 break;
@@ -201,44 +203,21 @@ static bool bx_fmt_parse_options(int argc, char **argv, struct bx_fmt_options *o
                 options->engine.uniform_spacing = true;
                 break;
             case 'w':
-                max_width_text = optarg;
+                max_width_text = option.value;
                 break;
             case 'g':
-                goal_width_text = optarg;
+                goal_width_text = option.value;
                 break;
             case 'p':
-                bx_fmt_set_prefix(options, optarg);
+                prefix_text = option.value;
                 break;
             case BX_FMT_OPT_HELP:
                 options->show_help = true;
-                free(prepared);
                 return true;
             case BX_FMT_OPT_VERSION:
                 options->show_version = true;
-                free(prepared);
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, prepared_argc,
-                                                prepared);
-                bx_cli_print_try_help(options->progname);
-                free(prepared);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, prepared_argc,
-                                                prepared);
-                bx_cli_print_try_help(options->progname);
-                free(prepared);
-                return false;
             default:
-                if (c >= '0' && c <= '9') {
-                    bx_diag(diag,
-                            "invalid option -- %c; -WIDTH is recognized only when it is the first\noption; use -w N instead",
-                            c);
-                    bx_cli_print_try_help(options->progname);
-                    free(prepared);
-                    return false;
-                }
-                free(prepared);
                 return false;
         }
     }
@@ -250,7 +229,6 @@ static bool bx_fmt_parse_options(int argc, char **argv, struct bx_fmt_options *o
                                         BX_FMT_ENGINE_MAX_WIDTH, ERANGE,
                                         &value)) {
             bx_fmt_diag_invalid_width(diag, max_width_text);
-            free(prepared);
             return false;
         }
         options->engine.width = value;
@@ -263,7 +241,6 @@ static bool bx_fmt_parse_options(int argc, char **argv, struct bx_fmt_options *o
                                         options->engine.width, EOVERFLOW,
                                         &value)) {
             bx_fmt_diag_invalid_width(diag, goal_width_text);
-            free(prepared);
             return false;
         }
         options->engine.goal = value;
@@ -275,9 +252,8 @@ static bool bx_fmt_parse_options(int argc, char **argv, struct bx_fmt_options *o
             bx_fmt_engine_default_goal_width(options->engine.width);
     }
 
-    *first_operand = optind;
-    *operand_index_adjust = consumed_legacy_width ? 1 : 0;
-    free(prepared);
+    if (prefix_text != NULL)
+        bx_fmt_set_prefix(options, prefix_text);
     return true;
 }
 
@@ -328,8 +304,6 @@ static int bx_fmt_process_path(const char *path, const struct bx_fmt_options *op
 int bx_fmt_main(int argc, char **argv) {
     struct bx_fmt_options options;
     struct bx_diag_ctx diag;
-    int first_operand = 0;
-    int operand_index_adjust = 0;
     int exit_status = 0;
     char output_buffer[BX_FMT_OUTPUT_BUFFER_SIZE];
     struct bx_line_writer writer;
@@ -338,8 +312,7 @@ int bx_fmt_main(int argc, char **argv) {
     bx_fmt_options_init(&options, progname);
     diag = (struct bx_diag_ctx){.progname = progname, .exit_status = 0};
 
-    if (!bx_fmt_parse_options(argc, argv, &options, &first_operand,
-                              &operand_index_adjust, &diag)) {
+    if (!bx_fmt_parse_options(argc, argv, &options, &diag)) {
         bx_fmt_options_dispose(&options);
         return 1;
     }
@@ -356,12 +329,13 @@ int bx_fmt_main(int argc, char **argv) {
 
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    if (first_operand + operand_index_adjust >= argc) {
+    if (options.file_count == 0) {
         exit_status = bx_fmt_process_stream(stdin, true, "-", &options, &writer,
                                             &diag);
-    } else {
-        for (int i = first_operand + operand_index_adjust; i < argc; i++) {
-            int rc = bx_fmt_process_path(argv[i], &options, &writer, &diag);
+    }
+    else {
+        for (size_t i = 0; i < options.file_count; i++) {
+            int rc = bx_fmt_process_path(options.files[i], &options, &writer, &diag);
 
             if (rc != 0) {
                 exit_status = 1;
