@@ -318,23 +318,6 @@ static int bx_traceroute_run(struct bx_traceroute_ctx* ctx) {
     if (ctx->options.ecmp > ctx->options.probes_per_hop)
         ctx->options.probes_per_hop = ctx->options.ecmp;
 
-    if (ctx->options.netns) {
-        int fd = bx_fd_open_cloexec(ctx->options.netns, O_RDONLY, 0);
-        if (fd < 0) {
-            fprintf(stderr, "open %s: %s\n", ctx->options.netns, strerror(errno));
-            bx_traceroute_ctx_destroy(ctx);
-            exit(2);
-        }
-        if (setns(fd, CLONE_NEWNET) < 0) {
-            int saved_errno = errno;
-            close(fd);
-            fprintf(stderr, "setns %s: %s\n", ctx->options.netns, strerror(saved_errno));
-            bx_traceroute_ctx_destroy(ctx);
-            exit(2);
-        }
-        close(fd);
-    }
-
     ctx->method = bx_traceroute_method_by_id(ctx->options.method);
     if (ctx->method)
         ctx->method->reset(ctx);
@@ -363,6 +346,24 @@ static int bx_traceroute_run(struct bx_traceroute_ctx* ctx) {
         if (!bx_time_milliseconds_double_to_seconds_double(ctx->options.send_secs, &send_seconds))
             ex_error(ctx, "bad sendtime `%g' specified", ctx->options.send_secs);
         ctx->options.send_secs = send_seconds;
+    }
+
+    if (!bx_traceroute_parse_method_options(ctx))
+        return ctx->diag.exit_status;
+
+    if (ctx->options.netns) {
+        int fd = bx_fd_open_cloexec(ctx->options.netns, O_RDONLY, 0);
+        if (fd < 0) {
+            fprintf(stderr, "open %s: %s\n", ctx->options.netns, strerror(errno));
+            return 2;
+        }
+        if (setns(fd, CLONE_NEWNET) < 0) {
+            int saved_errno = errno;
+            close(fd);
+            fprintf(stderr, "setns %s: %s\n", ctx->options.netns, strerror(saved_errno));
+            return 2;
+        }
+        close(fd);
     }
 
     if (ctx->options.address_family == AF_INET6 && (ctx->options.tos || ctx->options.flow_label))
@@ -407,9 +408,6 @@ static int bx_traceroute_run(struct bx_traceroute_ctx* ctx) {
     ctx->probes = calloc(ctx->probe_count, sizeof(*ctx->probes));
     if (!ctx->probes)
         bx_traceroute_error(ctx, "calloc");
-
-    if (!bx_traceroute_parse_method_options(ctx))
-        return ctx->diag.exit_status;
 
     if (ctx->method->init(ctx, ctx->options.destination_port, &ctx->data_len) < 0)
         ex_error(ctx, "trace method's init failed");
