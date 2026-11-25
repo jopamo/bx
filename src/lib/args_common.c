@@ -5,69 +5,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "args_common.h"
 #include "copy_metadata.h"
 #include "update_policy.h"
 #include "bx/libbx.h"
-
-static bool bx_args_getopt_reset_pending;
-static char bx_args_reset_program[] = "bx-getopt-reset";
-static char* bx_args_reset_argv[] = {bx_args_reset_program, NULL};
-
-void bx_args_getopt_reset(void) {
-    /*
-     * A full getopt reset must be initialized with the next parser's actual
-     * optstring. glibc chooses permutation/POSIX ordering while initializing,
-     * so priming it here with an empty optstring would lose a leading '+' and
-     * let command operands such as "cmd -d" be permuted back into an applet's
-     * option scan. Defer initialization until bx_args_getopt_long() has the
-     * real optstring.
-     */
-    bx_args_getopt_reset_pending = true;
-    opterr = 0;
-    optind = 1;
-    optopt = 0;
-    optarg = NULL;
-}
-
-int bx_args_getopt_long(
-    int argc,
-    char* const argv[],
-    const char* short_options,
-    const struct option* long_options,
-    int* long_index
-) {
-    if (bx_args_getopt_reset_pending) {
-        bx_args_getopt_reset_pending = false;
-
-        /*
-         * Force libc to discard any private grouped-option position and choose
-         * its ordering mode from this parser's real optstring. The empty argv
-         * prevents consuming caller arguments during initialization. Once the
-         * libc state is fresh, start at the first option.
-         */
-        opterr = 0;
-        optind = 0;
-        optopt = 0;
-        optarg = NULL;
-        (void)getopt_long(
-            1,
-            bx_args_reset_argv,
-            short_options,
-            long_options,
-            NULL
-        );
-
-        opterr = 0;
-        optind = 1;
-        optopt = 0;
-        optarg = NULL;
-    }
-
-    return getopt_long(argc, argv, short_options, long_options, long_index);
-}
 
 bool bx_args_parse_int_range(const char* arg, int min_value, int max_value, int* value_out) {
     if (arg == NULL || arg[0] == '\0' || value_out == NULL || min_value > max_value) {

@@ -3,19 +3,8 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <getopt.h>
 
 #include "update_policy.h"
-
-void bx_args_getopt_reset(void);
-enum { BX_ARGS_OPT_HELP = 512, BX_ARGS_OPT_VERSION };
-int bx_args_getopt_long(
-    int argc,
-    char* const argv[],
-    const char* short_options,
-    const struct option* long_options,
-    int* long_index
-);
 
 bool bx_args_parse_preserve_list(const char* arg, unsigned* mask, bool set_bits, bool* mode_mentioned_out, char** invalid_token_out);
 
