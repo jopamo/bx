@@ -1,7 +1,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -20,7 +19,7 @@
 #include "lib/same_file.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "applets/system/chown/chown.h"
 
 enum bx_chown_report_mode {
@@ -59,6 +58,8 @@ struct bx_chown_options {
     struct bx_id_owner_group from_owner_group;
     bool show_help;
     bool show_version;
+    const char** operands;
+    size_t operand_count;
 };
 
 static void bx_chown_print_help(FILE* stream, const char* progname) {
@@ -89,39 +90,57 @@ static void bx_chown_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  %s -hR root /u    Change the owner of /u and subfiles to \"root\".\n", progname);
 }
 
-static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"changes", no_argument, NULL, 'c'},
-        {"recursive", no_argument, NULL, 'R'},
-        {"quiet", no_argument, NULL, 'f'},
-        {"silent", no_argument, NULL, 'f'},
-        {"no-dereference", no_argument, NULL, 'h'},
-        {"dereference", no_argument, NULL, BX_CHOWN_OPT_DEREFERENCE},
-        {"from", required_argument, NULL, BX_CHOWN_OPT_FROM},
-        {"reference", required_argument, NULL, BX_CHOWN_OPT_REFERENCE},
-        {"no-preserve-root", no_argument, NULL, BX_CHOWN_OPT_NO_PRESERVE_ROOT},
-        {"preserve-root", no_argument, NULL, BX_CHOWN_OPT_PRESERVE_ROOT},
-        {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, BX_CHOWN_OPT_HELP},
-        {"version", no_argument, NULL, BX_CHOWN_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "changes", BX_OPTION_NO_VALUE},
+        {'R', 'R', "recursive", BX_OPTION_NO_VALUE},
+        {'f', 'f', "quiet", BX_OPTION_NO_VALUE},
+        {'f', 0, "silent", BX_OPTION_NO_VALUE},
+        {'h', 'h', "no-dereference", BX_OPTION_NO_VALUE},
+        {'H', 'H', NULL, BX_OPTION_NO_VALUE},
+        {'L', 'L', NULL, BX_OPTION_NO_VALUE},
+        {'P', 'P', NULL, BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {BX_CHOWN_OPT_DEREFERENCE, 0, "dereference", BX_OPTION_NO_VALUE},
+        {BX_CHOWN_OPT_FROM, 0, "from", BX_OPTION_REQUIRED_VALUE},
+        {BX_CHOWN_OPT_REFERENCE, 0, "reference", BX_OPTION_REQUIRED_VALUE},
+        {BX_CHOWN_OPT_NO_PRESERVE_ROOT, 0, "no-preserve-root", BX_OPTION_NO_VALUE},
+        {BX_CHOWN_OPT_PRESERVE_ROOT, 0, "preserve-root", BX_OPTION_NO_VALUE},
+        {BX_CHOWN_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_CHOWN_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "chown");
-    diag->progname = options->progname;
-
-    char short_options[] = "-:RcfhHLPv";
-    int next_operand = 1;
-    bx_args_getopt_reset_file_options(short_options);
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->operands == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->operands) ||
+                    (options->operands = malloc(capacity * sizeof(*options->operands))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->operands[options->operand_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%s'", result.token);
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'R':
                 options->recursive = true;
                 break;
@@ -144,10 +163,10 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
                 options->symlink_traversal = BX_CHOWN_SYMLINK_TRAVERSAL_P;
                 break;
             case BX_CHOWN_OPT_REFERENCE:
-                options->reference_path = optarg;
+                options->reference_path = result.value;
                 break;
             case BX_CHOWN_OPT_FROM:
-                if (!bx_id_parse_owner_group(optarg, &options->from_owner_group, diag)) {
+                if (!bx_id_parse_owner_group(result.value, &options->from_owner_group, diag)) {
                     return false;
                 }
                 options->from_filter_set = true;
@@ -171,35 +190,10 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
             case BX_CHOWN_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
     }
-
-    *first_operand = optind;
-    return true;
 }
 
 static void bx_chown_perror_path(const struct bx_chown_options* options, struct bx_diag_ctx* diag, const char* path) {
@@ -703,86 +697,88 @@ static bool bx_chown_apply_one(const char* path, uid_t owner, gid_t group, const
     return bx_chown_apply_path_recursive(path, true, owner, group, options, diag, NULL);
 }
 
-int bx_chown_run(int argc, char** argv, bool group_only, bx_cli_help_fn print_help) {
-    struct bx_chown_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "chown",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
-    };
-    int first_operand = 0;
-
-    if (!bx_chown_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        print_help(stdout, options.progname);
+static int bx_chown_operate(const struct bx_chown_options* options, struct bx_diag_ctx* diag,
+                            bool group_only, bx_cli_help_fn print_help) {
+    if (options->show_help) {
+        print_help(stdout, options->progname);
         return 0;
     }
 
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
 
-    if (options.recursive && options.dereference_explicit && !options.no_dereference && options.symlink_traversal == BX_CHOWN_SYMLINK_TRAVERSAL_P) {
-        bx_diag(&diag, "-R --dereference requires either -H or -L");
-        return diag.exit_status;
+    if (options->recursive && options->dereference_explicit && !options->no_dereference && options->symlink_traversal == BX_CHOWN_SYMLINK_TRAVERSAL_P) {
+        bx_diag(diag, "-R --dereference requires either -H or -L");
+        return diag->exit_status;
     }
 
     struct bx_id_owner_group owner_group = {0};
-    int operand_count = argc - first_operand;
-    int file_start = first_operand;
+    size_t operand_count = options->operand_count;
+    size_t file_start = 0;
 
-    if (options.reference_path != NULL) {
-        if (!bx_chown_parse_reference_owner_group(options.reference_path, &owner_group, &diag)) {
-            return diag.exit_status;
+    if (options->reference_path != NULL) {
+        if (!bx_chown_parse_reference_owner_group(options->reference_path, &owner_group, diag)) {
+            return diag->exit_status;
         }
 
-        if (operand_count <= 0) {
-            bx_diag(&diag, "missing operand");
-            return diag.exit_status;
+        if (operand_count == 0) {
+            bx_diag(diag, "missing operand");
+            return diag->exit_status;
         }
     }
     else {
-        if (operand_count <= 0) {
-            bx_diag(&diag, "missing operand");
-            return diag.exit_status;
+        if (operand_count == 0) {
+            bx_diag(diag, "missing operand");
+            return diag->exit_status;
         }
         if (operand_count <= 1) {
-            bx_diag(&diag, "missing operand after '%s'", argv[first_operand]);
-            return diag.exit_status;
+            bx_diag(diag, "missing operand after '%s'", options->operands[0]);
+            return diag->exit_status;
         }
 
         if (group_only) {
-            if (argv[first_operand][0] != '\0') {
-                if (!bx_id_parse_group(argv[first_operand], &owner_group.group, &diag)) {
-                    return diag.exit_status;
+            if (options->operands[0][0] != '\0') {
+                if (!bx_id_parse_group(options->operands[0], &owner_group.group, diag)) {
+                    return diag->exit_status;
                 }
                 owner_group.group_set = true;
             }
         }
-        else if (!bx_id_parse_owner_group(argv[first_operand], &owner_group, &diag)) {
-            return diag.exit_status;
+        else if (!bx_id_parse_owner_group(options->operands[0], &owner_group, diag)) {
+            return diag->exit_status;
         }
 
-        file_start = first_operand + 1;
+        file_start = 1;
     }
 
     uid_t owner = !group_only && owner_group.owner_set ? owner_group.owner : (uid_t)-1;
     gid_t group = owner_group.group_set ? owner_group.group : (gid_t)-1;
 
-    for (int i = file_start; i < argc; i++) {
-        (void)bx_chown_apply_one(argv[i], owner, group, &options, &diag);
+    for (size_t i = file_start; i < operand_count; i++) {
+        (void)bx_chown_apply_one(options->operands[i], owner, group, options, diag);
     }
 
-    if (options.report_mode != BX_CHOWN_REPORT_NONE && fflush(stdout) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
+    if (options->report_mode != BX_CHOWN_REPORT_NONE && fflush(stdout) == EOF) {
+        bx_diag(diag, "write error: %s", strerror(errno));
     }
 
-    return diag.exit_status;
+    return diag->exit_status;
+}
+
+int bx_chown_run(int argc, char** argv, bool group_only, bx_cli_help_fn print_help) {
+    struct bx_chown_options options = {
+        .progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, group_only ? "chgrp" : "chown"),
+    };
+    struct bx_diag_ctx diag = {.progname = options.progname};
+    int status;
+    if (bx_chown_parse_options(argc, argv, &options, &diag))
+        status = bx_chown_operate(&options, &diag, group_only, print_help);
+    else
+        status = diag.exit_status != 0 ? diag.exit_status : 1;
+    free(options.operands);
+    return status;
 }
 
 int bx_chown_main(int argc, char** argv) {
