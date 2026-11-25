@@ -25,6 +25,7 @@
 #include "lib/option_scan.h"
 #include "lib/statx_compat.h"
 #include "lib/fd_ops.h"
+#include "lib/xreadwrite.h"
 #include "applets/system/switch_root/switch_root.h"
 
 struct bx_switch_root_options {
@@ -211,6 +212,12 @@ done:
 struct bx_switch_root_init_check {
     const char* target;
     struct bx_diag_ctx* diag;
+    int report_fd;
+};
+
+struct bx_switch_root_init_identity {
+    dev_t device;
+    ino_t inode;
 };
 
 static int bx_switch_root_check_init_in_child(void* opaque) {
@@ -227,9 +234,23 @@ static int bx_switch_root_check_init_in_child(void* opaque) {
     char* found;
     int error = bx_child_find_executable(target, getenv("PATH"),
                                          BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, &found);
-    free(found);
-    if (error == 0)
+    if (error == 0) {
+        struct stat st;
+        if (stat(found, &st) != 0) {
+            bx_perror_path(diag, found);
+            free(found);
+            return 1;
+        }
+        free(found);
+        struct bx_switch_root_init_identity identity = {
+            .device = st.st_dev, .inode = st.st_ino,
+        };
+        if (!bx_xwrite_all(check->report_fd, &identity, sizeof(identity))) {
+            bx_perror_path(diag, "cannot report init identity");
+            return 1;
+        }
         return 0;
+    }
     bool exact = target[0] == '/';
     if (exact && error == ENOENT)
         bx_diag(diag, "target init path '%s' does not exist in NEW_ROOT", target);
@@ -240,7 +261,9 @@ static int bx_switch_root_check_init_in_child(void* opaque) {
     return 1;
 }
 
-static bool bx_switch_root_validate_init_target(const char* init_target, struct bx_diag_ctx* diag) {
+static bool bx_switch_root_validate_init_target(const char* init_target,
+                                                struct bx_switch_root_init_identity* identity,
+                                                struct bx_diag_ctx* diag) {
     if (init_target[0] == '\0') {
         bx_diag(diag, "INIT is empty");
         return false;
@@ -249,18 +272,30 @@ static bool bx_switch_root_validate_init_target(const char* init_target, struct 
         bx_diag(diag, "INIT path must be absolute when containing '/': '%s'", init_target);
         return false;
     }
-    struct bx_switch_root_init_check check = {init_target, diag};
+    int report[2];
+    if (bx_fd_pipe_cloexec(report) != 0) {
+        bx_perror_path(diag, "init preflight pipe");
+        return false;
+    }
+    struct bx_switch_root_init_check check = {init_target, diag, report[1]};
     int status;
-    if (bx_child_fork_callback_wait(bx_switch_root_check_init_in_child, &check,
-                                    BX_CHILD_SIGNALS_INHERIT, &status) != 0) {
+    /* The child writes a single fixed-size identity, smaller than PIPE_BUF. */
+    int waited = bx_child_fork_callback_wait(bx_switch_root_check_init_in_child, &check,
+                                             BX_CHILD_SIGNALS_INHERIT, &status);
+    if (waited != 0)
         bx_perror_path(diag, "init preflight child");
-        return false;
-    }
-    if (!WIFEXITED(status)) {
+    bx_fd_cleanup(&report[1]);
+    bool ok = false;
+    if (waited == 0 && !WIFEXITED(status))
         bx_diag(diag, "init preflight child did not exit normally");
-        return false;
+    if (waited == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        if (bx_xread(report[0], identity, sizeof(*identity)) == (ssize_t)sizeof(*identity))
+            ok = true;
+        else
+            bx_diag(diag, "incomplete init preflight identity");
     }
-    return WEXITSTATUS(status) == 0;
+    bx_fd_cleanup(&report[0]);
+    return ok;
 }
 
 static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const char* target_relpath, const char* new_root, struct bx_diag_ctx* diag) {
@@ -383,10 +418,41 @@ static bool empty_initramfs(int fd, unsigned depth, struct bx_diag_ctx* diag) {
     return empty;
 }
 
-static int bx_switch_root_exec_init(const struct bx_switch_root_options* options, char** argv, struct bx_diag_ctx* diag) {
+static bool bx_switch_root_init_matches(const char* path, const char* target,
+                                        const struct bx_switch_root_init_identity* identity,
+                                        struct bx_diag_ctx* diag) {
+    struct stat st;
+    if (stat(path, &st) != 0)
+        bx_perror_path(diag, path);
+    else if (st.st_dev == identity->device && st.st_ino == identity->inode)
+        return true;
+    else
+        bx_diag(diag, "init '%s' changed during mount handoff", target);
+    return false;
+}
+
+static char* bx_switch_root_find_checked_init(const char* target,
+                                             const struct bx_switch_root_init_identity* identity,
+                                             struct bx_diag_ctx* diag) {
+    char* found;
+    int error = bx_child_find_executable(target, getenv("PATH"),
+                                         BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, &found);
+    if (error != 0) {
+        bx_diag(diag, "cannot find init '%s' after handoff: %s", target, strerror(error));
+        return NULL;
+    }
+    if (bx_switch_root_init_matches(found, target, identity, diag))
+        return found;
+    free(found);
+    return NULL;
+}
+
+static int bx_switch_root_exec_init(const struct bx_switch_root_options* options, char** argv,
+                                    char* target, struct bx_diag_ctx* diag) {
     char** init_argv = argv + options->init_index;
 
-    int exec_error = bx_child_exec_argv_exact_or_path(init_argv);
+    int exec_error = bx_child_exec_file_argv_exact(target, init_argv);
+    free(target);
     bx_diag(diag, "failed to exec INIT '%s': %s", init_argv[0], strerror(exec_error));
     if (exec_error == ENOENT) {
         return 127;
@@ -426,7 +492,8 @@ int bx_switch_root_run(int argc, char** argv) {
         return 1;
     }
 
-    if (!bx_switch_root_validate_init_target(argv[options.init_index], &diag)) {
+    struct bx_switch_root_init_identity identity;
+    if (!bx_switch_root_validate_init_target(argv[options.init_index], &identity, &diag)) {
         return 1;
     }
 
@@ -456,9 +523,21 @@ int bx_switch_root_run(int argc, char** argv) {
         return 1;
     }
 
-    if (old_fd >= 0)
+    char* target = bx_switch_root_find_checked_init(argv[options.init_index], &identity, &diag);
+    if (!target) {
+        bx_fd_cleanup(&old_fd);
+        return 126;
+    }
+    /* The boot tree must remain trusted during cleanup and pathname exec.
+     * Using the checked pathname preserves script interpreter semantics. */
+    if (old_fd >= 0) {
         (void)empty_initramfs(old_fd, 0, &diag);
-    return bx_switch_root_exec_init(&options, argv, &diag);
+        if (!bx_switch_root_init_matches(target, argv[options.init_index], &identity, &diag)) {
+            free(target);
+            return 126;
+        }
+    }
+    return bx_switch_root_exec_init(&options, argv, target, &diag);
 }
 
 int bx_switch_root_main(int argc, char** argv) {
