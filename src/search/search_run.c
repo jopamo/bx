@@ -58,9 +58,8 @@ static int bx_search_operand_ref_compare(const void *left, const void *right) {
 }
 
 static struct bx_search_operand_ref *bx_search_collect_sorted_operands(
-    int argc, char **argv, int first_file, int *out_count
+    int count, char *const *files, int *out_count
 ) {
-    int count = argc - first_file;
     if (out_count)
         *out_count = count;
     if (count <= 0)
@@ -71,8 +70,8 @@ static struct bx_search_operand_ref *bx_search_collect_sorted_operands(
         return NULL;
 
     for (int i = 0; i < count; i++) {
-        refs[i].path = argv[first_file + i];
-        refs[i].index = first_file + i;
+        refs[i].path = files[i];
+        refs[i].index = i;
     }
     qsort(refs, (size_t)count, sizeof(*refs), bx_search_operand_ref_compare);
     return refs;
@@ -207,13 +206,11 @@ static char *bx_search_run_build_search_pattern(const char *pattern,
     return combined;
 }
 
-static bool bx_search_run_default_show_filename(int argc,
-                                                char **argv,
-                                                int first_file,
+static bool bx_search_run_default_show_filename(int num_files,
+                                                char *const *files,
                                                 enum bx_search_personality personality,
                                                 struct search_opts *opts,
                                                 bool rg_searches_stdin) {
-    int num_files = argc - first_file;
     if (num_files == 0) {
         if (bx_search_run_personality_is_rg(personality))
             return !rg_searches_stdin;
@@ -221,12 +218,12 @@ static bool bx_search_run_default_show_filename(int argc,
     }
     if (num_files > 1)
         return true;
-    if (!argv[first_file] || strcmp(argv[first_file], "-") == 0)
+    if (!files[0] || strcmp(files[0], "-") == 0)
         return false;
 
     struct stat st;
     bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-    if (stat(argv[first_file], &st) == 0)
+    if (stat(files[0], &st) == 0)
         return S_ISDIR(st.st_mode);
     return false;
 }
@@ -268,8 +265,7 @@ static void bx_search_run_apply_output_defaults(const struct bx_search_run_args 
     struct search_opts *opts = args->opts;
 
     if (!opts->show_filename && !opts->hide_filename) {
-        opts->show_filename = bx_search_run_default_show_filename(args->argc, args->argv,
-                                                                  args->first_file,
+        opts->show_filename = bx_search_run_default_show_filename(args->num_files, args->files,
                                                                   args->personality, opts,
                                                                   args->plan->rg_searches_stdin);
     }
@@ -314,13 +310,13 @@ bool bx_search_status_counts_as_selected(enum bx_search_personality personality,
 }
 
 static int bx_search_run_files_only(const struct bx_search_run_args *args) {
-    int num_files = args->argc - args->first_file;
+    int num_files = args->num_files;
     bool error_seen = false;
 
     if (args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_METADATA_SORTED) {
         struct bx_search_sorted_paths sorted_paths = {0};
 
-        if (bx_search_collect_metadata_sorted_paths(args->argc, args->argv, args->first_file,
+        if (bx_search_collect_metadata_sorted_paths(args->num_files, args->files,
                                                     args->progname, args->personality,
                                                     args->opts, args->runtime_snapshot,
                                                     &sorted_paths,
@@ -357,7 +353,7 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
     int sorted_operand_count = 0;
     struct bx_search_operand_ref *sorted_operands =
         bx_search_sort_is_path(args->opts)
-            ? bx_search_collect_sorted_operands(args->argc, args->argv, args->first_file,
+            ? bx_search_collect_sorted_operands(args->num_files, args->files,
                                                 &sorted_operand_count)
             : NULL;
 
@@ -372,21 +368,21 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
                                               ? (sorted_operand_count - 1 - operand_i)
                                               : operand_i]
                               .index
-                        : (args->first_file + operand_i);
+                        : operand_i;
             struct stat st;
 
             bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-            if (stat(args->argv[j], &st) != 0) {
-                bx_search_report_path_error(args->progname, args->argv[j], errno, args->opts);
+            if (stat(args->files[j], &st) != 0) {
+                bx_search_report_path_error(args->progname, args->files[j], errno, args->opts);
                 error_seen = true;
                 continue;
             }
             if (bx_search_loaded_metadata_exceeds_max_filesize(&st, args->opts))
                 continue;
             if (S_ISDIR(st.st_mode))
-                error_seen |= bx_search_walk(args->argv[j], &walk_config, &state) != 0;
+                error_seen |= bx_search_walk(args->files[j], &walk_config, &state) != 0;
             else
-                bx_search_print_path_record(args->argv[j], args->opts);
+                bx_search_print_path_record(args->files[j], args->opts);
         }
     }
 
@@ -468,7 +464,7 @@ static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
     struct bx_search_sorted_paths sorted_paths = {0};
     int global_matches = 0;
 
-    if (bx_search_collect_metadata_sorted_paths(args->argc, args->argv, args->first_file,
+    if (bx_search_collect_metadata_sorted_paths(args->num_files, args->files,
                                                 args->progname, args->personality,
                                                 args->opts, args->runtime_snapshot,
                                                 &sorted_paths,
@@ -507,7 +503,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                           int sorted_operand_count,
                                           bool *match_seen,
                                           bool *error_seen) {
-    int num_files = args->argc - args->first_file;
+    int num_files = args->num_files;
     int global_matches = 0;
     int exit_status = 1;
 
@@ -592,27 +588,27 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                               ? (sorted_operand_count - 1 - operand_i)
                                               : operand_i]
                               .index
-                        : (args->first_file + operand_i);
+                        : operand_i;
             struct stat st;
 
             bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-            if (stat(args->argv[j], &st) != 0) {
-                bx_search_report_path_error(args->progname, args->argv[j], errno, args->opts);
+            if (stat(args->files[j], &st) != 0) {
+                bx_search_report_path_error(args->progname, args->files[j], errno, args->opts);
                 exit_status = 2;
                 *error_seen = true;
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                if (bx_search_walk(args->argv[j], &walk_config, &state) != 0) {
+                if (bx_search_walk(args->files[j], &walk_config, &state) != 0) {
                     exit_status = 2;
                     *error_seen = true;
                 }
             } else {
                 if (bx_search_should_skip_special_input_mode(st.st_mode, args->opts))
                     continue;
-                if (bx_search_explicit_entry_selected(args->opts, args->argv[j])) {
+                if (bx_search_explicit_entry_selected(args->opts, args->files[j])) {
                     struct bx_walk_entry entry = {
-                        .path = args->argv[j],
+                        .path = args->files[j],
                         .follow_metadata = true,
                     };
                     bx_walk_entry_fill_from_stat(&entry, &st);
@@ -631,17 +627,17 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                           ? (sorted_operand_count - 1 - operand_i)
                                           : operand_i]
                           .index
-                    : (args->first_file + operand_i);
+                    : operand_i;
 
-        if (args->argv[j] && strcmp(args->argv[j], "-") != 0) {
+        if (args->files[j] && strcmp(args->files[j], "-") != 0) {
             struct stat st;
 
             bx_search_dev_counters_note_walk_lstat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-            if (lstat(args->argv[j], &st) == 0) {
+            if (lstat(args->files[j], &st) == 0) {
                 if (S_ISDIR(st.st_mode)) {
                     if (args->opts->directory_mode == BX_GREP_DIR_SKIP)
                         continue;
-                    bx_search_report_path_error(args->progname, args->argv[j],
+                    bx_search_report_path_error(args->progname, args->files[j],
                                                 EISDIR, args->opts);
                     *error_seen = true;
                     continue;
@@ -653,11 +649,11 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                                                       args->opts))
                     continue;
             }
-            if (bx_search_path_exceeds_max_filesize(args->argv[j], args->opts))
+            if (bx_search_path_exceeds_max_filesize(args->files[j], args->opts))
                 continue;
         }
 
-        int rc = bx_search_search_file(args->argv[j], NULL, false, args->progname, matcher,
+        int rc = bx_search_search_file(args->files[j], NULL, false, args->progname, matcher,
                                        exec_plan,
                                        args->opts, &global_matches, scanner,
                                        record_stream, args->stats);
@@ -717,7 +713,7 @@ void bx_search_run(const struct bx_search_run_args *args,
     bx_search_exec_plan_build(&exec_plan, args->plan, matcher, args->opts);
 
     sorted_operands = bx_search_sort_is_path(args->opts)
-        ? bx_search_collect_sorted_operands(args->argc, args->argv, args->first_file,
+        ? bx_search_collect_sorted_operands(args->num_files, args->files,
                                             &sorted_operand_count)
         : NULL;
 
@@ -731,8 +727,7 @@ void bx_search_run(const struct bx_search_run_args *args,
     }
 
     if (args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_SUBTREE) {
-        int parallel_status = bx_rg_sched_run(args->argc, args->argv,
-                                              args->first_file, sorted_operands,
+        int parallel_status = bx_rg_sched_run(args->num_files, args->files, sorted_operands,
                                               sorted_operand_count, args->progname,
                                               search_pattern, args->personality,
                                               &exec_plan, args->opts,
@@ -749,8 +744,7 @@ void bx_search_run(const struct bx_search_run_args *args,
     }
 
     if (args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_GENERIC) {
-        int parallel_status = bx_search_run_parallel_rg(args->argc, args->argv,
-                                                        args->first_file, sorted_operands,
+        int parallel_status = bx_search_run_parallel_rg(args->num_files, args->files, sorted_operands,
                                                         sorted_operand_count, args->progname,
                                                         search_pattern, args->personality,
                                                         &exec_plan, args->opts,

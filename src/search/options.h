@@ -152,9 +152,15 @@ struct search_opts {
     bool device_mode_explicit;
 };
 
+struct bx_search_operands {
+    const char* pattern;
+    char* const* files;
+    int num_files;
+};
+
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
-                             enum bx_search_personality personality,
-                             const char **pattern, int *first_file);
+                            enum bx_search_personality personality,
+                            struct bx_search_operands *operands);
 
 void bx_search_free_options(struct search_opts *opts);
 

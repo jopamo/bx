@@ -30,9 +30,8 @@ bool bx_search_sort_is_descending(const struct search_opts *opts);
 
 void bx_search_sorted_paths_dispose(struct bx_search_sorted_paths *paths);
 
-int bx_search_collect_metadata_sorted_paths(int argc,
-                                            char **argv,
-                                            int first_file,
+int bx_search_collect_metadata_sorted_paths(int num_files,
+                                            char *const *files,
                                             const char *progname,
                                             enum bx_search_personality personality,
                                             const struct search_opts *opts,

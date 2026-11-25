@@ -11,9 +11,8 @@ struct bx_search_stats;
 struct search_opts;
 
 struct bx_search_run_args {
-    int argc;
-    char **argv;
-    int first_file;
+    int num_files;
+    char *const *files;
     const char *pattern;
     const char *progname;
     enum bx_search_personality personality;

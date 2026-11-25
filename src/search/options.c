@@ -1103,8 +1103,8 @@ static struct option grep_long_opts[] = {
 };
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
-                             enum bx_search_personality personality,
-                             const char **pattern, int *first_file) {
+                            enum bx_search_personality personality,
+                            struct bx_search_operands *operands) {
     memset(opts, 0, sizeof(*opts));
     const char *progname = bx_cli_progname(argv[0], "grep");
 
@@ -2502,32 +2502,22 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     }
 
     if (opts->files_only) {
-        *pattern = "";
-        *first_file = optind;
-        return 0;
-    }
-
-        if (optind >= argc) {
-            if (!opts->files_only && opts->extra_patterns.len == 0u) {
-                if (personality == BX_SEARCH_GREP) {
-                    bx_grep_print_usage_try_help(progname);
-                } else {
-                    fprintf(stderr,
-                            "%s: ripgrep requires at least one pattern to execute a search\n",
-                            progname);
-                }
-                return -1;
-            }
-        *pattern = opts->extra_patterns.len > 0u
-            ? opts->extra_patterns.items[opts->extra_patterns.len - 1u]
-            : "";
-        bx_search_pattern_vec_drop_last(&opts->extra_patterns);
+        operands->pattern = "";
     } else if (opts->extra_patterns.len > 0u) {
-        *pattern = opts->extra_patterns.items[opts->extra_patterns.len - 1u];
+        operands->pattern = opts->extra_patterns.items[opts->extra_patterns.len - 1u];
         bx_search_pattern_vec_drop_last(&opts->extra_patterns);
-    } else {
-        *pattern = argv[optind++];
     }
-    *first_file = optind;
+    else if (optind >= argc) {
+        if (personality == BX_SEARCH_GREP)
+            bx_grep_print_usage_try_help(progname);
+        else
+            fprintf(stderr, "%s: ripgrep requires at least one pattern to execute a search\n", progname);
+        return -1;
+    }
+    else {
+        operands->pattern = argv[optind++];
+    }
+    operands->files = argv + optind;
+    operands->num_files = argc - optind;
     return 0;
 }

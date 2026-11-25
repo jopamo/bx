@@ -655,9 +655,8 @@ bool bx_search_parallel_rg_supported(enum bx_search_personality personality,
     return opts->recursive || num_files > 1;
 }
 
-int bx_search_run_parallel_rg(int argc,
-                              char **argv,
-                              int first_file,
+int bx_search_run_parallel_rg(int num_files,
+                              char *const *files,
                               struct bx_search_operand_ref *sorted_operands,
                               int sorted_operand_count,
                               const char *progname,
@@ -687,7 +686,6 @@ int bx_search_run_parallel_rg(int argc,
     size_t queue_capacity = thread_count > (SIZE_MAX / 64u) ? thread_count : thread_count * 64u;
     size_t output_byte_budget =
         bx_backpressure_limit_default(BX_BACKPRESSURE_LIMIT_PENDING_OUTPUT_BYTES);
-    int num_files = argc - first_file;
     bool pool_ready = false;
     bool publish_ready = false;
     bool walk_error_seen = false;
@@ -789,10 +787,10 @@ int bx_search_run_parallel_rg(int argc,
                                           ? (sorted_operand_count - 1 - operand_i)
                                           : operand_i]
                           .index
-                    : (first_file + operand_i);
+                    : operand_i;
             bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-            if (stat(argv[j], &st) != 0) {
-                if (!bx_search_parallel_submit_path_error(&state, argv[j], errno,
+            if (stat(files[j], &st) != 0) {
+                if (!bx_search_parallel_submit_path_error(&state, files[j], errno,
                                                           num_files == 1)) {
                     bx_search_parallel_set_fatal(&state, "rg: failed to queue traversal error\n");
                     break;
@@ -800,13 +798,13 @@ int bx_search_run_parallel_rg(int argc,
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                if (bx_search_walk(argv[j], &walk_config, &walk_state) != 0)
+                if (bx_search_walk(files[j], &walk_config, &walk_state) != 0)
                     walk_error_seen = true;
                 continue;
             }
             if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
                 continue;
-            if (!bx_search_explicit_entry_selected(opts, argv[j]))
+            if (!bx_search_explicit_entry_selected(opts, files[j]))
                 continue;
             if (bx_search_mode_can_skip_max_filesize_zero_literal(st.st_mode,
                                                                   state.exec_plan,
@@ -815,7 +813,7 @@ int bx_search_run_parallel_rg(int argc,
             if (bx_search_loaded_metadata_exceeds_max_filesize(&st, opts))
                 continue;
 
-            if (!bx_search_parallel_queue_path(&state, argv[j], false, false)) {
+            if (!bx_search_parallel_queue_path(&state, files[j], false, false)) {
                 if (!bx_cancel_state_requested(&state.cancel))
                     bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
                 break;
@@ -828,13 +826,13 @@ int bx_search_run_parallel_rg(int argc,
                                               ? (sorted_operand_count - 1 - operand_i)
                                               : operand_i]
                               .index
-                        : (first_file + operand_i);
-            if (argv[j] && strcmp(argv[j], "-") != 0) {
+                        : operand_i;
+            if (files[j] && strcmp(files[j], "-") != 0) {
                 struct stat st;
                 bx_search_dev_counters_note_walk_lstat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-                if (lstat(argv[j], &st) == 0) {
+                if (lstat(files[j], &st) == 0) {
                     if (S_ISDIR(st.st_mode)) {
-                        if (!bx_search_parallel_submit_path_error(&state, argv[j], EISDIR,
+                        if (!bx_search_parallel_submit_path_error(&state, files[j], EISDIR,
                                                                   false))
                             bx_search_parallel_set_fatal(&state, "rg: failed to queue directory error\n");
                         continue;
@@ -846,10 +844,10 @@ int bx_search_run_parallel_rg(int argc,
                                                                           opts))
                         continue;
                 }
-                if (bx_search_path_exceeds_max_filesize(argv[j], opts))
+                if (bx_search_path_exceeds_max_filesize(files[j], opts))
                     continue;
             }
-            if (!bx_search_parallel_queue_path(&state, argv[j], false, false)) {
+            if (!bx_search_parallel_queue_path(&state, files[j], false, false)) {
                 if (!bx_cancel_state_requested(&state.cancel))
                     bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
                 break;

@@ -1604,9 +1604,8 @@ bool bx_rg_sched_supported(enum bx_search_personality personality,
     return opts->recursive;
 }
 
-int bx_rg_sched_run(int argc,
-                    char **argv,
-                    int first_file,
+int bx_rg_sched_run(int num_files,
+                    char *const *files,
                     struct bx_search_operand_ref *sorted_operands,
                     int sorted_operand_count,
                     const char *progname,
@@ -1654,7 +1653,6 @@ int bx_rg_sched_run(int argc,
         return 2;
     }
 
-    int num_files = argc - first_file;
     if (num_files == 0) {
         if (!bx_rg_sched_add_root_dir_work(&frontier, ".", true))
             bx_rg_sched_set_fatal(&sched, "rg: failed to queue recursive root\n");
@@ -1665,22 +1663,22 @@ int bx_rg_sched_run(int argc,
                                               ? (sorted_operand_count - 1 - operand_i)
                                               : operand_i]
                               .index
-                        : (first_file + operand_i);
+                        : operand_i;
             struct stat st;
             bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-            if (stat(argv[j], &st) != 0) {
-                bx_rg_sched_report_path_error(&sched, argv[j], errno, num_files == 1);
+            if (stat(files[j], &st) != 0) {
+                bx_rg_sched_report_path_error(&sched, files[j], errno, num_files == 1);
                 bx_rg_sched_apply_result_unlocked(&sched, false, true);
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                if (!bx_rg_sched_add_root_dir_work(&frontier, argv[j], false))
+                if (!bx_rg_sched_add_root_dir_work(&frontier, files[j], false))
                     bx_rg_sched_set_fatal(&sched, "rg: failed to queue recursive root\n");
                 continue;
             }
             if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
                 continue;
-            if (!bx_search_explicit_entry_selected(opts, argv[j]))
+            if (!bx_search_explicit_entry_selected(opts, files[j]))
                 continue;
             if (bx_search_mode_can_skip_max_filesize_zero_literal(st.st_mode,
                                                                   sched.exec_plan,
@@ -1693,7 +1691,7 @@ int bx_rg_sched_run(int argc,
                 .vec = &frontier,
                 .strip_dot_prefix = false,
             };
-            if (!bx_rg_sched_batch_add(&batch_state, argv[j], 0) ||
+            if (!bx_rg_sched_batch_add(&batch_state, files[j], 0) ||
                 !bx_rg_sched_flush_pending_batch(&batch_state)) {
                 bx_rg_sched_set_fatal(&sched, "rg: failed to queue root file batch\n");
                 break;

@@ -340,16 +340,15 @@ static int bx_search_collect_metadata_sorted_root(
     return bx_search_walk(root, &walk_config, state);
 }
 
-int bx_search_collect_metadata_sorted_paths(int argc,
-                                            char **argv,
-                                            int first_file,
+int bx_search_collect_metadata_sorted_paths(int num_files,
+                                            char *const *files,
                                             const char *progname,
                                             enum bx_search_personality personality,
                                             const struct search_opts *opts,
                                             const struct bx_search_runtime_snapshot *runtime_snapshot,
                                             struct bx_search_sorted_paths *out,
                                             bool *error_seen) {
-    if (!argv || !progname || !opts || !runtime_snapshot || !out ||
+    if ((num_files > 0 && !files) || !progname || !opts || !runtime_snapshot || !out ||
         !bx_search_sort_is_metadata(opts)) {
         errno = EINVAL;
         return -1;
@@ -362,7 +361,6 @@ int bx_search_collect_metadata_sorted_paths(int argc,
         .out = out,
         .error_seen = error_seen,
     };
-    int num_files = argc - first_file;
 
     if (error_seen)
         *error_seen = false;
@@ -375,18 +373,17 @@ int bx_search_collect_metadata_sorted_paths(int argc,
         }
     } else if (opts->recursive) {
         for (int operand_i = 0; operand_i < num_files && !stop; ++operand_i) {
-            int j = first_file + operand_i;
             struct stat st;
 
             bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-            if (stat(argv[j], &st) != 0) {
-                bx_search_report_path_error(progname, argv[j], errno, opts);
+            if (stat(files[operand_i], &st) != 0) {
+                bx_search_report_path_error(progname, files[operand_i], errno, opts);
                 if (error_seen)
                     *error_seen = true;
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                if (bx_search_collect_metadata_sorted_root(argv[j], false, progname,
+                if (bx_search_collect_metadata_sorted_root(files[operand_i], false, progname,
                                                            personality, opts,
                                                            runtime_snapshot,
                                                            &state, &stop) != 0) {
@@ -397,12 +394,12 @@ int bx_search_collect_metadata_sorted_paths(int argc,
             }
             if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
                 continue;
-            if (!bx_search_explicit_entry_selected(opts, argv[j]))
+            if (!bx_search_explicit_entry_selected(opts, files[operand_i]))
                 continue;
             if (bx_search_loaded_metadata_exceeds_max_filesize(&st, opts))
                 continue;
 
-            switch (bx_search_sorted_paths_add(&state, argv[j], false)) {
+            switch (bx_search_sorted_paths_add(&state, files[operand_i], false)) {
             case BX_SEARCH_SORT_ADD_CONTINUE:
                 break;
             case BX_SEARCH_SORT_ADD_STOP:
@@ -415,14 +412,13 @@ int bx_search_collect_metadata_sorted_paths(int argc,
         }
     } else {
         for (int operand_i = 0; operand_i < num_files; ++operand_i) {
-            int j = first_file + operand_i;
 
-            if (argv[j] && strcmp(argv[j], "-") != 0) {
+            if (files[operand_i] && strcmp(files[operand_i], "-") != 0) {
                 struct stat st;
                 bx_search_dev_counters_note_walk_lstat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
-                if (lstat(argv[j], &st) == 0) {
+                if (lstat(files[operand_i], &st) == 0) {
                     if (S_ISDIR(st.st_mode)) {
-                        bx_search_report_path_error(progname, argv[j], EISDIR, opts);
+                        bx_search_report_path_error(progname, files[operand_i], EISDIR, opts);
                         if (error_seen)
                             *error_seen = true;
                         continue;
@@ -430,11 +426,11 @@ int bx_search_collect_metadata_sorted_paths(int argc,
                     if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
                         continue;
                 }
-                if (bx_search_path_exceeds_max_filesize(argv[j], opts))
+                if (bx_search_path_exceeds_max_filesize(files[operand_i], opts))
                     continue;
             }
 
-            switch (bx_search_sorted_paths_add(&state, argv[j], false)) {
+            switch (bx_search_sorted_paths_add(&state, files[operand_i], false)) {
             case BX_SEARCH_SORT_ADD_CONTINUE:
                 break;
             case BX_SEARCH_SORT_ADD_STOP:

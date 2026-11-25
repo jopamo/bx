@@ -22,8 +22,7 @@ static int finish_search_main(int status) {
 int bx_search_main(int argc, char **argv, enum bx_search_personality personality) {
     struct search_opts opts;
     struct bx_search_plan plan = {0};
-    const char *pattern;
-    int first_file;
+    struct bx_search_operands operands;
     const char *progname = argv[0] ? argv[0] : "grep";
     struct bx_line_writer_file stdout_file = {0};
     struct bx_search_runtime_snapshot *runtime_snapshot = NULL;
@@ -32,7 +31,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     (void)setlocale(LC_ALL, "");
     bx_search_dev_counters_begin_from_env();
 
-    int rc = bx_search_parse_options(argc, argv, &opts, personality, &pattern, &first_file);
+    int rc = bx_search_parse_options(argc, argv, &opts, personality, &operands);
     if (rc != 0) {
         bx_search_free_options(&opts);
         if (rc == 1)
@@ -58,7 +57,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         bx_ignore_validate_explicit_ignore_files(
             bx_search_runtime_snapshot_ignore_opts(runtime_snapshot));
 
-    int num_files = argc - first_file;
+    int num_files = operands.num_files;
     bool rg_searches_stdin = (personality == BX_SEARCH_RG
                               && !opts.files_only
                               && num_files == 0
@@ -94,10 +93,9 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
      * returns. The coordinator reclaims the snapshot only after that point.
      */
     struct bx_search_run_args run_args = {
-        .argc = argc,
-        .argv = argv,
-        .first_file = first_file,
-        .pattern = pattern,
+        .num_files = num_files,
+        .files = operands.files,
+        .pattern = operands.pattern,
         .progname = progname,
         .personality = personality,
         .plan = &plan,
