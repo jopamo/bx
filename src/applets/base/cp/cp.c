@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +12,7 @@
 #include "lib/cli_common.h"
 #include "lib/copy_metadata.h"
 #include "lib/copy_tree.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/stat_ops.h"
 #include "bx/diag.h"
@@ -28,6 +29,8 @@ struct bx_cp_options {
     const char* suffix;
     const char* target_directory;
     struct bx_copy_options copy;
+    const char** operands;
+    int operand_count;
 };
 
 enum bx_cp_longopt {
@@ -45,6 +48,8 @@ enum bx_cp_longopt {
     BX_CP_OPT_STRIP_TRAILING_SLASHES,
     BX_CP_OPT_UPDATE,
     BX_CP_OPT_JOBS,
+    BX_CP_OPT_HELP,
+    BX_CP_OPT_VERSION,
 };
 
 static void bx_cp_print_help(FILE* stream, const char* progname) {
@@ -101,42 +106,45 @@ static bool bx_cp_parse_update_mode(struct bx_diag_ctx* diag, const char* arg, e
     return true;
 }
 
-static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"archive", no_argument, NULL, 'a'},
-        {"attributes-only", no_argument, NULL, BX_CP_OPT_ATTRIBUTES_ONLY},
-        {"backup", optional_argument, NULL, BX_CP_OPT_BACKUP},
-        {"copy-contents", no_argument, NULL, BX_CP_OPT_COPY_CONTENTS},
-        {"debug", no_argument, NULL, BX_CP_OPT_DEBUG},
-        {"force", no_argument, NULL, 'f'},
-        {"interactive", no_argument, NULL, 'i'},
-        {"jobs", required_argument, NULL, BX_CP_OPT_JOBS},
-        {"dereference", no_argument, NULL, 'L'},
-        {"no-dereference", no_argument, NULL, 'P'},
-        {"keep-directory-symlink", no_argument, NULL, BX_CP_OPT_KEEP_DIRECTORY_SYMLINK},
-        {"link", no_argument, NULL, 'l'},
-        {"no-clobber", no_argument, NULL, 'n'},
-        {"preserve", optional_argument, NULL, BX_CP_OPT_PRESERVE},
-        {"no-preserve", required_argument, NULL, BX_CP_OPT_NO_PRESERVE},
-        {"parents", no_argument, NULL, BX_CP_OPT_PARENTS},
-        {"recursive", no_argument, NULL, 'R'},
-        {"reflink", optional_argument, NULL, BX_CP_OPT_REFLINK},
-        {"remove-destination", no_argument, NULL, BX_CP_OPT_REMOVE_DESTINATION},
-        {"sparse", required_argument, NULL, BX_CP_OPT_SPARSE},
-        {"strip-trailing-slashes", no_argument, NULL, BX_CP_OPT_STRIP_TRAILING_SLASHES},
-        {"symbolic-link", no_argument, NULL, 's'},
-        {"suffix", required_argument, NULL, 'S'},
-        {"target-directory", required_argument, NULL, 't'},
-        {"no-target-directory", no_argument, NULL, 'T'},
-        {"update", optional_argument, NULL, BX_CP_OPT_UPDATE},
-        {"verbose", no_argument, NULL, 'v'},
-        {"one-file-system", no_argument, NULL, 'x'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "archive", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_ATTRIBUTES_ONLY, 0, "attributes-only", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_BACKUP, 0, "backup", BX_OPTION_OPTIONAL_VALUE},
+        {BX_CP_OPT_COPY_CONTENTS, 0, "copy-contents", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_DEBUG, 0, "debug", BX_OPTION_NO_VALUE},
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'i', 'i', "interactive", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_JOBS, 0, "jobs", BX_OPTION_REQUIRED_VALUE},
+        {'L', 'L', "dereference", BX_OPTION_NO_VALUE},
+        {'P', 'P', "no-dereference", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_KEEP_DIRECTORY_SYMLINK, 0, "keep-directory-symlink", BX_OPTION_NO_VALUE},
+        {'l', 'l', "link", BX_OPTION_NO_VALUE},
+        {'n', 'n', "no-clobber", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_PRESERVE, 0, "preserve", BX_OPTION_OPTIONAL_VALUE},
+        {BX_CP_OPT_NO_PRESERVE, 0, "no-preserve", BX_OPTION_REQUIRED_VALUE},
+        {BX_CP_OPT_PARENTS, 0, "parents", BX_OPTION_NO_VALUE},
+        {'R', 'R', "recursive", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_REFLINK, 0, "reflink", BX_OPTION_OPTIONAL_VALUE},
+        {BX_CP_OPT_REMOVE_DESTINATION, 0, "remove-destination", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_SPARSE, 0, "sparse", BX_OPTION_REQUIRED_VALUE},
+        {BX_CP_OPT_STRIP_TRAILING_SLASHES, 0, "strip-trailing-slashes", BX_OPTION_NO_VALUE},
+        {'s', 's', "symbolic-link", BX_OPTION_NO_VALUE},
+        {'S', 'S', "suffix", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "target-directory", BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', "no-target-directory", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_UPDATE, 0, "update", BX_OPTION_OPTIONAL_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'x', 'x', "one-file-system", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_CP_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {'b', 'b', NULL, BX_OPTION_NO_VALUE},
+        {'d', 'd', NULL, BX_OPTION_NO_VALUE},
+        {'H', 'H', NULL, BX_OPTION_NO_VALUE},
+        {'p', 'p', NULL, BX_OPTION_NO_VALUE},
+        {'r', 'r', NULL, BX_OPTION_NO_VALUE},
+        {'u', 'u', NULL, BX_OPTION_NO_VALUE},
     };
-    char short_buf[] = ":abdfHiLPlnpRrsS:t:Tuvx";
-
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "cp");
     options->copy.deref_mode = BX_DEREF_DEFAULT;
@@ -148,27 +156,53 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
 
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, short_buf, long_options, &option_index);
-        if (c == -1) {
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
             break;
-        }
-
-        switch (c) {
-            case BX_CP_OPT_JOBS:
-                if (optarg[0] < '1' || optarg[0] > '0' + (int)BX_COPY_MAX_WORKERS || optarg[1] != '\0') {
-                    bx_diag(diag, "invalid --jobs value '%s' (expected 1..8)", optarg);
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->operands == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->operands) ||
+                    (options->operands = malloc(capacity * sizeof(*options->operands))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
                     return false;
                 }
-                options->copy.workers = (unsigned)(optarg[0] - '0');
+            }
+            options->operands[options->operand_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name != 0)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", result.token);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
+        }
+
+        const char* value = result.value;
+        switch (result.spec->id) {
+            case BX_CP_OPT_JOBS:
+                if (value[0] < '1' || value[0] > '0' + (int)BX_COPY_MAX_WORKERS || value[1] != '\0') {
+                    bx_diag(diag, "invalid --jobs value '%s' (expected 1..8)", value);
+                    return false;
+                }
+                options->copy.workers = (unsigned)(value[0] - '0');
                 break;
-            case 1:
+            case BX_CP_OPT_HELP:
                 options->show_help = true;
                 break;
-            case 2:
+            case BX_CP_OPT_VERSION:
                 options->show_version = true;
                 break;
             case 'a':
@@ -184,11 +218,11 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
                 bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case BX_CP_OPT_BACKUP:
-                if (optarg == NULL) {
+                if (value == NULL) {
                     bx_args_enable_backup_mode(&options->backup_mode);
                 }
-                else if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
-                    bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                else if (!bx_args_parse_backup_mode(value, &options->backup_mode)) {
+                    bx_diag(diag, "invalid --backup control value '%s'", value);
                     return false;
                 }
                 break;
@@ -196,41 +230,38 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
                 options->copy.copy_contents = true;
                 break;
             case 'S':
-                options->suffix = optarg;
+                options->suffix = value;
                 break;
             case BX_CP_OPT_REFLINK:
-                if (optarg == NULL) {
+                if (value == NULL) {
                     options->copy.reflink_mode = BX_REFLINK_ALWAYS;
                 }
-                else if (strcmp(optarg, "always") == 0) {
+                else if (strcmp(value, "always") == 0) {
                     options->copy.reflink_mode = BX_REFLINK_ALWAYS;
                 }
-                else if (strcmp(optarg, "auto") == 0) {
+                else if (strcmp(value, "auto") == 0) {
                     options->copy.reflink_mode = BX_REFLINK_AUTO;
                 }
-                else if (strcmp(optarg, "never") == 0) {
+                else if (strcmp(value, "never") == 0) {
                     options->copy.reflink_mode = BX_REFLINK_NEVER;
                 }
                 else {
-                    bx_diag(diag, "invalid --reflink argument '%s'", optarg);
+                    bx_diag(diag, "invalid --reflink argument '%s'", value);
                     return false;
                 }
                 break;
             case BX_CP_OPT_SPARSE:
-                if (optarg == NULL) {
-                    options->copy.sparse_mode = BX_SPARSE_AUTO;
-                }
-                else if (strcmp(optarg, "always") == 0) {
+                if (strcmp(value, "always") == 0) {
                     options->copy.sparse_mode = BX_SPARSE_ALWAYS;
                 }
-                else if (strcmp(optarg, "auto") == 0) {
+                else if (strcmp(value, "auto") == 0) {
                     options->copy.sparse_mode = BX_SPARSE_AUTO;
                 }
-                else if (strcmp(optarg, "never") == 0) {
+                else if (strcmp(value, "never") == 0) {
                     options->copy.sparse_mode = BX_SPARSE_NEVER;
                 }
                 else {
-                    bx_diag(diag, "invalid --sparse argument '%s'", optarg);
+                    bx_diag(diag, "invalid --sparse argument '%s'", value);
                     return false;
                 }
                 break;
@@ -273,13 +304,13 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
                 options->copy.preserve_mask |= BX_PRESERVE_MODE | BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS;
                 break;
             case BX_CP_OPT_PRESERVE:
-                if (optarg == NULL) {
+                if (value == NULL) {
                     options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
                     options->copy.preserve_mask |= BX_PRESERVE_MODE | BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS;
                 }
                 else {
                     bool mode_mentioned = false;
-                    if (!bx_cp_parse_preserve_list(diag, optarg, &options->copy.preserve_mask, true, &mode_mentioned)) {
+                    if (!bx_cp_parse_preserve_list(diag, value, &options->copy.preserve_mask, true, &mode_mentioned)) {
                         return false;
                     }
                     if (mode_mentioned) {
@@ -289,7 +320,7 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
                 break;
             case BX_CP_OPT_NO_PRESERVE: {
                 bool mode_mentioned = false;
-                if (!bx_cp_parse_preserve_list(diag, optarg, &options->copy.preserve_mask, false, &mode_mentioned)) {
+                if (!bx_cp_parse_preserve_list(diag, value, &options->copy.preserve_mask, false, &mode_mentioned)) {
                     return false;
                 }
                 if (mode_mentioned) {
@@ -314,13 +345,13 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
                 options->copy.symbolic_link = true;
                 break;
             case 't':
-                options->target_directory = optarg;
+                options->target_directory = value;
                 break;
             case 'T':
                 options->no_target_directory = true;
                 break;
             case BX_CP_OPT_UPDATE:
-                if (!bx_cp_parse_update_mode(diag, optarg, &options->copy.update_mode)) {
+                if (!bx_cp_parse_update_mode(diag, value, &options->copy.update_mode)) {
                     return false;
                 }
                 break;
@@ -333,31 +364,6 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
             case 'x':
                 options->copy.one_file_system = true;
                 break;
-            case ':':
-                if (optopt != 0) {
-                    const char* arg = (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
-                    if (arg != NULL && strncmp(arg, "--", 2) == 0) {
-                        bx_diag(diag, "option '%s' requires an argument", arg);
-                    }
-                    else {
-                        bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                    }
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 bx_diag(diag, "internal option parsing error");
                 return false;
@@ -380,8 +386,6 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
         bx_diag(diag, "--parents requires a target directory");
         return false;
     }
-
-    *first_operand = optind;
     return true;
 }
 
@@ -398,86 +402,75 @@ static void bx_cp_init_copy_context(struct bx_copy_context* ctx, const struct bx
     bx_backup_get_params(options->backup_mode, options->suffix, &ctx->backup_params);
 }
 
-int bx_cp_main(int argc, char** argv) {
-    struct bx_cp_options options;
-    int first_operand = 0;
+static int bx_cp_run(const struct bx_cp_options* options, struct bx_diag_ctx* diag) {
     struct bx_copy_context copy_ctx;
-    struct bx_diag_ctx diag_ctx = {0};
 
-    if (!bx_cp_parse_options(argc, argv, &options, &first_operand, &diag_ctx)) {
-        return 1;
-    }
+    diag->verbose = options->copy.verbose;
+    diag->debug = options->copy.debug;
 
-    diag_ctx.progname = options.progname;
-    diag_ctx.verbose = options.copy.verbose;
-    diag_ctx.debug = options.copy.debug;
-
-    if (options.show_help) {
-        bx_cp_print_help(stdout, options.progname);
+    if (options->show_help) {
+        bx_cp_print_help(stdout, options->progname);
         return 0;
     }
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
 
-    int operand_count = argc - first_operand;
+    int operand_count = options->operand_count;
     if (operand_count <= 0) {
-        bx_diag(&diag_ctx, "missing file operand");
+        bx_diag(diag, "missing file operand");
         return 1;
     }
 
     const char* destination_root = NULL;
     int source_count = 0;
-    char** source_operands = NULL;
+    const char* const* source_operands = options->operands;
     bool destination_is_directory = false;
 
-    if (options.target_directory != NULL) {
-        destination_root = options.target_directory;
-        source_operands = argv + first_operand;
+    if (options->target_directory != NULL) {
+        destination_root = options->target_directory;
         source_count = operand_count;
         if (!bx_stat_is_dir_path(destination_root)) {
-            bx_diag(&diag_ctx, "target '%s' is not a directory", destination_root);
+            bx_diag(diag, "target '%s' is not a directory", destination_root);
             return 1;
         }
         destination_is_directory = true;
     }
-    else if (options.no_target_directory) {
+    else if (options->no_target_directory) {
         if (operand_count < 2) {
-            bx_diag(&diag_ctx, "missing destination file operand after '%s'", argv[first_operand]);
+            bx_diag(diag, "missing destination file operand after '%s'", source_operands[0]);
             return 1;
         }
         if (operand_count > 2) {
-            bx_diag(&diag_ctx, "extra operand '%s'", argv[first_operand + 2]);
+            bx_diag(diag, "extra operand '%s'", source_operands[2]);
             return 1;
         }
 
-        destination_root = argv[first_operand + 1];
-        source_operands = argv + first_operand;
+        destination_root = source_operands[1];
         source_count = 1;
     }
     else {
         if (operand_count < 2) {
-            bx_diag(&diag_ctx, "missing destination file operand after '%s'", argv[first_operand]);
+            bx_diag(diag, "missing destination file operand after '%s'", source_operands[0]);
             return 1;
         }
-        destination_root = argv[argc - 1];
-        source_operands = argv + first_operand;
+        destination_root = source_operands[operand_count - 1];
         source_count = operand_count - 1;
 
         if (source_count > 1) {
             if (!bx_stat_is_dir_path(destination_root)) {
-                bx_diag(&diag_ctx, "target '%s' is not a directory", destination_root);
+                bx_diag(diag, "target '%s' is not a directory", destination_root);
                 return 1;
             }
             destination_is_directory = true;
         }
-        else if (!options.no_target_directory && bx_stat_is_dir_path(destination_root)) {
+        else if (bx_stat_is_dir_path(destination_root)) {
             destination_is_directory = true;
         }
 
-        if (options.copy.parents && !destination_is_directory) {
-            bx_diag(&diag_ctx, "--parents requires a directory destination");
+        if (options->copy.parents && !destination_is_directory) {
+            bx_diag(diag, "--parents requires a directory destination");
             return 1;
         }
     }
@@ -485,12 +478,12 @@ int bx_cp_main(int argc, char** argv) {
     mode_t old_umask = umask(0);
     umask(old_umask);
 
-    bx_cp_init_copy_context(&copy_ctx, &options, &diag_ctx, destination_root, old_umask);
+    bx_cp_init_copy_context(&copy_ctx, options, diag, destination_root, old_umask);
 
     for (int i = 0; i < source_count; i++) {
         char* lookup_path = xstrdup(source_operands[i]);
-        char* source_operand = options.strip_trailing_slashes ? bx_path_strip_trailing_slashes_dup(source_operands[i]) : xstrdup(source_operands[i]);
-        char* dest_path = bx_cp_build_dest_path(&options, source_operand, destination_root, destination_is_directory);
+        char* source_operand = options->strip_trailing_slashes ? bx_path_strip_trailing_slashes_dup(source_operands[i]) : xstrdup(source_operands[i]);
+        char* dest_path = bx_cp_build_dest_path(options, source_operand, destination_root, destination_is_directory);
 
         copy_ctx.stop_current_source = false;
         copy_ctx.current_source_root = lookup_path;
@@ -512,5 +505,13 @@ int bx_cp_main(int argc, char** argv) {
     bx_copy_free_parent_attrs(&copy_ctx);
     bx_copy_buffer_release(&copy_ctx.buffer);
     bx_overwrite_free_written(&copy_ctx.written);
-    return diag_ctx.exit_status;
+    return diag->exit_status;
+}
+
+int bx_cp_main(int argc, char** argv) {
+    struct bx_cp_options options;
+    struct bx_diag_ctx diag = {0};
+    int status = bx_cp_parse_options(argc, argv, &options, &diag) ? bx_cp_run(&options, &diag) : 1;
+    free(options.operands);
+    return status;
 }
