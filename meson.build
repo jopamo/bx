@@ -425,7 +425,6 @@ bx_lib_sources = [
   'src/lib/mode_parse.c',
   'src/lib/mount_table.c',
   'src/lib/swap_table.c',
-  'src/lib/manual_runtime.c',
   'src/lib/output_alloc_counter.c',
   'src/lib/output_adapter.c',
   'src/lib/output_policy.c',
@@ -1486,7 +1485,6 @@ manual_c_args += [
   '-D_GNU_SOURCE',
   '-DBX_MANUAL_HAVE_WCHAR=' + (manual_have_wchar ? '1' : '0'),
   '-DBX_MANUAL_UTF8_LOCALE="' + manual_utf8_locale + '"',
-  '-Dmain=bx_mandoc_main_impl',
 ]
 
 manual_lib = static_library('bx_manual',

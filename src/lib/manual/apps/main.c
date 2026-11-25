@@ -48,6 +48,8 @@
 
 #include "applets/archive/archive_codec.h"
 #include "lib/child_runner.h"
+#include "lib/manual_runtime.h"
+#include "lib/option_scan.h"
 #include "lib/time_parse.h"
 #include "mandoc_aux.h"
 #include "mandoc.h"
@@ -113,7 +115,7 @@ static	void		  process_onefile(struct mparse *, struct manpage *,
 				enum intype);
 static	void		  run_pager(struct outstate *, char *);
 static	pid_t		  spawn_pager(struct outstate *, char *);
-static	void		  usage(enum argmode) __attribute__((__noreturn__));
+static	int		  usage(enum argmode);
 static	int		  woptions(char *, enum mandoc_os *, int *);
 
 static	const int sec_prios[] = {1, 4, 5, 8, 6, 3, 7, 2, 9};
@@ -136,9 +138,36 @@ pager_parent_poll_delay(void)
 }
 
 
-int
-main(int argc, char *argv[])
+enum {
+	MANUAL_HELP = 256,
+	MANUAL_VERSION,
+};
+
+static int
+manual_run(int argc, char *argv[], char *operands[],
+    const char *fallback_progname, bx_cli_help_fn print_help)
 {
+	static const struct bx_option_spec specs[] = {
+		{MANUAL_HELP, 0, "help", BX_OPTION_NO_VALUE},
+		{MANUAL_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+		{'a', 'a', NULL, BX_OPTION_NO_VALUE},
+		{'C', 'C', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'c', 'c', NULL, BX_OPTION_NO_VALUE},
+		{'h', 'h', NULL, BX_OPTION_NO_VALUE},
+		{'I', 'I', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'K', 'K', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'l', 'l', NULL, BX_OPTION_NO_VALUE},
+		{'M', 'M', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'m', 'm', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'O', 'O', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'S', 'S', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'s', 's', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'T', 'T', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'W', 'W', NULL, BX_OPTION_REQUIRED_VALUE},
+		{'w', 'w', NULL, BX_OPTION_NO_VALUE},
+	};
+	struct bx_option_cursor cursor;
+	struct bx_option_result option;
 	struct manconf	 conf;		/* Manpaths and output options. */
 	struct outstate	 outst;		/* Output state. */
 	struct winsize	 ws;		/* Result of ioctl(TIOCGWINSZ). */
@@ -151,16 +180,18 @@ main(int argc, char *argv[])
 	const char	*progname, *sec, *ep;
 	char		*defpaths;	/* -M: override manpaths. */
 	char		*auxpaths;	/* -m: additional manpaths. */
-	char		*oarg;		/* -O: output option string. */
+	const char	*oarg;		/* -O: output option string. */
 	char		*tagarg;	/* -O tag: default value. */
 	unsigned char	*uc;
 	size_t		 ressz;		/* Number of elements in res[]. */
 	size_t		 resnsz;	/* Number of elements in resn[]. */
 	size_t		 i, ib, ssz;
 	int		 options;	/* Parser options. */
-	int		 show_usage;	/* Invalid argument: give up. */
+	int		 noperands;
 	int		 prio, best_prio;
+#if HAVE_PLEDGE
 	int		 c;
+#endif
 	enum intype	 intype;
 	enum mandoc_os	 os_e;		/* Check base system conventions. */
 	enum outmode	 outmode;	/* According to command line. */
@@ -222,17 +253,41 @@ main(int argc, char *argv[])
 	outst.outtype = OUTT_LOCALE;
 	outst.use_pager = 1;
 
-	show_usage = 0;
 	outmode = OUTMODE_DEF;
 
-	while ((c = getopt(argc, argv,
-	    "aC:chI:K:lM:m:O:S:s:T:VW:w")) != -1) {
-		switch (c) {
+	noperands = 0;
+	bx_option_cursor_init(&cursor, argv, argc > 0 ? 1 : 0, (size_t)argc,
+	    BX_OPTION_ORDERED, specs, sizeof(specs) / sizeof(specs[0]));
+	while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+		char *value = option.value;
+		if (option.event == BX_OPTION_OPERAND) {
+			operands[noperands++] = argv[option.index];
+			continue;
+		}
+		if (option.event != BX_OPTION_MATCH) {
+			if (option.event == BX_OPTION_MISSING_VALUE)
+				fprintf(stderr, "%s: option requires an argument -- '%c'\n",
+				    progname, option.short_name);
+			else if (option.short_name)
+				fprintf(stderr, "%s: invalid option -- '%c'\n",
+				    progname, option.short_name);
+			else
+				fprintf(stderr, "%s: unrecognized option '%s'\n",
+				    progname, option.token);
+			return usage(search.argmode);
+		}
+		switch (option.spec->id) {
+		case MANUAL_HELP:
+			print_help(stdout, bx_cli_progname(argv[0], fallback_progname));
+			return 0;
+		case MANUAL_VERSION:
+			bx_cli_print_version(bx_cli_progname(argv[0], fallback_progname));
+			return 0;
 		case 'a':
 			outmode = OUTMODE_ALL;
 			break;
 		case 'C':
-			conf_file = optarg;
+			conf_file = value;
 			break;
 		case 'c':
 			outst.use_pager = 0;
@@ -243,27 +298,27 @@ main(int argc, char *argv[])
 			outmode = OUTMODE_ALL;
 			break;
 		case 'I':
-			if (strncmp(optarg, "os=", 3) != 0) {
+			if (strncmp(value, "os=", 3) != 0) {
 				mandoc_msg(MANDOCERR_BADARG_BAD, 0, 0,
-				    "-I %s", optarg);
+				    "-I %s", value);
 				return mandoc_msg_getrc();
 			}
 			if (os_s != NULL) {
 				mandoc_msg(MANDOCERR_BADARG_DUPE, 0, 0,
-				    "-I %s", optarg);
+				    "-I %s", value);
 				return mandoc_msg_getrc();
 			}
-			os_s = optarg + 3;
+			os_s = value + 3;
 			break;
 		case 'K':
 			options &= ~(MPARSE_UTF8 | MPARSE_LATIN1);
-			if (strcmp(optarg, "utf-8") == 0)
+			if (strcmp(value, "utf-8") == 0)
 				options |=  MPARSE_UTF8;
-			else if (strcmp(optarg, "iso-8859-1") == 0)
+			else if (strcmp(value, "iso-8859-1") == 0)
 				options |=  MPARSE_LATIN1;
-			else if (strcmp(optarg, "us-ascii") != 0) {
+			else if (strcmp(value, "us-ascii") != 0) {
 				mandoc_msg(MANDOCERR_BADARG_BAD, 0, 0,
-				    "-K %s", optarg);
+				    "-K %s", value);
 				return mandoc_msg_getrc();
 			}
 			break;
@@ -272,52 +327,50 @@ main(int argc, char *argv[])
 			outmode = OUTMODE_ALL;
 			break;
 		case 'M':
-			defpaths = optarg;
+			defpaths = value;
 			break;
 		case 'm':
-			auxpaths = optarg;
+			auxpaths = value;
 			break;
 		case 'O':
-			oarg = optarg;
+			oarg = value;
 			break;
 		case 'S':
-			search.arch = optarg;
+			search.arch = value;
 			break;
 		case 's':
-			search.sec = optarg;
+			search.sec = value;
 			break;
 		case 'T':
-			if (strcmp(optarg, "ascii") == 0)
+			if (strcmp(value, "ascii") == 0)
 				outst.outtype = OUTT_ASCII;
-			else if (strcmp(optarg, "man") == 0)
+			else if (strcmp(value, "man") == 0)
 				outst.outtype = OUTT_MAN;
-			else if (strcmp(optarg, "markdown") == 0)
+			else if (strcmp(value, "markdown") == 0)
 				outst.outtype = OUTT_MARKDOWN;
-			else if (strcmp(optarg, "utf8") == 0)
+			else if (strcmp(value, "utf8") == 0)
 				outst.outtype = OUTT_UTF8;
-			else if (strcmp(optarg, "locale") == 0)
+			else if (strcmp(value, "locale") == 0)
 				outst.outtype = OUTT_LOCALE;
 			else {
 				mandoc_msg(MANDOCERR_BADARG_BAD, 0, 0,
-				    "-T %s", optarg);
+				    "-T %s", value);
 				return mandoc_msg_getrc();
 			}
 			break;
-		case 'W':
-			if (woptions(optarg, &os_e, &outst.wstop) == -1)
+		case 'W': {
+			char *warnings = mandoc_strdup(value);
+			int result = woptions(warnings, &os_e, &outst.wstop);
+			free(warnings);
+			if (result == -1)
 				return mandoc_msg_getrc();
 			break;
+		}
 		case 'w':
 			outmode = OUTMODE_FLN;
 			break;
-		default:
-			show_usage = 1;
-			break;
 		}
 	}
-
-	if (show_usage)
-		usage(search.argmode);
 
 	/* Postprocess options. */
 
@@ -339,9 +392,14 @@ main(int argc, char *argv[])
 		abort();
 	}
 
-	while (oarg != NULL) {
-		if (manconf_output(&conf.output,
-		    strsep(&oarg, ","), 0) == -1)
+	if (oarg != NULL) {
+		char *output_args = mandoc_strdup(oarg);
+		char *next = output_args;
+		int result = 0;
+		while (next != NULL && result == 0)
+			result = manconf_output(&conf.output, strsep(&next, ","), 0);
+		free(output_args);
+		if (result == -1)
 			return mandoc_msg_getrc();
 	}
 
@@ -379,10 +437,8 @@ main(int argc, char *argv[])
 
 	/* Parse arguments. */
 
-	if (argc > 0) {
-		argc -= optind;
-		argv += optind;
-	}
+	argc = noperands;
+	argv = operands;
 
 	/*
 	 * Quirks for help(1) and man(1),
@@ -434,8 +490,10 @@ main(int argc, char *argv[])
 
 	if (search.argmode == ARG_NAME) {
 		if (argc < 1) {
-			if (outmode != OUTMODE_FLN)
-				usage(ARG_NAME);
+			if (outmode != OUTMODE_FLN) {
+				manconf_free(&conf);
+				return usage(ARG_NAME);
+			}
 			if (conf.manpath.sz == 0) {
 				warnx("The manpath is empty.");
 				mandoc_msg_setrc(MANDOCLEVEL_BADARG);
@@ -602,7 +660,17 @@ out:
 	return (int)mandoc_msg_getrc();
 }
 
-static void
+int
+bx_manual_runtime_main(int argc, char **argv, const char *fallback_progname,
+    bx_cli_help_fn print_help)
+{
+	char **operands = argc > 1 ? mandoc_calloc((size_t)argc, sizeof(*operands)) : NULL;
+	int status = manual_run(argc, argv, operands, fallback_progname, print_help);
+	free(operands);
+	return status;
+}
+
+static int
 usage(enum argmode argmode)
 {
 	switch (argmode) {
@@ -620,7 +688,7 @@ usage(enum argmode argmode)
 	default:
 		break;
 	}
-	exit((int)MANDOCLEVEL_BADARG);
+	return (int)MANDOCLEVEL_BADARG;
 }
 
 static void
