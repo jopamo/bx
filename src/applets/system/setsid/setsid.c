@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,8 +7,8 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/child_runner.h"
+#include "lib/option_scan.h"
 
 struct bx_setsid_options {
     const char* progname;
@@ -27,41 +26,34 @@ static void bx_setsid_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_setsid_parse_options(int argc, char** argv, struct bx_setsid_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "setsid");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+hV", long_options, NULL);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 'h':
-                options->show_help = true;
-                return true;
-            case 'V':
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result result = bx_option_next(&cursor);
+    if (result.event == BX_OPTION_END) {
+        options->command_index = (int)result.index;
+        return true;
+    }
+    if (result.event == BX_OPTION_MATCH) {
+        options->show_help = result.spec->id == 'h';
+        options->show_version = result.spec->id == 'V';
+        return true;
     }
 
-    options->command_index = optind;
-    return true;
+    if (result.short_name)
+        bx_diag(diag, "invalid option -- '%c'", result.short_name);
+    else
+        bx_diag(diag, "unrecognized option '%s'", result.token);
+    return false;
 }
 
 int bx_setsid_main(int argc, char** argv) {
@@ -92,6 +84,10 @@ int bx_setsid_main(int argc, char** argv) {
         bx_diag(&diag, "missing command operand");
         bx_cli_print_try_help(options.progname);
         return 1;
+    }
+    if (argv[options.command_index][0] == '\0') {
+        bx_diag(&diag, "empty command operand");
+        return 127;
     }
 
     if (setsid() == -1) {
