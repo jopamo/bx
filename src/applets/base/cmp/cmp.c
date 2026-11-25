@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -9,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 #include "lib/xreadwrite.h"
 
@@ -114,31 +114,56 @@ static int cmp_compare(struct cmp_input* a, struct cmp_input* b, enum cmp_mode m
 }
 
 int bx_cmp_main(int argc, char** argv) {
-    static const struct option options[] = {
-        {"ignore-initial", required_argument, NULL, 'i'},
-        {"verbose", no_argument, NULL, 'l'},
-        {"bytes", required_argument, NULL, 'n'},
-        {"quiet", no_argument, NULL, 's'},
-        {"silent", no_argument, NULL, 's'},
-        {"help", no_argument, NULL, 'h'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'i', 'i', "ignore-initial", BX_OPTION_REQUIRED_VALUE},
+        {'l', 'l', "verbose", BX_OPTION_NO_VALUE},
+        {'n', 'n', "bytes", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "silent", BX_OPTION_NO_VALUE},
+        {'s', 0, "quiet", BX_OPTION_NO_VALUE},
+        {'h', 0, "help", BX_OPTION_NO_VALUE},
     };
     struct bx_diag_ctx diag = {.progname = "cmp"};
     uintmax_t skip[2] = {0, 0}, limit = UINTMAX_MAX;
     enum cmp_mode mode = CMP_FIRST;
-    int ch;
-    while ((ch = getopt_long(argc, argv, "i:ln:s", options, NULL)) != -1) {
+    enum { MAX_OPERANDS = 4 };
+    const char* operands[MAX_OPERANDS];
+    size_t count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result result;
+    while ((result = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (result.event == BX_OPTION_OPERAND) {
+            if (count < MAX_OPERANDS)
+                operands[count] = result.token;
+            count++;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE && result.short_name)
+                bx_diag(&diag, "option requires an argument -- '%c'", result.short_name);
+            else if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option '%s' requires an argument", result.token);
+            else if (result.event == BX_OPTION_UNEXPECTED_VALUE)
+                bx_diag(&diag, "option '%s' doesn't allow an argument", result.token);
+            else if (result.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", result.token);
+            return CMP_ERROR;
+        }
+        int ch = result.spec->id;
         switch (ch) {
             case 'i': {
-                const char* colon = strchr(optarg, ':');
-                char* first = colon != NULL ? strndup(optarg, (size_t)(colon - optarg)) : NULL;
+                const char* colon = strchr(result.value, ':');
+                char* first = colon != NULL ? strndup(result.value, (size_t)(colon - result.value)) : NULL;
                 bool valid = colon != NULL ?
                     first != NULL && bx_size_parse_uint(first, &skip[0]) &&
                         bx_size_parse_uint(colon + 1, &skip[1]) :
-                    bx_size_parse_uint(optarg, &skip[0]);
+                    bx_size_parse_uint(result.value, &skip[0]);
                 free(first);
                 if (!valid) {
-                    bx_diag(&diag, "invalid initial offset: '%s'", optarg);
+                    bx_diag(&diag, "invalid initial offset: '%s'", result.value);
                     return CMP_ERROR;
                 }
                 if (colon == NULL)
@@ -146,8 +171,8 @@ int bx_cmp_main(int argc, char** argv) {
                 break;
             }
             case 'n':
-                if (!bx_size_parse_uint(optarg, &limit)) {
-                    bx_diag(&diag, "invalid byte limit: '%s'", optarg);
+                if (!bx_size_parse_uint(result.value, &limit)) {
+                    bx_diag(&diag, "invalid byte limit: '%s'", result.value);
                     return CMP_ERROR;
                 }
                 break;
@@ -167,20 +192,19 @@ int bx_cmp_main(int argc, char** argv) {
         }
     }
 
-    int operands = argc - optind;
-    if (operands < 1 || operands > 4) {
+    if (count < 1 || count > MAX_OPERANDS) {
         bx_diag(&diag, "expected one or two files and optional initial offsets");
         return CMP_ERROR;
     }
-    for (int i = 2; i < operands; i++) {
-        if (!bx_size_parse_uint(argv[optind + i], &skip[i - 2])) {
-            bx_diag(&diag, "invalid initial offset: '%s'", argv[optind + i]);
+    for (size_t i = 2; i < count; i++) {
+        if (!bx_size_parse_uint(operands[i], &skip[i - 2])) {
+            bx_diag(&diag, "invalid initial offset: '%s'", operands[i]);
             return CMP_ERROR;
         }
     }
     struct cmp_input input[2] = {
-        {.name = argv[optind], .fd = -1},
-        {.name = operands > 1 ? argv[optind + 1] : "-", .fd = -1},
+        {.name = operands[0], .fd = -1},
+        {.name = count > 1 ? operands[1] : "-", .fd = -1},
     };
     bool stdin_file[] = {strcmp(input[0].name, "-") == 0, strcmp(input[1].name, "-") == 0};
     if (stdin_file[0] && stdin_file[1]) {
