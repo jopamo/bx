@@ -139,7 +139,8 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                             tail++;
                         else if (*tail == ']' ||
                                  (*tail == '[' && tail + 1 < end &&
-                                  strchr(".=:!^", tail[1])))
+                                  (strchr(".=:", tail[1]) ||
+                                   (strchr("!^", tail[1]) && end[-1] == '-'))))
                             return;
                     }
                     const char* hyphen = strchr(p + 3, '-');
