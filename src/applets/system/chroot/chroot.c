@@ -1,7 +1,6 @@
 #define _DEFAULT_SOURCE
 
 #include <errno.h>
-#include <getopt.h>
 #include <grp.h>
 #include <inttypes.h>
 #include <pwd.h>
@@ -16,9 +15,9 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/child_runner.h"
 #include "lib/id_parse.h"
+#include "lib/option_scan.h"
 
 struct bx_chroot_name_or_id {
     char* raw;
@@ -468,61 +467,69 @@ static bool bx_chroot_newroot_is_old_root(const char* newroot) {
 }
 
 static bool bx_chroot_parse_options(int argc, char** argv, struct bx_chroot_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"userspec", required_argument, NULL, 3}, {"groups", required_argument, NULL, 4}, {"skip-chdir", no_argument, NULL, 5},
-        {"help", no_argument, NULL, 1},           {"version", no_argument, NULL, 2},      {NULL, 0, NULL, 0},
+    enum { USERSPEC, GROUPS, SKIP_CHDIR, HELP, VERSION };
+    static const struct bx_option_spec specs[] = {
+        {USERSPEC, 0, "userspec", BX_OPTION_REQUIRED_VALUE},
+        {GROUPS, 0, "groups", BX_OPTION_REQUIRED_VALUE},
+        {SKIP_CHDIR, 0, "skip-chdir", BX_OPTION_NO_VALUE},
+        {HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "chroot");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+:", long_options, NULL);
-        if (c == -1) {
+    struct bx_option_cursor cursor;
+    size_t first;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            first = result.index;
             break;
         }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%s'", result.token);
+            else if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
+        }
 
-        switch (c) {
-            case 3:
-                if (!bx_chroot_parse_userspec(optarg, &options->cred_spec.userspec, diag)) {
+        switch (result.spec->id) {
+            case USERSPEC:
+                if (!bx_chroot_parse_userspec(result.value, &options->cred_spec.userspec, diag)) {
                     return false;
                 }
                 break;
-            case 4:
-                if (!bx_chroot_parse_groups(optarg, &options->cred_spec.groups, diag)) {
+            case GROUPS:
+                if (!bx_chroot_parse_groups(result.value, &options->cred_spec.groups, diag)) {
                     return false;
                 }
                 break;
-            case 5:
+            case SKIP_CHDIR:
                 options->skip_chdir = true;
                 break;
-            case 1:
+            case HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
         }
     }
 
-    if (optind >= argc) {
+    if (first == (size_t)argc) {
         bx_cli_diag_missing_operand(diag);
         return false;
     }
 
-    options->newroot = argv[optind];
-    options->command_index = optind + 1;
+    options->newroot = argv[first];
+    options->command_index = (int)first + 1;
     return true;
 }
 
@@ -594,7 +601,9 @@ int bx_chroot_main(int argc, char** argv) {
     }
 
     bool identity_options_present = bx_chroot_identity_options_present(&options.cred_spec);
-    if (chroot(options.newroot) != 0) {
+    /* In skip-chdir mode only the current root is allowed. Use it directly
+     * after checking NEWROOT, rather than resolving that path a second time. */
+    if (chroot(options.skip_chdir ? "/" : options.newroot) != 0) {
         bx_diag(&diag, "cannot change root directory to '%s': %s", options.newroot, strerror(errno));
         goto out;
     }
