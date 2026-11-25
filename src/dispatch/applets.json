@@ -1657,6 +1657,7 @@
       "main": "bx_find_main",
       "capabilities": [
         "filesystem-read",
+        "filesystem-write",
         "recursive-traversal",
         "child-execution"
       ],

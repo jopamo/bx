@@ -660,6 +660,7 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
             return NULL;
     } else if (strcmp(arg, "-delete") == 0) {
         parser->explicit_action = true;
+        parser->opts->depth_first = true;
         expr = find_expr_new(FIND_EXPR_DELETE);
     } else if (strcmp(arg, "-prune") == 0) {
         expr = find_expr_new(FIND_EXPR_PRUNE);

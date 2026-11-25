@@ -1,7 +1,6 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -22,14 +21,6 @@ static enum bx_walk_action find_walk_cb(struct bx_walk_entry *entry, void *user)
 
     (void)find_eval_expr(st->expr, entry, st);
     return (st->stop && *st->stop) ? BX_WALK_STOP : BX_WALK_CONTINUE;
-}
-
-static bool find_expr_argv_has_delete(char **expr_argv, int expr_argc) {
-    for (int i = 0; i < expr_argc; i++) {
-        if (strcmp(expr_argv[i], "-delete") == 0)
-            return true;
-    }
-    return false;
 }
 
 bool find_prepare_expression(const char *progname, struct find_opts *opts,
@@ -65,9 +56,6 @@ bool find_prepare_expression(const char *progname, struct find_opts *opts,
             return false;
         }
     }
-
-    if (find_expr_argv_has_delete(expr_argv, expr_argc))
-        opts->depth_first = true;
 
     *expr_out = expr;
     return true;
