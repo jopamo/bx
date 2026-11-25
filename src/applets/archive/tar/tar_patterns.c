@@ -263,7 +263,7 @@ void bx_tar_match_pattern_init(struct bx_tar_match_pattern* pattern, const char*
     if (policy->wildcards && pattern->wildcard_magic && (normalize || policy->ignore_case)) {
         pattern->wildcard_text = bx_tar_match_dup_folded_range(text, strlen(text), policy->ignore_case, normalize);
         if (normalize)
-            bx_glob_normalize_caret_with_spare(pattern->wildcard_text, 1);
+            bx_glob_normalize_caret(pattern->wildcard_text);
     }
 }
 

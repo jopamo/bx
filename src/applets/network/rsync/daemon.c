@@ -394,7 +394,7 @@ daemon_add_glob(struct sess *sess, const char *module, size_t *oargc,
 			memcpy(out, part, len);
 			out[len] = '\0';
 			if (len != 0)
-				bx_glob_normalize_caret_with_spare(out, 1);
+				bx_glob_normalize_caret(out);
 			if (slash == NULL)
 				break;
 			out += strlen(out);

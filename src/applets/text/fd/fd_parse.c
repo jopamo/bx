@@ -405,12 +405,14 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
                     out->exit_code = 2;
                     return false;
                 }
-                char *pattern = strdup(option.value);
+                size_t length = strlen(option.value);
+                char *pattern = malloc(length + 2u);
                 if (!pattern) {
                     fprintf(stderr, "%s: out of memory\n", out->progname);
                     out->exit_code = 2;
                     return false;
                 }
+                memcpy(pattern, option.value, length + 1u);
                 bx_glob_normalize_caret(pattern);
                 out->opts.exclude_patterns[out->opts.num_exclude_patterns++] = pattern;
                 break;

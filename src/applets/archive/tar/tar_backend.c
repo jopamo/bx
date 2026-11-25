@@ -2901,7 +2901,7 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             if (strstr(value, "[^")) {
                 char** mask = &masks->items[masks->len - 1];
                 *mask = xrealloc(*mask, strlen(*mask) + 2u);
-                bx_glob_normalize_caret_with_spare(*mask, 1);
+                bx_glob_normalize_caret(*mask);
             }
             return true;
         }

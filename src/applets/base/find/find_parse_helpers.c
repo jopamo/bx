@@ -61,7 +61,7 @@ static bool find_prepare_glob(struct find_expr *expr, const char *pattern) {
         return false;
 
     memcpy(copy, pattern, length + 1u);
-    bx_glob_normalize_caret_with_spare(copy, 1);
+    bx_glob_normalize_caret(copy);
     expr->pattern_storage = copy;
     expr->text = copy;
     return true;

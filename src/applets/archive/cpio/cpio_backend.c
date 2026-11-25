@@ -1935,7 +1935,7 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                 return false;
             }
             memcpy(pattern, text, length + 1u);
-            bx_glob_normalize_caret_with_spare(pattern, 1);
+            bx_glob_normalize_caret(pattern);
             options->operands[i].pattern = pattern;
         }
     }

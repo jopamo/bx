@@ -124,7 +124,7 @@ static bool bx_tree_pattern_matches(const char *pattern,
         one[len] = '\0';
         /* A bracket expression cannot span tree's alternative separator. */
         if (strstr(one, "[^"))
-            bx_glob_normalize_caret_with_spare(one, 1);
+            bx_glob_normalize_caret(one);
         bool matched = one[0] != '\0' && bx_tree_match_segment(one, text, ignore_case);
         free(one);
         if (matched)

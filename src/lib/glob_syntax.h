@@ -43,9 +43,9 @@ static inline const char* bx_glob_bracket_end(const char* text, const char* end)
     return NULL;
 }
 
-/* Spare storage after the terminator lets us quote the opening bracket of
- * a simple incomplete [^] expression. Leave ambiguous bracket tails alone. */
-static inline void bx_glob_normalize_caret_with_spare(char* pattern, size_t spare) {
+/* Requires one writable byte after the terminator. Quote the opening bracket
+ * of a simple incomplete [^] expression, but leave ambiguous tails alone. */
+static inline void bx_glob_normalize_caret(char* pattern) {
     const char* end = pattern + strlen(pattern);
     for (char* p = pattern; p < end; p++) {
         if (*p == '\\' && p + 1 < end) {
@@ -53,7 +53,7 @@ static inline void bx_glob_normalize_caret_with_spare(char* pattern, size_t spar
         } else if (*p == '[' && p + 1 < end) {
             const char* after = bx_glob_bracket_end(p, end);
             if (!after) {
-                if (spare && end - p >= 3 && p[1] == '^' && p[2] == ']' &&
+                if (end - p >= 3 && p[1] == '^' && p[2] == ']' &&
                     !strpbrk(p + 3, "[]\\-")) {
                     memmove(p + 1, p, (size_t)(end - p) + 1);
                     *p = '\\';
@@ -65,10 +65,6 @@ static inline void bx_glob_normalize_caret_with_spare(char* pattern, size_t spar
             p += after - p - 1;
         }
     }
-}
-
-static inline void bx_glob_normalize_caret(char* pattern) {
-    bx_glob_normalize_caret_with_spare(pattern, 0);
 }
 
 #endif

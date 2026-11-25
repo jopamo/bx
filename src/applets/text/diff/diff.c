@@ -451,7 +451,7 @@ int bx_diff_main(int argc, char** argv) {
                 char* pattern = state.excludes[state.exclude_count++];
                 memcpy(pattern, option.value, length + 1);
                 if (strstr(pattern, "[^"))
-                    bx_glob_normalize_caret_with_spare(pattern, 1);
+                    bx_glob_normalize_caret(pattern);
                 break;
             }
             case 'U':

@@ -14,7 +14,7 @@ int zu_strlist_normalize_globs(ZU_StrList* list) {
         if (!pattern)
             return -1;
         list->items[i] = pattern;
-        bx_glob_normalize_caret_with_spare(pattern, 1);
+        bx_glob_normalize_caret(pattern);
     }
     return 0;
 }

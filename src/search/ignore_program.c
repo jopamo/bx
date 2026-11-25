@@ -256,7 +256,7 @@ static int bx_ignore_rule_compile(struct bx_ignore_rule *rule,
     memcpy(rule->pattern, pattern, pattern_len);
     rule->pattern[pattern_len] = '\0';
     if (strstr(rule->pattern, "[^"))
-        bx_glob_normalize_caret_with_spare(rule->pattern, 1);
+        bx_glob_normalize_caret(rule->pattern);
     rule->kind = bx_ignore_rule_classify(rule->uses_relative_path,
                                          rule->directory_only,
                                          rule->pattern);

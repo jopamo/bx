@@ -1167,7 +1167,7 @@ static int bx_search_normalize_glob(char **slot) {
     if (!pattern)
         return -1;
     *slot = pattern;
-    bx_glob_normalize_caret_with_spare(pattern, 1);
+    bx_glob_normalize_caret(pattern);
     return pattern[length] != '\0';
 }
 
