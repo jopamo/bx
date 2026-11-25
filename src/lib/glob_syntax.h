@@ -53,8 +53,10 @@ static inline void bx_glob_normalize_caret(char* pattern) {
         } else if (*p == '[' && p + 1 < end) {
             const char* after = bx_glob_bracket_end(p, end);
             if (!after) {
+                /* A final hyphen can be an incomplete range, not a
+                 * literal tail in fnmatch(). */
                 if (end - p >= 3 && p[1] == '^' && p[2] == ']' &&
-                    !strpbrk(p + 3, "[]\\-")) {
+                    end[-1] != '-' && !strpbrk(p + 3, "[]\\")) {
                     memmove(p + 1, p, (size_t)(end - p) + 1);
                     *p = '\\';
                 }
