@@ -25,8 +25,7 @@ def main() -> int:
     env = os.environ.copy()
     env["CC"] = " ".join(sys.argv[3:])
 
-    # Oconfigure uses feature_probes.c and writes config.h, Makefile.configure, and
-    # temporary probe files. Keep them out of the source tree.
+    # Keep the feature header, log and temporary probe files out of the source tree.
     with tempfile.TemporaryDirectory(prefix="bx-openrsync-config-") as workdir:
         shutil.copyfile(
             configure.parent / "feature_probes.c", Path(workdir) / "feature_probes.c"

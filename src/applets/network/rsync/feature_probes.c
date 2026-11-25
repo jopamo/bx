@@ -264,18 +264,6 @@ main(void)
 	return landlock_restrict_self(fd, 0) ? 1 : 0;
 }
 #endif /* TEST_LANDLOCK */
-#if TEST_LIB_SOCKET
-#include <sys/socket.h>
-
-int
-main(void)
-{
-	int fds[2], c;
-
-	c = socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-	return c == -1;
-}
-#endif /* TEST_LIB_SOCKET */
 #if TEST_MEMMEM
 #define _GNU_SOURCE
 #include <string.h>
@@ -499,13 +487,6 @@ main(void)
 	return 0;
 }
 #endif /* TEST_SOCK_NONBLOCK */
-#if TEST_STATIC
-int
-main(void)
-{
-	return 0; /* not meant to do anything */
-}
-#endif /* TEST_STATIC */
 #if TEST_STRLCAT
 #include <string.h>
 

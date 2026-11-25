@@ -5,8 +5,8 @@ License: ISC and the other notices retained in the source and LICENSE.md.
 
 The rsync implementation is built as a static library in bx. The applet entry
 point is bx_rsync_main in main.c. The Meson build runs Apple's
-compile/link-only configure probes out of tree; no generated header is kept
-in the repository. The standalone Makefile uses shared bx sources.
+compile/link-only feature probes out of tree. Build the applet through the
+root Meson project; there is no separate rsync build.
 
 Local changes to Apple's files:
 - Shared bx text buffers for sbuf storage and unit labels for human-readable
@@ -28,5 +28,3 @@ Local changes to Apple's files:
 - Apple-private tracing is optional when its SDK header is unavailable.
 
 This is openrsync, not a GNU rsync CLI clone.
-The bx executable is still Linux-only due to its fetch subsystem; building
-the standalone openrsync on a Unix host does not remove that restriction.

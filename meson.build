@@ -1632,7 +1632,6 @@ rsync_lib = static_library(
   'bx_rsync',
   rsync_sources + [rsync_config],
   c_args : [
-    '-DBX_RSYNC_APPLET=1',
     '-include',
     join_paths(meson.current_build_dir(), 'openrsync-feature-config.h'),
   ],

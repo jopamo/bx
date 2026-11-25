@@ -45,12 +45,10 @@
 #include "extern.h"
 #include <zlib.h>
 
-#ifdef BX_RSYNC_APPLET
 #include "dispatch/applets.h"
 #include "bx/self_exec.h"
 #include "bx/version.h"
 extern char **environ;
-#endif
 
 #ifdef __APPLE__
 #if __has_include(<os/variant_private.h>)
@@ -1891,11 +1889,7 @@ basedir:
 			}
 			break;
 		case 'V':
-#ifdef BX_RSYNC_APPLET
 			printf("rsync (bx) %s\n", BX_VERSION);
-#else
-			printf("rsync (openrsync)\n");
-#endif
 			printf("Protocol version %u (rsync 2.6.9 wire compatibility)\n",
 			    RSYNC_PROTOCOL);
 #ifdef __linux__
@@ -2126,9 +2120,6 @@ child_exited(pid_t pid, int st)
 	}
 }
 
-#ifndef BX_RSYNC_APPLET
-#define bx_rsync_main main
-#endif
 int
 bx_rsync_main(int argc, char *argv[])
 {
@@ -2361,7 +2352,6 @@ bx_rsync_main(int argc, char *argv[])
 			err(ERR_IPC, "dup2");
 		if (dup2(fds[1], STDOUT_FILENO) == -1)
 			err(ERR_IPC, "dup2");
-		#ifdef BX_RSYNC_APPLET
 		/* Local transfers must use this exact bx executable, not a
 		 * possibly unrelated rsync found in PATH.  Remote transfers
 		 * retain the rsync command selected by --rsync-path. */
@@ -2376,7 +2366,6 @@ bx_rsync_main(int argc, char *argv[])
 			close(self_fd);
 			_exit(ERR_IPC);
 		}
-		#endif
 		if (execvp(args[0], args) == -1)
 			ERR("exec on '%s'", args[0]);
 		_exit(ERR_IPC);
