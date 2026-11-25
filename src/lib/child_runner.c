@@ -348,10 +348,11 @@ int bx_child_exec_file_argv_in_path(
         executable, argv, environ, path, mode, true, NULL);
 }
 
-int bx_child_find_executable(const char *name, const char *path, char **found) {
+int bx_child_find_executable(const char *name, const char *path,
+                             enum bx_child_path_search_mode mode, char **found) {
     *found = NULL;
     return bx_child_exec_file_argv_search(
-        name, NULL, NULL, path, BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR, true, found);
+        name, NULL, NULL, path ? path : BX_CHILD_DEFAULT_PATH, mode, true, found);
 }
 
 static int bx_child_internal_fd_pair(int pair[2]) {

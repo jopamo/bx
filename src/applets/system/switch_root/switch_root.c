@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -207,110 +208,59 @@ done:
     return ok;
 }
 
-static bool bx_switch_root_candidate_is_executable(const char* path) {
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        return false;
+struct bx_switch_root_init_check {
+    const char* target;
+    struct bx_diag_ctx* diag;
+};
+
+static int bx_switch_root_check_init_in_child(void* opaque) {
+    struct bx_switch_root_init_check* check = opaque;
+    const char* target = check->target;
+    struct bx_diag_ctx* diag = check->diag;
+    /* The child checks names inside the candidate root without changing the
+     * parent's root or running the target. */
+    if (chroot(".") != 0 || chdir("/") != 0) {
+        bx_perror_path(diag, "cannot enter NEW_ROOT for init preflight");
+        return 1;
     }
 
-    if (S_ISDIR(st.st_mode)) {
-        return false;
-    }
-
-    return access(path, X_OK) == 0;
+    char* found;
+    int error = bx_child_find_executable(target, getenv("PATH"),
+                                         BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, &found);
+    free(found);
+    if (error == 0)
+        return 0;
+    bool exact = target[0] == '/';
+    if (exact && error == ENOENT)
+        bx_diag(diag, "target init path '%s' does not exist in NEW_ROOT", target);
+    else if (!exact && error == ENOENT)
+        bx_diag(diag, "target init command '%s' was not found in PATH within NEW_ROOT", target);
+    else
+        bx_diag(diag, "cannot execute target init '%s' in NEW_ROOT: %s", target, strerror(error));
+    return 1;
 }
 
-static bool bx_switch_root_validate_init_path(const char* init_path, struct bx_diag_ctx* diag) {
-    char* candidate = bx_path_join_root_relative(".", init_path);
-
-    struct stat st;
-    if (stat(candidate, &st) != 0) {
-        if (errno == ENOENT) {
-            bx_diag(diag, "target init path '%s' does not exist in NEW_ROOT", init_path);
-        }
-        else {
-            bx_diag(diag, "cannot access target init path '%s' in NEW_ROOT: %s", init_path, strerror(errno));
-        }
-        free(candidate);
-        return false;
-    }
-
-    if (S_ISDIR(st.st_mode)) {
-        bx_diag(diag, "target init path '%s' is a directory in NEW_ROOT", init_path);
-        free(candidate);
-        return false;
-    }
-
-    if (access(candidate, X_OK) != 0) {
-        bx_diag(diag, "target init path '%s' is not executable in NEW_ROOT: %s", init_path, strerror(errno));
-        free(candidate);
-        return false;
-    }
-
-    free(candidate);
-    return true;
-}
-
-static bool bx_switch_root_validate_init_command(const char* init_command, struct bx_diag_ctx* diag) {
-    const char* path_env = getenv("PATH");
-    if (path_env == NULL || path_env[0] == '\0') {
-        path_env = "/sbin:/bin:/usr/sbin:/usr/bin";
-    }
-
-    char* path_copy = xstrdup(path_env);
-    bool found = false;
-
-    char* segment = path_copy;
-    while (true) {
-        char* separator = strchr(segment, ':');
-        if (separator != NULL) {
-            *separator = '\0';
-        }
-
-        const char* directory = (segment[0] == '\0') ? "." : segment;
-        char* relative_candidate = bx_path_join_root_relative(directory, init_command);
-        char* candidate = bx_path_join_root_relative(".", relative_candidate);
-        found = bx_switch_root_candidate_is_executable(candidate);
-        free(candidate);
-        free(relative_candidate);
-
-        if (found || separator == NULL) {
-            break;
-        }
-        segment = separator + 1;
-    }
-
-    free(path_copy);
-
-    if (!found) {
-        bx_diag(diag, "target init command '%s' was not found in PATH within NEW_ROOT", init_command);
-        return false;
-    }
-
-    return true;
-}
-
-static bool bx_switch_root_validate_init_target(const struct bx_switch_root_options* options, int argc, char** argv, struct bx_diag_ctx* diag) {
-    if (options->init_index >= argc) {
-        bx_diag(diag, "missing operand: INIT");
-        return false;
-    }
-
-    const char* init_target = argv[options->init_index];
-    if (init_target == NULL || init_target[0] == '\0') {
+static bool bx_switch_root_validate_init_target(const char* init_target, struct bx_diag_ctx* diag) {
+    if (init_target[0] == '\0') {
         bx_diag(diag, "INIT is empty");
         return false;
     }
-
-    if (strchr(init_target, '/') != NULL) {
-        if (init_target[0] != '/') {
-            bx_diag(diag, "INIT path must be absolute when containing '/': '%s'", init_target);
-            return false;
-        }
-        return bx_switch_root_validate_init_path(init_target, diag);
+    if (init_target[0] != '/' && strchr(init_target, '/') != NULL) {
+        bx_diag(diag, "INIT path must be absolute when containing '/': '%s'", init_target);
+        return false;
     }
-
-    return bx_switch_root_validate_init_command(init_target, diag);
+    struct bx_switch_root_init_check check = {init_target, diag};
+    int status;
+    if (bx_child_fork_callback_wait(bx_switch_root_check_init_in_child, &check,
+                                    BX_CHILD_SIGNALS_INHERIT, &status) != 0) {
+        bx_perror_path(diag, "init preflight child");
+        return false;
+    }
+    if (!WIFEXITED(status)) {
+        bx_diag(diag, "init preflight child did not exit normally");
+        return false;
+    }
+    return WEXITSTATUS(status) == 0;
 }
 
 static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const char* target_relpath, const char* new_root, struct bx_diag_ctx* diag) {
@@ -476,7 +426,7 @@ int bx_switch_root_run(int argc, char** argv) {
         return 1;
     }
 
-    if (!bx_switch_root_validate_init_target(&options, argc, argv, &diag)) {
+    if (!bx_switch_root_validate_init_target(argv[options.init_index], &diag)) {
         return 1;
     }
 

@@ -22,13 +22,17 @@ static char* ash_standard_path(void) {
 int ash_external_command_find(const struct ash_shell* shell, const struct ash_command_resolution* resolution, char** path_out) {
     *path_out = NULL;
     if (resolution->kind == ASH_COMMAND_EXPLICIT_PATH || resolution->kind == ASH_COMMAND_HASHED_EXTERNAL)
-        return bx_child_find_executable(resolution->target.path, "", path_out);
+        return bx_child_find_executable(resolution->target.path, "",
+                                        BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR, path_out);
     if (resolution->kind != ASH_COMMAND_PATH_SEARCH)
         return ENOENT;
 
     char* standard = resolution->default_path ? ash_standard_path() : NULL;
     const char* path = resolution->default_path ? (standard != NULL ? standard : BX_CHILD_DEFAULT_PATH) : ash_var_get(shell, "PATH");
-    int error = path != NULL ? bx_child_find_executable(resolution->command_name, path, path_out) : ENOENT;
+    int error = path != NULL
+        ? bx_child_find_executable(resolution->command_name, path,
+                                   BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR, path_out)
+        : ENOENT;
     free(standard);
     return error;
 }
