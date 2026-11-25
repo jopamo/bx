@@ -111,7 +111,7 @@ static inline bool bx_glob_terminal_hyphen_is_member(const char* atom, const cha
 /* Requires one writable byte after the terminator. Quote the opening bracket
  * of a simple incomplete [^] expression, but leave ambiguous tails alone. */
 static inline void bx_glob_normalize_caret(char* pattern) {
-    const char* end = pattern + strlen(pattern);
+    char* end = pattern + strlen(pattern);
     for (char* p = pattern; p < end; p++) {
         if (*p == '\\' && p + 1 < end) {
             p++;
@@ -124,6 +124,15 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                 after = bx_glob_bracket_end_with_classes(p, end, true);
 #endif
             if (!after) {
+                /* With no closing delimiter, a final [^- is literal.
+                 * glibc's other caret interpretation sees an unfinished
+                 * range instead, even after an earlier '[' fell back. */
+                if (end - p >= 3 && memcmp(end - 3, "[^-", 3) == 0 &&
+                    !strpbrk(p, "]\\") && !strstr(p, "[.") && !strstr(p, "[=")) {
+                    memmove(end - 2, end - 3, 4);
+                    end[-3] = '\\';
+                    break;
+                }
                 if (end - p >= 3 && p[1] == '^' && p[2] == ']') {
                     for (const char* tail = p + 3; tail < end; tail++) {
                         if (*tail == '\\' && tail + 1 < end)
