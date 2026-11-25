@@ -13,13 +13,12 @@ static void usage(FILE* out, const char* name) {
 }
 
 #ifdef __linux__
-#include <getopt.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "module_elf.h"
 #include "module_index.h"
 
@@ -58,52 +57,62 @@ static bool print_builtin(const char* name, const char* data, size_t len, const 
         return false;
     return print_records(data, len, field, name);
 }
-#endif
-
-int bx_modinfo_main(int argc, char** argv) {
-    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "modinfo", "-h", "-V", usage);
-    if (handled >= 0)
-        return handled;
+static int modinfo_command(int argc, char** argv, const char** operands) {
     struct bx_diag_ctx diag = {.progname = "modinfo"};
-#ifdef __linux__
-    static const struct option opts[] = {
-        {"field", required_argument, NULL, 'F'},
-        {"basedir", required_argument, NULL, 'b'},
-        {"set-version", required_argument, NULL, 'k'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec options[] = {
+        {'F', 'F', "field", BX_OPTION_REQUIRED_VALUE},
+        {'b', 'b', "basedir", BX_OPTION_REQUIRED_VALUE},
+        {'k', 'k', "set-version", BX_OPTION_REQUIRED_VALUE},
     };
     const char* field = NULL;
     const char* base = "/";
     const char* release = NULL;
-    bx_args_getopt_reset();
-    for (int opt; (opt = bx_args_getopt_long(argc, argv, ":F:b:k:", opts, NULL)) != -1;) {
-        if (opt == 'F') {
-            if (*optarg == '\0') {
+    size_t count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            operands[count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", result.token);
+            return 1;
+        }
+        switch (result.spec->id) {
+        case 'F':
+            if (*result.value == '\0') {
                 bx_diag(&diag, "field must not be empty");
                 return 1;
             }
-            field = optarg;
-        } else if (opt == 'b') {
-            if (*optarg == '\0') {
+            field = result.value;
+            break;
+        case 'b':
+            if (*result.value == '\0') {
                 bx_diag(&diag, "base directory must not be empty");
                 return 1;
             }
-            base = optarg;
-        } else if (opt == 'k') {
-            if (!bx_module_release_valid(optarg)) {
-                bx_diag(&diag, "invalid kernel release '%s'", optarg);
+            base = result.value;
+            break;
+        case 'k':
+            if (!bx_module_release_valid(result.value)) {
+                bx_diag(&diag, "invalid kernel release '%s'", result.value);
                 return 1;
             }
-            release = optarg;
-        } else {
-            if (opt == ':')
-                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-            else
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
+            release = result.value;
+            break;
         }
     }
-    if (optind == argc) {
+    if (count == 0) {
         usage(stderr, diag.progname);
         return 1;
     }
@@ -111,8 +120,8 @@ int bx_modinfo_main(int argc, char** argv) {
     struct bx_module_tree tree = {.fd = -1};
     bool tried_tree = false;
     int tree_error = 0;
-    for (int i = optind; i < argc; i++) {
-        const char* arg = argv[i];
+    for (size_t i = 0; i < count; i++) {
+        const char* arg = operands[i];
         char relative[PATH_MAX];
         bool named = bx_module_name_valid(arg);
         int fd;
@@ -188,7 +197,28 @@ output_error:
     bx_perror_path(&diag, "standard output");
     bx_module_tree_close(&tree);
     return 1;
+}
+#endif
+
+int bx_modinfo_main(int argc, char** argv) {
+    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "modinfo", "-h", "-V", usage);
+    if (handled >= 0)
+        return handled;
+#ifdef __linux__
+    const char** operands = NULL;
+    if (argc > 1) {
+        operands = calloc((size_t)argc - 1, sizeof(*operands));
+        if (!operands) {
+            struct bx_diag_ctx diag = {.progname = "modinfo"};
+            bx_perror_path(&diag, "module operands");
+            return 1;
+        }
+    }
+    int status = modinfo_command(argc, argv, operands);
+    free(operands);
+    return status;
 #else
+    struct bx_diag_ctx diag = {.progname = "modinfo"};
     bx_diag(&diag, "Linux module metadata is not supported on this platform");
     return 1;
 #endif
