@@ -11,6 +11,7 @@
 
 #include "bx/libbx.h"
 #include "fswalk/walk.h"
+#include "lib/glob_syntax.h"
 #include "lib/id_parse.h"
 #include "lib/path_ops.h"
 #include "lib/size_parse.h"
@@ -128,6 +129,9 @@ static bool bx_tree_pattern_matches(const char *pattern,
         char *one = bx_tree_strdup_range(segment, len);
         if (!one)
             return false;
+        /* A bracket expression cannot span tree's alternative separator. */
+        if (strstr(one, "[^"))
+            bx_glob_normalize_caret(one);
         bool matched = one[0] != '\0' && bx_tree_match_segment(one, text, ignore_case);
         free(one);
         if (matched)
