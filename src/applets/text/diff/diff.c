@@ -40,7 +40,7 @@ struct diff_state {
     size_t context;
     bool minimal;
     bool recursive;
-    char excludes[DIFF_EXCLUDES_MAX][DIFF_EXCLUDE_BYTES_MAX + 1];
+    char excludes[DIFF_EXCLUDES_MAX][DIFF_EXCLUDE_BYTES_MAX + 2];
     size_t exclude_count;
     size_t entries_left;
     size_t bytes_left;
@@ -451,7 +451,7 @@ int bx_diff_main(int argc, char** argv) {
                 char* pattern = state.excludes[state.exclude_count++];
                 memcpy(pattern, option.value, length + 1);
                 if (strstr(pattern, "[^"))
-                    bx_glob_normalize_caret(pattern);
+                    bx_glob_normalize_caret_with_spare(pattern, 1);
                 break;
             }
             case 'U':
