@@ -40,7 +40,7 @@ extern regmatch_t *match;
 extern size_t maxnsub;
 extern u_long linenum;
 extern unsigned int appendnum;
-extern int aflag, eflag, nflag;
+extern int aflag, nflag;
 extern const char *fname, *outfname;
 extern FILE *infile, *outfile;
 extern int rflags;	/* regex flags to use */

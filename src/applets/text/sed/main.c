@@ -40,7 +40,6 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <libgen.h>
 #include <limits.h>
 #include <locale.h>
@@ -52,6 +51,7 @@
 #include <unistd.h>
 
 #include "dispatch/applets.h"
+#include "lib/option_scan.h"
 #include "defs.h"
 #include "extern.h"
 
@@ -87,7 +87,7 @@ static struct s_flist *files, **fl_nextp = &files;
 FILE *infile;			/* Current input file */
 FILE *outfile;			/* Current output file */
 
-int aflag, eflag, nflag;
+int aflag, nflag;
 int rflags = 0;
 int quit = 0;
 static int rval;		/* Exit status */
@@ -121,89 +121,127 @@ static void usage(void) __attribute__((noreturn));
 int
 bx_sed_main(int argc, char *argv[])
 {
-	int c, fflag, fflagstdin;
+	static const struct bx_option_spec specs[] = {
+		{ 'E', 'E', NULL, BX_OPTION_NO_VALUE },
+		{ 'I', 'I', NULL, BX_OPTION_REQUIRED_VALUE },
+		{ 'a', 'a', NULL, BX_OPTION_NO_VALUE },
+		{ 'e', 'e', NULL, BX_OPTION_REQUIRED_VALUE },
+		{ 'f', 'f', NULL, BX_OPTION_REQUIRED_VALUE },
+		{ 'i', 'i', NULL, BX_OPTION_OPTIONAL_VALUE },
+		{ 'l', 'l', NULL, BX_OPTION_NO_VALUE },
+		{ 'n', 'n', NULL, BX_OPTION_NO_VALUE },
+		{ 'r', 'r', NULL, BX_OPTION_NO_VALUE },
+		{ 'u', 'u', NULL, BX_OPTION_NO_VALUE },
+	};
+	int fflagstdin = 0, buffering = 0;
 	char *temp_arg;
 
 	(void) setlocale(LC_ALL, "");
 
 	if (atexit(discard_tmp) != 0)
 		errx(1, "cannot register temporary file cleanup");
-	fflag = 0;
-	fflagstdin = 0;
 	inplace = NULL;
 
-	/* Permit options after the script or input names, as used in bp. */
-	static const struct option longopts[] = {{0}};
-	while ((c = getopt_long(argc, argv, "EI:ae:f:i::lnru", longopts, NULL)) != -1)
-		switch (c) {
+	char **operands = calloc((size_t)argc, sizeof(*operands));
+	if (operands == NULL)
+		err(1, "calloc");
+	size_t count = 0, skip_empty = 0;
+	struct bx_option_cursor cursor;
+	bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED,
+	    specs, sizeof(specs) / sizeof(specs[0]));
+	struct bx_option_result option;
+	while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+		if (option.event == BX_OPTION_OPERAND) {
+			if (option.index != skip_empty)
+				operands[count++] = argv[option.index];
+			continue;
+		}
+		if (option.event != BX_OPTION_MATCH) {
+			if (option.event == BX_OPTION_MISSING_VALUE)
+				warnx("option requires an argument -- '%c'", option.short_name);
+			else if (option.short_name)
+				warnx("invalid option -- '%c'", option.short_name);
+			else
+				warnx("unrecognized option '%s'", option.token);
+			usage();
+		}
+		switch (option.spec->id) {
 		case 'r':		/* Gnu sed compat */
 		case 'E':
 			rflags = REG_EXTENDED;
 			break;
 		case 'I':
-			inplace = optarg;
+			inplace = option.value;
 			ispan = 1;	/* span across input files */
 			break;
 		case 'a':
 			aflag = 1;
 			break;
 		case 'e':
-			eflag = 1;
-			if (asprintf(&temp_arg, "%s\n", optarg) == -1)
+			if (asprintf(&temp_arg, "%s\n", option.value) == -1)
 				err(1, "asprintf");
 			add_compunit(CU_STRING, temp_arg);
 			break;
 		case 'f':
-			fflag = 1;
-			if (strcmp(optarg, "-") == 0)
+			if (strcmp(option.value, "-") == 0)
 				fflagstdin = 1;
-			add_compunit(CU_FILE, optarg);
+			add_compunit(CU_FILE, option.value);
 			break;
 		case 'i':
 			/* GNU attached suffix; also accept BSD's explicit empty suffix. */
-			if (!optarg && optind < argc && argv[optind][0] == '\0')
-				optind++;
-			inplace = optarg ? optarg : "";
+			if (option.value == NULL && option.index + 1 < (size_t)argc &&
+			    argv[option.index + 1][0] == '\0')
+				skip_empty = option.index + 1;
+			inplace = option.value ? option.value : "";
 			ispan = 0;	/* don't span across input files */
 			break;
 		case 'l':
-			if(setvbuf(stdout, NULL, _IOLBF, 0) != 0)
-				warnx("setting line buffered output failed");
+			buffering = 'l';
 			break;
 		case 'n':
 			nflag = 1;
 			break;
 		case 'u':
-			if(setvbuf(stdout, NULL, _IONBF, 0) != 0)
-				warnx("setting unbuffered output failed");
+			buffering = 'u';
 			break;
 		default:
-		case '?':
 			usage();
 		}
-	argc -= optind;
-	argv += optind;
+	}
 
-	/* First usage case; script is the first arg */
-	if (!eflag && !fflag && *argv) {
-		if (asprintf(&temp_arg, "%s\n", *argv) == -1)
+	size_t first_file = 0;
+	if (script == NULL && count != 0) {
+		if (asprintf(&temp_arg, "%s\n", operands[0]) == -1)
 			err(1, "asprintf");
 		add_compunit(CU_STRING, temp_arg);
-		argv++;
+		first_file = 1;
 	}
 
 	if (script == NULL)
 		usage();
+	if (inplace != NULL) {
+		if (strchr(inplace, '/') != NULL)
+			errx(1, "backup suffix must not contain '/'");
+		if (first_file == count && !fflagstdin)
+			errx(1, "-I or -i may not be used with stdin");
+		for (size_t i = first_file; i < count; i++)
+			if (operands[i][0] == '\0')
+				errx(1, "empty in-place input file name");
+	}
+	if (buffering == 'l' && setvbuf(stdout, NULL, _IOLBF, 0) != 0)
+		warnx("setting line buffered output failed");
+	if (buffering == 'u' && setvbuf(stdout, NULL, _IONBF, 0) != 0)
+		warnx("setting unbuffered output failed");
 	compile();
 
-	/* Continue with first and start second usage */
-	if (*argv)
-		for (; *argv; argv++)
-			add_file(*argv);
+	if (first_file != count)
+		for (size_t i = first_file; i < count; i++)
+			add_file(operands[i]);
 	else if (fflagstdin)
 		exit(rval);
 	else
 		add_file(NULL);
+	free(operands);
 	process();
 	cfclose(prog, NULL);
 	if (fclose(stdout))
@@ -343,8 +381,6 @@ mf_fgets(SPACE *sp, enum e_spflag spflag)
 	if (infile == NULL) {
 		/* stdin? */
 		if (files->fname == NULL) {
-			if (inplace != NULL)
-				errx(1, "-I or -i may not be used with stdin");
 			infile = stdin;
 			fname = "stdin";
 			outfile = stdout;
@@ -408,8 +444,6 @@ mf_fgets(SPACE *sp, enum e_spflag spflag)
 			if ((infile = fdopen(fd, "r")) == NULL)
 				err(1, "%s", fname);
 			if (*inplace != '\0') {
-				if (strchr(inplace, '/') != NULL)
-					errx(1, "backup suffix must not contain '/'");
 				len = snprintf(oldfname, sizeof(oldfname), "%s%s", fname, inplace);
 				if (len < 0 || len >= (ssize_t)sizeof(oldfname))
 					errx(1, "%s: backup name too long", fname);

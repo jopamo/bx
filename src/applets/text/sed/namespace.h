@@ -6,7 +6,6 @@
 #define compile bx_sed_compile
 #define cspace bx_sed_cspace
 #define cu_fgets bx_sed_cu_fgets
-#define eflag bx_sed_eflag
 #define fname bx_sed_fname
 #define infile bx_sed_infile
 #define inplace bx_sed_inplace
