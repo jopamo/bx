@@ -389,6 +389,7 @@ bx_lib_sources = [
   'src/lib/base64_arm64.c',
   'src/lib/cli_common.c',
   'src/lib/args_common.c',
+  'src/lib/option_scan.c',
   'src/lib/argv_packer.c',
   'src/lib/backpressure_limit.c',
   'src/lib/backup_ops.c',
