@@ -4220,8 +4220,8 @@ local size_t num(char *arg) {
 }
 
 // Process an argument, return true if it is an option (not a filename)
-local int option(char *arg) {
-    static char get = 0;     // if not zero, look for option parameter
+local int option(char *arg, char *pending) {
+    char get = *pending;    // if not zero, look for option parameter
     char bad[3] = "-X";     // for error messages (X is replaced)
 
     // if no argument or dash option, check status of get
@@ -4330,8 +4330,10 @@ local int option(char *arg) {
                 throw(EINVAL, "invalid option: %s", bad);
             }
         } while (*++arg);
-        if (*arg == 0)
+        if (*arg == 0) {
+            *pending = get;
             return 1;
+        }
     }
 
     // process option parameter for -b, -p, -A, -S, or -C
@@ -4373,7 +4375,7 @@ local int option(char *arg) {
             g.alias = arg;                      // zip name for stdin
         else if (get == 'C')
             g.comment = arg;                    // header comment
-        get = 0;
+        *pending = 0;
         return 1;
     }
 
@@ -4388,13 +4390,27 @@ local void cut_yarn(int err) {
 }
 #endif
 
+local void environment_options(char *opts, const char *name) {
+    char pending = 0;
+    while (opts != NULL) {
+        opts += strspn(opts, " \t");
+        if (*opts == '\0')
+            break;
+        char *end = opts + strcspn(opts, " \t");
+        char *next = *end ? end + 1 : NULL;
+        *end = '\0';
+        if (!option(opts, &pending))
+            throw(EINVAL, "cannot provide files in %s environment variable", name);
+        opts = next;
+    }
+    option(NULL, &pending);
+}
+
 // Process command line arguments.
-int bx_pigz_main(int argc, char **argv) {
+local int pigz_run(int argc, char **argv, char **files, char *gzip_opts, char *pigz_opts) {
     int n;                          // general index
-    int nop;                        // index before which "-" means stdin
-    int done;                       // number of named files processed
     size_t k;                       // program name length
-    char *opts, *p;                 // environment default options, marker
+    char *p;
     ball_t err;                     // error information from throw()
 
     g.ret = 0;
@@ -4440,43 +4456,8 @@ int bx_pigz_main(int argc, char **argv) {
         // create CRC table, in case zlib compiled with dynamic tables
         get_crc_table();
 
-        // process user environment variable defaults in GZIP
-        opts = getenv("GZIP");
-        if (opts != NULL) {
-            while (*opts) {
-                while (*opts == ' ' || *opts == '\t')
-                    opts++;
-                p = opts;
-                while (*p && *p != ' ' && *p != '\t')
-                    p++;
-                n = *p;
-                *p = 0;
-                if (!option(opts))
-                    throw(EINVAL, "cannot provide files in "
-                                  "GZIP environment variable");
-                opts = p + (n ? 1 : 0);
-            }
-            option(NULL);           // check for missing parameter
-        }
-
-        // process user environment variable defaults in PIGZ as well
-        opts = getenv("PIGZ");
-        if (opts != NULL) {
-            while (*opts) {
-                while (*opts == ' ' || *opts == '\t')
-                    opts++;
-                p = opts;
-                while (*p && *p != ' ' && *p != '\t')
-                    p++;
-                n = *p;
-                *p = 0;
-                if (!option(opts))
-                    throw(EINVAL, "cannot provide files in "
-                                  "PIGZ environment variable");
-                opts = p + (n ? 1 : 0);
-            }
-            option(NULL);           // check for missing parameter
-        }
+        environment_options(gzip_opts, "GZIP");
+        environment_options(pigz_opts, "PIGZ");
 
         // decompress if named "unpigz" or "gunzip", to stdout if "*cat"
         if (strcmp(g.prog, "unpigz") == 0 || strcmp(g.prog, "gunzip") == 0) {
@@ -4496,31 +4477,28 @@ int bx_pigz_main(int argc, char **argv) {
             help();
 
         // process all command-line options first
-        nop = argc;
+        int count = 0;
+        char pending = 0;
         for (n = 1; n < argc; n++)
             if (strcmp(argv[n], "--") == 0) {
-                nop = n;                // after this, "-" is the name "-"
-                argv[n] = NULL;         // remove option
-                break;                  // ignore options after "--"
+                while (++n < argc)
+                    files[count++] = argv[n]; // "-" is now a literal filename
+                break;
             }
-            else if (option(argv[n]))   // process argument
-                argv[n] = NULL;         // remove if option
-        option(NULL);                   // check for missing parameter
+            else if (!option(argv[n], &pending))
+                files[count++] = strcmp(argv[n], "-") == 0 ? NULL : argv[n];
+        option(NULL, &pending);
 
         // process command-line filenames
-        done = 0;
-        for (n = 1; n < argc; n++)
-            if (argv[n] != NULL) {
-                if (done == 1 && g.pipeout && !g.decode && !g.list &&
-                    g.form > 1)
-                    complain("warning: output will be concatenated zip files"
-                             " -- %s will not be able to extract", g.prog);
-                process(n < nop && strcmp(argv[n], "-") == 0 ? NULL : argv[n]);
-                done++;
-            }
+        for (n = 0; n < count; n++) {
+            if (n == 1 && g.pipeout && !g.decode && !g.list && g.form > 1)
+                complain("warning: output will be concatenated zip files"
+                         " -- %s will not be able to extract", g.prog);
+            process(files[n]);
+        }
 
         // list stdin or compress stdin to stdout if no file names provided
-        if (done == 0)
+        if (count == 0)
             process(NULL);
     }
     always {
@@ -4536,4 +4514,21 @@ int bx_pigz_main(int argc, char **argv) {
     // show log (if any)
     log_dump();
     return g.ret;
+}
+
+int bx_pigz_main(int argc, char **argv) {
+    const char *gzip = getenv("GZIP");
+    const char *pigz = getenv("PIGZ");
+    char *gzip_opts = gzip ? strdup(gzip) : NULL;
+    char *pigz_opts = pigz ? strdup(pigz) : NULL;
+    char **files = argc > 1 ? calloc((size_t)argc - 1, sizeof(*files)) : NULL;
+    int status = 1;
+    if ((gzip && !gzip_opts) || (pigz && !pigz_opts) || (argc > 1 && !files))
+        fputs("pigz: out of memory\n", stderr);
+    else
+        status = pigz_run(argc, argv, files, gzip_opts, pigz_opts);
+    free(files);
+    free(pigz_opts);
+    free(gzip_opts);
+    return status;
 }
