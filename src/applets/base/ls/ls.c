@@ -21,6 +21,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/dir_cycle.h"
+#include "lib/glob_syntax.h"
 #include "lib/line_writer_file.h"
 #include "lib/output_alloc_counter.h"
 #include "lib/output_policy.h"
@@ -284,7 +285,7 @@ struct bx_ls_dired_output {
     size_t subdir_cap;
 };
 
-static void bx_ls_pattern_list_append(struct bx_ls_pattern_list* list, char* pattern);
+static void bx_ls_pattern_list_append(struct bx_ls_pattern_list* list, const char* pattern);
 static void bx_ls_pattern_list_free(struct bx_ls_pattern_list* list);
 static time_t bx_ls_selected_time_sec(const struct stat* st, enum bx_ls_time_kind kind);
 static long bx_ls_selected_time_nsec(const struct stat* st, enum bx_ls_time_kind kind);
@@ -1284,17 +1285,22 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
     return true;
 }
 
-static void bx_ls_pattern_list_append(struct bx_ls_pattern_list* list, char* pattern) {
+static void bx_ls_pattern_list_append(struct bx_ls_pattern_list* list, const char* pattern) {
     if (list->len == list->cap) {
         size_t new_cap = (list->cap == 0) ? 4u : list->cap * 2u;
         list->items = xrealloc(list->items, new_cap * sizeof(*list->items));
         list->cap = new_cap;
     }
 
-    list->items[list->len++] = pattern;
+    char* copy = xstrdup(pattern);
+    if (strstr(copy, "[^"))
+        bx_glob_normalize_caret(copy);
+    list->items[list->len++] = copy;
 }
 
 static void bx_ls_pattern_list_free(struct bx_ls_pattern_list* list) {
+    for (size_t i = 0; i < list->len; i++)
+        free(list->items[i]);
     free(list->items);
     list->items = NULL;
     list->len = 0;
