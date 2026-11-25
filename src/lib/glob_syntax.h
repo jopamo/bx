@@ -108,7 +108,9 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                     for (const char* tail = p + 3; tail < end; tail++) {
                         if (*tail == '\\' && tail + 1 < end)
                             tail++;
-                        else if (*tail == '[' || *tail == ']')
+                        else if (*tail == ']' ||
+                                 (*tail == '[' && tail + 1 < end &&
+                                  strchr(".=:!^", tail[1])))
                             return;
                     }
                     const char* hyphen = strchr(p + 3, '-');
@@ -121,7 +123,7 @@ static inline void bx_glob_normalize_caret(char* pattern) {
 #ifdef __GLIBC__
                     /* glibc rejects a single terminal range. A prior
                      * hyphen could make this one a range endpoint instead. */
-                    else if (hyphen == end - 1 && !strchr(p + 3, '\\')) {
+                    else if (hyphen == end - 1 && !strpbrk(p + 3, "[\\")) {
                         p[1] = '!';
                     }
 #endif
