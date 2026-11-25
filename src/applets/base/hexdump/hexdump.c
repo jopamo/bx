@@ -1,20 +1,19 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "crypto/digest_util.h"
-#include "lib/args_common.h"
-#include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/xreadwrite.h"
 
 struct dump {
@@ -118,52 +117,79 @@ static void usage(FILE* stream) {
 }
 
 int bx_hexdump_main(int argc, char** argv) {
-    static const struct option options[] = {{"help", no_argument, NULL, 'h'}, {0}};
+    static const struct bx_option_spec specs[] = {
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'C', 'C', NULL, BX_OPTION_NO_VALUE},
+        {'e', 'e', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', NULL, BX_OPTION_NO_VALUE},
+    };
     struct bx_diag_ctx diag = {.progname = "hexdump"};
     struct dump dump = {0};
     bool mode_selected = false;
-    int opt, operand = 1;
-    bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:Ce:hv", options, &operand)) != -1) {
-        switch (opt) {
-        case 'C':
-        case 'e':
-            if (mode_selected || (opt == 'e' && strcmp(optarg, "1/4 \"%u\"") != 0)) {
-                bx_diag(&diag, "choose exactly one of -C or -e '1/4 \"%%u\"'");
-                return 1;
+    const char** files = NULL;
+    size_t file_count = 0;
+    int status = 1;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!files) {
+                files = calloc((size_t)argc - option.index, sizeof(*files));
+                if (!files) {
+                    bx_perror_path(&diag, "allocate input operands");
+                    goto done;
+                }
             }
-            dump.canonical = opt == 'C';
-            mode_selected = true;
-            break;
-        case 'v':
-            dump.verbose = true;
-            break;
-        case 'h':
-            usage(stdout);
-            return 0;
-        case ':':
-            bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-            return 1;
-        default:
-            bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
+            files[file_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
+            case 'C':
+            case 'e':
+                if (mode_selected || (option.spec->id == 'e' && strcmp(option.value, "1/4 \"%u\"") != 0)) {
+                    bx_diag(&diag, "choose exactly one of -C or -e '1/4 \"%%u\"'");
+                    goto done;
+                }
+                dump.canonical = option.spec->id == 'C';
+                mode_selected = true;
+                break;
+            case 'v':
+                dump.verbose = true;
+                break;
+            case 'h':
+                usage(stdout);
+                status = 0;
+                goto done;
         }
     }
     if (!mode_selected) {
         usage(stderr);
-        return 1;
+        goto done;
     }
     size_t width = dump.canonical ? 16 : sizeof(uint32_t);
-    if (optind == argc && !consume(&dump, width, "-", &diag))
-        return 1;
-    for (int i = optind; i < argc; i++)
-        if (!consume(&dump, width, argv[i], &diag))
-            return 1;
+    if (!file_count && !consume(&dump, width, "-", &diag))
+        goto done;
+    for (size_t i = 0; i < file_count; i++)
+        if (!consume(&dump, width, files[i], &diag))
+            goto done;
     if ((dump.used && !emit(&dump, width)) ||
         (dump.canonical && dump.offset && printf("%08" PRIxMAX "\n", dump.offset) < 0) ||
         fflush(stdout) == EOF) {
         bx_perror_path(&diag, "standard output");
-        return 1;
+        goto done;
     }
-    return 0;
+    status = 0;
+done:
+    free(files);
+    return status;
 }
