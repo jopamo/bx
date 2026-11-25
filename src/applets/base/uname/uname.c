@@ -3,11 +3,10 @@
 #include <string.h>
 #include <sys/utsname.h>
 #include <unistd.h>
-#include <getopt.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 static void bx_uname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]...\n", progname);
@@ -28,18 +27,19 @@ static void bx_uname_print_help(FILE* stream, const char* progname) {
 }
 
 int bx_uname_main(int argc, char** argv) {
-    static const struct option long_options[] = {{"all", no_argument, NULL, 'a'},
-                                                 {"kernel-name", no_argument, NULL, 's'},
-                                                 {"nodename", no_argument, NULL, 'n'},
-                                                 {"kernel-release", no_argument, NULL, 'r'},
-                                                 {"kernel-version", no_argument, NULL, 'v'},
-                                                 {"machine", no_argument, NULL, 'm'},
-                                                 {"processor", no_argument, NULL, 'p'},
-                                                 {"hardware-platform", no_argument, NULL, 'i'},
-                                                 {"operating-system", no_argument, NULL, 'o'},
-                                                 {"help", no_argument, NULL, 'h'},
-                                                 {"version", no_argument, NULL, 'V'},
-                                                 {NULL, 0, NULL, 0}};
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'s', 's', "kernel-name", BX_OPTION_NO_VALUE},
+        {'n', 'n', "nodename", BX_OPTION_NO_VALUE},
+        {'r', 'r', "kernel-release", BX_OPTION_NO_VALUE},
+        {'v', 'v', "kernel-version", BX_OPTION_NO_VALUE},
+        {'m', 'm', "machine", BX_OPTION_NO_VALUE},
+        {'p', 'p', "processor", BX_OPTION_NO_VALUE},
+        {'i', 'i', "hardware-platform", BX_OPTION_NO_VALUE},
+        {'o', 'o', "operating-system", BX_OPTION_NO_VALUE},
+        {'h', 0, "help", BX_OPTION_NO_VALUE},
+        {'V', 0, "version", BX_OPTION_NO_VALUE},
+    };
 
     const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "uname");
     struct bx_diag_ctx diag = {
@@ -49,11 +49,26 @@ int bx_uname_main(int argc, char** argv) {
         .debug = false,
     };
     int opt_a = 0, opt_s = 0, opt_n = 0, opt_r = 0, opt_v = 0, opt_m = 0, opt_p = 0, opt_i = 0, opt_o = 0;
-    int c;
 
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "asnrvmpio", long_options, NULL)) != -1) {
-        switch (c) {
+    const char* extra = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!extra)
+                extra = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(progname);
+            return 1;
+        }
+        switch (option.spec->id) {
             case 'a':
                 opt_a = 1;
                 break;
@@ -87,17 +102,13 @@ int bx_uname_main(int argc, char** argv) {
             case 'V':
                 bx_cli_print_version(progname);
                 return 0;
-            case '?':
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(progname);
-                return 1;
             default:
                 return 1;
         }
     }
 
-    if (optind < argc) {
-        bx_cli_diag_extra_operand(&diag, argv[optind]);
+    if (extra) {
+        bx_cli_diag_extra_operand(&diag, extra);
         bx_cli_print_try_help(progname);
         return 1;
     }

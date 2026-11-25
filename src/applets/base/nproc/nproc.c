@@ -5,7 +5,6 @@
 #ifdef __linux__
 #include <sched.h>
 #endif
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -16,7 +15,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 struct bx_nproc_options {
     const char* progname;
@@ -24,7 +23,6 @@ struct bx_nproc_options {
     uintmax_t ignore;
     bool show_help;
     bool show_version;
-    int first_operand;
 };
 
 enum bx_nproc_parse_status {
@@ -98,29 +96,42 @@ static enum bx_nproc_parse_status bx_nproc_parse_options(
     struct bx_nproc_options* options,
     struct bx_diag_ctx* diag
 ) {
-    static const struct option long_options[] = {
-        {"all", no_argument, NULL, 1}, {"ignore", required_argument, NULL, 2}, {"help", no_argument, NULL, 3}, {"version", no_argument, NULL, 4}, {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {1, 0, "all", BX_OPTION_NO_VALUE},
+        {2, 0, "ignore", BX_OPTION_REQUIRED_VALUE},
+        {3, 0, "help", BX_OPTION_NO_VALUE},
+        {4, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "nproc");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "", long_options, &option_index);
-        if (c == -1) {
-            break;
+    const char* extra = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!extra)
+                extra = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return BX_NPROC_PARSE_ERROR_TRY_HELP;
+        }
+        switch (option.spec->id) {
             case 1:
                 options->all = true;
                 break;
             case 2:
-                if (!bx_nproc_parse_ignore(optarg, &options->ignore, diag)) {
+                if (!bx_nproc_parse_ignore(option.value, &options->ignore, diag)) {
                     return BX_NPROC_PARSE_ERROR;
                 }
                 break;
@@ -130,17 +141,13 @@ static enum bx_nproc_parse_status bx_nproc_parse_options(
             case 4:
                 options->show_version = true;
                 return BX_NPROC_PARSE_OK;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return BX_NPROC_PARSE_ERROR_TRY_HELP;
             default:
                 return BX_NPROC_PARSE_ERROR;
         }
     }
 
-    options->first_operand = optind;
-    if (optind < argc) {
-        bx_cli_diag_extra_operand(diag, argv[optind]);
+    if (extra) {
+        bx_cli_diag_extra_operand(diag, extra);
         return BX_NPROC_PARSE_ERROR_TRY_HELP;
     }
 
