@@ -43,6 +43,25 @@ static inline const char* bx_glob_bracket_end(const char* text, const char* end)
     return NULL;
 }
 
+/* A final hyphen is literal when escaped or consumed as a range member.
+ * Only classify ASCII here: a multibyte endpoint may span several bytes. */
+static inline int bx_glob_terminal_hyphen_is_member(const char* atom, const char* end) {
+    while (atom < end) {
+        if (*atom == '\\')
+            atom++;
+        if (atom == end || (unsigned char)*atom++ >= 0x80u)
+            return 0;
+        if (atom < end && *atom == '-') {
+            atom++;
+            if (atom < end && *atom == '\\')
+                atom++;
+            if (atom == end || (unsigned char)*atom++ >= 0x80u)
+                return 0;
+        }
+    }
+    return 1;
+}
+
 /* Requires one writable byte after the terminator. Quote the opening bracket
  * of a simple incomplete [^] expression, but leave ambiguous tails alone. */
 static inline void bx_glob_normalize_caret(char* pattern) {
@@ -62,7 +81,8 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                     }
                     const char* hyphen = strchr(p + 3, '-');
                     if (end[-1] != '-' ||
-                        (end - p >= 5 && hyphen == end - 2 && !strchr(p + 3, '\\'))) {
+                        (end - p >= 5 && hyphen == end - 2 && !strchr(p + 3, '\\')) ||
+                        bx_glob_terminal_hyphen_is_member(p + 2, end)) {
                         memmove(p + 1, p, (size_t)(end - p) + 1);
                         *p = '\\';
                     }
