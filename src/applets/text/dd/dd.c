@@ -86,7 +86,6 @@ struct bx_dd_config {
     bool bs_set;
     bool cbs_set;
     bool count_set;
-    bool skip_set;
     bool seek_set;
     bool count_bytes;
     bool skip_bytes;
@@ -98,6 +97,11 @@ struct bx_dd_config {
     unsigned status_mask;
 
     mode_t create_mode;
+};
+
+struct bx_dd_offsets {
+    uintmax_t skip_bytes;
+    off_t seek;
 };
 
 struct bx_dd_stats {
@@ -626,7 +630,6 @@ static bool bx_dd_parse_assignment(struct bx_dd_config* cfg, const char* arg, co
             return false;
         }
         cfg->skip_bytes = bytes || (cfg->iflag_mask & BX_DD_FLAG_SKIP_BYTES) != 0u;
-        cfg->skip_set = true;
         return true;
     }
 
@@ -670,6 +673,11 @@ static unsigned bx_dd_popcount(unsigned value) {
 }
 
 static bool bx_dd_validate_config(const struct bx_dd_config* cfg, const char* progname) {
+    if (cfg->ibs >= SIZE_MAX || cfg->obs > SIZE_MAX || cfg->cbs > SIZE_MAX) {
+        bx_dd_diag(progname, "block size too large");
+        return false;
+    }
+
     unsigned charset = cfg->conv_mask & (BX_DD_CONV_ASCII | BX_DD_CONV_EBCDIC | BX_DD_CONV_IBM);
     if (bx_dd_popcount(charset) > 1u) {
         bx_dd_diag(progname, "cannot combine any two of {ascii,ebcdic,ibm}");
@@ -693,6 +701,20 @@ static bool bx_dd_validate_config(const struct bx_dd_config* cfg, const char* pr
         return false;
     }
 
+    return true;
+}
+
+static bool bx_dd_prepare_offsets(const struct bx_dd_config* cfg, struct bx_dd_offsets* offsets, const char* progname) {
+    uintmax_t seek_bytes;
+    if (!bx_dd_safe_mul(cfg->skip, cfg->skip_bytes ? 1 : cfg->ibs, &offsets->skip_bytes)) {
+        bx_dd_diag(progname, "skip offset overflow");
+        return false;
+    }
+    if (!bx_dd_safe_mul(cfg->seek, cfg->seek_bytes ? 1 : cfg->obs, &seek_bytes) ||
+        !bx_dd_u64_to_off_t(seek_bytes, &offsets->seek)) {
+        bx_dd_diag(progname, "seek offset overflow");
+        return false;
+    }
     return true;
 }
 
@@ -1023,19 +1045,10 @@ static bool bx_dd_discard_input_bytes(struct bx_dd_ctx* ctx, uintmax_t byte_coun
     return true;
 }
 
-static bool bx_dd_apply_skip_seek(struct bx_dd_ctx* ctx) {
-    if (ctx->cfg.skip_set && ctx->cfg.skip > 0) {
-        uintmax_t skip_bytes = 0;
-        if (ctx->cfg.skip_bytes) {
-            skip_bytes = ctx->cfg.skip;
-        }
-        else if (!bx_dd_safe_mul(ctx->cfg.skip, ctx->cfg.ibs, &skip_bytes)) {
-            bx_dd_diag(ctx->progname, "skip offset overflow");
-            return false;
-        }
-
+static bool bx_dd_apply_skip_seek(struct bx_dd_ctx* ctx, const struct bx_dd_offsets* offsets) {
+    if (offsets->skip_bytes != 0) {
         off_t skip_offset = 0;
-        bool offset_ok = bx_dd_u64_to_off_t(skip_bytes, &skip_offset);
+        bool offset_ok = bx_dd_u64_to_off_t(offsets->skip_bytes, &skip_offset);
 
         if (!offset_ok || bx_fd_lseek(ctx->infd, skip_offset, SEEK_CUR) < 0) {
             if (offset_ok && errno != ESPIPE && errno != EINVAL) {
@@ -1043,32 +1056,15 @@ static bool bx_dd_apply_skip_seek(struct bx_dd_ctx* ctx) {
                 return false;
             }
 
-            if (!bx_dd_discard_input_bytes(ctx, skip_bytes)) {
+            if (!bx_dd_discard_input_bytes(ctx, offsets->skip_bytes)) {
                 return false;
             }
         }
     }
 
-    if (ctx->cfg.seek_set && ctx->cfg.seek > 0) {
-        uintmax_t seek_bytes = 0;
-        if (ctx->cfg.seek_bytes) {
-            seek_bytes = ctx->cfg.seek;
-        }
-        else if (!bx_dd_safe_mul(ctx->cfg.seek, ctx->cfg.obs, &seek_bytes)) {
-            bx_dd_diag(ctx->progname, "seek offset overflow");
-            return false;
-        }
-
-        off_t seek_offset = 0;
-        if (!bx_dd_u64_to_off_t(seek_bytes, &seek_offset)) {
-            bx_dd_diag(ctx->progname, "seek offset overflow");
-            return false;
-        }
-
-        if (bx_fd_lseek(ctx->outfd, seek_offset, SEEK_CUR) < 0) {
-            bx_dd_perror_path(ctx->progname, ctx->output_path);
-            return false;
-        }
+    if (offsets->seek != 0 && bx_fd_lseek(ctx->outfd, offsets->seek, SEEK_CUR) < 0) {
+        bx_dd_perror_path(ctx->progname, ctx->output_path);
+        return false;
     }
 
     return true;
@@ -1351,17 +1347,7 @@ static unsigned char bx_dd_sync_pad_byte(const struct bx_dd_ctx* ctx) {
     return (unsigned char)0;
 }
 
-static bool bx_dd_alloc_buffers(struct bx_dd_ctx* ctx) {
-    if (ctx->cfg.ibs == 0 || ctx->cfg.obs == 0) {
-        bx_dd_diag(ctx->progname, "block sizes must be greater than zero");
-        return false;
-    }
-
-    if (ctx->cfg.ibs >= SIZE_MAX || ctx->cfg.obs > SIZE_MAX || ctx->cfg.cbs > SIZE_MAX) {
-        bx_dd_diag(ctx->progname, "block size too large");
-        return false;
-    }
-
+static void bx_dd_alloc_buffers(struct bx_dd_ctx* ctx) {
     ctx->ibuf = bx_dd_alloc_buffer((size_t)ctx->cfg.ibs);
     ctx->obuf = bx_dd_alloc_buffer((size_t)ctx->cfg.obs);
     ctx->xbuf = bx_dd_alloc_buffer((size_t)ctx->cfg.ibs + 1u);
@@ -1369,7 +1355,6 @@ static bool bx_dd_alloc_buffers(struct bx_dd_ctx* ctx) {
         ctx->cbuf = bx_dd_alloc_buffer((size_t)ctx->cfg.cbs);
     }
     ctx->obuf_len = 0;
-    return true;
 }
 
 static void bx_dd_read_input(struct bx_dd_ctx* ctx, size_t want, size_t* got_out, int* err_out) {
@@ -1973,21 +1958,23 @@ int bx_dd_main(int argc, char** argv) {
         return 0;
     }
 
-    bx_dd_install_usr1_handler();
+    struct bx_dd_offsets offsets;
+    if (!bx_dd_prepare_offsets(&ctx.cfg, &offsets, ctx.progname)) {
+        return 1;
+    }
 
+    bx_dd_install_usr1_handler();
     int rc = 1;
 
     if (!bx_dd_open_files(&ctx)) {
         goto out;
     }
 
-    if (!bx_dd_apply_skip_seek(&ctx)) {
+    if (!bx_dd_apply_skip_seek(&ctx, &offsets)) {
         goto out;
     }
 
-    if (!bx_dd_alloc_buffers(&ctx)) {
-        goto out;
-    }
+    bx_dd_alloc_buffers(&ctx);
 
     ctx.time_ready = bx_dd_now(&ctx.start_time);
     if (ctx.time_ready) {
