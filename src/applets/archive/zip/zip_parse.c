@@ -116,6 +116,14 @@ static int read_stdin_names(ZContext* ctx) {
     return ZU_STATUS_OK;
 }
 
+static void reverse_names(char** names, size_t count) {
+    for (size_t i = 0; i < count / 2; ++i) {
+        char* swap = names[i];
+        names[i] = names[count - 1 - i];
+        names[count - 1 - i] = swap;
+    }
+}
+
 /*
  * Read an archive comment from stdin into ctx->zip_comment
  *
@@ -639,6 +647,7 @@ static int parse_long_option(const char* tok, int argc, char** argv, int* idx, b
  */
 int zu_zip_parse_args(int argc, char** argv, ZContext* ctx, bool is_zipnote) {
     bool endopts = false;
+    size_t stdin_index = 0;
     int i = 1;
 
     while (i < argc) {
@@ -890,10 +899,9 @@ int zu_zip_parse_args(int argc, char** argv, ZContext* ctx, bool is_zipnote) {
                 continue;
             }
             if (strcmp(tok, "-@") == 0) {
+                if (!ctx->stdin_names_read)
+                    stdin_index = ctx->include.len;
                 ctx->stdin_names_read = true;
-                int rc = read_stdin_names(ctx);
-                if (rc != ZU_STATUS_OK)
-                    return rc;
                 ++i;
                 continue;
             }
@@ -944,7 +952,7 @@ int zu_zip_parse_args(int argc, char** argv, ZContext* ctx, bool is_zipnote) {
      * Version-only mode: -v with no archive and no file operands prints version
      * This matches Info-ZIP behavior where "zip -v" prints version and exits.
      */
-    if (ctx->verbose && !ctx->archive_path && ctx->include.len == 0) {
+    if (ctx->verbose && !ctx->archive_path && ctx->include.len == 0 && !ctx->stdin_names_read) {
         ctx->version_only = true;
         return ZU_STATUS_OK;
     }
@@ -956,14 +964,13 @@ int zu_zip_parse_args(int argc, char** argv, ZContext* ctx, bool is_zipnote) {
      * - Otherwise assume stdin provides file data and stdout is the archive stream
      */
     if (!ctx->archive_path) {
-        if (ctx->include.len == 0 && isatty(STDIN_FILENO)) {
-            print_usage(stderr, argv[0]);
-            return ZU_STATUS_USAGE;
-        }
-
         // Implicit mode consumes stdin for file data
         if (ctx->stdin_names_read) {
             zu_cli_error(zip_parse_tool(ctx), "cannot use -@ with implicit stdin-to-stdout mode");
+            return ZU_STATUS_USAGE;
+        }
+        if (ctx->include.len == 0 && isatty(STDIN_FILENO)) {
+            print_usage(stderr, argv[0]);
             return ZU_STATUS_USAGE;
         }
 
@@ -971,6 +978,23 @@ int zu_zip_parse_args(int argc, char** argv, ZContext* ctx, bool is_zipnote) {
         ctx->output_to_stdout = true;
         if (zu_strlist_push(&ctx->include, "-") != 0)
             return ZU_STATUS_OOM;
+    }
+
+    if (ctx->stdin_names_read) {
+        if (ctx->zip_comment_specified || ctx->zipnote_write) {
+            zu_cli_error(zip_parse_tool(ctx), "-@ conflicts with reading an archive comment from stdin");
+            return ZU_STATUS_USAGE;
+        }
+        size_t original_count = ctx->include.len;
+        int rc = read_stdin_names(ctx);
+        if (rc != ZU_STATUS_OK)
+            return rc;
+        if (stdin_index < original_count && ctx->include.len > original_count) {
+            /* Move appended names into the operand order of the first -@. */
+            reverse_names(ctx->include.items + stdin_index, original_count - stdin_index);
+            reverse_names(ctx->include.items + original_count, ctx->include.len - original_count);
+            reverse_names(ctx->include.items + stdin_index, ctx->include.len - stdin_index);
+        }
     }
 
     return ZU_STATUS_OK;
