@@ -118,17 +118,18 @@ static bool bx_switch_root_is_root_path(const char* path) {
     return len == 1 && path[0] == '/';
 }
 
-static bool bx_switch_root_path_is_mountpoint(const char* path, bool* is_mountpoint_out, struct bx_diag_ctx* diag, const char* label) {
+static bool bx_switch_root_path_is_mountpoint(int dirfd, const char* path, bool* is_mountpoint_out,
+                                              struct bx_diag_ctx* diag, const char* label) {
 #ifdef STATX_ATTR_MOUNT_ROOT
     struct statx info;
-    if (statx(AT_FDCWD, path, 0, STATX_TYPE, &info) == 0 &&
+    if (statx(dirfd, path, 0, STATX_TYPE, &info) == 0 &&
         (info.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT)) {
         *is_mountpoint_out = (info.stx_attributes & STATX_ATTR_MOUNT_ROOT) != 0;
         return true;
     }
 #endif
     struct stat st;
-    if (stat(path, &st) != 0) {
+    if (fstatat(dirfd, path, &st, 0) != 0) {
         bx_diag(diag, "cannot stat %s '%s': %s", label, path, strerror(errno));
         return false;
     }
@@ -139,7 +140,7 @@ static bool bx_switch_root_path_is_mountpoint(const char* path, bool* is_mountpo
     memcpy(parent + path_len, "/..", 4);
 
     struct stat parent_st;
-    if (stat(parent, &parent_st) != 0) {
+    if (fstatat(dirfd, parent, &parent_st, 0) != 0) {
         bx_diag(diag, "cannot stat parent of %s '%s': %s", label, path, strerror(errno));
         free(parent);
         return false;
@@ -151,7 +152,7 @@ static bool bx_switch_root_path_is_mountpoint(const char* path, bool* is_mountpo
     return true;
 }
 
-static bool bx_switch_root_validate_new_root(const char* new_root, struct bx_diag_ctx* diag) {
+static bool bx_switch_root_enter_new_root(const char* new_root, struct bx_diag_ctx* diag) {
     if (new_root == NULL || new_root[0] == '\0') {
         bx_diag(diag, "NEW_ROOT is empty");
         return false;
@@ -167,26 +168,43 @@ static bool bx_switch_root_validate_new_root(const char* new_root, struct bx_dia
         return false;
     }
 
-    struct stat st;
-    if (stat(new_root, &st) != 0) {
+    int fd = bx_fd_open_cloexec(new_root, O_PATH, 0);
+    struct stat st, old;
+    bool ok = false;
+    if (fd < 0 || fstat(fd, &st) != 0) {
         bx_diag(diag, "cannot access NEW_ROOT '%s': %s", new_root, strerror(errno));
-        return false;
+        goto done;
     }
     if (!S_ISDIR(st.st_mode)) {
         bx_diag(diag, "NEW_ROOT '%s' is not a directory", new_root);
-        return false;
+        goto done;
+    }
+    if (stat("/", &old) != 0) {
+        bx_diag(diag, "cannot access current root: %s", strerror(errno));
+        goto done;
+    }
+    if (st.st_dev == old.st_dev && st.st_ino == old.st_ino) {
+        bx_diag(diag, "NEW_ROOT must not be '/' for initramfs handoff");
+        goto done;
     }
 
     bool is_mountpoint = false;
-    if (!bx_switch_root_path_is_mountpoint(new_root, &is_mountpoint, diag, "NEW_ROOT")) {
-        return false;
-    }
+    if (!bx_switch_root_path_is_mountpoint(fd, ".", &is_mountpoint, diag, "NEW_ROOT"))
+        goto done;
     if (!is_mountpoint) {
         bx_diag(diag, "NEW_ROOT '%s' is not a mount point", new_root);
-        return false;
+        goto done;
     }
 
-    return true;
+    /* Keep the checked mount as cwd for preflight and for MS_MOVE. */
+    if (fchdir(fd) != 0) {
+        bx_diag(diag, "cannot change directory to NEW_ROOT '%s': %s", new_root, strerror(errno));
+        goto done;
+    }
+    ok = true;
+done:
+    bx_fd_cleanup(&fd);
+    return ok;
 }
 
 static bool bx_switch_root_candidate_is_executable(const char* path) {
@@ -202,8 +220,8 @@ static bool bx_switch_root_candidate_is_executable(const char* path) {
     return access(path, X_OK) == 0;
 }
 
-static bool bx_switch_root_validate_init_path(const char* new_root, const char* init_path, struct bx_diag_ctx* diag) {
-    char* candidate = bx_path_join_root_relative(new_root, init_path);
+static bool bx_switch_root_validate_init_path(const char* init_path, struct bx_diag_ctx* diag) {
+    char* candidate = bx_path_join_root_relative(".", init_path);
 
     struct stat st;
     if (stat(candidate, &st) != 0) {
@@ -233,7 +251,7 @@ static bool bx_switch_root_validate_init_path(const char* new_root, const char* 
     return true;
 }
 
-static bool bx_switch_root_validate_init_command(const char* new_root, const char* init_command, struct bx_diag_ctx* diag) {
+static bool bx_switch_root_validate_init_command(const char* init_command, struct bx_diag_ctx* diag) {
     const char* path_env = getenv("PATH");
     if (path_env == NULL || path_env[0] == '\0') {
         path_env = "/sbin:/bin:/usr/sbin:/usr/bin";
@@ -251,19 +269,12 @@ static bool bx_switch_root_validate_init_command(const char* new_root, const cha
 
         const char* directory = (segment[0] == '\0') ? "." : segment;
         char* relative_candidate = bx_path_join_root_relative(directory, init_command);
-        char* full_candidate = bx_path_join_root_relative(new_root, relative_candidate);
-
-        if (bx_switch_root_candidate_is_executable(full_candidate)) {
-            found = true;
-            free(relative_candidate);
-            free(full_candidate);
-            break;
-        }
-
+        char* candidate = bx_path_join_root_relative(".", relative_candidate);
+        found = bx_switch_root_candidate_is_executable(candidate);
+        free(candidate);
         free(relative_candidate);
-        free(full_candidate);
 
-        if (separator == NULL) {
+        if (found || separator == NULL) {
             break;
         }
         segment = separator + 1;
@@ -296,10 +307,10 @@ static bool bx_switch_root_validate_init_target(const struct bx_switch_root_opti
             bx_diag(diag, "INIT path must be absolute when containing '/': '%s'", init_target);
             return false;
         }
-        return bx_switch_root_validate_init_path(options->new_root, init_target, diag);
+        return bx_switch_root_validate_init_path(init_target, diag);
     }
 
-    return bx_switch_root_validate_init_command(options->new_root, init_target, diag);
+    return bx_switch_root_validate_init_command(init_target, diag);
 }
 
 static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const char* target_relpath, const char* new_root, struct bx_diag_ctx* diag) {
@@ -313,7 +324,7 @@ static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const 
     }
 
     bool source_is_mountpoint = false;
-    if (!bx_switch_root_path_is_mountpoint(source_path, &source_is_mountpoint, diag, "pseudo-filesystem path")) {
+    if (!bx_switch_root_path_is_mountpoint(AT_FDCWD, source_path, &source_is_mountpoint, diag, "pseudo-filesystem path")) {
         return false;
     }
 
@@ -461,16 +472,11 @@ int bx_switch_root_run(int argc, char** argv) {
         return 1;
     }
 
-    if (!bx_switch_root_validate_new_root(options.new_root, &diag)) {
+    if (!bx_switch_root_enter_new_root(options.new_root, &diag)) {
         return 1;
     }
 
     if (!bx_switch_root_validate_init_target(&options, argc, argv, &diag)) {
-        return 1;
-    }
-
-    if (chdir(options.new_root) != 0) {
-        bx_diag(&diag, "cannot change directory to NEW_ROOT '%s': %s", options.new_root, strerror(errno));
         return 1;
     }
 
