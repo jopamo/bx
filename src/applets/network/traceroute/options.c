@@ -13,7 +13,7 @@
 #include <strings.h>
 #include <netdb.h>
 
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
 #include "traceroute.h"
@@ -373,82 +373,91 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
         print_help(ctx);
         return false;
     }
-    static const struct option long_options[] = {
-        {"debug", no_argument, NULL, 'd'},
-        {"dont-fragment", no_argument, NULL, 'F'},
-        {"extensions", no_argument, NULL, 'e'},
-        {"as-path-lookups", no_argument, NULL, 'A'},
-        {"jsonl", no_argument, NULL, 264},
-        {"quiet", no_argument, NULL, 265},
-        {"auto-fallback", no_argument, NULL, 266},
-        {"mtu", no_argument, NULL, 267},
-        {"back", no_argument, NULL, 268},
-        {"first", required_argument, NULL, 'f'},
-        {"max-hops", required_argument, NULL, 'm'},
-        {"sim-queries", required_argument, NULL, 'N'},
-        {"tos", required_argument, NULL, 't'},
-        {"flowlabel", required_argument, NULL, 'l'},
-        {"queries", required_argument, NULL, 'q'},
-        {"ecmp", required_argument, NULL, 275},
-        {"fwmark", required_argument, NULL, 276},
-        {"interface", required_argument, NULL, 'i'},
-        {"netns", required_argument, NULL, 278},
-        {"module", required_argument, NULL, 'M'},
-        {"icmp", no_argument, NULL, 'I'},
-        {"tcp", no_argument, NULL, 'T'},
-        {"udp", no_argument, NULL, 'U'},
-        {"UL", no_argument, NULL, 283},
-        {"dccp", no_argument, NULL, 'D'},
-        {"port", required_argument, NULL, 'p'},
-        {"sport", required_argument, NULL, 286},
-        {"gateway", required_argument, NULL, 'g'},
-        {"source", required_argument, NULL, 's'},
-        {"options", required_argument, NULL, 'O'},
-        {"protocol", required_argument, NULL, 'P'},
-        {"wait", required_argument, NULL, 'w'},
-        {"sendwait", required_argument, NULL, 'z'},
-        {"deadline", required_argument, NULL, 293},
-        {"ts", required_argument, NULL, 294},
-        {"bpf", required_argument, NULL, 295},
-        {"version", no_argument, NULL, 'V'},
-        {"help", no_argument, NULL, 297},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "debug", BX_OPTION_NO_VALUE},
+        {'F', 'F', "dont-fragment", BX_OPTION_NO_VALUE},
+        {'e', 'e', "extensions", BX_OPTION_NO_VALUE},
+        {'A', 'A', "as-path-lookups", BX_OPTION_NO_VALUE},
+        {264, 0, "jsonl", BX_OPTION_NO_VALUE},
+        {265, 0, "quiet", BX_OPTION_NO_VALUE},
+        {266, 0, "auto-fallback", BX_OPTION_NO_VALUE},
+        {267, 0, "mtu", BX_OPTION_NO_VALUE},
+        {268, 0, "back", BX_OPTION_NO_VALUE},
+        {'f', 'f', "first", BX_OPTION_REQUIRED_VALUE},
+        {'m', 'm', "max-hops", BX_OPTION_REQUIRED_VALUE},
+        {'N', 'N', "sim-queries", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "tos", BX_OPTION_REQUIRED_VALUE},
+        {'l', 'l', "flowlabel", BX_OPTION_REQUIRED_VALUE},
+        {'q', 'q', "queries", BX_OPTION_REQUIRED_VALUE},
+        {275, 0, "ecmp", BX_OPTION_REQUIRED_VALUE},
+        {276, 0, "fwmark", BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', "interface", BX_OPTION_REQUIRED_VALUE},
+        {278, 0, "netns", BX_OPTION_REQUIRED_VALUE},
+        {'M', 'M', "module", BX_OPTION_REQUIRED_VALUE},
+        {'I', 'I', "icmp", BX_OPTION_NO_VALUE},
+        {'T', 'T', "tcp", BX_OPTION_NO_VALUE},
+        {'U', 'U', "udp", BX_OPTION_NO_VALUE},
+        {283, 0, "UL", BX_OPTION_NO_VALUE},
+        {'D', 'D', "dccp", BX_OPTION_NO_VALUE},
+        {'p', 'p', "port", BX_OPTION_REQUIRED_VALUE},
+        {286, 0, "sport", BX_OPTION_REQUIRED_VALUE},
+        {'g', 'g', "gateway", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "source", BX_OPTION_REQUIRED_VALUE},
+        {'O', 'O', "options", BX_OPTION_REQUIRED_VALUE},
+        {'P', 'P', "protocol", BX_OPTION_REQUIRED_VALUE},
+        {'w', 'w', "wait", BX_OPTION_REQUIRED_VALUE},
+        {'z', 'z', "sendwait", BX_OPTION_REQUIRED_VALUE},
+        {293, 0, "deadline", BX_OPTION_REQUIRED_VALUE},
+        {294, 0, "ts", BX_OPTION_REQUIRED_VALUE},
+        {295, 0, "bpf", BX_OPTION_REQUIRED_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
+        {297, 0, "help", BX_OPTION_NO_VALUE},
+        {'4', '4', NULL, BX_OPTION_NO_VALUE},
+        {'6', '6', NULL, BX_OPTION_NO_VALUE},
+        {'n', 'n', NULL, BX_OPTION_NO_VALUE},
+        {'r', 'r', NULL, BX_OPTION_NO_VALUE},
+        {'L', 'L', NULL, BX_OPTION_NO_VALUE},
     };
-    bool posix = getenv("POSIXLY_CORRECT") != NULL;
-    /* Keep option positions stable across libc implementations. */
-    char short_options[] = "-:46dFnreAf:m:N:t:l:q:i:M:ITULDp:g:s:O:P:w:z:V";
-    if (posix)
-        short_options[0] = '+';
-    int next_operand = 1;
-    bx_args_getopt_reset();
-    while (true) {
-        int index = optind > 0 ? optind : 1;
-        const char* spelling = index < argc ? argv[index] : "";
-        int c = posix
-                    ? bx_args_getopt_long(argc, argv, short_options, long_options, NULL)
-                    : bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1)
-            break;
-        if (spelling[0] != '-' || !spelling[1]) {
-            index = optind - 1;
-            if (optarg && index > 1 && optarg == argv[index])
-                index--;
-            /* A partially scanned short-option group has not advanced optind. */
-            if ((argv[index][0] != '-' || !argv[index][1]) && optind < argc)
-                index = optind;
-            spelling = argv[index];
+    struct bx_option_result operands[2];
+    size_t operand_count = 0;
+    struct bx_option_result extra = {0};
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (operand_count < sizeof(operands) / sizeof(operands[0]))
+                operands[operand_count++] = option;
+            else if (!extra.token)
+                extra = option;
+            continue;
+        }
+        const char* spelling = option.token;
+        int index = (int)option.index;
+        int c = option.spec ? option.spec->id : 0;
+        const char* value = option.value;
+        const char* argument_name = option_argument_name(c);
+        if (option.event != BX_OPTION_MATCH) {
+            const char* equals = strchr(spelling, '=');
+            if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&ctx->diag, "Option `%s' (argc %d) requires an argument: `%s%s%s'", spelling, index, spelling, option.short_name ? " " : "=", argument_name);
+            else if (option.short_name)
+                bx_diag(&ctx->diag, "Bad option `-%c' (argc %d)", option.short_name, index);
+            else if (equals)
+                bx_diag(&ctx->diag, "Bad option `%s' (with arg `%s') (argc %d)", spelling, equals + 1, index);
+            else
+                bx_diag(&ctx->diag, "Bad option `%s' (argc %d)", spelling, index);
+            ctx->diag.exit_status = 2;
+            return false;
+        }
+        bool detached = value && cursor.index == option.index + 2;
+        /* Allow -nf 1, but recognize an attached value only in standalone -f1. */
+        if (option.short_name && value && !detached && spelling[1] != c) {
+            bx_diag(&ctx->diag, "Option `-%c' (argc %d) requires an argument: `-%c %s'", c, index, c, argument_name);
+            ctx->diag.exit_status = 2;
+            return false;
         }
         bool ok = true;
-        const char* argument_name = option_argument_name(c);
-        /* Keep joined arguments ungrouped; POSIX also forbids -nf 1. */
-        if (argument_name && optarg && spelling[0] == '-' && spelling[1] != '-') {
-            const char* position = strchr(spelling + 1, c);
-            if (position && position != spelling + 1 && (optarg == position + 1 || posix)) {
-                bx_diag(&ctx->diag, "Option `-%c' (argc %d) requires an argument: `-%c %s'", c, index, c, argument_name);
-                ctx->diag.exit_status = 2;
-                return false;
-            }
-        }
         switch (c) {
             case '4': {
                 ctx->options.address_family = AF_INET;
@@ -503,47 +512,47 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
                 break;
             }
             case 'f': {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.first_hop);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.first_hop);
                 break;
             }
             case 'm': {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.max_hops);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.max_hops);
                 break;
             }
             case 'N': {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.simultaneous_probes);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.simultaneous_probes);
                 break;
             }
             case 't': {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.tos);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.tos);
                 break;
             }
             case 'l': {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.flow_label);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.flow_label);
                 break;
             }
             case 'q': {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.probes_per_hop);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.probes_per_hop);
                 break;
             }
             case 275: {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.ecmp);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.ecmp);
                 break;
             }
             case 276: {
-                ok = bx_traceroute_parse_uint(optarg, &ctx->options.fwmark);
+                ok = bx_traceroute_parse_uint(value, &ctx->options.fwmark);
                 break;
             }
             case 'i': {
-                ctx->options.interface = optarg;
+                ctx->options.interface = value;
                 break;
             }
             case 278: {
-                ctx->options.netns = optarg;
+                ctx->options.netns = value;
                 break;
             }
             case 'M': {
-                select_method(ctx, optarg);
+                select_method(ctx, value);
                 break;
             }
             case 'I': {
@@ -576,88 +585,66 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
                 break;
             }
             case 'p': {
-                ok = parse_port(optarg, &ctx->options.destination_port);
+                ok = parse_port(value, &ctx->options.destination_port);
                 break;
             }
             case 286: {
-                ok = parse_port(optarg, &ctx->options.source_port);
+                ok = parse_port(value, &ctx->options.source_port);
                 break;
             }
             case 'g': {
-                ok = add_gateways(ctx, optarg);
+                ok = add_gateways(ctx, value);
                 break;
             }
             case 's': {
-                ok = bx_traceroute_getaddr(ctx, optarg, &ctx->source) == 0;
+                ok = bx_traceroute_getaddr(ctx, value, &ctx->source) == 0;
                 break;
             }
             case 'O': {
-                ok = add_method_options(ctx, optarg);
+                ok = add_method_options(ctx, value);
                 break;
             }
             case 'P': {
                 select_method(ctx, "raw");
                 char raw_option[1024];
-                snprintf(raw_option, sizeof(raw_option), "protocol=%s", optarg);
+                snprintf(raw_option, sizeof(raw_option), "protocol=%s", value);
                 ok = append_method_option(ctx, raw_option);
                 break;
             }
             case 'w': {
-                ok = parse_wait(ctx, optarg);
+                ok = parse_wait(ctx, value);
                 break;
             }
             case 'z': {
-                ok = parse_double(optarg, &ctx->options.send_secs);
+                ok = parse_double(value, &ctx->options.send_secs);
                 break;
             }
             case 293: {
-                ok = parse_double(optarg, &ctx->options.deadline);
+                ok = parse_double(value, &ctx->options.deadline);
                 break;
             }
             case 294: {
-                ok = parse_ts(ctx, optarg);
+                ok = parse_ts(ctx, value);
                 break;
             }
             case 295: {
-                ok = parse_bpf(ctx, optarg);
+                ok = parse_bpf(ctx, value);
                 break;
             }
             case 'V': {
                 print_version();
                 return false;
-                break;
             }
             case 297: {
                 print_help(ctx);
                 return false;
-                break;
             }
-            case ':': {
-                const char* name = option_argument_name(optopt);
-                if (!name)
-                    name = "argument";
-                bx_diag(&ctx->diag, "Option `%s' (argc %d) requires an argument: `%s%s%s'", spelling, index, spelling,
-                        spelling[0] == '-' && spelling[1] == '-' ? "=" : " ", name);
-                ctx->diag.exit_status = 2;
-                return false;
-            }
-            default:
-                if (spelling[0] == '-' && spelling[1] != '-' && optopt)
-                    bx_diag(&ctx->diag, "Bad option `-%c' (argc %d)", optopt, index);
-                else if (strchr(spelling, '='))
-                    bx_diag(&ctx->diag, "Bad option `%s' (with arg `%s') (argc %d)", spelling, strchr(spelling, '=') + 1, index);
-                else
-                    bx_diag(&ctx->diag, "Bad option `%s' (argc %d)", spelling, index);
-                ctx->diag.exit_status = 2;
-                return false;
         }
         if (!ok) {
             if (ctx->options.show_method_help)
                 return false;
             char option_name[128];
-            int argument_index = index;
-            if (index + 1 < argc && optarg == argv[index + 1])
-                argument_index++;
+            int argument_index = index + detached;
             size_t len = spelling[0] == '-' && spelling[1] != '-'
                              ? 2 : strcspn(spelling, "=");
             if (len >= sizeof(option_name))
@@ -666,40 +653,41 @@ bool bx_traceroute_parse_options(struct bx_traceroute_ctx* ctx, int argc, char**
             if (spelling[0] == '-' && spelling[1] != '-')
                 option_name[1] = (char)c;
             option_name[len] = '\0';
-            bx_diag(&ctx->diag, "Cannot handle `%s' option with arg `%s' (argc %d)", option_name, optarg ? optarg : argument_name, argument_index);
+            bx_diag(&ctx->diag, "Cannot handle `%s' option with arg `%s' (argc %d)", option_name, value ? value : argument_name, argument_index);
             ctx->diag.exit_status = 2;
             return false;
         }
     }
-    if (optind == argc) {
+    if (operand_count == 0) {
         bx_diag(&ctx->diag, "Specify \"host\" missing argument.");
         ctx->diag.exit_status = 2;
         return false;
     }
-    if (argc - optind > 2) {
-        bx_diag(&ctx->diag, "Extra arg `%s' (position 3, argc %d)", argv[optind + 2], optind + 2);
+    if (extra.token) {
+        bx_diag(&ctx->diag, "Extra arg `%s' (position 3, argc %zu)", extra.token, extra.index);
         ctx->diag.exit_status = 2;
         return false;
     }
-    const char* host = argv[optind++];
+    if (operand_count == 2) {
+        const char* packetlen = operands[1].token;
+        char* end;
+        errno = 0;
+        long length = strtol(packetlen, &end, 0);
+        if (errno == ERANGE || end == packetlen || *end || length < INT_MIN || length > INT_MAX) {
+            bx_diag(&ctx->diag, "Cannot handle \"packetlen\" cmdline arg `%s' on position 2 (argc %zu)", packetlen, operands[1].index);
+            ctx->diag.exit_status = 2;
+            return false;
+        }
+        ctx->options.packet_len = (int)length;
+    }
+    const char* host = operands[0].token;
     if (bx_traceroute_getaddr(ctx, host, &ctx->destination) < 0) {
-        bx_diag(&ctx->diag, "Cannot handle \"host\" cmdline arg `%s' on position 1 (argc %d)", host, optind - 1);
+        bx_diag(&ctx->diag, "Cannot handle \"host\" cmdline arg `%s' on position 1 (argc %zu)", host, operands[0].index);
         ctx->diag.exit_status = 2;
         return false;
     }
     ctx->options.dst_name = host;
     if (!ctx->options.address_family)
         ctx->options.address_family = ctx->destination.sa.sa_family;
-    if (optind < argc) {
-        char* end;
-        long length = strtol(argv[optind], &end, 0);
-        if (end == argv[optind] || *end || length < INT_MIN || length > INT_MAX) {
-            bx_diag(&ctx->diag, "Cannot handle \"packetlen\" cmdline arg `%s' on position 2 (argc %d)", argv[optind], optind);
-            ctx->diag.exit_status = 2;
-            return false;
-        }
-        ctx->options.packet_len = (int)length;
-        optind++;
-    }
     return true;
 }
