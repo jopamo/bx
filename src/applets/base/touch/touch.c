@@ -1,8 +1,8 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,14 +14,19 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/time_parse.h"
-#include "lib/args_common.h"
 
 enum bx_touch_time_source {
     BX_TOUCH_TIME_SOURCE_NOW = 0,
     BX_TOUCH_TIME_SOURCE_DATE,
     BX_TOUCH_TIME_SOURCE_TIMESTAMP,
     BX_TOUCH_TIME_SOURCE_REFERENCE,
+};
+
+enum {
+    BX_TOUCH_OPT_HELP = 256,
+    BX_TOUCH_OPT_VERSION,
 };
 
 struct bx_touch_options {
@@ -35,6 +40,8 @@ struct bx_touch_options {
     struct timespec explicit_mtime;
     bool show_help;
     bool show_version;
+    const char** paths;
+    size_t path_count;
 };
 
 static void bx_touch_print_help(FILE* stream, const char* progname) {
@@ -198,32 +205,54 @@ static bool bx_touch_parse_stamp_argument(const char* value, struct timespec* ti
     return bx_time_build_local_timestamp(year, month, day, hour, minute, second, 0, timestamp_out);
 }
 
-static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"date", required_argument, NULL, 'd'},
-        {"no-create", no_argument, NULL, 'c'},
-        {"no-dereference", no_argument, NULL, 'h'},
-        {"reference", required_argument, NULL, 'r'},
-        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},
-        {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', NULL, BX_OPTION_NO_VALUE},
+        {'c', 'c', "no-create", BX_OPTION_NO_VALUE},
+        {'d', 'd', "date", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "no-dereference", BX_OPTION_NO_VALUE},
+        {'m', 'm', NULL, BX_OPTION_NO_VALUE},
+        {'r', 'r', "reference", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', NULL, BX_OPTION_REQUIRED_VALUE},
+        {BX_TOUCH_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_TOUCH_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "touch");
-    diag->progname = options->progname;
-
-    char short_options[] = "-:acd:hmr:t:";
-    int next_operand = 1;
-    bx_args_getopt_reset_file_options(short_options);
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1) {
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
             break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->paths == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->paths) ||
+                    (options->paths = malloc(capacity * sizeof(*options->paths))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->paths[options->path_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name != 0)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", result.token);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'a':
                 options->update_atime = true;
                 break;
@@ -236,8 +265,8 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
                     return false;
                 }
                 struct timespec parsed_date;
-                if (!bx_touch_parse_date_argument(optarg, &parsed_date)) {
-                    bx_diag(diag, "invalid date format '%s'", optarg);
+                if (!bx_touch_parse_date_argument(result.value, &parsed_date)) {
+                    bx_diag(diag, "invalid date format '%s'", result.value);
                     return false;
                 }
                 bx_touch_set_explicit_times(options, &parsed_date, &parsed_date);
@@ -256,8 +285,8 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
                     return false;
                 }
                 struct stat ref_st;
-                if (stat(optarg, &ref_st) != 0) {
-                    bx_perror_path(diag, optarg);
+                if (stat(result.value, &ref_st) != 0) {
+                    bx_perror_path(diag, result.value);
                     return false;
                 }
                 bx_touch_set_explicit_times(options, &ref_st.st_atim, &ref_st.st_mtim);
@@ -270,45 +299,20 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
                     return false;
                 }
                 struct timespec parsed_stamp;
-                if (!bx_touch_parse_stamp_argument(optarg, &parsed_stamp)) {
-                    bx_diag(diag, "invalid date format '%s'", optarg);
+                if (!bx_touch_parse_stamp_argument(result.value, &parsed_stamp)) {
+                    bx_diag(diag, "invalid date format '%s'", result.value);
                     return false;
                 }
                 bx_touch_set_explicit_times(options, &parsed_stamp, &parsed_stamp);
                 options->time_source = BX_TOUCH_TIME_SOURCE_TIMESTAMP;
                 break;
             }
-            case BX_ARGS_OPT_HELP:
+            case BX_TOUCH_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case BX_ARGS_OPT_VERSION:
+            case BX_TOUCH_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                if (optopt != 0) {
-                    const char* arg = (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
-                    if (arg != NULL && strncmp(arg, "--", 2) == 0) {
-                        bx_diag(diag, "option '%s' requires an argument", arg);
-                    }
-                    else {
-                        bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                    }
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 bx_diag(diag, "internal option parsing error");
                 return false;
@@ -320,7 +324,6 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
         options->update_mtime = true;
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -390,38 +393,35 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
     }
 }
 
+static int bx_touch_run(const struct bx_touch_options* options, struct bx_diag_ctx* diag) {
+    if (options->show_help) {
+        bx_touch_print_help(stdout, options->progname);
+        return 0;
+    }
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
+        return 0;
+    }
+    if (options->path_count == 0) {
+        bx_diag(diag, "missing file operand");
+        return diag->exit_status;
+    }
+    for (size_t i = 0; i < options->path_count; i++) {
+        bx_touch_path(options->paths[i], options, diag);
+    }
+    return diag->exit_status;
+}
+
 int bx_touch_main(int argc, char** argv) {
-    struct bx_touch_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "touch",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+    struct bx_touch_options options = {
+        .progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "touch"),
     };
-    int first_operand = 0;
-
-    if (!bx_touch_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_touch_print_help(stdout, options.progname);
-        return 0;
-    }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
-    }
-
-    if (first_operand >= argc) {
-        bx_diag(&diag, "missing file operand");
-        return diag.exit_status;
-    }
-
-    for (int i = first_operand; i < argc; i++) {
-        bx_touch_path(argv[i], &options, &diag);
-    }
-
-    return diag.exit_status;
+    struct bx_diag_ctx diag = {.progname = options.progname};
+    int status;
+    if (bx_touch_parse_options(argc, argv, &options, &diag))
+        status = bx_touch_run(&options, &diag);
+    else
+        status = diag.exit_status != 0 ? diag.exit_status : 1;
+    free(options.paths);
+    return status;
 }
