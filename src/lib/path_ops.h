@@ -4,6 +4,9 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+/* Match Linux pathname lookup when following links in a userspace resolver. */
+enum { BX_PATH_SYMLINK_LIMIT = 40 };
+
 struct bx_path_components {
     char** parts;
     size_t count;

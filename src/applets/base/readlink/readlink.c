@@ -163,7 +163,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
             if (S_ISLNK(st.st_mode)) {
                 char* target = NULL;
 
-                if (symlink_expansions >= 40u) {
+                if (symlink_expansions >= BX_PATH_SYMLINK_LIMIT) {
                     if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING) {
                         bx_path_components_append_normalized_part(&resolved, part);
                         bx_readlink_components_append_normalized_and_clear(&resolved, &pending);
