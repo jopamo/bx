@@ -131,14 +131,22 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                 after = bx_glob_bracket_end_with_classes(p, end, true);
 #endif
             if (!after) {
-                /* With no closing delimiter, a final [^- is literal.
-                 * glibc's other caret interpretation sees an unfinished
-                 * range instead, even after an earlier '[' fell back. */
-                if (end - p >= 3 && memcmp(end - 3, "[^-", 3) == 0 &&
-                    !strpbrk(p, "]\\") && !strstr(p, "[.") && !strstr(p, "[=")) {
-                    memmove(end - 2, end - 3, 4);
-                    end[-3] = '\\';
-                    break;
+                /* Without a closing bracket, these tails can be reached
+                 * after an earlier '[' fell back to literal matching. */
+                if (end - p >= 3 && end[-1] == '-' && !strpbrk(p, "]\\") &&
+                    !strstr(p, "[.") && !strstr(p, "[=")) {
+                    if (memcmp(end - 3, "[^-", 3) == 0) {
+                        memmove(end - 2, end - 3, 4);
+                        end[-3] = '\\';
+                        break;
+                    }
+#ifdef __GLIBC__
+                    /* Unlike [^-, the second '-' in [^-- starts an unfinished range. */
+                    if (end - p >= 4 && memcmp(end - 4, "[^--", 4) == 0) {
+                        end[-3] = '!';
+                        break;
+                    }
+#endif
                 }
                 if (end - p >= 3 && p[1] == '^' && p[2] == ']') {
                     for (const char* tail = p + 3; tail < end; tail++) {
