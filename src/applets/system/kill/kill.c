@@ -947,11 +947,6 @@ static bool bx_kill_send_target(
     bool needs_pidfd = expected_pidfd_inode != 0 || options->timeout_count > 0;
     int pidfd = -1;
 
-    if ((options->queue_set || options->timeout_count > 0 || options->require_handler || expected_pidfd_inode != 0) && pid <= 0) {
-        bx_diag(diag, "option requires a positive PID target: %s", target_text);
-        return false;
-    }
-
     if (needs_pidfd) {
         if (!bx_kill_prepare_pidfd(pid, expected_pidfd_inode, &pidfd, diag)) {
             return false;
@@ -1033,59 +1028,43 @@ static void bx_kill_record_result(struct bx_kill_outcome* outcome, bool success)
     }
 }
 
-static bool bx_kill_handle_numeric_target(
-    const struct bx_kill_options* options,
-    const char* operand,
-    struct bx_diag_ctx* diag,
-    struct bx_kill_outcome* outcome
-) {
-    pid_t pid = -1;
-    if (!bx_kill_parse_pid_text(operand, &pid)) {
-        bx_diag(diag, "invalid PID '%s'", operand);
-        bx_kill_record_result(outcome, false);
+struct bx_kill_target {
+    const char* text;
+    pid_t pid;
+    uintmax_t inode;
+    bool numeric;
+};
+
+static bool bx_kill_parse_target(const struct bx_kill_options* options, const char* text,
+                                 struct bx_kill_target* target, struct bx_diag_ctx* diag) {
+    target->text = text;
+    if (*text == '\0') {
+        bx_diag(diag, "empty process operand");
         return false;
     }
-
-    if (options->action == BX_KILL_ACTION_PID) {
-        bx_kill_print_pid_target(pid);
-        bx_kill_record_result(outcome, true);
-        return true;
+    if (strchr(text, ':') != NULL) {
+        if (!bx_kill_parse_pidfd_operand(text, &target->pid, &target->inode)) {
+            bx_diag(diag, "invalid pid:pidfd operand '%s'", text);
+            return false;
+        }
+        if (!options->signal_explicit) {
+            bx_diag(diag, "pid:pidfd operands require an explicit signal option");
+            return false;
+        }
+        if (options->action == BX_KILL_ACTION_PID) {
+            bx_diag(diag, "-p does not accept pid:pidfd operands");
+            return false;
+        }
+        target->numeric = true;
+    } else {
+        target->numeric = bx_kill_parse_pid_text(text, &target->pid);
+        if (target->numeric && target->pid <= 0 &&
+            (options->queue_set || options->timeout_count > 0 || options->require_handler)) {
+            bx_diag(diag, "option requires a positive PID target: %s", text);
+            return false;
+        }
     }
-
-    bool ok = bx_kill_send_target(options, pid, operand, 0, diag);
-    bx_kill_record_result(outcome, ok);
-    return ok;
-}
-
-static bool bx_kill_handle_pidfd_target(
-    const struct bx_kill_options* options,
-    const char* operand,
-    struct bx_diag_ctx* diag,
-    struct bx_kill_outcome* outcome
-) {
-    pid_t pid = -1;
-    uintmax_t inode = 0;
-    if (!bx_kill_parse_pidfd_operand(operand, &pid, &inode)) {
-        bx_diag(diag, "invalid pid:pidfd operand '%s'", operand);
-        bx_kill_record_result(outcome, false);
-        return false;
-    }
-
-    if (!options->signal_explicit) {
-        bx_diag(diag, "pid:pidfd operands require an explicit signal option");
-        bx_kill_record_result(outcome, false);
-        return false;
-    }
-
-    if (options->action == BX_KILL_ACTION_PID) {
-        bx_diag(diag, "-p does not accept pid:pidfd operands");
-        bx_kill_record_result(outcome, false);
-        return false;
-    }
-
-    bool ok = bx_kill_send_target(options, pid, operand, inode, diag);
-    bx_kill_record_result(outcome, ok);
-    return ok;
+    return true;
 }
 
 static bool bx_kill_handle_name_target(
@@ -1134,34 +1113,40 @@ static bool bx_kill_handle_name_target(
 }
 
 static bool bx_kill_execute_targets(const struct bx_kill_options* options, int argc, char** argv, struct bx_diag_ctx* diag, struct bx_kill_outcome* outcome) {
-    if (options->first_operand_index >= argc) {
-        bx_diag(diag, options->action == BX_KILL_ACTION_PID ? "not enough arguments" : "not enough arguments");
+    int count = argc - options->first_operand_index;
+    if (count <= 0) {
+        bx_diag(diag, "not enough arguments");
         return false;
+    }
+    struct bx_kill_target* targets = calloc((size_t)count, sizeof(*targets));
+    if (targets == NULL) {
+        bx_diag(diag, "memory exhausted");
+        return false;
+    }
+    for (int i = 0; i < count; i++) {
+        if (!bx_kill_parse_target(options, argv[options->first_operand_index + i], &targets[i], diag)) {
+            free(targets);
+            return false;
+        }
     }
 
     bool all_ok = true;
-    for (int i = options->first_operand_index; i < argc; i++) {
-        const char* operand = argv[i];
-        bool target_ok = false;
-
-        if (strchr(operand, ':') != NULL) {
-            target_ok = bx_kill_handle_pidfd_target(options, operand, diag, outcome);
+    for (int i = 0; i < count; i++) {
+        const struct bx_kill_target* target = &targets[i];
+        bool target_ok;
+        if (!target->numeric) {
+            target_ok = bx_kill_handle_name_target(options, target->text, diag, outcome);
+        } else {
+            if (options->action == BX_KILL_ACTION_PID)
+                target_ok = bx_kill_print_pid_target(target->pid);
+            else
+                target_ok = bx_kill_send_target(options, target->pid, target->text, target->inode, diag);
+            bx_kill_record_result(outcome, target_ok);
         }
-        else {
-            pid_t numeric_pid = -1;
-            if (bx_kill_parse_pid_text(operand, &numeric_pid)) {
-                target_ok = bx_kill_handle_numeric_target(options, operand, diag, outcome);
-            }
-            else {
-                target_ok = bx_kill_handle_name_target(options, operand, diag, outcome);
-            }
-        }
-
-        if (!target_ok) {
+        if (!target_ok)
             all_ok = false;
-        }
     }
-
+    free(targets);
     return all_ok;
 }
 
