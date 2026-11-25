@@ -520,8 +520,10 @@ static bool bx_ignore_load_patterns_from_path(const char *path,
 
     f = fopen(path, "r");
     if (!f) {
-        if (explicit_file)
-            bx_ignore_report_error(opts, path, errno);
+        int error = errno;
+        if (explicit_file || error == ENOMEM)
+            bx_ignore_report_error(opts, path, error);
+        errno = error;
         return false;
     }
 
@@ -589,11 +591,14 @@ static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns
         pthread_mutex_unlock(&bx_ignore_program_cache_lock);
     }
 
+    errno = 0;
     program = bx_ignore_program_compile_with_sources(patterns, sources, pattern_count, casefold);
+    int compile_error = errno;
     bx_ignore_free_patterns(patterns, sources, pattern_count);
     if (!program) {
         if (have_cache_key)
             bx_ignore_program_cache_key_dispose(&cache_key);
+        errno = compile_error;
         return NULL;
     }
 
@@ -626,48 +631,50 @@ static struct bx_ignore_program *bx_ignore_load_program_from_path(const char *pa
     enum bx_ignore_source_kind *sources = NULL;
     int pattern_count = 0;
 
-    bx_ignore_load_patterns_from_path(path, opts, &patterns, &sources, &pattern_count,
-                                      explicit_file, source);
-    return bx_ignore_program_from_patterns(patterns, sources, pattern_count, casefold);
+    if (!bx_ignore_load_patterns_from_path(path, opts, &patterns, &sources, &pattern_count,
+                                           explicit_file, source) && errno == ENOMEM) {
+        bx_ignore_free_patterns(patterns, sources, pattern_count);
+        errno = ENOMEM;
+        return NULL;
+    }
+    struct bx_ignore_program *program =
+        bx_ignore_program_from_patterns(patterns, sources, pattern_count, casefold);
+    if (!program && errno == ENOMEM) {
+        bx_ignore_report_error(opts, path, ENOMEM);
+        errno = ENOMEM;
+    }
+    return program;
 }
 
-static struct bx_ignore_state *bx_ignore_append_state(struct bx_ignore_state *chain,
-                                                      struct bx_ignore_program *program,
-                                                      const char *dirpath,
-                                                      const char *root_prefix) {
+static bool bx_ignore_append_state(struct bx_ignore_state **chain,
+                                   struct bx_ignore_program *program,
+                                   const char *root_prefix) {
     struct bx_ignore_state *state;
 
     if (!program) {
-        return chain;
+        return errno != ENOMEM;
     }
 
     state = calloc(1, sizeof(*state));
     if (!state) {
         bx_ignore_program_release(program);
-        return NULL;
+        errno = ENOMEM;
+        return false;
     }
-    bx_ignore_state_init(state, chain, dirpath, program);
-    if (dirpath) {
-        state->owned_dirpath = strdup(dirpath);
-        if (!state->owned_dirpath) {
-            bx_ignore_state_dispose(state);
-            free(state);
-            return NULL;
-        }
-        state->dirpath = state->owned_dirpath;
-        state->dirpath_len = strlen(state->owned_dirpath);
-    }
+    bx_ignore_state_init(state, *chain, NULL, program);
     if (root_prefix) {
         state->owned_root_prefix = strdup(root_prefix);
         if (!state->owned_root_prefix) {
             bx_ignore_state_dispose(state);
             free(state);
-            return NULL;
+            errno = ENOMEM;
+            return false;
         }
         state->root_prefix = state->owned_root_prefix;
         state->root_prefix_len = strlen(state->owned_root_prefix);
     }
-    return state;
+    *chain = state;
+    return true;
 }
 
 struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
@@ -676,8 +683,10 @@ struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
     enum bx_ignore_source_kind *sources = NULL;
     int pattern_count = 0;
 
-    if (!opts || !opts->ignore_filenames || opts->num_ignore_filenames <= 0)
+    if (!opts || !opts->ignore_filenames || opts->num_ignore_filenames <= 0) {
+        errno = 0;
         return NULL;
+    }
 
     for (int file_i = 0; file_i < opts->num_ignore_filenames; file_i++) {
         const char *filename = opts->ignore_filenames[file_i];
@@ -723,12 +732,13 @@ struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
         free(ignore_path);
     }
 
-    errno = 0;
     struct bx_ignore_program *program =
         bx_ignore_program_from_patterns(patterns, sources, pattern_count,
                                         opts->ignore_file_case_insensitive);
-    if (!program && pattern_count > 0 && errno == ENOMEM)
+    if (!program && errno == ENOMEM) {
         bx_ignore_report_error(opts, dirpath, ENOMEM);
+        errno = ENOMEM;
+    }
     return program;
 }
 
@@ -825,74 +835,42 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
                 bx_ignore_load_program_from_path(opts->extra_ignore_files[i], opts, false,
                                                  BX_IGNORE_SOURCE_BUILTIN,
                                                  opts->ignore_file_case_insensitive);
-            if (program) {
-                chain = bx_ignore_append_state(chain, program, NULL, NULL);
-                if (!chain)
-                    goto fail;
-            }
+            if (!bx_ignore_append_state(&chain, program, NULL))
+                goto fail;
         }
     }
 
     if (!opts->no_ignore && !opts->no_ignore_global && opts->gitignore_enabled) {
         const char *xdg = getenv("XDG_CONFIG_HOME");
         const char *home = getenv("HOME");
-        char *base = NULL;
-        char *git_dir = NULL;
         char *global_path = NULL;
 
-        if (xdg && *xdg) {
-            base = strdup(xdg);
-        } else if (home && *home) {
-            base = bx_path_join(home, ".config");
-        }
-        if (base) {
-            git_dir = bx_path_join(base, "git");
-            if (git_dir)
-                global_path = bx_path_join(git_dir, "ignore");
-        }
+        if (xdg && *xdg)
+            global_path = bx_path_join(xdg, "git/ignore");
+        else if (home && *home)
+            global_path = bx_path_join(home, ".config/git/ignore");
         if (global_path) {
             struct bx_ignore_program *program =
                 bx_ignore_load_program_from_path(global_path, opts, false,
                                                  BX_IGNORE_SOURCE_GITIGNORE,
                                                  opts->ignore_file_case_insensitive);
-            if (program) {
-                chain = bx_ignore_append_state(chain, program, NULL, NULL);
-                if (!chain) {
-                    free(base);
-                    free(git_dir);
-                    free(global_path);
-                    goto fail;
-                }
-            }
+            bool loaded = bx_ignore_append_state(&chain, program, NULL);
+            free(global_path);
+            if (!loaded)
+                goto fail;
         }
-        free(base);
-        free(git_dir);
-        free(global_path);
     }
 
     if (!opts->no_ignore && !opts->no_ignore_exclude && opts->git_root && opts->git_root[0] != '\0') {
-        char *git_dir = bx_path_join(opts->git_root, ".git");
-        char *info_dir = git_dir ? bx_path_join(git_dir, "info") : NULL;
-        char *exclude_path = info_dir ? bx_path_join(info_dir, "exclude") : NULL;
-
-        if (exclude_path) {
-            struct bx_ignore_program *program =
-                bx_ignore_load_program_from_path(exclude_path, opts, false,
-                                                 BX_IGNORE_SOURCE_GITIGNORE,
-                                                 opts->ignore_file_case_insensitive);
-            if (program) {
-                chain = bx_ignore_append_state(chain, program, NULL, NULL);
-                if (!chain) {
-                    free(git_dir);
-                    free(info_dir);
-                    free(exclude_path);
-                    goto fail;
-                }
-            }
-        }
-        free(git_dir);
-        free(info_dir);
+        char *exclude_path = bx_path_join(opts->git_root, ".git/info/exclude");
+        struct bx_ignore_program *program =
+            bx_ignore_load_program_from_path(exclude_path, opts, false,
+                                             BX_IGNORE_SOURCE_GITIGNORE,
+                                             opts->ignore_file_case_insensitive);
+        bool loaded = bx_ignore_append_state(&chain, program, NULL);
         free(exclude_path);
+        if (!loaded)
+            goto fail;
     }
 
     if (!root || !opts || opts->no_ignore || opts->no_ignore_parent)
@@ -944,24 +922,21 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
 
     for (int i = dir_count - 1; i >= 0; i--) {
         struct bx_ignore_program *program = bx_ignore_load_program(dirs[i], opts);
+        const char *relative_root = resolved_root;
         if (program) {
             size_t dir_len = strlen(dirs[i]);
-            const char *relative_root = resolved_root;
             if (strncmp(resolved_root, dirs[i], dir_len) == 0) {
                 if (resolved_root[dir_len] == '/')
                     relative_root = resolved_root + dir_len + 1;
                 else if (resolved_root[dir_len] == '\0')
                     relative_root = "";
             }
-            chain = bx_ignore_append_state(chain, program, NULL, relative_root);
-            if (!chain) {
-                for (int k = 0; k < dir_count; k++)
-                    free(dirs[k]);
-                free(dirs);
-                free(resolved_root);
-                resolved_root = NULL;
-                goto fail;
-            }
+        }
+        if (!bx_ignore_append_state(&chain, program, relative_root)) {
+            for (int k = 0; k < dir_count; k++)
+                free(dirs[k]);
+            free(dirs);
+            goto fail;
         }
     }
 
@@ -973,12 +948,13 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
         *ok = true;
     return chain;
 
-fail:
-    free(resolved_root);
-    bx_ignore_state_dispose_chain(chain);
-    if (ok)
-        *ok = false;
-    return NULL;
+fail: {
+        int error = errno;
+        free(resolved_root);
+        bx_ignore_state_dispose_chain(chain);
+        errno = error;
+        return NULL;
+    }
 
 success:
     if (ok)
