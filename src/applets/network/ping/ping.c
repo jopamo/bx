@@ -2,7 +2,6 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <netdb.h>
 #include <netinet/ip.h>
@@ -11,7 +10,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -20,10 +18,11 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/internet_checksum.h"
+#include "lib/option_scan.h"
 #include "lib/poll_deadline.h"
+#include "lib/size_parse.h"
 #include "lib/sockaddr_format.h"
 #include "lib/time_parse.h"
 
@@ -71,17 +70,8 @@ static void bx_ping_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_ping_parse_uint(const char* text, unsigned int min_value, unsigned int max_value, unsigned int* out_value) {
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    unsigned long value = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
-        return false;
-    }
-    if (value < min_value || value > max_value) {
+    uintmax_t value;
+    if (!bx_size_parse_uint(text, &value) || value < min_value || value > max_value) {
         return false;
     }
 
@@ -90,14 +80,13 @@ static bool bx_ping_parse_uint(const char* text, unsigned int min_value, unsigne
 }
 
 static bool bx_ping_parse_options(int argc, char** argv, struct bx_ping_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"ipv4", no_argument, NULL, '4'},
-        {"count", required_argument, NULL, 'c'},
-        {"timeout", required_argument, NULL, 'W'},
-        {"size", required_argument, NULL, 's'},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'4', '4', "ipv4", BX_OPTION_NO_VALUE},
+        {'c', 'c', "count", BX_OPTION_REQUIRED_VALUE},
+        {'W', 'W', "timeout", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "size", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -107,40 +96,51 @@ static bool bx_ping_parse_options(int argc, char** argv, struct bx_ping_options*
     options->payload_size = BX_PING_DEFAULT_PAYLOAD_SIZE;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+4c:W:s:hV", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE) {
+                if (option.short_name)
+                    bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", option.token);
+            }
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
         unsigned int value = 0;
-        switch (c) {
+        switch (option.spec->id) {
             case '4':
                 break;
             case 'c':
-                if (!bx_ping_parse_uint(optarg, 1u, BX_PING_MAX_COUNT, &value)) {
-                    bx_diag(diag, "invalid count '%s'", optarg != NULL ? optarg : "");
+                if (!bx_ping_parse_uint(option.value, 1u, BX_PING_MAX_COUNT, &value)) {
+                    bx_diag(diag, "invalid count '%s'", option.value);
                     return false;
                 }
                 options->count = value;
                 break;
             case 'W':
-                if (!bx_ping_parse_uint(optarg, 1u, BX_PING_MAX_TIMEOUT_SECS, &value)) {
-                    bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
+                if (!bx_ping_parse_uint(option.value, 1u, BX_PING_MAX_TIMEOUT_SECS, &value)) {
+                    bx_diag(diag, "invalid timeout '%s'", option.value);
                     return false;
                 }
                 uintmax_t timeout_ms = 0;
                 if (!bx_time_seconds_to_milliseconds_uint(value, &timeout_ms) || timeout_ms > (uintmax_t)UINT_MAX) {
-                    bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
+                    bx_diag(diag, "invalid timeout '%s'", option.value);
                     return false;
                 }
                 options->timeout_ms = (unsigned int)timeout_ms;
                 break;
             case 's':
-                if (!bx_ping_parse_uint(optarg, 0u, BX_PING_MAX_PAYLOAD_SIZE, &value)) {
-                    bx_diag(diag, "invalid payload size '%s'", optarg != NULL ? optarg : "");
+                if (!bx_ping_parse_uint(option.value, 0u, BX_PING_MAX_PAYLOAD_SIZE, &value)) {
+                    bx_diag(diag, "invalid payload size '%s'", option.value);
                     return false;
                 }
                 options->payload_size = value;
@@ -151,26 +151,24 @@ static bool bx_ping_parse_options(int argc, char** argv, struct bx_ping_options*
             case 'V':
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    if (optind >= argc) {
+    if (option.index == (size_t)argc) {
         bx_diag(diag, "missing HOST operand");
         return false;
     }
 
-    options->destination = argv[optind++];
+    options->destination = argv[option.index];
+    if (options->destination[0] == '\0') {
+        bx_diag(diag, "empty HOST operand");
+        return false;
+    }
 
-    if (optind < argc) {
-        bx_diag(diag, "extra operand '%s'", argv[optind]);
+    if (option.index + 1 < (size_t)argc) {
+        bx_diag(diag, "extra operand '%s'", argv[option.index + 1]);
         return false;
     }
 
