@@ -3,7 +3,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <signal.h>
@@ -21,8 +20,8 @@
 #include "lib/child_runner.h"
 #include "lib/cli_common.h"
 #include "lib/xreadwrite.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/size_parse.h"
 #include "lib/tty_speed.h"
@@ -51,6 +50,7 @@ struct bx_getty_options {
     unsigned timeout_seconds;
     const char* tty_operand;
     const char* baud_list;
+    speed_t baud;
     const char* termtype;
 };
 
@@ -176,9 +176,9 @@ static bool bx_getty_parse_local_line(const char* text, enum bx_getty_clocal_mod
     return false;
 }
 
-static bool bx_getty_parse_operands(int argc, char** argv, int start, struct bx_getty_options* options, struct bx_diag_ctx* diag) {
-    int remaining = argc - start;
-    if (remaining <= 0) {
+static bool bx_getty_parse_operands(size_t remaining, const char* const* operands,
+                                    struct bx_getty_options* options, struct bx_diag_ctx* diag) {
+    if (remaining == 0) {
         bx_diag(diag, "not enough arguments");
         return false;
     }
@@ -187,9 +187,9 @@ static bool bx_getty_parse_operands(int argc, char** argv, int start, struct bx_
         return false;
     }
 
-    const char* op1 = argv[start];
-    const char* op2 = remaining >= 2 ? argv[start + 1] : NULL;
-    const char* op3 = remaining >= 3 ? argv[start + 2] : NULL;
+    const char* op1 = operands[0];
+    const char* op2 = remaining >= 2 ? operands[1] : NULL;
+    const char* op3 = remaining >= 3 ? operands[2] : NULL;
 
     if (remaining == 1) {
         options->tty_operand = op1;
@@ -227,22 +227,22 @@ static bool bx_getty_parse_operands(int argc, char** argv, int start, struct bx_
 }
 
 static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"8bits", no_argument, NULL, '8'},
-        {"autologin", required_argument, NULL, 'a'},
-        {"flow-control", no_argument, NULL, 'h'},
-        {"noissue", no_argument, NULL, 'i'},
-        {"noclear", no_argument, NULL, 'J'},
-        {"login-program", required_argument, NULL, 'l'},
-        {"local-line", optional_argument, NULL, 'L'},
-        {"skip-login", no_argument, NULL, 'n'},
-        {"login-options", required_argument, NULL, 'o'},
-        {"timeout", required_argument, NULL, 't'},
-        {"show-issue", no_argument, NULL, 1000},
-        {"list-speeds", no_argument, NULL, 1001},
-        {"help", no_argument, NULL, 1002},
-        {"version", no_argument, NULL, 1003},
-        {NULL, 0, NULL, 0},
+    enum { SHOW_ISSUE = 256, LIST_SPEEDS, HELP, VERSION };
+    static const struct bx_option_spec specs[] = {
+        {'8', '8', "8bits", BX_OPTION_NO_VALUE},
+        {'a', 'a', "autologin", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "flow-control", BX_OPTION_NO_VALUE},
+        {'i', 'i', "noissue", BX_OPTION_NO_VALUE},
+        {'J', 'J', "noclear", BX_OPTION_NO_VALUE},
+        {'l', 'l', "login-program", BX_OPTION_REQUIRED_VALUE},
+        {'L', 'L', "local-line", BX_OPTION_OPTIONAL_VALUE},
+        {'n', 'n', "skip-login", BX_OPTION_NO_VALUE},
+        {'o', 'o', "login-options", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "timeout", BX_OPTION_REQUIRED_VALUE},
+        {SHOW_ISSUE, 0, "show-issue", BX_OPTION_NO_VALUE},
+        {LIST_SPEEDS, 0, "list-speeds", BX_OPTION_NO_VALUE},
+        {HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -251,24 +251,40 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
     options->clocal_mode = BX_GETTY_CLOCAL_AUTO;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "8a:hiJl:L::no:t:", long_options, NULL);
-        if (c == -1) {
+    const char* operands[3];
+    size_t count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
             break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (count < sizeof(operands) / sizeof(operands[0]))
+                operands[count] = result.token;
+            count++;
+            continue;
         }
-
-        switch (c) {
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
+        }
+        switch (result.spec->id) {
             case '8':
                 options->eight_bits = true;
                 break;
             case 'a':
-                if (optarg == NULL || optarg[0] == '\0') {
+                if (result.value == NULL || result.value[0] == '\0') {
                     bx_diag(diag, "autologin user may not be empty");
                     return false;
                 }
-                options->autologin_user = optarg;
+                options->autologin_user = result.value;
                 break;
             case 'h':
                 options->flow_control = true;
@@ -280,11 +296,11 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
                 options->noclear = true;
                 break;
             case 'l':
-                options->login_program = optarg;
+                options->login_program = result.value;
                 break;
             case 'L':
-                if (!bx_getty_parse_local_line(optarg, &options->clocal_mode)) {
-                    bx_diag(diag, "invalid local-line mode '%s'", optarg);
+                if (!bx_getty_parse_local_line(result.value, &options->clocal_mode)) {
+                    bx_diag(diag, "invalid local-line mode '%s'", result.value);
                     return false;
                 }
                 break;
@@ -292,38 +308,40 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
                 options->skip_login = true;
                 break;
             case 'o':
-                options->login_options = optarg;
+                options->login_options = result.value;
                 break;
             case 't':
-                if (!bx_getty_parse_timeout(optarg, &options->timeout_seconds)) {
-                    bx_diag(diag, "invalid timeout '%s'", optarg);
+                if (!bx_getty_parse_timeout(result.value, &options->timeout_seconds)) {
+                    bx_diag(diag, "invalid timeout '%s'", result.value);
                     return false;
                 }
                 break;
-            case 1000:
+            case SHOW_ISSUE:
                 options->show_issue_only = true;
                 return true;
-            case 1001:
+            case LIST_SPEEDS:
                 options->list_speeds = true;
                 return true;
-            case 1002:
+            case HELP:
                 options->show_help = true;
                 return true;
-            case 1003:
+            case VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
         }
     }
 
-    return bx_getty_parse_operands(argc, argv, optind, options, diag);
+    if (!bx_getty_parse_operands(count, operands, options, diag))
+        return false;
+    if (*options->tty_operand == '\0' || *options->login_program == '\0') {
+        bx_diag(diag, "terminal and login program must not be empty");
+        return false;
+    }
+    if (options->baud_list && !bx_getty_parse_baud_list(options->baud_list, &options->baud)) {
+        bx_diag(diag, "unsupported baud rate '%s'", options->baud_list);
+        return false;
+    }
+    return true;
 }
 
 static char* bx_getty_resolve_tty_path(const char* tty_operand) {
@@ -436,12 +454,7 @@ static bool bx_getty_prepare_tty(int tty_fd, const struct bx_getty_options* opti
     }
 
     if (options->baud_list != NULL) {
-        speed_t speed = 0;
-        if (!bx_getty_parse_baud_list(options->baud_list, &speed)) {
-            bx_diag(diag, "unsupported baud rate '%s'", options->baud_list);
-            return false;
-        }
-        if (cfsetispeed(&tio, speed) != 0 || cfsetospeed(&tio, speed) != 0) {
+        if (cfsetispeed(&tio, options->baud) != 0 || cfsetospeed(&tio, options->baud) != 0) {
             bx_diag(diag, "cannot apply baud rate '%s': %s", options->baud_list, strerror(errno));
             return false;
         }
