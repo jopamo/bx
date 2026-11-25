@@ -20,7 +20,9 @@ static inline const char* bx_glob_notation_end(const char* text, const char* end
 }
 
 /* text points at '['. ']' is literal as the first member after negation. */
-static inline const char* bx_glob_bracket_end(const char* text, const char* end) {
+static inline const char* bx_glob_bracket_end_with_classes(const char* text,
+                                                          const char* end,
+                                                          bool glibc_classes) {
     const char* p = text + 1;
     unsigned missing_notation = 0;
     if (p < end && (*p == '!' || *p == '^'))
@@ -34,6 +36,14 @@ static inline const char* bx_glob_bracket_end(const char* text, const char* end)
             return p + 1;
         } else if (*p == '[' && p + 1 < end &&
                    (p[1] == '.' || p[1] == '=' || p[1] == ':')) {
+            if (glibc_classes && p[1] == ':') {
+                const char* name_end = p + 2;
+                while (name_end < end && *name_end >= 'a' && *name_end < 'z')
+                    name_end++;
+                if (end - name_end >= 2 && name_end[0] == ':' && name_end[1] == ']')
+                    p = name_end + 1;
+                continue;
+            }
             unsigned bit = p[1] == '.' ? 1u : p[1] == '=' ? 2u : 4u;
             if (!(missing_notation & bit)) {
                 const char* next = bx_glob_notation_end(p, end);
@@ -45,6 +55,10 @@ static inline const char* bx_glob_bracket_end(const char* text, const char* end)
         }
     }
     return NULL;
+}
+
+static inline const char* bx_glob_bracket_end(const char* text, const char* end) {
+    return bx_glob_bracket_end_with_classes(text, end, false);
 }
 
 static inline const char* bx_glob_skip_member(const char* atom, const char* end,
@@ -94,26 +108,6 @@ static inline bool bx_glob_terminal_hyphen_is_member(const char* atom, const cha
     return matched;
 }
 
-#ifdef __GLIBC__
-/* When a simple [:name:] has a malformed name, glibc reads the opening
- * '[' as a member. Its ']' can therefore close the outer bracket. */
-static inline const char* bx_glob_malformed_class_end(const char* text, const char* end) {
-    if (end - text < 7 || text[1] != '^' || text[2] != '[' || text[3] != ':')
-        return NULL;
-    bool malformed = false;
-    for (const char* p = text + 4; p < end; p++) {
-        if (*p == ':' && p + 1 < end && p[1] == ']')
-            return malformed ? p + 2 : NULL;
-        if (*p == '[' || *p == ']' || *p == '\\' || *p == '-' ||
-            (unsigned char)*p >= 0x80u)
-            return NULL;
-        if (*p < 'a' || *p > 'z')
-            malformed = true;
-    }
-    return NULL;
-}
-#endif
-
 /* Requires one writable byte after the terminator. Quote the opening bracket
  * of a simple incomplete [^] expression, but leave ambiguous tails alone. */
 static inline void bx_glob_normalize_caret(char* pattern) {
@@ -124,8 +118,10 @@ static inline void bx_glob_normalize_caret(char* pattern) {
         } else if (*p == '[' && p + 1 < end) {
             const char* after = bx_glob_bracket_end(p, end);
 #ifdef __GLIBC__
-            if (!after)
-                after = bx_glob_malformed_class_end(p, end);
+            /* An invalid class name can leave its ']' available to
+             * close the outer bracket; the shell uses its own grammar. */
+            if (!after && p[1] == '^')
+                after = bx_glob_bracket_end_with_classes(p, end, true);
 #endif
             if (!after) {
                 if (end - p >= 3 && p[1] == '^' && p[2] == ']') {
