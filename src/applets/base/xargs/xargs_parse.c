@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -12,6 +11,7 @@
 #include "lib/argv_packer.h"
 #include "xargs_parse.h"
 #include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 static void xargs_warn_mutex(const char *progname, const char *left,
                              const char *right, const char *ignored) {
@@ -213,26 +213,29 @@ static bool xargs_parse_delimiter(const char *progname, const char *text,
 }
 
 bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
-    static struct option long_opts[] = {
-        {"help", no_argument, NULL, 200},
-        {"version", no_argument, NULL, 201},
-        {"show-limits", no_argument, NULL, 202},
-        {"eof", optional_argument, NULL, 203},
-        {"null", no_argument, NULL, '0'},
-        {"delimiter", required_argument, NULL, 'd'},
-        {"exit", no_argument, NULL, 'x'},
-        {"no-run-if-empty", no_argument, NULL, 'r'},
-        {"max-args", required_argument, NULL, 'n'},
-        {"max-lines", required_argument, NULL, 'L'},
-        {"max-chars", required_argument, NULL, 's'},
-        {"open-tty", no_argument, NULL, 'o'},
-        {"interactive", no_argument, NULL, 'p'},
-        {"verbose", no_argument, NULL, 't'},
-        {"replace", optional_argument, NULL, 'i'},
-        {"process-slot-var", required_argument, NULL, 204},
-        {"max-procs", required_argument, NULL, 'P'},
-        {"arg-file", required_argument, NULL, 'a'},
-        {NULL, 0, NULL, 0},
+    enum { OPT_HELP = 256, OPT_VERSION, OPT_SHOW_LIMITS, OPT_SLOT_VAR };
+    static const struct bx_option_spec specs[] = {
+        {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {OPT_SHOW_LIMITS, 0, "show-limits", BX_OPTION_NO_VALUE},
+        {'E', 'E', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'e', 'e', "eof", BX_OPTION_OPTIONAL_VALUE},
+        {'0', '0', "null", BX_OPTION_NO_VALUE},
+        {'d', 'd', "delimiter", BX_OPTION_REQUIRED_VALUE},
+        {'x', 'x', "exit", BX_OPTION_NO_VALUE},
+        {'r', 'r', "no-run-if-empty", BX_OPTION_NO_VALUE},
+        {'n', 'n', "max-args", BX_OPTION_REQUIRED_VALUE},
+        {'L', 'L', "max-lines", BX_OPTION_REQUIRED_VALUE},
+        {'l', 'l', NULL, BX_OPTION_OPTIONAL_VALUE},
+        {'s', 's', "max-chars", BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', "open-tty", BX_OPTION_NO_VALUE},
+        {'p', 'p', "interactive", BX_OPTION_NO_VALUE},
+        {'t', 't', "verbose", BX_OPTION_NO_VALUE},
+        {'I', 'I', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', "replace", BX_OPTION_OPTIONAL_VALUE},
+        {OPT_SLOT_VAR, 0, "process-slot-var", BX_OPTION_REQUIRED_VALUE},
+        {'P', 'P', "max-procs", BX_OPTION_REQUIRED_VALUE},
+        {'a', 'a', "arg-file", BX_OPTION_REQUIRED_VALUE},
     };
 
     memset(out, 0, sizeof(*out));
@@ -240,12 +243,29 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
     out->opts.max_procs = 1;
     out->input = stdin;
 
-    bx_args_getopt_reset();
-
-    int c;
-    while ((c = bx_args_getopt_long(argc, argv, "+0d:E:e::I:i::l::L:oprs:txa:n:P:",
-                            long_opts, NULL)) != -1) {
-        switch (c) {
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result result;
+    while ((result = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.spec->short_name)
+                    fprintf(stderr, "%s: option requires an argument -- '-%c'\n",
+                            out->progname, result.spec->short_name);
+                else
+                    fprintf(stderr, "%s: option requires an argument -- '%s'\n",
+                            out->progname, result.token);
+            } else if (result.short_name) {
+                fprintf(stderr, "%s: invalid option -- '%c'\n", out->progname, result.short_name);
+            } else {
+                fprintf(stderr, "%s: unrecognized option '%s'\n", out->progname, result.token);
+            }
+            out->exit_code = 1;
+            return false;
+        }
+        const char *value = result.value;
+        switch (result.spec->id) {
         case 'r':
             out->opts.no_run_if_empty = true;
             break;
@@ -265,7 +285,7 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
             out->opts.nul_delim = true;
             break;
         case 'd':
-            if (!xargs_parse_delimiter(out->progname, optarg,
+            if (!xargs_parse_delimiter(out->progname, value,
                                        &out->opts.delimiter)) {
                 out->exit_code = 1;
                 return false;
@@ -273,23 +293,21 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
             out->opts.delimiter_mode = true;
             break;
         case 'I':
-            xargs_set_replace_mode(&out->opts, out->progname, optarg);
+            xargs_set_replace_mode(&out->opts, out->progname, value);
             break;
         case 'i':
             xargs_set_replace_mode(&out->opts, out->progname,
-                                   optarg ? optarg : "{}");
+                                   value ? value : "{}");
             break;
         case 'E':
-            out->opts.logical_eof = optarg;
-            break;
         case 'e':
-            out->opts.logical_eof = optarg ? optarg : NULL;
+            out->opts.logical_eof = value;
             break;
         case 'a':
-            out->opts.arg_file = optarg;
+            out->opts.arg_file = value;
             break;
         case 'n':
-            if (!xargs_parse_int(out->progname, "-n", optarg,
+            if (!xargs_parse_int(out->progname, "-n", value,
                                  &out->opts.max_args, false)) {
                 out->exit_code = 1;
                 return false;
@@ -297,14 +315,14 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
             xargs_set_max_args(&out->opts, out->progname, out->opts.max_args);
             break;
         case 's':
-            if (!xargs_parse_int(out->progname, "-s", optarg,
+            if (!xargs_parse_int(out->progname, "-s", value,
                                  &out->opts.max_chars, false)) {
                 out->exit_code = 1;
                 return false;
             }
             break;
         case 'L':
-            if (!xargs_parse_int(out->progname, "-L", optarg,
+            if (!xargs_parse_int(out->progname, "-L", value,
                                  &out->opts.max_lines, false)) {
                 out->exit_code = 1;
                 return false;
@@ -313,8 +331,8 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
                                 out->opts.max_lines);
             break;
         case 'l':
-            if (optarg) {
-                if (!xargs_parse_int(out->progname, "-l", optarg,
+            if (value) {
+                if (!xargs_parse_int(out->progname, "-l", value,
                                      &out->opts.max_lines, false)) {
                     out->exit_code = 1;
                     return false;
@@ -326,48 +344,33 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
             }
             break;
         case 'P':
-            if (!xargs_parse_int(out->progname, "-P", optarg,
+            if (!xargs_parse_int(out->progname, "-P", value,
                                  &out->opts.max_procs, true)) {
                 out->exit_code = 1;
                 return false;
             }
             break;
-        case 200:
+        case OPT_HELP:
             xargs_print_help(out->progname);
             out->exit_code = 0;
             return false;
-        case 201:
+        case OPT_VERSION:
             xargs_print_version();
             out->exit_code = 0;
             return false;
-        case 202:
+        case OPT_SHOW_LIMITS:
             xargs_print_limits();
             out->exit_code = 0;
             return false;
-        case 203:
-            out->opts.logical_eof = optarg ? optarg : NULL;
-            break;
-        case 204:
-            out->opts.process_slot_var = optarg;
-            break;
-        case '?':
-            if (optopt == 'n' || optopt == 'L' || optopt == 'P' ||
-                optopt == 'a' || optopt == 'd' || optopt == 'E' ||
-                optopt == 'I' || optopt == 's') {
-                fprintf(stderr,
-                        "%s: option requires an argument -- '-%c'\n",
-                        out->progname, optopt);
-            } else if (optopt) {
-                fprintf(stderr, "%s: invalid option -- '%c'\n",
-                        out->progname, optopt);
-            } else if (optind > 0 && optind <= argc) {
-                fprintf(stderr, "%s: unrecognized option '%s'\n",
-                        out->progname, argv[optind - 1]);
-            } else {
-                fprintf(stderr, "%s: unrecognized option\n", out->progname);
+        case OPT_SLOT_VAR:
+            if (value[0] == '\0' || strchr(value, '=') != NULL) {
+                fprintf(stderr, "%s: invalid variable name for --process-slot-var: '%s'\n",
+                        out->progname, value);
+                out->exit_code = 1;
+                return false;
             }
-            out->exit_code = 1;
-            return false;
+            out->opts.process_slot_var = value;
+            break;
         default:
             out->exit_code = 1;
             return false;
@@ -380,8 +383,9 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
         out->opts.replace_marker = "{}";
 
     static char *default_command[] = {"echo", NULL};
-    out->command = (optind < argc) ? &argv[optind] : default_command;
-    out->command_argc = (optind < argc) ? (argc - optind) : 1;
+    int command_index = (int)result.index;
+    out->command = (command_index < argc) ? &argv[command_index] : default_command;
+    out->command_argc = (command_index < argc) ? (argc - command_index) : 1;
 
     if (out->opts.arg_file) {
         out->input = fopen(out->opts.arg_file,

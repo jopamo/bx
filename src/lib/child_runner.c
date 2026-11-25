@@ -671,7 +671,10 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
         if (opts && opts->process_slot_var) {
             char slot_buf[32];
             snprintf(slot_buf, sizeof(slot_buf), "%d", slot);
-            setenv(opts->process_slot_var, slot_buf, 1);
+            if (setenv(opts->process_slot_var, slot_buf, 1) != 0) {
+                bx_child_report_exec_error(errpipe[1], errno, opts);
+                _exit(127);
+            }
         }
         if (opts && opts->reset_common_signals)
             bx_child_reset_common_signal_handlers();
