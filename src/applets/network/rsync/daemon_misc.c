@@ -444,17 +444,18 @@ parse_addr(sa_family_t family, const char *strmask, struct sockaddr *maskaddr)
 static long
 parse_mask(sa_family_t family, const char *strmask, struct sockaddr *maskaddr)
 {
-	char *endp;
-	unsigned long mask;
+	const char *error;
+	long long bits;
 
-	errno = 0;
-	mask = strtoul(strmask, &endp, 10);
-	if (errno == 0 && *endp == '\0') {
+	/* A prefix length is unsigned decimal; IPv6 masks may start with ':'. */
+	if (*strmask < '0' || *strmask > '9')
+		return parse_addr(family, strmask, maskaddr);
+	bits = strtonum(strmask, 0, family == AF_INET ? 32 : 128, &error);
+	if (error == NULL) {
 		uint8_t *addr;
 		size_t addrsz, nbytes;
 		int rem;
 
-		/* No sanity checking at all. */
 		if (family == AF_INET) {
 			struct sockaddr_in *sin = (void *)maskaddr;
 
@@ -469,23 +470,18 @@ parse_mask(sa_family_t family, const char *strmask, struct sockaddr *maskaddr)
 
 		memset(addr, 0, addrsz);
 
-		/* Invalid...  */
-		if (mask > (addrsz << 3))
-			return 0;
-
 		/*
 		 * We can memset up until the last byte of the mask, then
 		 * set the remainder manually.
 		 */
-		nbytes = mask >> 3;
+		nbytes = (size_t)bits >> 3;
 
 		/* Recalculate our last byte's worth, if any. */
-		rem = mask & 0x07;	/* Truncated bits */
-		mask = ~((1 << (8 - rem)) - 1);
+		rem = bits & 0x07;
 
 		memset(addr, 0xff, nbytes);
 		if (rem != 0)
-			addr[nbytes] |= mask;
+			addr[nbytes] = (uint8_t)(0xffU << (8 - rem));
 
 		return 1;
 	}
@@ -505,16 +501,20 @@ masked_match(char *host, struct sockaddr *addr)
 	size_t addrsz;
 	sa_family_t family;
 
-	family = addr->sa_family;
 	strmask = strrchr(host, '/');
 	assert(strmask != NULL);
-
-	if (!parse_mask(family, strmask + 1, (struct sockaddr *)&maskaddr))
-		return 0;
-
 	*strmask = '\0';
 
-	if (!parse_addr(family, host, (struct sockaddr *)&hostaddr))
+	/* Validate the rule's own address family even for an opposite-family peer. */
+	if (parse_addr(AF_INET, host, (struct sockaddr *)&hostaddr))
+		family = AF_INET;
+	else if (parse_addr(AF_INET6, host, (struct sockaddr *)&hostaddr))
+		family = AF_INET6;
+	else
+		return -1;
+	if (!parse_mask(family, strmask + 1, (struct sockaddr *)&maskaddr))
+		return -1;
+	if (family != addr->sa_family)
 		return 0;
 
 	if (family == AF_INET) {
@@ -554,129 +554,87 @@ static int
 daemon_connection_matches_one(const struct sess *sess, char *host)
 {
 	const struct daemon_role *role;
-	const char *addr, *masked;
+	const char *addr;
 
 	role = (void *)sess->role;
+	if (strrchr(host, '/') != NULL)
+		return masked_match(host, role->client_sa);
+
 	if (role->client_host[0] != '\0' &&
 	    rmatch(host, role->client_host, 0) == 0)
 		return 1;
 
-	masked = strrchr(host, '/');
 	addr = &role->client_addr[0];
-	if (masked == NULL)
-		return strcmp(host, addr) == 0;
-
-	return masked_match(host, role->client_sa);
+	return strcmp(host, addr) == 0;
 }
 
-static int
-daemon_connection_matches(struct sess *sess, const char *hostlistp, bool *match,
-    int *total)
+enum host_list_result { HOST_EMPTY, HOST_MATCH, HOST_MISS, HOST_INVALID };
+
+static enum host_list_result
+daemon_connection_matches(const struct sess *sess, const char *list)
 {
-	char *host, *hostlist;
-	int cnt;
-	bool matched;
+	char *host, *copy, *next;
+	enum host_list_result result = HOST_EMPTY;
 
-	hostlist = strdup(hostlistp);
-	if (hostlist == NULL) {
-		daemon_client_error(sess, "out of memory");
-		return -1;
-	}
-
-	cnt = 0;
-	matched = false;
-	while ((host = strsep(&hostlist, ", \t")) != NULL) {
+	if (list == NULL || *list == '\0')
+		return HOST_EMPTY;
+	copy = strdup(list);
+	if (copy == NULL)
+		return HOST_INVALID;
+	next = copy;
+	while ((host = strsep(&next, ", \t")) != NULL) {
 		if (*host == '\0')
 			continue;
-
-		cnt++;
-
-		/* Check host */
-		if (daemon_connection_matches_one(sess, host)) {
-			matched = true;
+		int match = daemon_connection_matches_one(sess, host);
+		if (match < 0) {
+			result = HOST_INVALID;
 			break;
 		}
+		if (match)
+			result = HOST_MATCH;
+		else if (result == HOST_EMPTY)
+			result = HOST_MISS;
 	}
-
-	*total = cnt;
-	*match = matched;
-
-	free(hostlist);
-	return 0;
+	free(copy);
+	return result;
 }
 
-/* Check 'hosts allow' and 'hosts deny' */
+/* Validate both lists before applying the existing allow-first precedence. */
+static const char *
+daemon_host_rejection(const struct sess *sess, const char *allow, const char *deny)
+{
+	enum host_list_result a = daemon_connection_matches(sess, allow);
+	if (a == HOST_INVALID)
+		return "failed to process allow host list";
+	enum host_list_result d = daemon_connection_matches(sess, deny);
+	if (d == HOST_INVALID)
+		return "failed to process deny host list";
+	if (a != HOST_MATCH && d == HOST_MATCH)
+		return "access denied by deny policy";
+	if (a == HOST_MISS && d == HOST_EMPTY)
+		return "access denied by allow policy";
+	return NULL;
+}
+
 int
 daemon_connection_allowed(struct sess *sess, const char *module)
 {
-	struct daemon_role *role;
-	const char *hostlist;
-	int allowcnt, denycnt, rc;
-	bool has_deny, matched;
+	struct daemon_role *role = (void *)sess->role;
+	const char *allow = NULL, *deny = NULL;
 
-	role = (void *)sess->role;
-
-	allowcnt = denycnt = 0;
-	has_deny = cfg_has_param(role->dcfg, module, "hosts deny");
-	if (cfg_has_param(role->dcfg, module, "hosts allow")) {
-		rc = cfg_param_str(role->dcfg, module, "hosts allow",
-		    &hostlist);
-		assert(rc == 0);
-
-		/* Fail safe, don't allow if we failed to parse. */
-		if (daemon_connection_matches(sess, hostlist,
-		    &matched, &allowcnt) == -1) {
-			daemon_client_error(sess, "failed to process allow host list");
-			return 0;
-		}
-
-		if (allowcnt > 0) {
-			if (matched)
-				return 1;
-
-			if (!has_deny) {
-				daemon_client_error(sess,
-				    "access denied by allow policy from %s [%s]",
-				    role->client_host, role->client_addr);
-				return 0;
-			}
-		}
+	if ((cfg_has_param(role->dcfg, module, "hosts allow") &&
+	    cfg_param_str(role->dcfg, module, "hosts allow", &allow) != 0) ||
+	    (cfg_has_param(role->dcfg, module, "hosts deny") &&
+	    cfg_param_str(role->dcfg, module, "hosts deny", &deny) != 0)) {
+		daemon_client_error(sess, "failed to read host lists");
+		return 0;
 	}
-
-	if (has_deny) {
-		rc = cfg_param_str(role->dcfg, module, "hosts deny",
-		    &hostlist);
-		assert(rc == 0);
-
-		/* Fail safe, don't allow if we failed to parse. */
-		if (daemon_connection_matches(sess, hostlist,
-		    &matched, &denycnt) == -1) {
-			daemon_client_error(sess, "failed to process deny host list");
-			return 0;
-		}
-
-		if (denycnt > 0) {
-			if (matched) {
-				daemon_client_error(sess,
-				    "access denied by deny policy from %s [%s]",
-				    role->client_host, role->client_addr);
-				return 0;
-			}
-		} else if (allowcnt > 0) {
-			/*
-			 * We had an allow list and we thought we had a deny
-			 * list, but we parsed the list only to discover it was
-			 * actually empty.  Deny the connection, since they were
-			 * not allowed by the allow list.
-			 */
-			daemon_client_error(sess,
-			    "access denied by allow policy from %s [%s]",
-			    role->client_host, role->client_addr);
-			return 0;
-		}
+	const char *reason = daemon_host_rejection(sess, allow, deny);
+	if (reason != NULL) {
+		daemon_client_error(sess, "%s from %s [%s]", reason,
+		    role->client_host, role->client_addr);
+		return 0;
 	}
-
-	/* Default policy is to accept all. */
 	return 1;
 }
 

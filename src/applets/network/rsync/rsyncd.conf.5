@@ -191,18 +191,19 @@ before the transfer begins.
 .It Do hosts allow Dc , Do hosts deny Dc
 Specifies a list of host patterns that are either allowed or denied from using
 the module.
-Incoming connections must match at least one of the
+An invalid address/mask entry in either list rejects the connection.
+Otherwise, a match in
 .Dq hosts allow
-patterns, if specified.
-Conversely, incoming connections must not match any
+permits the connection, even if the host also matches
+.Dq hosts deny .
+If no allow pattern matches, a match in
 .Dq hosts deny
-pattern, if specified.
-If both options are specified, then the
+rejects the connection.
+If neither list matches, the connection is permitted unless
 .Dq hosts allow
-rule is processed first, followed by a potential rejection if the allowed host
-matches one of the
+is nonempty and
 .Dq hosts deny
-patterns.
+is empty or absent.
 .Pp
 The pattern may be:
 .Bl -bullet
