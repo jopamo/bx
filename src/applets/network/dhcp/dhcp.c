@@ -2,7 +2,6 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <net/if.h>
@@ -25,10 +24,11 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/child_runner.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/poll_deadline.h"
 #include "lib/random_bytes.h"
+#include "lib/size_parse.h"
 #include "lib/time_parse.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
@@ -126,17 +126,8 @@ static void bx_dhcp_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_dhcp_parse_uint(const char* text, unsigned int min_value, unsigned int max_value, unsigned int* out_value) {
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    unsigned long value = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
-        return false;
-    }
-    if (value < min_value || value > max_value) {
+    uintmax_t value;
+    if (!bx_size_parse_uint(text, &value) || value < min_value || value > max_value) {
         return false;
     }
 
@@ -166,17 +157,16 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
         BX_DHCP_OPT_SERVER_ADDRESS,
     };
 
-    static const struct option long_options[] = {
-        {"script", required_argument, NULL, 's'},
-        {"interface", required_argument, NULL, 'i'},
-        {"timeout", required_argument, NULL, 't'},
-        {"retries", required_argument, NULL, 'r'},
-        {"server-port", required_argument, NULL, BX_DHCP_OPT_SERVER_PORT},
-        {"client-port", required_argument, NULL, BX_DHCP_OPT_CLIENT_PORT},
-        {"server-address", required_argument, NULL, BX_DHCP_OPT_SERVER_ADDRESS},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'s', 's', "script", BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', "interface", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "timeout", BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', "retries", BX_OPTION_REQUIRED_VALUE},
+        {BX_DHCP_OPT_SERVER_PORT, 0, "server-port", BX_OPTION_REQUIRED_VALUE},
+        {BX_DHCP_OPT_CLIENT_PORT, 0, "client-port", BX_OPTION_REQUIRED_VALUE},
+        {BX_DHCP_OPT_SERVER_ADDRESS, 0, "server-address", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -189,62 +179,72 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
     options->server_addr.s_addr = htonl(INADDR_BROADCAST);
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+:i:t:r:s:hV", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE) {
+                if (option.short_name)
+                    bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", option.token);
+            }
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
         unsigned int value = 0;
-        switch (c) {
+        switch (option.spec->id) {
             case 's':
-                options->script = optarg;
-                if (optarg[0] != '/') {
+                options->script = option.value;
+                if (option.value[0] != '/') {
                     bx_diag(diag, "lease script must be an absolute path");
                     return false;
                 }
                 break;
             case 'i':
-                options->ifname = optarg;
+                options->ifname = option.value;
                 break;
             case 't':
-                if (!bx_dhcp_parse_uint(optarg, 1u, 3600u, &value)) {
-                    bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
+                if (!bx_dhcp_parse_uint(option.value, 1u, 3600u, &value)) {
+                    bx_diag(diag, "invalid timeout '%s'", option.value);
                     return false;
                 }
                 uintmax_t timeout_ms = 0;
                 if (!bx_time_seconds_to_milliseconds_uint(value, &timeout_ms) || timeout_ms > (uintmax_t)UINT_MAX) {
-                    bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
+                    bx_diag(diag, "invalid timeout '%s'", option.value);
                     return false;
                 }
                 options->timeout_ms = (unsigned int)timeout_ms;
                 break;
             case 'r':
-                if (!bx_dhcp_parse_uint(optarg, 1u, 100u, &value)) {
-                    bx_diag(diag, "invalid retry count '%s'", optarg != NULL ? optarg : "");
+                if (!bx_dhcp_parse_uint(option.value, 1u, 100u, &value)) {
+                    bx_diag(diag, "invalid retry count '%s'", option.value);
                     return false;
                 }
                 options->retries = value;
                 break;
             case BX_DHCP_OPT_SERVER_PORT:
-                if (!bx_dhcp_parse_uint(optarg, 1u, 65535u, &value)) {
-                    bx_diag(diag, "invalid server port '%s'", optarg != NULL ? optarg : "");
+                if (!bx_dhcp_parse_uint(option.value, 1u, 65535u, &value)) {
+                    bx_diag(diag, "invalid server port '%s'", option.value);
                     return false;
                 }
                 options->server_port = (uint16_t)value;
                 break;
             case BX_DHCP_OPT_CLIENT_PORT:
-                if (!bx_dhcp_parse_uint(optarg, 0u, 65535u, &value)) {
-                    bx_diag(diag, "invalid client port '%s'", optarg != NULL ? optarg : "");
+                if (!bx_dhcp_parse_uint(option.value, 0u, 65535u, &value)) {
+                    bx_diag(diag, "invalid client port '%s'", option.value);
                     return false;
                 }
                 options->client_port = (uint16_t)value;
                 break;
             case BX_DHCP_OPT_SERVER_ADDRESS:
-                if (!bx_dhcp_parse_ipv4(optarg, &options->server_addr)) {
-                    bx_diag(diag, "invalid server address '%s'", optarg != NULL ? optarg : "");
+                if (!bx_dhcp_parse_ipv4(option.value, &options->server_addr)) {
+                    bx_diag(diag, "invalid server address '%s'", option.value);
                     return false;
                 }
                 break;
@@ -254,23 +254,18 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
             case 'V':
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    if (options->ifname == NULL && optind < argc) {
-        options->ifname = argv[optind++];
+    size_t operand = option.index;
+    if (options->ifname == NULL && operand < (size_t)argc) {
+        options->ifname = argv[operand++];
     }
 
-    if (optind < argc) {
-        bx_diag(diag, "extra operand '%s'", argv[optind]);
+    if (operand < (size_t)argc) {
+        bx_cli_diag_extra_operand(diag, argv[operand]);
         return false;
     }
 
@@ -281,6 +276,12 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
 
     if (strlen(options->ifname) >= IFNAMSIZ) {
         bx_diag(diag, "interface name is too long: '%s'", options->ifname);
+        return false;
+    }
+
+    /* Reject names the kernel would reject before invoking the lease script. */
+    if (strcmp(options->ifname, ".") == 0 || strcmp(options->ifname, "..") == 0 || strpbrk(options->ifname, "/: \t\n\r\v\f")) {
+        bx_diag(diag, "invalid interface name '%s'", options->ifname);
         return false;
     }
 
