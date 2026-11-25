@@ -2596,6 +2596,10 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->archive_path = value;
             return true;
         case BX_TAR_OPT_DIRECTORY:
+            if (!*value) {
+                bx_diag(diag, "%s: empty directory operand", display);
+                return false;
+            }
             return bx_tar_create_options_add_chdir(&options->create_options, value);
         case BX_TAR_OPT_TO_STDOUT:
             options->to_stdout = true;
@@ -2987,7 +2991,7 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
             }
             break;
         }
-        if (!oldstyle && arg[0] != '-') {
+        if (!oldstyle && (arg[0] != '-' || arg[1] == '\0')) {
             if (!bx_tar_add_operand(options, arg)) {
                 return false;
             }
