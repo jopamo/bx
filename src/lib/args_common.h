@@ -9,9 +9,6 @@
 
 void bx_args_getopt_reset_at(int first_option_index);
 void bx_args_getopt_reset(void);
-/* Reset a whole-invocation file parser. short_options is writable and
- * starts with an ordering byte, e.g. "-:m:". Never use for a child argv. */
-void bx_args_getopt_reset_file_options(char* short_options);
 enum { BX_ARGS_OPT_HELP = 512, BX_ARGS_OPT_VERSION };
 int bx_args_getopt_long(
     int argc,

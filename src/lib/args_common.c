@@ -36,11 +36,6 @@ void bx_args_getopt_reset(void) {
     bx_args_getopt_reset_at(1);
 }
 
-void bx_args_getopt_reset_file_options(char* short_options) {
-    short_options[0] = getenv("POSIXLY_CORRECT") != NULL ? '+' : '-';
-    bx_args_getopt_reset();
-}
-
 int bx_args_getopt_long(
     int argc,
     char* const argv[],
