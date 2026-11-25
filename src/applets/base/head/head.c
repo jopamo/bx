@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -14,7 +13,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/line_writer.h"
 
 struct bx_head_options {
@@ -26,6 +25,8 @@ struct bx_head_options {
     bool zero_terminated;
     bool show_help;
     bool show_version;
+    const char** files;
+    size_t file_count;
 };
 
 static void bx_head_print_help(FILE* stream, const char* progname) {
@@ -65,7 +66,7 @@ static bool bx_head_parse_num(const char* str, long long* value_out) {
     if (!bx_size_parse_scaled_count(str, &value)) {
         return false;
     }
-    if (value < (intmax_t)LLONG_MIN || value > (intmax_t)LLONG_MAX) {
+    if (value <= (intmax_t)LLONG_MIN || value > (intmax_t)LLONG_MAX) {
         return false;
     }
 
@@ -81,11 +82,10 @@ static bool bx_head_parse_legacy_lines_option(const char* arg, long long* lines_
     return bx_head_parse_num(arg + 1, lines_out);
 }
 
-static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"bytes", required_argument, NULL, 'c'}, {"lines", required_argument, NULL, 'n'}, {"quiet", no_argument, NULL, 'q'},
-        {"silent", no_argument, NULL, 'q'},      {"verbose", no_argument, NULL, 'v'},     {"zero-terminated", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 1},          {"version", no_argument, NULL, 2},       {NULL, 0, NULL, 0},
+static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "bytes", BX_OPTION_REQUIRED_VALUE}, {'n', 'n', "lines", BX_OPTION_REQUIRED_VALUE},     {'q', 'q', "quiet", BX_OPTION_NO_VALUE}, {'q', 0, "silent", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},     {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE}, {1, 0, "help", BX_OPTION_NO_VALUE},      {2, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -93,7 +93,7 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
     options->lines = 10;
     diag->progname = options->progname;
 
-    int option_start = 1;
+    size_t option_start = argc > 0 ? 1u : 0u;
     if (argc > 1) {
         long long legacy_lines = 0;
         if (bx_head_parse_legacy_lines_option(argv[1], &legacy_lines)) {
@@ -102,20 +102,35 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
         }
     }
 
-    bx_args_getopt_reset_at(option_start);
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "c:n:qvz", long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, option_start, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!options->files) {
+                options->files = calloc((size_t)argc - option.index, sizeof(*options->files));
+                if (!options->files) {
+                    bx_perror_path(diag, "allocate input operands");
+                    return false;
+                }
+            }
+            options->files[options->file_count++] = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.spec)
+                bx_diag(diag, "option requires an argument -- '%c'", option.spec->short_name);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'c': {
                 long long bytes = 0;
-                if (!bx_head_parse_num(optarg, &bytes)) {
-                    bx_diag(diag, "invalid number of bytes: '%s'", optarg);
+                if (!bx_head_parse_num(option.value, &bytes)) {
+                    bx_diag(diag, "invalid number of bytes: '%s'", option.value);
                     return false;
                 }
                 options->bytes = bytes;
@@ -124,8 +139,8 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
             }
             case 'n': {
                 long long lines = 0;
-                if (!bx_head_parse_num(optarg, &lines)) {
-                    bx_diag(diag, "invalid number of lines: '%s'", optarg);
+                if (!bx_head_parse_num(option.value, &lines)) {
+                    bx_diag(diag, "invalid number of lines: '%s'", option.value);
                     return false;
                 }
                 options->lines = lines;
@@ -149,26 +164,16 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
             case 2:
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt == 'c' || optopt == 'n') {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
     }
 
-    *first_operand = optind;
+    if ((options->bytes < 0 && (uintmax_t)-options->bytes > SIZE_MAX) ||
+        (options->lines < 0 && ((uintmax_t)-options->lines > SIZE_MAX / sizeof(char*) || (uintmax_t)-options->lines > SIZE_MAX / sizeof(size_t)))) {
+        bx_diag(diag, "count too large to buffer");
+        return false;
+    }
     return true;
 }
 
@@ -305,27 +310,30 @@ static bool head_file(FILE* f, struct bx_head_options* options, struct bx_line_w
 int bx_head_main(int argc, char** argv) {
     struct bx_head_options options;
     struct bx_diag_ctx diag = {.progname = "head", .exit_status = 0};
-    int first_operand = 0;
 
-    if (!bx_head_parse_options(argc, argv, &options, &first_operand, &diag))
+    if (!bx_head_parse_options(argc, argv, &options, &diag)) {
+        free(options.files);
         return 1;
+    }
     if (options.show_help) {
         bx_head_print_help(stdout, options.progname);
+        free(options.files);
         return 0;
     }
     if (options.show_version) {
         bx_cli_print_version(options.progname);
+        free(options.files);
         return 0;
     }
 
-    int num_files = argc - first_operand;
+    size_t num_files = options.file_count;
     bool ok = true;
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    for (int i = 0; ok && (i < num_files || (i == 0 && num_files == 0)); i++) {
-        const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
+    for (size_t i = 0; ok && (i < num_files || (i == 0 && num_files == 0)); i++) {
+        const char* filename = (num_files == 0) ? "-" : options.files[i];
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
         if (!f) {
@@ -350,5 +358,6 @@ int bx_head_main(int argc, char** argv) {
         bx_head_write_error(&diag);
     }
 
+    free(options.files);
     return diag.exit_status;
 }

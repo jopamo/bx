@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -13,7 +12,7 @@
 #include "bx/diag.h"
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/line_writer.h"
 
 typedef struct {
@@ -314,17 +313,18 @@ static bool tail_lines(
 }
 
 int bx_tail_main(int argc, char** argv) {
-    static const struct option long_options[] = {{"bytes", required_argument, NULL, 'c'},
-                                                 {"lines", required_argument, NULL, 'n'},
-                                                 {"follow", optional_argument, NULL, 'f'},
-                                                 {"quiet", no_argument, NULL, 'q'},
-                                                 {"silent", no_argument, NULL, 'q'},
-                                                 {"verbose", no_argument, NULL, 'v'},
-                                                 {"zero-terminated", no_argument, NULL, 'z'},
-                                                 {"sleep-interval", required_argument, NULL, 's'},
-                                                 {"help", no_argument, NULL, 'h'},
-                                                 {"version", no_argument, NULL, 'V'},
-                                                 {NULL, 0, NULL, 0}};
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "bytes", BX_OPTION_REQUIRED_VALUE},
+        {'n', 'n', "lines", BX_OPTION_REQUIRED_VALUE},
+        {'f', 'f', "follow", BX_OPTION_OPTIONAL_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'q', 0, "silent", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE},
+        {'s', 's', "sleep-interval", BX_OPTION_REQUIRED_VALUE},
+        {'h', 0, "help", BX_OPTION_NO_VALUE},
+        {'V', 0, "version", BX_OPTION_NO_VALUE},
+    };
 
     tail_opts_t opts = {
         .lines = -10,
@@ -336,7 +336,7 @@ int bx_tail_main(int argc, char** argv) {
         .sleep_interval = {.tv_sec = 1, .tv_nsec = 0},
     };
     struct bx_diag_ctx diag = {.progname = "tail", .exit_status = 0};
-    int option_start = 1;
+    size_t option_start = argc > 0 ? 1u : 0u;
     if (argc > 1) {
         long long legacy_lines = 0;
         if (bx_tail_parse_legacy_lines_option(argv[1], &legacy_lines)) {
@@ -346,26 +346,53 @@ int bx_tail_main(int argc, char** argv) {
         }
     }
 
-    bx_args_getopt_reset_at(option_start);
-
-    int c;
-    while ((c = bx_args_getopt_long(argc, argv, "c:n:f::qvs:z", long_options, NULL)) != -1) {
-        switch (c) {
+    const char** files = NULL;
+    size_t file_count = 0;
+    int status = 1;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, option_start, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!files) {
+                files = calloc((size_t)argc - option.index, sizeof(*files));
+                if (!files) {
+                    bx_perror_path(&diag, "allocate input operands");
+                    goto done;
+                }
+            }
+            files[file_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.spec)
+                bx_diag(&diag, "option requires an argument -- '%c'", option.spec->short_name);
+            else if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
             case 'c':
-                if (!bx_tail_parse_count_argument(optarg, &opts.bytes)) {
-                    bx_diag(&diag, "invalid number of bytes: '%s'", optarg);
-                    return 1;
+                if (!bx_tail_parse_count_argument(option.value, &opts.bytes)) {
+                    bx_diag(&diag, "invalid number of bytes: '%s'", option.value);
+                    goto done;
                 }
                 opts.lines = 0;
                 break;
             case 'n':
-                if (!bx_tail_parse_count_argument(optarg, &opts.lines)) {
-                    bx_diag(&diag, "invalid number of lines: '%s'", optarg);
-                    return 1;
+                if (!bx_tail_parse_count_argument(option.value, &opts.lines)) {
+                    bx_diag(&diag, "invalid number of lines: '%s'", option.value);
+                    goto done;
                 }
                 opts.bytes = 0;
                 break;
             case 'f':
+                if (option.value && strcmp(option.value, "descriptor") != 0) {
+                    bx_diag(&diag, "unsupported follow mode: '%s'", option.value);
+                    goto done;
+                }
                 opts.follow = true;
                 break;
             case 'q':
@@ -380,34 +407,22 @@ int bx_tail_main(int argc, char** argv) {
                 opts.zero_terminated = true;
                 break;
             case 's':
-                if (!bx_tail_parse_sleep_interval(optarg, &opts.sleep_interval)) {
-                    bx_diag(&diag, "invalid sleep interval: '%s'", optarg != NULL ? optarg : "");
-                    return 1;
+                if (!bx_tail_parse_sleep_interval(option.value, &opts.sleep_interval)) {
+                    bx_diag(&diag, "invalid sleep interval: '%s'", option.value);
+                    goto done;
                 }
                 break;
             case 'h':
                 printf("Usage: %s [OPTION]... [FILE]...\n", argv[0]);
                 // ...
-                return 0;
+                status = 0;
+                goto done;
             case 'V':
                 printf("tail (bx) %s\n", BX_VERSION);
-                return 0;
-            case '?':
-                if (optopt == 'c' || optopt == 'n' || optopt == 's') {
-                    bx_diag(&diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optopt != 0) {
-                    bx_diag(&diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(&diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(&diag, "unrecognized option");
-                }
-                return 1;
+                status = 0;
+                goto done;
             default:
-                return 1;
+                goto done;
         }
     }
 
@@ -416,18 +431,18 @@ int bx_tail_main(int argc, char** argv) {
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    if (optind == argc) {
+    if (file_count == 0) {
         if (opts.bytes != 0)
             ok = tail_bytes(stdin, opts.bytes, &writer, &diag);
         else
             ok = tail_lines(stdin, opts.lines, opts.zero_terminated ? '\0' : '\n', &writer, &diag);
     }
     else {
-        bool multiple = (argc - optind > 1);
-        for (int i = optind; ok && i < argc; i++) {
-            const char* path = argv[i];
+        bool multiple = file_count > 1;
+        for (size_t i = 0; ok && i < file_count; i++) {
+            const char* path = files[i];
             if ((multiple && !opts.quiet) || opts.verbose) {
-                ok = bx_tail_write_header(&writer, path, i > optind, &diag);
+                ok = bx_tail_write_header(&writer, path, i > 0, &diag);
             }
 
             FILE* f = (strcmp(path, "-") == 0) ? stdin : fopen(path, "r");
@@ -473,5 +488,8 @@ int bx_tail_main(int argc, char** argv) {
         bx_tail_write_error(&diag);
     }
 
-    return diag.exit_status;
+    status = diag.exit_status;
+done:
+    free(files);
+    return status;
 }
