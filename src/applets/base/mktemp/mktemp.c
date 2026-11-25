@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,14 +11,16 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/random_bytes.h"
 
 enum {
     BX_MKTEMP_OPT_TMPDIR = 256,
     BX_MKTEMP_OPT_SUFFIX,
+    BX_MKTEMP_OPT_HELP,
+    BX_MKTEMP_OPT_VERSION,
 };
 
 struct bx_mktemp_options {
@@ -33,6 +34,8 @@ struct bx_mktemp_options {
     const char* suffix;
     bool show_help;
     bool show_version;
+    const char* template;
+    const char* extra_operand;
 };
 
 static void bx_mktemp_print_help(FILE* stream, const char* progname) {
@@ -55,33 +58,53 @@ static void bx_mktemp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "TEMPLATE must contain at least 3 consecutive 'X' in the last component.\n");
 }
 
-static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"directory", no_argument, NULL, 'd'},
-        {"dry-run", no_argument, NULL, 'u'},
-        {"quiet", no_argument, NULL, 'q'},
-        {"tmpdir", optional_argument, NULL, BX_MKTEMP_OPT_TMPDIR},
-        {"suffix", required_argument, NULL, BX_MKTEMP_OPT_SUFFIX},
-        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},
-        {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "directory", BX_OPTION_NO_VALUE},
+        {'u', 'u', "dry-run", BX_OPTION_NO_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'t', 't', NULL, BX_OPTION_NO_VALUE},
+        {'p', 'p', NULL, BX_OPTION_REQUIRED_VALUE},
+        {BX_MKTEMP_OPT_TMPDIR, 0, "tmpdir", BX_OPTION_OPTIONAL_VALUE},
+        {BX_MKTEMP_OPT_SUFFIX, 0, "suffix", BX_OPTION_REQUIRED_VALUE},
+        {BX_MKTEMP_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_MKTEMP_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mktemp");
+    options->progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "mktemp");
     diag->progname = options->progname;
 
-    char short_options[] = "-duqtp:";
-    int next_operand = 1;
-    bx_args_getopt_reset_file_options(short_options);
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->template == NULL)
+                options->template = result.token;
+            else if (options->extra_operand == NULL)
+                options->extra_operand = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name != 0)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", result.token);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'd':
                 options->create_directory = true;
                 break;
@@ -95,32 +118,23 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
                 options->template_component_mode = true;
                 break;
             case 'p':
-                options->tmpdir_specified = true;
-                options->tmpdir_arg = optarg;
-                break;
             case BX_MKTEMP_OPT_TMPDIR:
                 options->tmpdir_specified = true;
-                options->tmpdir_arg = optarg;
+                options->tmpdir_arg = result.value;
                 break;
             case BX_MKTEMP_OPT_SUFFIX:
-                options->suffix = optarg;
+                options->suffix = result.value;
                 break;
-            case BX_ARGS_OPT_HELP:
+            case BX_MKTEMP_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case BX_ARGS_OPT_VERSION:
+            case BX_MKTEMP_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
-
-    *first_operand = optind;
-    return true;
 }
 
 static const char* bx_mktemp_tmpdir_env(void) {
@@ -316,9 +330,8 @@ int bx_mktemp_main(int argc, char** argv) {
         .verbose = false,
         .debug = false,
     };
-    int first_operand = 0;
 
-    if (!bx_mktemp_parse_options(argc, argv, &options, &first_operand, &diag)) {
+    if (!bx_mktemp_parse_options(argc, argv, &options, &diag)) {
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
@@ -332,14 +345,13 @@ int bx_mktemp_main(int argc, char** argv) {
         return 0;
     }
 
-    int operand_count = argc - first_operand;
-    if (operand_count > 1) {
-        bx_diag(&diag, "extra operand '%s'", argv[first_operand + 1]);
+    if (options.extra_operand != NULL) {
+        bx_diag(&diag, "extra operand '%s'", options.extra_operand);
         return diag.exit_status;
     }
 
-    const char* template_text = (operand_count == 1) ? argv[first_operand] : "tmp.XXXXXXXXXX";
-    bool use_tmpdir = options.template_component_mode || options.tmpdir_specified || operand_count == 0;
+    const char* template_text = options.template != NULL ? options.template : "tmp.XXXXXXXXXX";
+    bool use_tmpdir = options.template_component_mode || options.tmpdir_specified || options.template == NULL;
     const char* tmpdir = NULL;
     if (use_tmpdir) {
         if (options.template_component_mode) {
