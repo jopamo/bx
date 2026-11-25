@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -90,9 +91,50 @@ static char* bx_nohup_home_output_path(const char* home) {
     return path;
 }
 
+static bool bx_nohup_safe_output(const struct stat* st) {
+    return S_ISREG(st->st_mode) && st->st_uid == geteuid() && st->st_nlink == 1;
+}
+
+static int bx_nohup_open_append(const char* path) {
+    int fd = bx_fd_open_cloexec(path, O_WRONLY | O_CREAT | O_EXCL | O_APPEND, 0600);
+    if (fd >= 0 || errno != EEXIST)
+        return fd;
+
+    /* Check existing files without performing a device or FIFO open.
+     * Reopen the checked inode, not a second lookup of the caller's path. */
+    int locator = bx_fd_open_nofollow_cloexec(path, O_PATH, 0);
+    if (locator < 0)
+        return -1;
+    struct stat expected, opened;
+    if (fstat(locator, &expected) == 0) {
+        if (!bx_nohup_safe_output(&expected)) {
+            errno = EPERM;
+        } else {
+            char proc_path[64];
+            snprintf(proc_path, sizeof(proc_path), "/proc/self/fd/%d", locator);
+            fd = bx_fd_open_cloexec(proc_path, O_WRONLY | O_APPEND | O_NONBLOCK | O_NOCTTY, 0);
+            if (fd >= 0) {
+                int error = 0;
+                if (bx_fd_fstat_expected(fd, &expected, &opened) != 0)
+                    error = errno;
+                else if (!bx_nohup_safe_output(&opened))
+                    error = EPERM;
+                if (error) {
+                    bx_fd_cleanup(&fd);
+                    errno = error;
+                }
+            }
+        }
+    }
+    int error = errno;
+    bx_fd_cleanup(&locator);
+    errno = error;
+    return fd;
+}
+
 static bool bx_nohup_open_output_file(int* output_fd, char** output_path, struct bx_diag_ctx* diag) {
     const char default_output[] = "nohup.out";
-    int fd = bx_fd_open_cloexec(default_output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+    int fd = bx_nohup_open_append(default_output);
     if (fd >= 0) {
         *output_fd = fd;
         *output_path = xstrdup(default_output);
@@ -106,7 +148,7 @@ static bool bx_nohup_open_output_file(int* output_fd, char** output_path, struct
     }
 
     char* home_output = bx_nohup_home_output_path(home);
-    fd = bx_fd_open_cloexec(home_output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+    fd = bx_nohup_open_append(home_output);
     if (fd >= 0) {
         *output_fd = fd;
         *output_path = home_output;
