@@ -56,7 +56,7 @@ static void bx_killall_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Send signals to processes selected by name.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -e, --exact            require exact match for long names\n");
-    fprintf(stream, "  -g, --process-group    signal the process group instead of each PID\n");
+    fprintf(stream, "  -g, --process-group    signal the group (requires a group leader pidfd and kernel support)\n");
     fprintf(stream, "  -i, --interactive      ask before signaling each match\n");
     fprintf(stream, "  -I, --ignore-case      match process names case-insensitively\n");
     fprintf(stream, "  -l, --list             list known signal names\n");
@@ -453,16 +453,29 @@ static bool bx_killall_id_seen(const struct bx_killall_target* ids, size_t len, 
     return false;
 }
 
-static int bx_killall_signal_group(pid_t id, int signal_number) {
-    /* kill(-1, ...) broadcasts instead of addressing process group 1. */
+static int bx_killall_pin_group(pid_t id, const struct bx_proc_info* member) {
     if (id <= 1) {
         errno = EINVAL;
         return -1;
     }
-    return kill(-id, signal_number);
+    if (id != member->pgrp) {
+        errno = ESTALE;
+        return -1;
+    }
+    /* The group-signal flag addresses the pidfd's PID as a PGID. Open the
+     * group leader, not the member that matched the selection. The member
+     * must still belong to that group after the descriptor is opened. */
+    int fd = bx_fd_pidfd_open(id);
+    if (fd >= 0 && !bx_proc_signal_target_matches(member->pid, member->starttime_ticks, id)) {
+        int error = errno;
+        bx_fd_cleanup(&fd);
+        errno = error;
+        return -1;
+    }
+    return fd;
 }
 
-static bool bx_killall_wait_for_ids(const struct bx_killall_target* ids, size_t len, bool process_group) {
+static bool bx_killall_wait_for_ids(struct bx_killall_target* ids, size_t len, bool process_group) {
     if (!process_group) {
         for (size_t i = 0; i < len; i++) {
             struct pollfd process = {.fd = ids[i].fd, .events = POLLIN};
@@ -484,9 +497,15 @@ static bool bx_killall_wait_for_ids(const struct bx_killall_target* ids, size_t 
         size_t i;
         remaining = 0u;
         for (i = 0u; i < len; i++) {
-            int rc = bx_killall_signal_group(ids[i].id, 0);
+            if (ids[i].fd < 0)
+                continue;
+            int rc = bx_fd_pidfd_signal_process_group(ids[i].fd, 0);
             if (rc == 0 || (rc < 0 && errno == EPERM)) {
                 remaining++;
+            } else if (errno == ESRCH) {
+                bx_fd_cleanup(&ids[i].fd);
+            } else {
+                return false;
             }
         }
         if (remaining == 0u) {
@@ -646,24 +665,16 @@ int bx_killall_main(int argc, char** argv) {
             }
         }
 
-        int signal_fd = -1;
-        if (options.process_group &&
-            (signal_id != info->pgrp ||
-             !bx_proc_signal_target_matches(info->pid, info->starttime_ticks, signal_id))) {
+        int signal_fd = options.process_group ? bx_killall_pin_group(signal_id, info)
+                      : bx_proc_pin_signal_target(signal_id, info->starttime_ticks);
+        if (signal_fd < 0) {
             if (!options.quiet)
-                bx_diag(&diag, "process %ld changed or exited before signaling", (long)info->pid);
+                bx_diag(&diag, "cannot pin %s %ld before signaling: %s",
+                        options.process_group ? "process group" : "process",
+                        (long)signal_id, strerror(errno));
             continue;
         }
-        if (!options.process_group) {
-            signal_fd = bx_proc_pin_signal_target(signal_id, info->starttime_ticks);
-            if (signal_fd < 0) {
-                if (!options.quiet)
-                    bx_diag(&diag, "cannot pin process %ld before signaling: %s",
-                            (long)signal_id, strerror(errno));
-                continue;
-            }
-        }
-        int sent = options.process_group ? bx_killall_signal_group(signal_id, options.signal_number)
+        int sent = options.process_group ? bx_fd_pidfd_signal_process_group(signal_fd, options.signal_number)
                  : bx_fd_pidfd_send_signal(signal_fd, options.signal_number, NULL);
         if (sent != 0) {
             if (!options.quiet) {

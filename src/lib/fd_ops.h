@@ -49,6 +49,7 @@ void bx_fd_cleanup(int* p_fd);
 /* Pin a positive process ID and signal that identity without a numeric fallback. */
 int bx_fd_pidfd_open(pid_t pid);
 int bx_fd_pidfd_send_signal(int fd, int signal_number, siginfo_t* info);
+int bx_fd_pidfd_signal_process_group(int fd, int signal_number);
 
 /* CLOEXEC-enforcing constructors. These are the shared authority point for
  * creating process-local descriptors that must not leak across exec. */

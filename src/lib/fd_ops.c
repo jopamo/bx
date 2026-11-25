@@ -40,16 +40,26 @@ int bx_fd_pidfd_open(pid_t pid) {
 #endif
 }
 
-int bx_fd_pidfd_send_signal(int fd, int signal_number, siginfo_t* info) {
+static int bx_fd_pidfd_signal(int fd, int signal_number, siginfo_t* info, unsigned flags) {
 #ifdef SYS_pidfd_send_signal
-    return (int)syscall(SYS_pidfd_send_signal, fd, signal_number, info, 0);
+    return (int)syscall(SYS_pidfd_send_signal, fd, signal_number, info, flags);
 #else
     (void)fd;
     (void)signal_number;
     (void)info;
+    (void)flags;
     errno = ENOSYS;
     return -1;
 #endif
+}
+
+int bx_fd_pidfd_send_signal(int fd, int signal_number, siginfo_t* info) {
+    return bx_fd_pidfd_signal(fd, signal_number, info, 0);
+}
+
+int bx_fd_pidfd_signal_process_group(int fd, int signal_number) {
+    /* Linux UAPI PIDFD_SIGNAL_PROCESS_GROUP; runtime errors are not retried. */
+    return bx_fd_pidfd_signal(fd, signal_number, NULL, 1U << 2);
 }
 
 int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownership ownership) {
