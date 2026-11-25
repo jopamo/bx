@@ -15,5 +15,7 @@ void zu_strlist_free(ZU_StrList* list);
 /* Frees the list using a custom destructor for each item. */
 void zu_strlist_free_with_dtor(ZU_StrList* list, void (*dtor)(void*));
 int zu_strlist_push(ZU_StrList* list, const char* value);
+/* Use only for lists whose entries are patterns, not literal paths. */
+void zu_strlist_normalize_globs(ZU_StrList* list);
 
 #endif

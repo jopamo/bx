@@ -3,6 +3,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "lib/glob_syntax.h"
+
+void zu_strlist_normalize_globs(ZU_StrList* list) {
+    for (size_t i = 0; i < list->len; i++) {
+        if (strstr(list->items[i], "[^"))
+            bx_glob_normalize_caret(list->items[i]);
+    }
+}
+
 /*
  * Growable list of owned C strings
  *

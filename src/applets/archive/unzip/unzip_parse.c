@@ -427,5 +427,7 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
         ctx->list_only = true;
     }
 
+    zu_strlist_normalize_globs(&ctx->include);
+    zu_strlist_normalize_globs(&ctx->exclude);
     return ZU_STATUS_OK;
 }
