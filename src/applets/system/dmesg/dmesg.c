@@ -2,7 +2,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
@@ -19,8 +18,8 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
 
 enum bx_dmesg_action {
     BX_DMESG_ACTION_READ = 0,
@@ -214,22 +213,22 @@ static bool bx_dmesg_parse_timestamp(const char** cursor, double* stamp_out) {
 }
 
 static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"clear", no_argument, NULL, 'C'},
-        {"read-clear", no_argument, NULL, 'c'},
-        {"console-off", no_argument, NULL, 'D'},
-        {"console-on", no_argument, NULL, 'E'},
-        {"console-level", required_argument, NULL, 'n'},
-        {"raw", no_argument, NULL, 'r'},
-        {"syslog", no_argument, NULL, 'S'},
-        {"buffer-size", required_argument, NULL, 's'},
-        {"notime", no_argument, NULL, 't'},
-        {"ctime", no_argument, NULL, 'T'},
-        {"decode", no_argument, NULL, 'x'},
-        {"time-format", required_argument, NULL, 1000},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    enum { TIME_FORMAT = 256 };
+    static const struct bx_option_spec specs[] = {
+        {'C', 'C', "clear", BX_OPTION_NO_VALUE},
+        {'c', 'c', "read-clear", BX_OPTION_NO_VALUE},
+        {'D', 'D', "console-off", BX_OPTION_NO_VALUE},
+        {'E', 'E', "console-on", BX_OPTION_NO_VALUE},
+        {'n', 'n', "console-level", BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', "raw", BX_OPTION_NO_VALUE},
+        {'S', 'S', "syslog", BX_OPTION_NO_VALUE},
+        {'s', 's', "buffer-size", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "notime", BX_OPTION_NO_VALUE},
+        {'T', 'T', "ctime", BX_OPTION_NO_VALUE},
+        {'x', 'x', "decode", BX_OPTION_NO_VALUE},
+        {TIME_FORMAT, 0, "time-format", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -238,15 +237,31 @@ static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_option
     options->time_format = BX_DMESG_TIME_RAW;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+CcDEn:rSs:TtxhV", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            if (result.index >= (size_t)argc)
+                return true;
+            bx_cli_diag_extra_operand(diag, argv[result.index]);
+            return false;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "option requires an argument -- '%s'", result.token);
+            } else if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'C':
                 options->action = BX_DMESG_ACTION_CLEAR;
                 break;
@@ -260,8 +275,8 @@ static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_option
                 options->action = BX_DMESG_ACTION_CONSOLE_ON;
                 break;
             case 'n':
-                if (!bx_dmesg_parse_console_level(optarg, &options->console_level)) {
-                    bx_diag(diag, "invalid console level '%s'", optarg);
+                if (!bx_dmesg_parse_console_level(result.value, &options->console_level)) {
+                    bx_diag(diag, "invalid console level '%s'", result.value);
                     return false;
                 }
                 options->action = BX_DMESG_ACTION_CONSOLE_LEVEL;
@@ -273,8 +288,8 @@ static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_option
                 options->force_syslog = true;
                 break;
             case 's':
-                if (!bx_dmesg_parse_size(optarg, &options->buffer_size)) {
-                    bx_diag(diag, "invalid buffer size '%s'", optarg);
+                if (!bx_dmesg_parse_size(result.value, &options->buffer_size)) {
+                    bx_diag(diag, "invalid buffer size '%s'", result.value);
                     return false;
                 }
                 break;
@@ -287,9 +302,9 @@ static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_option
             case 'x':
                 options->decode = true;
                 break;
-            case 1000:
-                if (!bx_dmesg_parse_time_format(optarg, &options->time_format)) {
-                    bx_diag(diag, "unsupported time format '%s'", optarg);
+            case TIME_FORMAT:
+                if (!bx_dmesg_parse_time_format(result.value, &options->time_format)) {
+                    bx_diag(diag, "unsupported time format '%s'", result.value);
                     return false;
                 }
                 break;
@@ -299,23 +314,8 @@ static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_option
             case 'V':
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
         }
     }
-
-    if (optind < argc) {
-        bx_cli_diag_extra_operand(diag, argv[optind]);
-        return false;
-    }
-
-    return true;
 }
 
 static const char* bx_dmesg_level_name(unsigned level) {
