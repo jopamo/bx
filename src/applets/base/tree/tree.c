@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -15,6 +14,7 @@
 #include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 #include "tree_internal.h"
 
 enum bx_tree_option_code {
@@ -140,32 +140,66 @@ static bool bx_tree_parse_options(int argc,
                                   char **argv,
                                   struct bx_tree_options *opts,
                                   int *first_operand) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, BX_TREE_OPT_HELP},
-        {"version", no_argument, NULL, BX_TREE_OPT_VERSION},
-        {"noreport", no_argument, NULL, BX_TREE_OPT_NOREPORT},
-        {"nolinks", no_argument, NULL, BX_TREE_OPT_NO_LINKS},
-        {"inodes", no_argument, NULL, BX_TREE_OPT_INODES},
-        {"device", no_argument, NULL, BX_TREE_OPT_DEVICE},
-        {"dirsfirst", no_argument, NULL, BX_TREE_OPT_DIRSFIRST},
-        {"filelimit", required_argument, NULL, BX_TREE_OPT_FILELIMIT},
-        {"matchdirs", no_argument, NULL, BX_TREE_OPT_MATCHDIRS},
-        {"ignore-case", no_argument, NULL, BX_TREE_OPT_IGNORE_CASE},
-        {"prune", no_argument, NULL, 'Z'},
-        {"charset", required_argument, NULL, BX_TREE_OPT_CHARSET},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', NULL, BX_OPTION_NO_VALUE},
+        {'d', 'd', NULL, BX_OPTION_NO_VALUE},
+        {'f', 'f', NULL, BX_OPTION_NO_VALUE},
+        {'g', 'g', NULL, BX_OPTION_NO_VALUE},
+        {'h', 'h', NULL, BX_OPTION_NO_VALUE},
+        {'i', 'i', NULL, BX_OPTION_NO_VALUE},
+        {'l', 'l', NULL, BX_OPTION_NO_VALUE},
+        {'n', 'n', NULL, BX_OPTION_NO_VALUE},
+        {'p', 'p', NULL, BX_OPTION_NO_VALUE},
+        {'q', 'q', NULL, BX_OPTION_NO_VALUE},
+        {'r', 'r', NULL, BX_OPTION_NO_VALUE},
+        {'s', 's', NULL, BX_OPTION_NO_VALUE},
+        {'t', 't', NULL, BX_OPTION_NO_VALUE},
+        {'u', 'u', NULL, BX_OPTION_NO_VALUE},
+        {'v', 'v', NULL, BX_OPTION_NO_VALUE},
+        {'x', 'x', NULL, BX_OPTION_NO_VALUE},
+        {'A', 'A', NULL, BX_OPTION_NO_VALUE},
+        {'C', 'C', NULL, BX_OPTION_NO_VALUE},
+        {'D', 'D', NULL, BX_OPTION_NO_VALUE},
+        {'F', 'F', NULL, BX_OPTION_NO_VALUE},
+        {'N', 'N', NULL, BX_OPTION_NO_VALUE},
+        {'S', 'S', NULL, BX_OPTION_NO_VALUE},
+        {'L', 'L', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'R', 'R', NULL, BX_OPTION_NO_VALUE},
+        {'H', 'H', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'P', 'P', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'I', 'I', NULL, BX_OPTION_REQUIRED_VALUE},
+        {BX_TREE_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_NOREPORT, 0, "noreport", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_NO_LINKS, 0, "nolinks", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_INODES, 0, "inodes", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_DEVICE, 0, "device", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_DIRSFIRST, 0, "dirsfirst", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_FILELIMIT, 0, "filelimit", BX_OPTION_REQUIRED_VALUE},
+        {BX_TREE_OPT_MATCHDIRS, 0, "matchdirs", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_IGNORE_CASE, 0, "ignore-case", BX_OPTION_NO_VALUE},
+        {'Z', 0, "prune", BX_OPTION_NO_VALUE},
+        {BX_TREE_OPT_CHARSET, 0, "charset", BX_OPTION_REQUIRED_VALUE},
     };
 
-    bx_args_getopt_reset();
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                fprintf(stderr, "%s: option requires an argument -- '%c'\n", opts->progname, option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                fprintf(stderr, "%s: option requires an argument -- '%s'\n", opts->progname, option.token);
+            else
+                fprintf(stderr, "%s: unrecognized option '%s'\n", opts->progname, option.token);
+            return false;
+        }
 
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+:adfghilnpqrstuvxACDFNSL:RH:T:o:P:I:",
-                            long_options, &option_index);
-        if (c == -1)
-            break;
-
-        switch (c) {
+        switch (option.spec->id) {
         case 'a':
             opts->show_all = true;
             break;
@@ -192,7 +226,7 @@ static bool bx_tree_parse_options(int argc,
             opts->colorize = false;
             break;
         case 'o':
-            opts->output_path = optarg;
+            opts->output_path = option.value;
             break;
         case 'p':
             opts->show_mode = true;
@@ -239,7 +273,7 @@ static bool bx_tree_parse_options(int argc,
             opts->charset_name = "IBM437";
             break;
         case 'L':
-            if (!bx_tree_parse_nonnegative(opts->progname, "-L", optarg, &opts->max_depth))
+            if (!bx_tree_parse_nonnegative(opts->progname, "-L", option.value, &opts->max_depth))
                 return false;
             break;
         case 'R':
@@ -247,16 +281,16 @@ static bool bx_tree_parse_options(int argc,
             break;
         case 'H':
             opts->html_output = true;
-            opts->html_base_href = optarg;
+            opts->html_base_href = option.value;
             break;
         case 'T':
-            opts->html_title = optarg;
+            opts->html_title = option.value;
             break;
         case 'P':
-            opts->pattern_include = optarg;
+            opts->pattern_include = option.value;
             break;
         case 'I':
-            opts->pattern_exclude = optarg;
+            opts->pattern_exclude = option.value;
             break;
         case 'Z':
             opts->prune = true;
@@ -283,7 +317,7 @@ static bool bx_tree_parse_options(int argc,
             opts->dirs_first = true;
             break;
         case BX_TREE_OPT_FILELIMIT:
-            if (!bx_tree_parse_nonnegative(opts->progname, "--filelimit", optarg,
+            if (!bx_tree_parse_nonnegative(opts->progname, "--filelimit", option.value,
                                            &opts->filelimit))
                 return false;
             break;
@@ -294,30 +328,15 @@ static bool bx_tree_parse_options(int argc,
             opts->ignore_case = true;
             break;
         case BX_TREE_OPT_CHARSET:
-            if (!bx_tree_parse_charset(opts->progname, optarg, opts))
+            if (!bx_tree_parse_charset(opts->progname, option.value, opts))
                 return false;
             break;
-        case ':':
-            if (optind > 0 && optind <= argc && strncmp(argv[optind - 1], "--", 2) == 0)
-                fprintf(stderr, "%s: option requires an argument -- '%s'\n",
-                        opts->progname, argv[optind - 1]);
-            else if (optopt != 0)
-                fprintf(stderr, "%s: option requires an argument -- '%c'\n",
-                        opts->progname, optopt);
-            else
-                fprintf(stderr, "%s: option requires an argument\n", opts->progname);
-            return false;
-        case '?':
         default:
-            if (optind > 0 && optind <= argc)
-                fprintf(stderr, "%s: unrecognized option '%s'\n", opts->progname, argv[optind - 1]);
-            else
-                fprintf(stderr, "%s: invalid option\n", opts->progname);
             return false;
         }
     }
 
-    *first_operand = optind;
+    *first_operand = (int)option.index;
     return true;
 }
 

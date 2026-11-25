@@ -897,6 +897,7 @@
       "main": "bx_tree_main",
       "capabilities": [
         "filesystem-read",
+        "filesystem-write",
         "recursive-traversal",
         "terminal-control",
         "raw-output"
