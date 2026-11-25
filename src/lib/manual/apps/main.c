@@ -116,7 +116,7 @@ static	void		  process_onefile(struct mparse *, struct manpage *,
 static	void		  run_pager(struct outstate *, char *);
 static	pid_t		  spawn_pager(struct outstate *, char *);
 static	int		  usage(enum argmode);
-static	int		  woptions(char *, enum mandoc_os *, int *);
+static	int		  woptions(const char *, enum mandoc_os *, int *);
 
 static	const int sec_prios[] = {1, 4, 5, 8, 6, 3, 7, 2, 9};
 static	char		  help_arg[] = "help";
@@ -358,14 +358,10 @@ manual_run(int argc, char *argv[], char *operands[],
 				return mandoc_msg_getrc();
 			}
 			break;
-		case 'W': {
-			char *warnings = mandoc_strdup(value);
-			int result = woptions(warnings, &os_e, &outst.wstop);
-			free(warnings);
-			if (result == -1)
+		case 'W':
+			if (woptions(value, &os_e, &outst.wstop) == -1)
 				return mandoc_msg_getrc();
 			break;
-		}
 		case 'w':
 			outmode = OUTMODE_FLN;
 			break;
@@ -1153,60 +1149,49 @@ done:
 }
 
 static int
-woptions(char *arg, enum mandoc_os *os_e, int *wstop)
+woptions(const char *arg, enum mandoc_os *os_e, int *wstop)
 {
-	char		*v, *o;
-	const char	*toks[11];
-
-	toks[0] = "stop";
-	toks[1] = "all";
-	toks[2] = "base";
-	toks[3] = "style";
-	toks[4] = "warning";
-	toks[5] = "error";
-	toks[6] = "unsupp";
-	toks[7] = "fatal";
-	toks[8] = "openbsd";
-	toks[9] = "netbsd";
-	toks[10] = NULL;
+	static const struct {
+		const char *name;
+		enum mandocerr min;
+		enum mandoc_os os;
+	} levels[] = {
+		{"all", MANDOCERR_BASE, MANDOC_OS_OTHER},
+		{"base", MANDOCERR_BASE, MANDOC_OS_OTHER},
+		{"style", MANDOCERR_STYLE, MANDOC_OS_OTHER},
+		{"warning", MANDOCERR_WARNING, MANDOC_OS_OTHER},
+		{"error", MANDOCERR_ERROR, MANDOC_OS_OTHER},
+		{"unsupp", MANDOCERR_UNSUPP, MANDOC_OS_OTHER},
+		{"fatal", MANDOCERR_BADARG, MANDOC_OS_OTHER},
+		{"openbsd", MANDOCERR_BASE, MANDOC_OS_OPENBSD},
+		{"netbsd", MANDOCERR_BASE, MANDOC_OS_NETBSD},
+	};
 
 	while (*arg) {
-		o = arg;
-		switch (getsubopt(&arg, (char * const *)toks, &v)) {
-		case 0:
+		const char *comma = strchr(arg, ',');
+		size_t len = strcspn(arg, ",=");
+		/* Historically a recognized name ignores any attached value. */
+		if (len == sizeof("stop") - 1 && memcmp(arg, "stop", len) == 0)
 			*wstop = 1;
-			break;
-		case 1:
-		case 2:
-			mandoc_msg_setmin(MANDOCERR_BASE);
-			break;
-		case 3:
-			mandoc_msg_setmin(MANDOCERR_STYLE);
-			break;
-		case 4:
-			mandoc_msg_setmin(MANDOCERR_WARNING);
-			break;
-		case 5:
-			mandoc_msg_setmin(MANDOCERR_ERROR);
-			break;
-		case 6:
-			mandoc_msg_setmin(MANDOCERR_UNSUPP);
-			break;
-		case 7:
-			mandoc_msg_setmin(MANDOCERR_BADARG);
-			break;
-		case 8:
-			mandoc_msg_setmin(MANDOCERR_BASE);
-			*os_e = MANDOC_OS_OPENBSD;
-			break;
-		case 9:
-			mandoc_msg_setmin(MANDOCERR_BASE);
-			*os_e = MANDOC_OS_NETBSD;
-			break;
-		default:
-			mandoc_msg(MANDOCERR_BADARG_BAD, 0, 0, "-W %s", o);
-			return -1;
+		else {
+			size_t i;
+			for (i = 0; i < sizeof(levels) / sizeof(levels[0]); i++)
+				if (len == strlen(levels[i].name) &&
+				    memcmp(arg, levels[i].name, len) == 0)
+					break;
+			if (i == sizeof(levels) / sizeof(levels[0])) {
+				size_t item_len = comma ? (size_t)(comma - arg) : strlen(arg);
+				mandoc_msg(MANDOCERR_BADARG_BAD, 0, 0, "-W %.*s",
+				    item_len > INT_MAX ? INT_MAX : (int)item_len, arg);
+				return -1;
+			}
+			mandoc_msg_setmin(levels[i].min);
+			if (levels[i].os != MANDOC_OS_OTHER)
+				*os_e = levels[i].os;
 		}
+		if (comma == NULL)
+			break;
+		arg = comma + 1;
 	}
 	return 0;
 }
