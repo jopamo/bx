@@ -17,9 +17,10 @@ struct bx_option_spec {
     enum bx_option_value value;
 };
 
-enum bx_option_order {
-    BX_OPTION_ORDERED, /* Return operands as events, including after "--". */
-    BX_OPTION_PREFIX,  /* Stop at the first operand or just after "--". */
+enum bx_option_mode {
+    BX_OPTION_ORDERED = 0, /* Return operands as events, including after "--". */
+    BX_OPTION_PREFIX = 1 << 0, /* Stop at the first operand or just after "--". */
+    BX_OPTION_ABBREVIATE = 1 << 1, /* Accept unique prefixes of long names. */
 };
 
 enum bx_option_event {
@@ -27,6 +28,7 @@ enum bx_option_event {
     BX_OPTION_MATCH,
     BX_OPTION_OPERAND,
     BX_OPTION_UNKNOWN,
+    BX_OPTION_AMBIGUOUS,
     BX_OPTION_MISSING_VALUE,
     BX_OPTION_UNEXPECTED_VALUE,
 };
@@ -45,7 +47,7 @@ struct bx_option_cursor {
     const struct bx_option_spec* specs;
     size_t spec_count;
     size_t index, end, short_offset;
-    enum bx_option_order order;
+    unsigned mode;
     bool literal, stopped;
 };
 
@@ -57,12 +59,14 @@ struct bx_option_cursor {
  * or its results. Neither slots nor strings are modified. Reinitialize to
  * restart; abandoning a partially read group needs no cleanup.
  *
- * Long names match exactly. Required values use the attached suffix or
- * the next token (even "--"); optional values are attached only. Long
- * values attach with '='. A short value takes the rest of its group.
+ * Long names match exactly unless mode includes BX_OPTION_ABBREVIATE.
+ * Even then, prefer exact matches; multiple prefix matches are ambiguous.
+ * Required values use the attached suffix or the next token (even "--");
+ * optional values are attached only. Long values attach with '='. A short
+ * value takes the rest of its group.
  */
 void bx_option_cursor_init(struct bx_option_cursor* cursor, char* const argv[],
-                           size_t first, size_t end, enum bx_option_order order,
+                           size_t first, size_t end, unsigned mode,
                            const struct bx_option_spec* specs, size_t spec_count);
 
 /*

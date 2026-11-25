@@ -4,7 +4,7 @@
 #include <string.h>
 
 void bx_option_cursor_init(struct bx_option_cursor* cursor, char* const argv[],
-                           size_t first, size_t end, enum bx_option_order order,
+                           size_t first, size_t end, unsigned mode,
                            const struct bx_option_spec* specs, size_t spec_count) {
     assert(first <= end);
     *cursor = (struct bx_option_cursor) {
@@ -13,7 +13,7 @@ void bx_option_cursor_init(struct bx_option_cursor* cursor, char* const argv[],
         .spec_count = spec_count,
         .index = first,
         .end = end,
-        .order = order,
+        .mode = mode,
     };
 }
 
@@ -27,13 +27,23 @@ static const struct bx_option_spec* find_short(const struct bx_option_cursor* cu
 }
 
 static const struct bx_option_spec* find_long(const struct bx_option_cursor* cursor,
-                                              const char* name, size_t length) {
+                                              const char* name, size_t length, bool* ambiguous) {
+    const struct bx_option_spec* prefix = NULL;
     for (size_t i = 0; i < cursor->spec_count; i++) {
-        const char* candidate = cursor->specs[i].long_name;
-        if (candidate != NULL && strncmp(candidate, name, length) == 0 && candidate[length] == '\0')
-            return &cursor->specs[i];
+        const struct bx_option_spec* spec = &cursor->specs[i];
+        const char* candidate = spec->long_name;
+        if (candidate == NULL || strncmp(candidate, name, length) != 0)
+            continue;
+        if (candidate[length] == '\0') {
+            *ambiguous = false;
+            return spec;
+        }
+        if (cursor->mode & BX_OPTION_ABBREVIATE) {
+            *ambiguous = prefix != NULL;
+            prefix = spec;
+        }
     }
-    return NULL;
+    return *ambiguous ? NULL : prefix;
 }
 
 static struct bx_option_result scan_error(struct bx_option_cursor* cursor,
@@ -54,7 +64,7 @@ struct bx_option_result bx_option_next(struct bx_option_cursor* cursor) {
     const char* token = cursor->argv[cursor->index];
     if (!cursor->literal && strcmp(token, "--") == 0) {
         result.index = ++cursor->index;
-        if (cursor->order == BX_OPTION_PREFIX) {
+        if (cursor->mode & BX_OPTION_PREFIX) {
             cursor->stopped = true;
             return result;
         }
@@ -64,7 +74,7 @@ struct bx_option_result bx_option_next(struct bx_option_cursor* cursor) {
         token = cursor->argv[cursor->index];
     }
     if (cursor->literal || token[0] != '-' || token[1] == '\0') {
-        if (cursor->order == BX_OPTION_PREFIX) {
+        if (cursor->mode & BX_OPTION_PREFIX) {
             cursor->stopped = true;
             return result;
         }
@@ -80,8 +90,12 @@ struct bx_option_result bx_option_next(struct bx_option_cursor* cursor) {
         const char* name = token + 2;
         const char* equals = strchr(name, '=');
         size_t length = equals == NULL ? strlen(name) : (size_t)(equals - name);
-        if (length != 0)
-            result.spec = find_long(cursor, name, length);
+        if (length != 0) {
+            bool ambiguous = false;
+            result.spec = find_long(cursor, name, length, &ambiguous);
+            if (ambiguous)
+                return scan_error(cursor, result, BX_OPTION_AMBIGUOUS);
+        }
         if (equals != NULL)
             attached = equals + 1;
     }
