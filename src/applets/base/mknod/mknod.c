@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -15,7 +14,12 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
+
+enum {
+    BX_MKNOD_OPT_HELP = 1,
+    BX_MKNOD_OPT_VERSION,
+};
 
 struct bx_mknod_options {
     const char* progname;
@@ -37,42 +41,36 @@ static void bx_mknod_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_mknod_parse_options(int argc, char** argv, struct bx_mknod_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {BX_MKNOD_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_MKNOD_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mknod");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+", long_options, &option_index);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 1:
-                options->show_help = true;
-                return true;
-            case 2:
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end,
+                          BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result result = bx_option_next(&cursor);
+    if (result.event == BX_OPTION_END) {
+        *first_operand = (int)result.index;
+        return true;
+    }
+    if (result.event == BX_OPTION_MATCH) {
+        options->show_help = result.spec->id == BX_MKNOD_OPT_HELP;
+        options->show_version = result.spec->id == BX_MKNOD_OPT_VERSION;
+        return true;
     }
 
-    *first_operand = optind;
-    return true;
+    if (result.short_name != 0)
+        bx_diag(diag, "invalid option -- '%c'", result.short_name);
+    else
+        bx_diag(diag, "unrecognized option '%s'", result.token);
+    return false;
 }
 
 static bool bx_mknod_parse_type(const char* type_text, mode_t* type_mode, bool* need_device_numbers, struct bx_diag_ctx* diag) {
