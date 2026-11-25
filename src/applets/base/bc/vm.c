@@ -1752,13 +1752,6 @@ bc_vm_boot(int argc, const char* argv[])
 #if BC_ENABLED
 	if (BC_IS_BC)
 	{
-		// bc checks this environment variable to see if it should run in
-		// standard mode.
-		char* var = bc_vm_getenv("POSIXLY_CORRECT");
-
-		vm->flags |= BC_FLAG_S * (var != NULL);
-		bc_vm_getenvFree(var);
-
 		// Set whether we print the banner or not.
 		if (BC_I) bc_vm_setenvFlag("BC_BANNER", BC_DEFAULT_BANNER, BC_FLAG_Q);
 	}

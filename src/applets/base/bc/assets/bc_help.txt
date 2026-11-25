@@ -194,10 +194,6 @@ Options:
 
 Environment variables:
 
-  POSIXLY_CORRECT
-
-      Error if any non-POSIX extensions are used.
-
   BC_ENV_ARGS
 
       Command-line arguments to use on every run.
