@@ -97,6 +97,7 @@ struct find_expr {
     struct find_expr *right;
     const char *text;
     const char *text2;
+    char *pattern_storage;
     char type_filter;
     bool ignore_case;
     long long number;

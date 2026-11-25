@@ -9,6 +9,7 @@
 
 #include "applets/shell/ash/character.h"
 #include "applets/shell/ash/pattern.h"
+#include "lib/glob_syntax.h"
 
 struct ash_pattern_compiler {
     const char* input;
@@ -329,51 +330,6 @@ static int ash_pattern_compile_extglob(
     return 0;
 }
 
-static const char* ash_pattern_notation_end(const char* text, const char* end) {
-    for (const char* cursor = text + 2u; cursor < end - 1u; cursor++) {
-        if (*cursor == '\\') {
-            cursor++;
-        }
-        else if (cursor[0] == text[1] && cursor[1] == ']') {
-            return cursor + 2u;
-        }
-    }
-    return NULL;
-}
-
-static size_t ash_pattern_bracket_end(
-    const struct ash_pattern_compiler* compiler
-) {
-    size_t position = compiler->position + 1u;
-    if (position < compiler->length &&
-        (compiler->input[position] == '!' ||
-         compiler->input[position] == '^')) {
-        position++;
-    }
-    if (position < compiler->length &&
-        compiler->input[position] == ']') {
-        position++;
-    }
-    for (; position < compiler->length; position++) {
-        if (compiler->input[position] == '\\' &&
-            position + 1u < compiler->length) {
-            position++;
-            continue;
-        }
-        if (compiler->input[position] == '[' && position + 1u < compiler->length && strchr(".=:", compiler->input[position + 1u]) != NULL) {
-            const char* end = ash_pattern_notation_end(compiler->input + position, compiler->input + compiler->length);
-            if (end != NULL) {
-                position = (size_t)(end - compiler->input) - 1u;
-                continue;
-            }
-        }
-        if (compiler->input[position] == ']') {
-            return position + 1u;
-        }
-    }
-    return compiler->position;
-}
-
 static int ash_pattern_compile_sequence(
     struct ash_pattern_compiler* compiler,
     struct ash_pattern_sequence* sequence,
@@ -457,16 +413,17 @@ static int ash_pattern_compile_sequence(
         }
         if (character == '[') {
             compiler->position--;
-            size_t end = ash_pattern_bracket_end(compiler);
-            if (end != compiler->position) {
+            const char* start = compiler->input + compiler->position;
+            const char* end = bx_glob_bracket_end(start, compiler->input + compiler->length);
+            if (end != NULL) {
                 struct ash_pattern_term term = {
                     .kind = ASH_PATTERN_BRACKET,
                     .source_offset = source_offset,
                 };
                 if (ash_pattern_copy_span(
                         &term.value.span,
-                        compiler->input + compiler->position,
-                        end - compiler->position
+                        start,
+                        (size_t)(end - start)
                     ) != 0) {
                     return -1;
                 }
@@ -478,7 +435,7 @@ static int ash_pattern_compile_sequence(
                     ash_pattern_term_destroy(&term);
                     return -1;
                 }
-                compiler->position = end;
+                compiler->position = (size_t)(end - compiler->input);
                 if ((compiler->options.flags &
                     ASH_PATTERN_ASCII_RANGES) != 0u) {
                     compiler->required_features |=
@@ -650,7 +607,7 @@ static struct ash_bracket_atom ash_pattern_bracket_atom(const char* text, const 
         text++;
     }
     else if (*text == '[' && text + 1u < end && strchr(".=:", text[1]) != NULL) {
-        const char* close = ash_pattern_notation_end(text, end);
+        const char* close = bx_glob_notation_end(text, end);
         if (close != NULL) {
             struct ash_bracket_atom atom = {
                 .end = close,

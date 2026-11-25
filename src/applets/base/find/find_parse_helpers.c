@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "find_parse_helpers.h"
+#include "lib/glob_syntax.h"
 
 bool find_parse_require_arguments(struct find_parser *parser,
                                   const char *optname, int count) {
@@ -48,6 +49,35 @@ static bool find_parse_numeric_test(const char *progname, const char *optname,
     return true;
 }
 
+/* Compile libc-independent bracket negation before walking any paths. */
+static bool find_prepare_glob(struct find_expr *expr, const char *pattern) {
+    expr->text = pattern;
+    if (strstr(pattern, "[^") == NULL)
+        return true;
+
+    char *copy = strdup(pattern);
+    if (!copy)
+        return false;
+
+    const char *end = pattern + strlen(pattern);
+    for (const char *p = pattern; p < end; p++) {
+        if (*p == '\\' && p + 1 < end) {
+            p++;
+        } else if (*p == '[' && p + 1 < end) {
+            const char *after = bx_glob_bracket_end(p, end);
+            /* Do not reinterpret a malformed bracket expression. */
+            if (!after)
+                break;
+            if (p[1] == '^')
+                copy[p - pattern + 1] = '!';
+            p = after - 1;
+        }
+    }
+    expr->pattern_storage = copy;
+    expr->text = copy;
+    return true;
+}
+
 struct find_expr *find_parse_text_predicate(struct find_parser *parser,
                                             const char *arg) {
     enum find_expr_kind kind = FIND_EXPR_NAME;
@@ -74,7 +104,11 @@ struct find_expr *find_parse_text_predicate(struct find_parser *parser,
         return NULL;
     }
 
-    expr->text = parser->argv[parser->pos++];
+    if (!find_prepare_glob(expr, parser->argv[parser->pos++])) {
+        fprintf(stderr, "%s: out of memory\n", parser->progname);
+        find_expr_free(expr);
+        return NULL;
+    }
     expr->ignore_case = ignore_case;
     return expr;
 }

@@ -42,6 +42,7 @@ void find_expr_free(struct find_expr *expr) {
     find_expr_free(expr->right);
     if (expr->regex_compiled)
         regfree(&expr->regex);
+    free(expr->pattern_storage);
     free(expr->exec_argv);
     find_exec_items_free(&expr->exec_items);
     free(expr);
