@@ -997,11 +997,13 @@ int zu_zip_parse_args(int argc, char** argv, ZContext* ctx, bool is_zipnote) {
         }
     }
 
-    zu_strlist_normalize_globs(&ctx->include_patterns);
-    zu_strlist_normalize_globs(&ctx->exclude);
+    if (zu_strlist_normalize_globs(&ctx->include_patterns) != 0 ||
+        zu_strlist_normalize_globs(&ctx->exclude) != 0)
+        return ZU_STATUS_OOM;
     if (!is_zipnote && (ctx->difference_mode || ctx->copy_mode ||
-                        (ctx->recursive && ctx->recurse_from_cwd)))
-        zu_strlist_normalize_globs(&ctx->include);
+                        (ctx->recursive && ctx->recurse_from_cwd)) &&
+        zu_strlist_normalize_globs(&ctx->include) != 0)
+        return ZU_STATUS_OOM;
 
     return ZU_STATUS_OK;
 }

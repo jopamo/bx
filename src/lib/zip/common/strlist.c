@@ -5,11 +5,18 @@
 
 #include "lib/glob_syntax.h"
 
-void zu_strlist_normalize_globs(ZU_StrList* list) {
+int zu_strlist_normalize_globs(ZU_StrList* list) {
     for (size_t i = 0; i < list->len; i++) {
-        if (strstr(list->items[i], "[^"))
-            bx_glob_normalize_caret(list->items[i]);
+        char* pattern = list->items[i];
+        if (!strstr(pattern, "[^"))
+            continue;
+        pattern = realloc(pattern, strlen(pattern) + 2u);
+        if (!pattern)
+            return -1;
+        list->items[i] = pattern;
+        bx_glob_normalize_caret_with_spare(pattern, 1);
     }
+    return 0;
 }
 
 /*
