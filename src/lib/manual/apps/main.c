@@ -681,7 +681,7 @@ static void
 glob_esc(char **dst, const char *src, const char *suffix)
 {
 	while (*src != '\0') {
-		if (strchr("*?[", *src) != NULL)
+		if (strchr("\\*?[", *src) != NULL)
 			*(*dst)++ = '\\';
 		*(*dst)++ = *src++;
 	}
