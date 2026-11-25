@@ -2,17 +2,12 @@
 
 #include "unzip_parse.h"
 
-#include <ctype.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 
 #include "cli_common.h"
 #include "ziputils.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 enum { OPT_DRY_RUN = 1000 };
 
@@ -102,7 +97,7 @@ static void print_usage(FILE* to, const char* argv0) {
  *
  * Parsing phases
  * - Pre-scan argv0 to enable zipinfo compatibility modes early
- * - getopt_long loop to translate flags into ctx fields
+ * - Scan options and operands in their original order
  * - Consume positional args: archive path and optional include patterns
  * - Apply zipinfo post-processing rules that depend on the final option set
  *
@@ -112,7 +107,6 @@ static void print_usage(FILE* to, const char* argv0) {
  * - Other ZU_STATUS_* codes for allocation failures or unsupported behaviors
  */
 int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
-    bx_args_getopt_reset();
     // Some installations provide zipinfo as a hardlink or alias to unzip
     // If argv0 matches zipinfo-like names, default into zipinfo listing mode
     if (zu_cli_name_matches(argv[0], "zipinfo") || zu_cli_name_matches(argv[0], "ii")) {
@@ -121,22 +115,62 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
         zu_trace_option(ctx, "zipinfo mode enabled via argv0");
     }
 
-    // Supported long options are intentionally limited to what this implementation covers today
-    static const struct option long_opts[] = {
-        {"help", no_argument, NULL, '?'},
-        {"list", no_argument, NULL, 'l'},
-        {"pipe", no_argument, NULL, 'p'},
-        {"test", no_argument, NULL, 't'},
-        {"password", required_argument, NULL, 'P'},
-        {"dry-run", no_argument, NULL, OPT_DRY_RUN},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'l', 'l', "list", BX_OPTION_NO_VALUE},
+        {'p', 'p', "pipe", BX_OPTION_NO_VALUE},
+        {'t', 't', "test", BX_OPTION_NO_VALUE},
+        {'d', 'd', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', NULL, BX_OPTION_NO_VALUE},
+        {'v', 'v', NULL, BX_OPTION_NO_VALUE},
+        {'n', 'n', NULL, BX_OPTION_NO_VALUE},
+        {'q', 'q', NULL, BX_OPTION_NO_VALUE},
+        {'j', 'j', NULL, BX_OPTION_NO_VALUE},
+        {'L', 'L', NULL, BX_OPTION_NO_VALUE},
+        {'i', 'i', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'X', 'X', NULL, BX_OPTION_NO_VALUE},
+        {'x', 'x', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', NULL, BX_OPTION_NO_VALUE},
+        {'C', 'C', NULL, BX_OPTION_NO_VALUE},
+        {'Z', 'Z', NULL, BX_OPTION_NO_VALUE},
+        {'1', '1', NULL, BX_OPTION_NO_VALUE},
+        {'2', '2', NULL, BX_OPTION_NO_VALUE},
+        {'s', 's', NULL, BX_OPTION_NO_VALUE},
+        {'m', 'm', NULL, BX_OPTION_NO_VALUE},
+        {'M', 'M', NULL, BX_OPTION_NO_VALUE},
+        {'T', 'T', NULL, BX_OPTION_NO_VALUE},
+        {'z', 'z', NULL, BX_OPTION_NO_VALUE},
+        {'?', '?', "help", BX_OPTION_NO_VALUE},
+        {'P', 'P', "password", BX_OPTION_REQUIRED_VALUE},
+        {'D', 'D', NULL, BX_OPTION_NO_VALUE},
+        {OPT_DRY_RUN, 0, "dry-run", BX_OPTION_NO_VALUE},
     };
 
-    int opt;
-    int positional_seen = 0;
-    // Leading '-' in optstring makes getopt_long return 1 for non-option arguments
-    while ((opt = bx_args_getopt_long(argc, argv, "-lptd:ovnqvjLi:Xx:hCZ12smMvTz?P:D", long_opts, NULL)) != -1) {
-        switch (opt) {
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (ctx->archive_path == NULL) {
+                if (option.token[0] == '\0') {
+                    zu_cli_error(unzip_parse_tool(ctx), "empty archive path");
+                    return ZU_STATUS_USAGE;
+                }
+                ctx->archive_path = option.token;
+                zu_trace_option(ctx, "archive path set to %s", option.token);
+            }
+            else {
+                if (zu_strlist_push(&ctx->include, option.token) != 0)
+                    return ZU_STATUS_OOM;
+                zu_trace_option(ctx, "include pattern %s", option.token);
+            }
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            print_usage(stderr, argv[0]);
+            return ZU_STATUS_USAGE;
+        }
+        switch (option.spec->id) {
             case 'l':
                 // unzip: list only
                 // zipinfo: treat as "long" listing format selector
@@ -180,8 +214,12 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
             case 'd':
                 // Set extraction target directory
                 // Actual directory creation and path sanitization are handled in execution code
-                ctx->target_dir = optarg;
-                zu_trace_option(ctx, "-d %s", optarg);
+                if (option.value[0] == '\0') {
+                    zu_cli_error(unzip_parse_tool(ctx), "empty target directory");
+                    return ZU_STATUS_USAGE;
+                }
+                ctx->target_dir = option.value;
+                zu_trace_option(ctx, "-d %s", option.value);
                 break;
 
             case 'o':
@@ -250,17 +288,17 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
             case 'i':
                 // Add an include pattern, restricting matches to this set
                 // Multiple -i flags accumulate in the include list
-                if (zu_strlist_push(&ctx->include, optarg) != 0)
+                if (zu_strlist_push(&ctx->include, option.value) != 0)
                     return ZU_STATUS_OOM;
-                zu_trace_option(ctx, "-i pattern %s", optarg);
+                zu_trace_option(ctx, "-i pattern %s", option.value);
                 break;
 
             case 'x':
                 // Add an exclude pattern, removing matches from the final selection
                 // Multiple -x flags accumulate in the exclude list
-                if (zu_strlist_push(&ctx->exclude, optarg) != 0)
+                if (zu_strlist_push(&ctx->exclude, option.value) != 0)
                     return ZU_STATUS_OOM;
-                zu_trace_option(ctx, "-x pattern %s", optarg);
+                zu_trace_option(ctx, "-x pattern %s", option.value);
                 break;
 
             case 'Z':
@@ -268,7 +306,7 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
                 // Listing mode is implied and tool_name is switched for diagnostics
                 ctx->zipinfo_mode = true;
                 ctx->list_only = true;
-                        zu_trace_option(ctx, "-Z zipinfo mode");
+                zu_trace_option(ctx, "-Z zipinfo mode");
                 break;
 
             case '1':
@@ -306,7 +344,7 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
             case 's':
             case 'm':
             case 'T':
-                zu_cli_error(unzip_parse_tool(ctx), "zipinfo option -%c is not supported", opt);
+                zu_cli_error(unzip_parse_tool(ctx), "zipinfo option -%c is not supported", option.spec->id);
                 return ZU_STATUS_USAGE;
 
             case 'z':
@@ -344,84 +382,16 @@ int zu_unzip_parse_args(int argc, char** argv, ZContext* ctx) {
                 break;
 
             case '?':
-                if (optind > 0 && optind <= argc && strcmp(argv[optind - 1], "-") == 0) {
-                    if (positional_seen == 0) {
-                        ctx->archive_path = "-";
-                        zu_trace_option(ctx, "archive path set to -");
-                    }
-                    else {
-                        if (zu_strlist_push(&ctx->include, "-") != 0)
-                            return ZU_STATUS_OOM;
-                        zu_trace_option(ctx, "include pattern -");
-                    }
-                    positional_seen++;
-                    break;
-                }
-
-                // getopt_long maps --help and unknown/invalid flags to '?'
                 print_usage(stdout, argv[0]);
                 return ZU_STATUS_USAGE;
-
-            case 1:
-                // Non-option argument (due to leading '-' in optstring)
-                if (positional_seen == 0) {
-                    ctx->archive_path = optarg;
-                    zu_trace_option(ctx, "archive path set to %s", optarg);
-                }
-                else {
-                    if (zu_strlist_push(&ctx->include, optarg) != 0)
-                        return ZU_STATUS_OOM;
-                    zu_trace_option(ctx, "include pattern %s", optarg);
-                }
-                positional_seen++;
-                break;
-
-            default:
-                // Defensive default for unexpected getopt return values
-                print_usage(stderr, argv[0]);
-                return ZU_STATUS_USAGE;
         }
     }
 
-    // "-" as archive path (stdin) is allowed and passed to execution layer
-
-    // Support for reading the archive from stdin is intentionally incomplete here
-
-    // If archive_path not already set via non‑option arguments, process traditional positionals
     if (ctx->archive_path == NULL) {
-        /*
-         * Positional arguments
-         * - First positional is archive path
-         * - Remaining positionals are treated as include patterns (Info-ZIP style)
-         */
-        if (optind >= argc) {
-            // "unzip -v" or "zipinfo -v" with no args prints version in this implementation
-            if (ctx->zipinfo_mode && ctx->verbose) {
-                ctx->archive_path = NULL;
-                return ZU_STATUS_OK;
-            }
-            print_usage(stderr, argv[0]);
-            return ZU_STATUS_USAGE;
-        }
-
-        ctx->archive_path = argv[optind++];
-
-        zu_trace_option(ctx, "archive path set to %s", ctx->archive_path);
-
-        // Any remaining args after the archive are treated as patterns to include
-        for (int i = optind; i < argc; ++i) {
-            if (zu_strlist_push(&ctx->include, argv[i]) != 0)
-                return ZU_STATUS_OOM;
-            zu_trace_option(ctx, "include pattern %s", argv[i]);
-        }
-    }
-    else {
-        // archive_path already set via non-option argument; add any remaining arguments as patterns
-        for (int i = optind; i < argc; ++i) {
-            if (zu_strlist_push(&ctx->include, argv[i]) != 0)
-                return ZU_STATUS_OOM;
-            zu_trace_option(ctx, "include pattern %s", argv[i]);
-        }
+        if (ctx->zipinfo_mode && ctx->verbose)
+            return ZU_STATUS_OK;
+        print_usage(stderr, argv[0]);
+        return ZU_STATUS_USAGE;
     }
 
     /*
