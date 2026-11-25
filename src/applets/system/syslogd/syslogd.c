@@ -2,7 +2,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <limits.h>
 #include <netdb.h>
 #include <poll.h>
@@ -21,10 +20,10 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/daemon_ops.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/pidfile_ops.h"
 #include "lib/size_parse.h"
 #include "lib/system/syslog_config.h"
@@ -129,68 +128,101 @@ static void options_destroy(struct options *o) {
 
 static bool parse_options(int argc, char **argv, struct options *o,
                           struct bx_diag_ctx *d) {
-    static const struct option longs[] = {
-        {"socket", required_argument, NULL, 256},
-        {"pidfile", required_argument, NULL, 257},
-        {"help", no_argument, NULL, 'h'}, {NULL, 0, NULL, 0}
+    enum { SOCKET = 256, PIDFILE };
+    static const struct bx_option_spec specs[] = {
+        {'n', 'n', NULL, BX_OPTION_NO_VALUE},
+        {'O', 'O', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'l', 'l', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'S', 'S', NULL, BX_OPTION_NO_VALUE},
+        {'t', 't', NULL, BX_OPTION_NO_VALUE},
+        {'D', 'D', NULL, BX_OPTION_NO_VALUE},
+        {'s', 's', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'b', 'b', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'R', 'R', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'L', 'L', NULL, BX_OPTION_NO_VALUE},
+        {'f', 'f', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'K', 'K', NULL, BX_OPTION_NO_VALUE},
+        {'m', 'm', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'C', 'C', NULL, BX_OPTION_OPTIONAL_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {SOCKET, 0, "socket", BX_OPTION_REQUIRED_VALUE},
+        {PIDFILE, 0, "pidfile", BX_OPTION_REQUIRED_VALUE},
     };
     memset(o, 0, sizeof(*o));
     o->output = "/var/log/messages"; o->config = "/etc/syslog.conf";
     o->socket = "/dev/log"; o->pidfile = "/run/syslogd.pid";
     o->level = 8; o->rotate_size = 200 * 1024;
     o->backups = 1;
-    bx_args_getopt_reset();
-    int c;
-    while ((c = bx_args_getopt_long(argc, argv,
-             ":nO:l:StDs:b:R:Lf:Km:C::h", longs, NULL)) != -1) {
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            if (result.index >= (size_t)argc)
+                break;
+            bx_cli_diag_extra_operand(d, argv[result.index]);
+            return false;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name)
+                    bx_diag(d, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(d, "option requires an argument -- '%s'", result.token);
+            } else if (result.short_name)
+                bx_diag(d, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(d, "unrecognized option '%s'", result.token);
+            return false;
+        }
         uintmax_t n;
-        switch (c) {
+        switch (result.spec->id) {
         case 'n': o->foreground = true; break;
-        case 'O': o->output = optarg; break;
+        case 'O': o->output = result.value; break;
         case 'l':
-            if (!bx_size_parse_uint(optarg, &n) || n < 1 || n > 8)
+            if (!bx_size_parse_uint(result.value, &n) || n < 1 || n > 8)
                 goto badnum;
             o->level = (unsigned)n; break;
         case 'S': o->compact = true; break;
         case 't': o->strip_time = true; break;
         case 'D': o->dedup = true; break;
         case 's':
-            if (!bx_size_parse_uint(optarg, &n) || n > UINT64_MAX / 1024)
+            if (!bx_size_parse_uint(result.value, &n) || n > UINT64_MAX / 1024)
                 goto badnum;
             o->rotate_size = (uint64_t)n * 1024; break;
         case 'b':
-            if (!bx_size_parse_uint(optarg, &n) || n > 99) goto badnum;
+            if (!bx_size_parse_uint(result.value, &n) || n > 99) goto badnum;
             o->backups = (unsigned)n; break;
         case 'R':
-            if (!add_remote(o, optarg)) {
-                bx_diag(d, "invalid remote destination '%s'", optarg);
+            if (!add_remote(o, result.value)) {
+                bx_diag(d, "invalid remote destination '%s'", result.value);
                 return false;
             }
             break;
         case 'L': o->local = true; break;
-        case 'f': o->config = optarg; o->explicit_config = true; break;
+        case 'f': o->config = result.value; o->explicit_config = true; break;
         case 'K': o->kmsg = true; break;
         case 'm':
-            if (!bx_size_parse_uint(optarg, &n) || n > INT_MAX / 60)
+            if (!bx_size_parse_uint(result.value, &n) || n > INT_MAX / 60)
                 goto badnum;
             break;
         case 'C':
             bx_diag(d, "-C is unsupported: BusyBox logread IPC is not implemented");
             return false;
-        case 256: o->socket = optarg; break;
-        case 257: o->pidfile = optarg; break;
+        case SOCKET: o->socket = result.value; break;
+        case PIDFILE: o->pidfile = result.value; break;
         case 'h': usage(stdout, d->progname); return false;
-        case ':': bx_cli_diag_option_requires_arg(d, optopt, optind, argc, argv);
-                  return false;
-        default: bx_cli_diag_unrecognized_option(d, optopt, optind, argc, argv);
-                 return false;
         }
         continue;
 badnum:
-        bx_diag(d, "invalid numeric argument '%s'", optarg);
+        bx_diag(d, "invalid numeric argument '%s'", result.value);
         return false;
     }
-    if (optind != argc) { bx_cli_diag_extra_operand(d, argv[optind]); return false; }
+    if (!*o->socket || !*o->pidfile || !*o->output || !*o->config) {
+        bx_diag(d, "socket, pidfile, output and config paths must not be empty");
+        return false;
+    }
     if (!o->remote_count) o->local = true;
     return true;
 }
