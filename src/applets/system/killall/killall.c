@@ -1,6 +1,4 @@
-#include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <regex.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -19,10 +17,10 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/id_parse.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
 #include "lib/time_parse.h"
-#include "lib/args_common.h"
 
 struct bx_killall_options {
     int signal_number;
@@ -46,6 +44,7 @@ struct bx_killall_options {
     bool context_set;
     regex_t context_regex;
     bool context_regex_ready;
+    int informational_option;
     int first_name_index;
 };
 
@@ -98,122 +97,125 @@ static bool bx_killall_parse_duration(const char* text, double* seconds_out) {
     return true;
 }
 
-static bool bx_killall_is_signal_short_option(const char* arg) {
-    static const char* known = "egiIlnoqrsuvwyZhV";
+static bool bx_killall_is_signal_short_option(const char* arg, const struct bx_option_spec* specs, size_t count) {
     if (arg == NULL || arg[0] != '-' || arg[1] == '\0' || arg[1] == '-') {
         return false;
     }
-    if (isdigit((unsigned char)arg[1])) {
-        return true;
-    }
-    return strchr(known, arg[1]) == NULL;
+    for (size_t i = 0; i < count; i++)
+        if (specs[i].short_name == (unsigned char)arg[1])
+            return false;
+    return true;
 }
 
 static bool bx_killall_parse_options(struct bx_killall_options* options,
                                      int argc,
                                      char** argv,
                                      struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"exact", no_argument, NULL, 'e'},
-        {"process-group", no_argument, NULL, 'g'},
-        {"interactive", no_argument, NULL, 'i'},
-        {"ignore-case", no_argument, NULL, 'I'},
-        {"list", no_argument, NULL, 'l'},
-        {"ns", required_argument, NULL, 'n'},
-        {"older-than", required_argument, NULL, 'o'},
-        {"quiet", no_argument, NULL, 'q'},
-        {"regexp", no_argument, NULL, 'r'},
-        {"signal", required_argument, NULL, 's'},
-        {"user", required_argument, NULL, 'u'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"wait", no_argument, NULL, 'w'},
-        {"younger-than", required_argument, NULL, 'y'},
-        {"context", required_argument, NULL, 'Z'},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'e', 'e', "exact", BX_OPTION_NO_VALUE},
+        {'g', 'g', "process-group", BX_OPTION_NO_VALUE},
+        {'i', 'i', "interactive", BX_OPTION_NO_VALUE},
+        {'I', 'I', "ignore-case", BX_OPTION_NO_VALUE},
+        {'l', 'l', "list", BX_OPTION_NO_VALUE},
+        {'n', 'n', "ns", BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', "older-than", BX_OPTION_REQUIRED_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'r', 'r', "regexp", BX_OPTION_NO_VALUE},
+        {'s', 's', "signal", BX_OPTION_REQUIRED_VALUE},
+        {'u', 'u', "user", BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'w', 'w', "wait", BX_OPTION_NO_VALUE},
+        {'y', 'y', "younger-than", BX_OPTION_REQUIRED_VALUE},
+        {'Z', 'Z', "context", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
-    int c;
+    size_t spec_count = sizeof(specs) / sizeof(specs[0]);
     struct bx_id_user user;
 
     memset(options, 0, sizeof(*options));
     options->signal_number = SIGTERM;
-    if (argc > 1 && bx_killall_is_signal_short_option(argv[1])) {
+    if (argc > 1 && bx_killall_is_signal_short_option(argv[1], specs, spec_count)) {
+        /* The legacy first-token signal also ends option recognition. */
         options->signal_number = get_signal(argv[1] + 1, diag->progname);
-        argv[1] = (char*)"--";
-    }
-
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "+egiIln:o:qrs:u:vwy:Z:hV", long_options, NULL)) != -1) {
-        switch (c) {
-            case 'e': options->exact = true; break;
-            case 'g': options->process_group = true; break;
-            case 'i': options->interactive = true; break;
-            case 'I': options->ignore_case = true; break;
-            case 'l': options->list_signals = true; break;
-            case 'n':
-                if (!bx_proc_parse_pid_arg(optarg, &options->ns_pid)) {
-                    bx_diag(diag, "invalid namespace PID");
-                    return false;
-                }
-                options->ns_set = true;
+        options->first_name_index = 2;
+    } else {
+        struct bx_option_cursor cursor;
+        bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                              specs, spec_count);
+        for (;;) {
+            struct bx_option_result result = bx_option_next(&cursor);
+            if (result.event == BX_OPTION_END) {
+                options->first_name_index = (int)result.index;
                 break;
-            case 'o':
-                if (!bx_killall_parse_duration(optarg, &options->older_than_seconds)) {
-                    bx_diag(diag, "invalid time '%s'", optarg);
-                    return false;
-                }
-                options->older_than_set = true;
-                break;
-            case 'q': options->quiet = true; break;
-            case 'r': options->regexp = true; break;
-            case 's':
-                options->signal_number = get_signal(optarg, diag->progname);
-                break;
-            case 'u':
-                if (!bx_id_parse_user(optarg, &user, diag)) {
-                    return false;
-                }
-                options->user = user.uid;
-                options->user_set = true;
-                break;
-            case 'v': options->verbose = true; break;
-            case 'w': options->wait = true; break;
-            case 'y':
-                if (!bx_killall_parse_duration(optarg, &options->younger_than_seconds)) {
-                    bx_diag(diag, "invalid time '%s'", optarg);
-                    return false;
-                }
-                options->younger_than_set = true;
-                break;
-            case 'Z':
-                if (regcomp(&options->context_regex, optarg, REG_EXTENDED | REG_NOSUB) != 0) {
-                    bx_diag(diag, "invalid context regexp: %s", optarg);
-                    return false;
-                }
-                options->context_set = true;
-                options->context_regex_ready = true;
-                break;
-            case 'h':
-            case 'V':
-                return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+            }
+            if (result.event != BX_OPTION_MATCH) {
+                if (result.event == BX_OPTION_MISSING_VALUE)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+                else if (result.short_name)
+                    bx_diag(diag, "invalid option -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "unrecognized option '%s'", result.token);
                 return false;
-            default:
-                return false;
+            }
+            switch (result.spec->id) {
+                case 'e': options->exact = true; break;
+                case 'g': options->process_group = true; break;
+                case 'i': options->interactive = true; break;
+                case 'I': options->ignore_case = true; break;
+                case 'l': options->list_signals = true; break;
+                case 'n':
+                    if (!bx_proc_parse_pid_arg(result.value, &options->ns_pid)) {
+                        bx_diag(diag, "invalid namespace PID");
+                        return false;
+                    }
+                    options->ns_set = true;
+                    break;
+                case 'o':
+                    if (!bx_killall_parse_duration(result.value, &options->older_than_seconds)) {
+                        bx_diag(diag, "invalid time '%s'", result.value);
+                        return false;
+                    }
+                    options->older_than_set = true;
+                    break;
+                case 'q': options->quiet = true; break;
+                case 'r': options->regexp = true; break;
+                case 's':
+                    options->signal_number = get_signal(result.value, diag->progname);
+                    break;
+                case 'u':
+                    if (!bx_id_parse_user(result.value, &user, diag)) {
+                        return false;
+                    }
+                    options->user = user.uid;
+                    options->user_set = true;
+                    break;
+                case 'v': options->verbose = true; break;
+                case 'w': options->wait = true; break;
+                case 'y':
+                    if (!bx_killall_parse_duration(result.value, &options->younger_than_seconds)) {
+                        bx_diag(diag, "invalid time '%s'", result.value);
+                        return false;
+                    }
+                    options->younger_than_set = true;
+                    break;
+                case 'Z':
+                    bx_killall_options_cleanup(options);
+                    if (regcomp(&options->context_regex, result.value, REG_EXTENDED | REG_NOSUB) != 0) {
+                        bx_diag(diag, "invalid context regexp: %s", result.value);
+                        return false;
+                    }
+                    options->context_set = true;
+                    options->context_regex_ready = true;
+                    break;
+                case 'h':
+                case 'V':
+                    options->informational_option = result.spec->id;
+                    return true;
+            }
         }
     }
 
-    options->first_name_index = optind;
     if (!options->list_signals && options->first_name_index >= argc) {
         bx_diag(diag, "missing process name");
         return false;
@@ -490,20 +492,23 @@ int bx_killall_main(int argc, char** argv) {
     double uptime_seconds = 0.0;
     long ticks_per_second;
     pid_t self_host_pid;
-    int handled;
     int rc = 1;
     int i;
 
-    handled = bx_psmisc_maybe_handle_help_or_version(argc, argv, "killall", "-h", bx_killall_print_help);
-    if (handled >= 0) {
-        return handled;
-    }
     if (!bx_killall_parse_options(&options, argc, argv, &diag)) {
         if (diag.exit_status != 0) {
             bx_cli_print_try_help(diag.progname);
         }
         bx_killall_options_cleanup(&options);
         return diag.exit_status != 0 ? diag.exit_status : 1;
+    }
+    if (options.informational_option) {
+        if (options.informational_option == 'h')
+            bx_killall_print_help(stdout, diag.progname);
+        else
+            bx_cli_print_version(diag.progname);
+        bx_killall_options_cleanup(&options);
+        return 0;
     }
     if (options.list_signals) {
         list_signals();
