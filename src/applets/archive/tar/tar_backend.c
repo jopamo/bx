@@ -29,6 +29,7 @@
 #include "lib/copy_data.h"
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
+#include "lib/glob_syntax.h"
 #include "lib/id_parse.h"
 #include "lib/inode_ledger.h"
 #include "lib/mode_parse.h"
@@ -2890,12 +2891,17 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->metadata.selinux = false;
             return true;
         case BX_TAR_OPT_XATTRS_INCLUDE:
-        case BX_TAR_OPT_XATTRS_EXCLUDE:
+        case BX_TAR_OPT_XATTRS_EXCLUDE: {
             options->format_ustar = false;
             options->metadata.xattrs = true;
-            return bx_archive_name_list_append(effect == BX_TAR_OPT_XATTRS_INCLUDE
-                                                  ? &options->metadata.include
-                                                  : &options->metadata.exclude, value);
+            struct bx_archive_name_list* masks = effect == BX_TAR_OPT_XATTRS_INCLUDE
+                ? &options->metadata.include : &options->metadata.exclude;
+            if (!bx_archive_name_list_append(masks, value))
+                return false;
+            if (strstr(value, "[^"))
+                bx_glob_normalize_caret(masks->items[masks->len - 1]);
+            return true;
+        }
     }
 
     return true;
