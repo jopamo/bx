@@ -2,16 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <math.h>
 #include <errno.h>
 #include <float.h>
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 #define SEQ_MAX_FORMAT_FIELD 4096
 
@@ -126,9 +125,17 @@ static bool seq_emit_range(
     return bx_line_writer_putc(writer, '\n') && bx_line_writer_flush(writer);
 }
 
+static bool seq_negative_operand(const char* token) {
+    char* end;
+    (void)strtod(token, &end);
+    return end != token && *end == '\0';
+}
+
 int bx_seq_main(int argc, char** argv) {
-    static const struct option long_options[] = {{"format", required_argument, NULL, 'f'}, {"separator", required_argument, NULL, 's'}, {"equal-width", no_argument, NULL, 'w'},
-                                                  {"help", no_argument, NULL, 'h'},         {"version", no_argument, NULL, 'v'},         {NULL, 0, NULL, 0}};
+    static const struct bx_option_spec specs[] = {
+        {'f', 'f', "format", BX_OPTION_REQUIRED_VALUE}, {'s', 's', "separator", BX_OPTION_REQUIRED_VALUE}, {'w', 'w', "equal-width", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},         {'v', 'v', "version", BX_OPTION_NO_VALUE},
+    };
     struct bx_diag_ctx diag = {
         .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "seq"),
         .exit_status = 1,
@@ -137,15 +144,29 @@ int bx_seq_main(int argc, char** argv) {
     const char* format = NULL;
     const char* separator = "\n";
     bool equal_width = false;
-    int c;
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "+:f:s:whv", long_options, NULL)) != -1) {
-        switch (c) {
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_UNKNOWN && option.short_name && seq_negative_operand(option.token))
+            break;
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(&diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%s'", option.token);
+            else if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            return 1;
+        }
+        switch (option.spec->id) {
             case 'f':
-                format = optarg;
+                format = option.value;
                 break;
             case 's':
-                separator = optarg;
+                separator = option.value;
                 break;
             case 'w':
                 equal_width = true;
@@ -166,16 +187,11 @@ int bx_seq_main(int argc, char** argv) {
             case 'v':
                 printf("seq (bx) %s\n", BX_VERSION);
                 return 0;
-            case ':':
-                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-                return 1;
-            default:
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                return 1;
         }
     }
 
-    int num_args = argc - optind;
+    size_t first_operand = option.index;
+    size_t num_args = (size_t)argc - first_operand;
     if (num_args < 1 || num_args > 3) {
         bx_cli_diag_missing_operand(&diag);
         return 1;
@@ -191,9 +207,9 @@ int bx_seq_main(int argc, char** argv) {
         }
     }
     double values[3];
-    for (int i = 0; i < num_args; i++) {
+    for (size_t i = 0; i < num_args; i++) {
         char* end;
-        const char* arg = argv[optind + i];
+        const char* arg = argv[first_operand + i];
         errno = 0;
         values[i] = strtod(arg, &end);
         /* Beyond this boundary, adjacent integer operands can parse alike. */
@@ -214,9 +230,11 @@ int bx_seq_main(int argc, char** argv) {
 
     int max_prec = 0;
     if (format == NULL) {
-        max_prec = count_decimal_places(argv[optind]);
-        if (num_args >= 2) { int p = count_decimal_places(argv[optind + 1]); if (p > max_prec) max_prec = p; }
-        if (num_args >= 3) { int p = count_decimal_places(argv[optind + 2]); if (p > max_prec) max_prec = p; }
+        for (size_t i = 0; i < num_args; i++) {
+            int precision = count_decimal_places(argv[first_operand + i]);
+            if (precision > max_prec)
+                max_prec = precision;
+        }
     }
 
     char fmt_buf[64];
