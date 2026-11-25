@@ -4,15 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <stdbool.h>
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/fopen_dash.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 static bool tac_write_error(struct bx_diag_ctx* diag) {
     bx_diag(diag, "write error: %s", strerror(errno));
@@ -42,19 +42,7 @@ static void tac_push_record(char*** records, size_t** record_lens, size_t* count
     (*count)++;
 }
 
-static bool tac_file_regex(FILE* f, const char* pattern, bool before, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
-    int errcode;
-    PCRE2_SIZE erroffset;
-    pcre2_code* re = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
-    if (!re) {
-        PCRE2_UCHAR errbuf[256];
-        pcre2_get_error_message(errcode, errbuf, sizeof(errbuf));
-        bx_diag(diag, "%s: %s", pattern, (const char*)errbuf);
-        return true;
-    }
-
-    pcre2_match_data* md = pcre2_match_data_create_from_pattern(re, NULL);
-
+static bool tac_file_regex(FILE* f, const pcre2_code* re, pcre2_match_data* md, bool before, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
     char* data = NULL;
     size_t data_len = 0;
     size_t data_cap = 0;
@@ -191,8 +179,6 @@ cleanup:
     free(seps);
     free(sep_lens);
     free(data);
-    pcre2_match_data_free(md);
-    pcre2_code_free(re);
     return ok;
 }
 
@@ -303,20 +289,48 @@ static bool tac_file(FILE* f, const char* separator, bool before, struct bx_line
 }
 
 int bx_tac_main(int argc, char** argv) {
-    static const struct option long_options[] = {{"before", no_argument, NULL, 'b'}, {"regex", no_argument, NULL, 'r'},   {"separator", required_argument, NULL, 's'},
-                                                  {"help", no_argument, NULL, 'h'},   {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', "before", BX_OPTION_NO_VALUE}, {'r', 'r', "regex", BX_OPTION_NO_VALUE},   {'s', 's', "separator", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},   {'v', 'v', "version", BX_OPTION_NO_VALUE},
+    };
     struct bx_diag_ctx diag = {
         .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "tac"),
-        .exit_status = 1,
     };
-
     bool before = false;
     bool regex = false;
     const char* separator = "\n";
-    int c;
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, ":brs:hv", long_options, NULL)) != -1) {
-        switch (c) {
+    const char** files = NULL;
+    size_t file_count = 0;
+    int status = 1;
+    pcre2_code* re = NULL;
+    pcre2_match_data* md = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!files) {
+                files = calloc((size_t)argc - option.index, sizeof(*files));
+                if (!files) {
+                    bx_perror_path(&diag, "allocate input operands");
+                    goto done;
+                }
+            }
+            files[file_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(&diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
             case 'b':
                 before = true;
                 break;
@@ -324,7 +338,7 @@ int bx_tac_main(int argc, char** argv) {
                 regex = true;
                 break;
             case 's':
-                separator = optarg;
+                separator = option.value;
                 break;
             case 'h':
                 printf("Usage: %s [OPTION]... [FILE]...\n", argv[0]);
@@ -335,16 +349,31 @@ int bx_tac_main(int argc, char** argv) {
                 printf("  -s, --separator=STRING   use STRING as the separator instead of newline\n");
                 printf("      --help          display this help and exit\n");
                 printf("      --version       output version information and exit\n");
-                return 0;
+                status = 0;
+                goto done;
             case 'v':
                 printf("tac (bx) %s\n", BX_VERSION);
-                return 0;
-            case ':':
-                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-                return 1;
-            default:
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                return 1;
+                status = 0;
+                goto done;
+        }
+    }
+
+    if (regex) {
+        int code;
+        PCRE2_SIZE offset;
+        re = pcre2_compile((PCRE2_SPTR)separator, PCRE2_ZERO_TERMINATED, 0, &code, &offset, NULL);
+        if (!re) {
+            PCRE2_UCHAR detail[256];
+            if (pcre2_get_error_message(code, detail, sizeof(detail)) < 0)
+                bx_diag(&diag, "invalid separator regex (error %d)", code);
+            else
+                bx_diag(&diag, "invalid separator regex: %s", (const char*)detail);
+            goto done;
+        }
+        md = pcre2_match_data_create_from_pattern(re, NULL);
+        if (!md) {
+            bx_diag(&diag, "cannot allocate separator match data");
+            goto done;
         }
     }
 
@@ -352,77 +381,26 @@ int bx_tac_main(int argc, char** argv) {
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
     bool ok = true;
-
-    if (regex) {
-        if (optind == argc) {
-            ok = tac_file_regex(stdin, separator, before, &writer, &diag);
+    bool had_error = false;
+    for (size_t i = 0; ok && (i < file_count || (i == 0 && file_count == 0)); i++) {
+        const char* path = file_count ? files[i] : "-";
+        bool standard;
+        FILE* f = bx_fopen_dash(path, "r", &standard);
+        if (!f) {
+            bx_perror_path(&diag, path);
+            had_error = true;
+            continue;
         }
-        else {
-            bool had_error = false;
-            for (int i = optind; ok && i < argc; i++) {
-                FILE* f;
-                if (strcmp(argv[i], "-") == 0) {
-                    f = stdin;
-                }
-                else {
-                    f = fopen(argv[i], "r");
-                    if (!f) {
-                        bx_perror_path(&diag, argv[i]);
-                        had_error = true;
-                        continue;
-                    }
-                }
-                ok = tac_file_regex(f, separator, before, &writer, &diag);
-                if (f != stdin)
-                    fclose(f);
-            }
-            if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
-                ok = tac_write_error(&diag);
-            }
-            if (!ok)
-                return 1;
-            if (had_error)
-                return 1;
-        }
+        ok = re ? tac_file_regex(f, re, md, before, &writer, &diag) : tac_file(f, separator, before, &writer, &diag);
+        bx_fclose_nonstdio(f, standard);
     }
-    else {
-        if (optind == argc) {
-            ok = tac_file(stdin, separator, before, &writer, &diag);
-        }
-        else {
-            bool had_error = false;
-            for (int i = optind; ok && i < argc; i++) {
-                FILE* f;
-                if (strcmp(argv[i], "-") == 0) {
-                    f = stdin;
-                }
-                else {
-                    f = fopen(argv[i], "r");
-                    if (!f) {
-                        bx_perror_path(&diag, argv[i]);
-                        had_error = true;
-                        continue;
-                    }
-                }
-                ok = tac_file(f, separator, before, &writer, &diag);
-                if (f != stdin)
-                    fclose(f);
-            }
-            if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
-                ok = tac_write_error(&diag);
-            }
-            if (!ok)
-                return 1;
-            if (had_error)
-                return 1;
-        }
-    }
-
-    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer))
         ok = tac_write_error(&diag);
-    }
-    if (!ok)
-        return 1;
+    status = !ok || had_error;
 
-    return 0;
+done:
+    pcre2_match_data_free(md);
+    pcre2_code_free(re);
+    free(files);
+    return status;
 }
