@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -16,6 +15,7 @@
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 enum numbering_style { STYLE_ALL, STYLE_NONEMPTY, STYLE_NONE, STYLE_REGEX };
 
@@ -39,6 +39,8 @@ struct bx_nl_options {
     int number_width;
     bool show_help;
     bool show_version;
+    const char** files;
+    size_t file_count;
 };
 
 static void bx_nl_print_help(FILE* stream, const char* progname) {
@@ -74,19 +76,26 @@ static void bx_nl_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  rz      right justified, leading zeros\n");
 }
 
+static void clear_style(struct section_style* style) {
+    if (style->style == STYLE_REGEX)
+        regfree(&style->regex);
+    style->style = STYLE_NONE;
+}
+
 static bool parse_style(const char* str, struct section_style* style, struct bx_diag_ctx* diag) {
-    if (str[0] == 'a')
+    clear_style(style);
+    if (strcmp(str, "a") == 0)
         style->style = STYLE_ALL;
-    else if (str[0] == 't')
+    else if (strcmp(str, "t") == 0)
         style->style = STYLE_NONEMPTY;
-    else if (str[0] == 'n')
+    else if (strcmp(str, "n") == 0)
         style->style = STYLE_NONE;
     else if (str[0] == 'p') {
-        style->style = STYLE_REGEX;
         if (regcomp(&style->regex, str + 1, REG_NOSUB) != 0) {
             bx_diag(diag, "invalid regular expression: %s", str + 1);
             return false;
         }
+        style->style = STYLE_REGEX;
     }
     else {
         bx_diag(diag, "invalid body numbering style: '%s'", str);
@@ -95,22 +104,21 @@ static bool parse_style(const char* str, struct section_style* style, struct bx_
     return true;
 }
 
-static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"body-numbering", required_argument, NULL, 'b'},
-        {"section-delimiter", required_argument, NULL, 'd'},
-        {"footer-numbering", required_argument, NULL, 'f'},
-        {"header-numbering", required_argument, NULL, 'h'},
-        {"line-increment", required_argument, NULL, 'i'},
-        {"join-blank-lines", required_argument, NULL, 'l'},
-        {"number-format", required_argument, NULL, 'n'},
-        {"no-renumber", no_argument, NULL, 'p'},
-        {"number-separator", required_argument, NULL, 's'},
-        {"starting-line-number", required_argument, NULL, 'v'},
-        {"number-width", required_argument, NULL, 'w'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', "body-numbering", BX_OPTION_REQUIRED_VALUE},
+        {'d', 'd', "section-delimiter", BX_OPTION_REQUIRED_VALUE},
+        {'f', 'f', "footer-numbering", BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', "header-numbering", BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', "line-increment", BX_OPTION_REQUIRED_VALUE},
+        {'l', 'l', "join-blank-lines", BX_OPTION_REQUIRED_VALUE},
+        {'n', 'n', "number-format", BX_OPTION_REQUIRED_VALUE},
+        {'p', 'p', "no-renumber", BX_OPTION_NO_VALUE},
+        {'s', 's', "number-separator", BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', "starting-line-number", BX_OPTION_REQUIRED_VALUE},
+        {'w', 'w', "number-width", BX_OPTION_REQUIRED_VALUE},
+        {1, 0, "help", BX_OPTION_NO_VALUE},
+        {2, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -128,71 +136,92 @@ static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* opt
     options->number_width = 6;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "b:d:f:h:i:l:n:ps:v:w:", long_options, &option_index);
-        if (c == -1)
-            break;
-
-        switch (c) {
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!options->files) {
+                options->files = calloc((size_t)argc - option.index, sizeof(*options->files));
+                if (!options->files) {
+                    bx_perror_path(diag, "allocate input operands");
+                    return false;
+                }
+            }
+            options->files[options->file_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.spec)
+                bx_diag(diag, "option requires an argument -- '%c'", option.spec->short_name);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        const char* value = option.value;
+        switch (option.spec->id) {
             case 'b':
-                if (!parse_style(optarg, &options->body, diag))
+                if (!parse_style(value, &options->body, diag))
                     return false;
                 break;
             case 'd':
-                if (strlen(optarg) == 1) {
-                    options->section_delim[0] = optarg[0];
+                if (strlen(value) == 1) {
+                    options->section_delim[0] = value[0];
                     options->section_delim[1] = ':';
                 }
-                else if (strlen(optarg) == 2) {
-                    options->section_delim[0] = optarg[0];
-                    options->section_delim[1] = optarg[1];
+                else if (strlen(value) == 2) {
+                    options->section_delim[0] = value[0];
+                    options->section_delim[1] = value[1];
                 }
                 else {
-                    bx_diag(diag, "invalid section delimiter: '%s'", optarg);
+                    bx_diag(diag, "invalid section delimiter: '%s'", value);
                     return false;
                 }
                 break;
             case 'f':
-                if (!parse_style(optarg, &options->footer, diag))
+                if (!parse_style(value, &options->footer, diag))
                     return false;
                 break;
             case 'h':
-                if (!parse_style(optarg, &options->header, diag))
+                if (!parse_style(value, &options->header, diag))
                     return false;
                 break;
             case 'i':
-                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->line_increment)) {
-                    bx_diag(diag, "invalid line increment: '%s'", optarg);
+                if (!bx_args_parse_int_range(value, INT_MIN, INT_MAX, &options->line_increment)) {
+                    bx_diag(diag, "invalid line increment: '%s'", value);
                     return false;
                 }
                 break;
             case 'l':
-                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_blank_lines)) {
-                    bx_diag(diag, "invalid blank line count: '%s'", optarg);
+                if (!bx_args_parse_int_range(value, INT_MIN, INT_MAX, &options->join_blank_lines)) {
+                    bx_diag(diag, "invalid blank line count: '%s'", value);
                     return false;
                 }
                 break;
             case 'n':
-                options->number_format = optarg;
+                if (strcmp(value, "ln") != 0 && strcmp(value, "rn") != 0 && strcmp(value, "rz") != 0) {
+                    bx_diag(diag, "invalid number format: '%s'", value);
+                    return false;
+                }
+                options->number_format = value;
                 break;
             case 'p':
                 options->no_renumber = true;
                 break;
             case 's':
-                options->number_separator = optarg;
+                options->number_separator = value;
                 break;
             case 'v':
-                if (!bx_args_parse_llong_range(optarg, LLONG_MIN, LLONG_MAX, &options->starting_line_number)) {
-                    bx_diag(diag, "invalid starting line number: '%s'", optarg);
+                if (!bx_args_parse_llong_range(value, LLONG_MIN, LLONG_MAX, &options->starting_line_number)) {
+                    bx_diag(diag, "invalid starting line number: '%s'", value);
                     return false;
                 }
                 break;
             case 'w':
-                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->number_width)) {
-                    bx_diag(diag, "invalid number width: '%s'", optarg);
+                if (!bx_args_parse_int_range(value, INT_MIN, INT_MAX, &options->number_width)) {
+                    bx_diag(diag, "invalid number width: '%s'", value);
                     return false;
                 }
                 break;
@@ -202,15 +231,11 @@ static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* opt
             case 2:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
-                return false;
             default:
                 return false;
         }
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -312,6 +337,7 @@ static bool nl_file(FILE* f, struct bx_nl_options* options, struct bx_line_write
     size_t line_cap = 0;
     ssize_t len;
     long long current_line = options->starting_line_number;
+    bool advance_number = false;
     struct section_style* current_style = &options->body;
     int blank_count = 0;
 
@@ -324,8 +350,10 @@ static bool nl_file(FILE* f, struct bx_nl_options* options, struct bx_line_write
             if (line[2] == delim1 && line[3] == delim2 && line[4] == delim1 && line[5] == delim2 && (line[6] == '\n' || line[6] == '\0')) {
                 // Header \:\:\:
                 current_style = &options->header;
-                if (!options->no_renumber)
+                if (!options->no_renumber) {
                     current_line = options->starting_line_number;
+                    advance_number = false;
+                }
                 if (!bx_line_writer_putc(writer, '\n')) {
                     free(line);
                     return bx_nl_write_error(diag);
@@ -335,8 +363,10 @@ static bool nl_file(FILE* f, struct bx_nl_options* options, struct bx_line_write
             else if (line[2] == delim1 && line[3] == delim2 && (line[4] == '\n' || line[4] == '\0')) {
                 // Body \:\:
                 current_style = &options->body;
-                if (!options->no_renumber)
+                if (!options->no_renumber) {
                     current_line = options->starting_line_number;
+                    advance_number = false;
+                }
                 if (!bx_line_writer_putc(writer, '\n')) {
                     free(line);
                     return bx_nl_write_error(diag);
@@ -346,8 +376,10 @@ static bool nl_file(FILE* f, struct bx_nl_options* options, struct bx_line_write
             else if (line[2] == '\n' || line[2] == '\0') {
                 // Footer \:
                 current_style = &options->footer;
-                if (!options->no_renumber)
+                if (!options->no_renumber) {
                     current_line = options->starting_line_number;
+                    advance_number = false;
+                }
                 if (!bx_line_writer_putc(writer, '\n')) {
                     free(line);
                     return bx_nl_write_error(diag);
@@ -389,11 +421,16 @@ static bool nl_file(FILE* f, struct bx_nl_options* options, struct bx_line_write
         }
 
         if (should_number) {
+            if (advance_number && __builtin_add_overflow(current_line, options->line_increment, &current_line)) {
+                bx_diag(diag, "line number overflow");
+                free(line);
+                return false;
+            }
             if (!bx_nl_write_number_field(writer, current_line, options, diag)) {
                 free(line);
                 return false;
             }
-            current_line += options->line_increment;
+            advance_number = true;
         }
         else {
             if (!bx_nl_write_unnumbered_prefix(writer, options, diag)) {
@@ -414,26 +451,28 @@ static bool nl_file(FILE* f, struct bx_nl_options* options, struct bx_line_write
 int bx_nl_main(int argc, char** argv) {
     struct bx_nl_options options;
     struct bx_diag_ctx diag = {.progname = "nl", .exit_status = 0};
-    int first_operand = 0;
 
-    if (!bx_nl_parse_options(argc, argv, &options, &first_operand, &diag))
-        return 1;
+    if (!bx_nl_parse_options(argc, argv, &options, &diag)) {
+        if (diag.exit_status == 0)
+            diag.exit_status = 1;
+        goto done;
+    }
     if (options.show_help) {
         bx_nl_print_help(stdout, options.progname);
-        return 0;
+        goto done;
     }
     if (options.show_version) {
         bx_cli_print_version(options.progname);
-        return 0;
+        goto done;
     }
 
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    int num_files = argc - first_operand;
-    for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
-        const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
+    size_t num_files = options.file_count;
+    for (size_t i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
+        const char* filename = (num_files == 0) ? "-" : options.files[i];
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
         if (!f) {
@@ -451,12 +490,10 @@ int bx_nl_main(int argc, char** argv) {
         bx_nl_write_error(&diag);
     }
 
-    if (options.body.style == STYLE_REGEX)
-        regfree(&options.body.regex);
-    if (options.header.style == STYLE_REGEX)
-        regfree(&options.header.regex);
-    if (options.footer.style == STYLE_REGEX)
-        regfree(&options.footer.regex);
-
+done:
+    clear_style(&options.body);
+    clear_style(&options.header);
+    clear_style(&options.footer);
+    free(options.files);
     return diag.exit_status;
 }
