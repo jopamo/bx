@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +12,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 #ifndef BX_LSCOLORS_FILE
 #define BX_LSCOLORS_FILE "/usr/share/bx/lscolors.dircolors"
@@ -119,12 +118,11 @@ static void bx_dircolors_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_dircolors_parse_options(int argc, char** argv, struct bx_dircolors_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"bourne-shell", no_argument, NULL, 'b'},
-        {"c-shell", no_argument, NULL, 'c'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', "bourne-shell", BX_OPTION_NO_VALUE},
+        {'c', 'c', "c-shell", BX_OPTION_NO_VALUE},
+        {1, 0, "help", BX_OPTION_NO_VALUE},
+        {2, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -132,15 +130,18 @@ static bool bx_dircolors_parse_options(int argc, char** argv, struct bx_dircolor
     options->shell_mode = bx_dircolors_default_shell_mode();
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+bc", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
-
-        switch (c) {
+        switch (option.spec->id) {
             case 'b':
                 options->shell_mode = BX_DIRCOLORS_SHELL_BOURNE;
                 break;
@@ -153,21 +154,16 @@ static bool bx_dircolors_parse_options(int argc, char** argv, struct bx_dircolor
             case 2:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    if (optind < argc) {
-        options->input_path = argv[optind];
-        optind++;
-    }
-
-    if (optind < argc) {
-        bx_diag(diag, "unexpected operand '%s'", argv[optind]);
+    size_t operand = option.index;
+    if (operand < (size_t)argc)
+        options->input_path = argv[operand++];
+    if (operand < (size_t)argc) {
+        bx_diag(diag, "unexpected operand '%s'", argv[operand]);
         return false;
     }
 
