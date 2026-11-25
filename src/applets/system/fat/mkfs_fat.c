@@ -44,6 +44,7 @@
 #include "applets.h"
 #include "dos.h"
 #include "lib/checked_math.h"
+#include "lib/option_scan.h"
 
 #define	argto1(arg, lo, msg)  argtou(arg, lo, 0xff, msg)
 #define	argto2(arg, lo, msg)  argtou(arg, lo, 0xffff, msg)
@@ -81,17 +82,56 @@ bx_mkfs_fat_main(int argc, char *argv[])
     name = name ? name + 1 : argv[0];
     if (strcmp(name, "newfs_msdos"))
         return bx_fat_mkfs_dos(argc, argv);
-    static const char opts[] = "@:NAB:C:F:I:L:O:S:a:b:c:e:f:h:i:k:m:n:o:r:s:T:u:";
-    struct msdos_options o;
-    const char *fname, *dtype;
-    int ch;
+    static const struct bx_option_spec specs[] = {
+        {'@', '@', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'N', 'N', NULL, BX_OPTION_NO_VALUE},
+        {'A', 'A', NULL, BX_OPTION_NO_VALUE},
+        {'B', 'B', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'C', 'C', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'F', 'F', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'I', 'I', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'L', 'L', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'O', 'O', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'S', 'S', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'a', 'a', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'b', 'b', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'c', 'c', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'e', 'e', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'f', 'f', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'k', 'k', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'m', 'm', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'n', 'n', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'u', 'u', NULL, BX_OPTION_REQUIRED_VALUE},
+    };
+    struct msdos_options o = {0};
+    const char *operands[2] = {0};
+    size_t count = 0;
+    struct bx_option_cursor cursor;
 
-    memset(&o, 0, sizeof(o));
-
-    while ((ch = getopt(argc, argv, opts)) != -1)
-	switch (ch) {
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (count == sizeof(operands) / sizeof(operands[0]))
+                usage();
+            operands[count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH)
+            usage();
+        const char *value = result.value;
+        switch (result.spec->id) {
 	case '@':
-	    o.offset = argtooff(optarg, "offset");
+	    o.offset = argtooff(value, "offset");
 	    break;
 	case 'N':
 	    o.no_create = 1;
@@ -100,97 +140,92 @@ bx_mkfs_fat_main(int argc, char *argv[])
 	    o.align = true;
 	    break;
 	case 'B':
-	    o.bootstrap = optarg;
+	    o.bootstrap = value;
 	    break;
 	case 'C':
-	    o.create_size = argtooff(optarg, "create size");
+	    o.create_size = argtooff(value, "create size");
 	    if (o.create_size == 0)
 		errx(1, "create size must be positive");
 	    break;
 	case 'F':
-	    if (strcmp(optarg, "12") &&
-		strcmp(optarg, "16") &&
-		strcmp(optarg, "32"))
-		errx(1, "%s: bad FAT type", optarg);
-	    o.fat_type = atoi(optarg);
+	    if (strcmp(value, "12") &&
+		strcmp(value, "16") &&
+		strcmp(value, "32"))
+		errx(1, "%s: bad FAT type", value);
+	    o.fat_type = atoi(value);
 	    break;
 	case 'I':
-	    o.volume_id = argto4(optarg, 0, "volume ID");
+	    o.volume_id = argto4(value, 0, "volume ID");
 	    o.volume_id_set = 1;
 	    break;
 	case 'L':
-	    o.volume_label = optarg;
+	    o.volume_label = value;
 	    break;
 	case 'O':
-	    o.OEM_string = optarg;
+	    o.OEM_string = value;
 	    break;
 	case 'S':
-	    o.bytes_per_sector = argto2(optarg, 1, "bytes/sector");
+	    o.bytes_per_sector = argto2(value, 1, "bytes/sector");
 	    break;
 	case 'a':
-	    o.sectors_per_fat = argto4(optarg, 1, "sectors/FAT");
+	    o.sectors_per_fat = argto4(value, 1, "sectors/FAT");
 	    break;
 	case 'b':
-	    o.block_size = argtox(optarg, 1, "block size");
+	    o.block_size = argtox(value, 1, "block size");
 	    o.sectors_per_cluster = 0;
 	    break;
 	case 'c':
-	    o.sectors_per_cluster = argto1(optarg, 1, "sectors/cluster");
+	    o.sectors_per_cluster = argto1(value, 1, "sectors/cluster");
 	    o.block_size = 0;
 	    break;
 	case 'e':
-	    o.directory_entries = argto2(optarg, 1, "directory entries");
+	    o.directory_entries = argto2(value, 1, "directory entries");
 	    break;
 	case 'f':
-	    o.floppy = optarg;
+	    o.floppy = value;
 	    break;
 	case 'h':
-	    o.drive_heads = argto2(optarg, 1, "drive heads");
+	    o.drive_heads = argto2(value, 1, "drive heads");
 	    break;
 	case 'i':
-	    o.info_sector = argto2(optarg, 1, "info sector");
+	    o.info_sector = argto2(value, 1, "info sector");
 	    break;
 	case 'k':
-	    o.backup_sector = argto2(optarg, 1, "backup sector");
+	    o.backup_sector = argto2(value, 1, "backup sector");
 	    break;
 	case 'm':
-	    o.media_descriptor = argto1(optarg, 0, "media descriptor");
+	    o.media_descriptor = argto1(value, 0, "media descriptor");
 	    o.media_descriptor_set = 1;
 	    break;
 	case 'n':
-	    o.num_FAT = argto1(optarg, 1, "number of FATs");
+	    o.num_FAT = argto1(value, 1, "number of FATs");
 	    break;
 	case 'o':
-	    o.hidden_sectors = argto4(optarg, 0, "hidden sectors");
+	    o.hidden_sectors = argto4(value, 0, "hidden sectors");
 	    o.hidden_sectors_set = 1;
 	    break;
 	case 'r':
-	    o.reserved_sectors = argto2(optarg, 1, "reserved sectors");
+	    o.reserved_sectors = argto2(value, 1, "reserved sectors");
 	    break;
 	case 's':
-	    o.size = argto4(optarg, 1, "file system size");
+	    o.size = argto4(value, 1, "file system size");
 	    break;
 	case 'T':
 	    o.timestamp_set = 1;
-	    o.timestamp = get_tstamp(optarg);
+	    o.timestamp = get_tstamp(value);
 	    break;
 	case 'u':
-	    o.sectors_per_track = argto2(optarg, 1, "sectors/track");
+	    o.sectors_per_track = argto2(value, 1, "sectors/track");
 	    break;
 	default:
 	    usage();
 	}
-    argc -= optind;
-    argv += optind;
-    if (argc < 1 || argc > 2)
-	usage();
-    if (o.align) {
-	if (o.reserved_sectors)
-	    errx(1, "align (-A) is incompatible with -r");
     }
-    fname = *argv++;
-    dtype = *argv;
-    exit(!!mkfs_msdos(fname, dtype, &o));
+    if (count == 0)
+	usage();
+    if (o.align && o.reserved_sectors)
+	errx(1, "align (-A) is incompatible with -r");
+    exit(!!mkfs_msdos(operands[0], operands[1], &o));
 }
 
 /*
