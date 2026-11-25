@@ -1,5 +1,4 @@
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -13,8 +12,8 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
 
 enum bx_truncate_size_mode {
     BX_TRUNCATE_SIZE_SET = 0,
@@ -31,6 +30,11 @@ struct bx_truncate_size_spec {
     uintmax_t value;
 };
 
+enum {
+    BX_TRUNCATE_OPT_HELP = 256,
+    BX_TRUNCATE_OPT_VERSION,
+};
+
 struct bx_truncate_options {
     const char* progname;
     bool no_create;
@@ -40,6 +44,8 @@ struct bx_truncate_options {
     const char* reference_path;
     bool show_help;
     bool show_version;
+    const char** paths;
+    size_t path_count;
 };
 
 static void bx_truncate_print_help(FILE* stream, const char* progname) {
@@ -107,32 +113,49 @@ static bool bx_truncate_parse_size_spec(const char* text, struct bx_truncate_siz
     return true;
 }
 
-static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"no-create", no_argument, NULL, 'c'},
-        {"io-blocks", no_argument, NULL, 'o'},
-        {"reference", required_argument, NULL, 'r'},
-        {"size", required_argument, NULL, 's'},
-        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},
-        {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "no-create", BX_OPTION_NO_VALUE},
+        {'o', 'o', "io-blocks", BX_OPTION_NO_VALUE},
+        {'r', 'r', "reference", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "size", BX_OPTION_REQUIRED_VALUE},
+        {BX_TRUNCATE_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_TRUNCATE_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "truncate");
-    diag->progname = options->progname;
-
-    char short_options[] = "-:cor:s:";
-    int next_operand = 1;
-    bx_args_getopt_reset_file_options(short_options);
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1) {
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
             break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->paths == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->paths) ||
+                    (options->paths = malloc(capacity * sizeof(*options->paths))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->paths[options->path_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                /* Preserve the established short names for --size and --reference. */
+                bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'c':
                 options->no_create = true;
                 break;
@@ -140,33 +163,25 @@ static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_
                 options->io_blocks = true;
                 break;
             case 'r':
-                options->reference_path = optarg;
+                options->reference_path = result.value;
                 break;
             case 's':
-                if (!bx_truncate_parse_size_spec(optarg, &options->size_spec)) {
-                    bx_diag(diag, "invalid size '%s'", (optarg != NULL) ? optarg : "");
+                if (!bx_truncate_parse_size_spec(result.value, &options->size_spec)) {
+                    bx_diag(diag, "invalid size '%s'", result.value);
                     return false;
                 }
                 options->size_specified = true;
                 break;
-            case BX_ARGS_OPT_HELP:
+            case BX_TRUNCATE_OPT_HELP:
                 options->show_help = true;
                 break;
-            case BX_ARGS_OPT_VERSION:
+            case BX_TRUNCATE_OPT_VERSION:
                 options->show_version = true;
                 break;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
-
-    *first_operand = optind;
 
     if (options->show_help || options->show_version) {
         return true;
@@ -371,45 +386,50 @@ static bool bx_truncate_apply_path(const char* path, const struct bx_truncate_op
     return true;
 }
 
-int bx_truncate_main(int argc, char** argv) {
-    struct bx_truncate_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "truncate",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
-    };
-    int first_operand = 0;
-
-    if (!bx_truncate_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_truncate_print_help(stdout, options.progname);
+static int bx_truncate_run(const struct bx_truncate_options* options, struct bx_diag_ctx* diag) {
+    if (options->show_help) {
+        bx_truncate_print_help(stdout, options->progname);
         return 0;
     }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
-
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        return diag.exit_status;
+    if (options->path_count == 0) {
+        bx_diag(diag, "missing operand");
+        return diag->exit_status;
     }
 
     uintmax_t reference_size = 0;
-    bool has_reference = options.reference_path != NULL;
-    if (has_reference && !bx_truncate_get_reference_size(options.reference_path, &reference_size, &diag)) {
-        return diag.exit_status;
+    bool has_reference = options->reference_path != NULL;
+    if (has_reference && !bx_truncate_get_reference_size(options->reference_path, &reference_size, diag))
+        return diag->exit_status;
+
+    /* An absolute byte count can be rejected without opening any target. */
+    if (options->size_specified && !options->io_blocks && options->size_spec.mode == BX_TRUNCATE_SIZE_SET) {
+        off_t size;
+        if (!bx_truncate_uintmax_to_off_t(options->size_spec.value, &size)) {
+            bx_diag(diag, "%s: size too large", options->paths[0]);
+            return diag->exit_status;
+        }
     }
 
-    for (int i = first_operand; i < argc; i++) {
-        (void)bx_truncate_apply_path(argv[i], &options, reference_size, has_reference, &diag);
+    for (size_t i = 0; i < options->path_count; i++) {
+        (void)bx_truncate_apply_path(options->paths[i], options, reference_size, has_reference, diag);
     }
+    return diag->exit_status;
+}
 
-    return diag.exit_status;
+int bx_truncate_main(int argc, char** argv) {
+    struct bx_truncate_options options = {
+        .progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "truncate"),
+    };
+    struct bx_diag_ctx diag = {.progname = options.progname};
+    int status;
+    if (bx_truncate_parse_options(argc, argv, &options, &diag))
+        status = bx_truncate_run(&options, &diag);
+    else
+        status = diag.exit_status != 0 ? diag.exit_status : 1;
+    free(options.paths);
+    return status;
 }
