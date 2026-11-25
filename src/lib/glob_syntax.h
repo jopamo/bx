@@ -1,8 +1,12 @@
 #ifndef BX_LIB_GLOB_SYNTAX_H
 #define BX_LIB_GLOB_SYNTAX_H
 
+#include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 /* Return past the closing delimiter of a bracket atom such as [:alpha:]. */
 static inline const char* bx_glob_notation_end(const char* text, const char* end) {
@@ -43,23 +47,51 @@ static inline const char* bx_glob_bracket_end(const char* text, const char* end)
     return NULL;
 }
 
-/* A final hyphen is literal when escaped or consumed as a range member.
- * Only classify ASCII here: a multibyte endpoint may span several bytes. */
-static inline int bx_glob_terminal_hyphen_is_member(const char* atom, const char* end) {
+static inline const char* bx_glob_skip_member(const char* atom, const char* end,
+                                              mbstate_t* state) {
+    if (*atom == '\\')
+        atom++;
+    if (atom == end)
+        return NULL;
+    if (!state)
+        return atom + 1;
+    size_t len = mbrlen(atom, (size_t)(end - atom), state);
+    if (len == 0 || len > (size_t)(end - atom) || !mbsinit(state))
+        return NULL;
+    return atom + len;
+}
+
+/* A final hyphen is literal when escaped or consumed as a range endpoint. */
+static inline bool bx_glob_members_have_endpoints(const char* atom, const char* end,
+                                                  mbstate_t* state) {
     while (atom < end) {
-        if (*atom == '\\')
-            atom++;
-        if (atom == end || (unsigned char)*atom++ >= 0x80u)
-            return 0;
+        atom = bx_glob_skip_member(atom, end, state);
+        if (!atom)
+            return false;
         if (atom < end && *atom == '-') {
-            atom++;
-            if (atom < end && *atom == '\\')
-                atom++;
-            if (atom == end || (unsigned char)*atom++ >= 0x80u)
-                return 0;
+            if (++atom == end)
+                return false;
+            atom = bx_glob_skip_member(atom, end, state);
+            if (!atom)
+                return false;
         }
     }
-    return 1;
+    return true;
+}
+
+static inline bool bx_glob_terminal_hyphen_is_member(const char* atom, const char* end) {
+    if (!bx_glob_members_have_endpoints(atom, end, NULL))
+        return false;
+    if (MB_CUR_MAX == 1)
+        return true;
+
+    /* fnmatch may use byte matching for an invalid multibyte filename.
+     * Rewrite only when byte and multibyte parsing agree. */
+    mbstate_t state = {0};
+    int saved_errno = errno;
+    bool matched = bx_glob_members_have_endpoints(atom, end, &state);
+    errno = saved_errno;
+    return matched;
 }
 
 /* Requires one writable byte after the terminator. Quote the opening bracket
