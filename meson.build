@@ -1802,6 +1802,24 @@ install_subdir('src/applets/text/edit/runtime',
   strip_directory : true
 )
 
+install_data(
+  'LICENSE',
+  'COPYING.GPL-2',
+  'COPYING.GPL-3',
+  'COPYING.LGPL-2.1',
+  'src/applets/network/rsync/LICENSE.md',
+  'src/applets/network/socat/COPYING.socat',
+  'src/applets/text/edit/COPYING.vim',
+  'src/lib/fetch/COPYING.Mira',
+  'src/lib/manual/COPYING.mandoc',
+  'src/lib/zip/LICENSE.InfoZIP',
+  'src/vendor/jq/COPYING',
+  'src/vendor/jq/src/parser.h',  # Includes the Bison skeleton exception.
+  'src/vendor/jq/vendor/decNumber/ICU-license.html',
+  install_dir : get_option('datadir') / 'licenses' / 'bx',
+  preserve_path : true,
+)
+
 if multicall_install_mode == 'symlink'
   foreach applet : applet_names
     if disabled_shell_shortcut_names.contains(applet)

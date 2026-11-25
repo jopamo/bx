@@ -15,18 +15,23 @@ areas include:
   files
 - src/applets/network/nc/netcat.[ch], socks.c — OpenBSD/BSD-style
   notices
-- src/applets/network/traceroute/ — GPL-2.0-or-later, with clif.[ch] under
-  LGPL-2.1-or-later
+- src/applets/network/traceroute/ — GPL-2.0-or-later
+- src/applets/network/socat/ — includes code published under GPL version 2;
+  see the file headers and COPYING.socat
 - src/applets/system/init/ — BusyBox init-derived policy, GPL-2.0-or-later
 - src/applets/text/awk/ — One True Awk (Lucent permissive license), with a
   public-domain Berkeley Yacc parser skeleton
 - src/applets/text/sed/ — FreeBSD sed, BSD-3-Clause
 - src/applets/text/ed/ — GNU ed, GPL-2.0-or-later
-- src/applets/text/edit/vim/ — Vim license
+- src/applets/text/edit/vim/ — modified Vim, see src/applets/text/edit/COPYING.vim;
+  the embedded xdiff library is LGPL-2.1-or-later (see COPYING.LGPL-2.1)
 - src/applets/text/edit/runtime/ — curated Vim runtime subset; some files carry
   their own upstream notices
-- src/applets/text/jq/upstream/ — jq and bundled upstream components under the
-  terms collected in src/applets/text/jq/COPYING.jq
+- src/vendor/jq/ — jq and bundled components, see src/vendor/jq/COPYING.
+  The generated src/vendor/jq/src/parser.c and parser.h contain a Bison
+  skeleton under GPL-3.0-or-later (COPYING.GPL-3) with the Bison special
+  exception. The exception permits distributing this larger work under
+  terms of our choice; bx is not a parser generator using the skeleton.
 - src/lib/fetch/ — Mira-derived code under the MIT terms in
   src/lib/fetch/COPYING.Mira
 - src/lib/manual/ — mandoc/OpenBSD-derived code under the terms collected in
@@ -35,7 +40,8 @@ areas include:
 - src/applets/network/rsync/ — ISC and other retained notices
 - src/lib/fat/ and src/applets/system/fat/ — FreeBSD FAT utilities under
   BSD-2-Clause, with BSD-3-Clause checker diagnostics
-
+- src/lib/zip/ — modified Info-ZIP code, not an official Info-ZIP release;
+  see src/lib/zip/LICENSE.InfoZIP
 - src/applets/archive/pigz/ — Zlib license
 
 Subtree README/COPYING/LICENSE files and per-file headers control when they
@@ -45,4 +51,13 @@ Combined binary note
 --------------------
 bx is linked as one multicall executable. Because that combined work includes
 components under different copyleft terms, the binary you ship must satisfy the
-obligations of the included parts.
+obligations of the included parts. The bx-owned grant is not a linking
+exception for third-party code. Review the libraries in the actual build,
+including archive members linked through dependencies. In particular, do not
+distribute a GPLv2 binary incorporating legacy OpenSSL/SSLeay code under
+its advertising terms without an applicable exception or other permission.
+
+Distributors must also satisfy the corresponding-source requirements of
+GPLv2 section 3 and the applicable LGPL terms. The license files installed
+with bx do not replace the copyright notices in individual source files or
+the notices required by linked libraries.
