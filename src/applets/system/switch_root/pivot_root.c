@@ -18,9 +18,11 @@ static void usage(FILE* out, const char* name) {
 }
 
 int bx_pivot_root_main(int argc, char** argv) {
-    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "pivot_root", "-h", "-V", usage);
-    if (handled >= 0)
-        return handled;
+    if (argc == 2) {
+        int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "pivot_root", "-h", "-V", usage);
+        if (handled >= 0)
+            return handled;
+    }
     struct bx_diag_ctx diag = {.progname = "pivot_root"};
     bool end_options = argc > 1 && strcmp(argv[1], "--") == 0;
     int operand = end_options ? 2 : 1;
