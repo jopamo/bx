@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,12 +12,12 @@
 #include "lib/backup_ops.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
 #include "lib/same_file.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -42,6 +41,8 @@ struct bx_ln_options {
 
 enum {
     BX_LN_OPT_BACKUP = 256,
+    BX_LN_OPT_HELP,
+    BX_LN_OPT_VERSION,
 };
 
 static void bx_ln_print_help(FILE* stream, const char* progname) {
@@ -70,49 +71,58 @@ static void bx_ln_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"backup", optional_argument, NULL, BX_LN_OPT_BACKUP},
-        {"directory", no_argument, NULL, 'd'},
-        {"force", no_argument, NULL, 'f'},
-        {"interactive", no_argument, NULL, 'i'},
-        {"logical", no_argument, NULL, 'L'},
-        {"no-dereference", no_argument, NULL, 'n'},
-        {"physical", no_argument, NULL, 'P'},
-        {"relative", no_argument, NULL, 'r'},
-        {"symbolic", no_argument, NULL, 's'},
-        {"suffix", required_argument, NULL, 'S'},
-        {"target-directory", required_argument, NULL, 't'},
-        {"no-target-directory", no_argument, NULL, 'T'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', NULL, BX_OPTION_NO_VALUE},
+        {'F', 'F', NULL, BX_OPTION_NO_VALUE},
+        {BX_LN_OPT_BACKUP, 0, "backup", BX_OPTION_OPTIONAL_VALUE},
+        {'d', 'd', "directory", BX_OPTION_NO_VALUE},
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'i', 'i', "interactive", BX_OPTION_NO_VALUE},
+        {'L', 'L', "logical", BX_OPTION_NO_VALUE},
+        {'n', 'n', "no-dereference", BX_OPTION_NO_VALUE},
+        {'P', 'P', "physical", BX_OPTION_NO_VALUE},
+        {'r', 'r', "relative", BX_OPTION_NO_VALUE},
+        {'s', 's', "symbolic", BX_OPTION_NO_VALUE},
+        {'S', 'S', "suffix", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "target-directory", BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', "no-target-directory", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {BX_LN_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_LN_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
-    char short_opts[] = "+:bdFfiLnPrsS:t:Tv";
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname(argv[0], "ln");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, short_opts, long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE) {
+                if (option.spec->short_name)
+                    bx_diag(diag, "option requires an argument -- '%c'", option.spec->short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", option.token);
+            }
+            else {
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            }
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case 'b':
                 bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case BX_LN_OPT_BACKUP:
-                if (optarg == NULL) {
+                if (option.value == NULL) {
                     bx_args_enable_backup_mode(&options->backup_mode);
                 }
-                else if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
-                    bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                else if (!bx_args_parse_backup_mode(option.value, &options->backup_mode)) {
+                    bx_diag(diag, "invalid --backup control value '%s'", option.value);
                     return false;
                 }
                 break;
@@ -144,11 +154,11 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
                 options->symbolic = true;
                 break;
             case 'S':
-                options->suffix = optarg;
+                options->suffix = option.value;
                 bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case 't':
-                options->target_directory = optarg;
+                options->target_directory = option.value;
                 break;
             case 'T':
                 options->no_target_directory = true;
@@ -156,23 +166,12 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
             case 'v':
                 options->verbose = true;
                 break;
-            case 1:
+            case BX_LN_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_LN_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                return false;
-            case '?':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
@@ -188,7 +187,7 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
         return false;
     }
 
-    *first_operand = optind;
+    *first_operand = (int)option.index;
     return true;
 }
 
@@ -580,6 +579,12 @@ int bx_ln_main(int argc, char** argv) {
         bx_diag(&diag, "missing file operand");
         return diag.exit_status;
     }
+    for (int i = 0; i < operand_count; i++) {
+        if (operands[i][0] == '\0') {
+            bx_diag(&diag, "empty file operand");
+            return diag.exit_status;
+        }
+    }
 
     if (options.no_target_directory && options.target_directory == NULL) {
         if (operand_count < 2) {
@@ -614,7 +619,8 @@ int bx_ln_main(int argc, char** argv) {
     else {
         source_count = operand_count - 1;
         destination_root = operands[operand_count - 1];
-        destination_is_directory = source_count > 1 || (!options.no_target_directory && bx_ln_path_is_directory(destination_root, !options.no_dereference));
+        destination_is_directory = !options.no_target_directory &&
+            bx_ln_path_is_directory(destination_root, !options.no_dereference);
 
         if (source_count > 1 && !destination_is_directory) {
             bx_diag(&diag, "target '%s' is not a directory", destination_root);
