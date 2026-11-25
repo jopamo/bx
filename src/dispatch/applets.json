@@ -141,7 +141,10 @@
     {
       "name": "date",
       "main": "bx_date_main",
-      "capabilities": [],
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ],
       "execution_class": "exec-only"
     },
     {

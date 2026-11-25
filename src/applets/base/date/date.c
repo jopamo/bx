@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -17,8 +16,8 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/option_scan.h"
 #include "lib/time_parse.h"
-#include "lib/args_common.h"
 
 struct bx_date_options {
     const char* progname;
@@ -191,46 +190,62 @@ static bool bx_date_normalize_precision(const char* arg,
     return false;
 }
 
-static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"date", required_argument, NULL, 'd'},
-        {"debug", no_argument, NULL, 5},
-        {"file", required_argument, NULL, 'f'},
-        {"iso-8601", optional_argument, NULL, 'I'},
-        {"rfc-email", no_argument, NULL, 'R'},
-        {"rfc-3339", required_argument, NULL, 1},
-        {"reference", required_argument, NULL, 'r'},
-        {"set", required_argument, NULL, 's'},
-        {"utc", no_argument, NULL, 'u'},
-        {"universal", no_argument, NULL, 'u'},
-        {"resolution", no_argument, NULL, 2},
-        {"help", no_argument, NULL, 3},
-        {"version", no_argument, NULL, 4},
-        {NULL, 0, NULL, 0},
+static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options* options,
+                                  const char* operands[3], size_t* operand_count, struct bx_diag_ctx* diag) {
+    enum { OPT_RFC_3339 = 256, OPT_RESOLUTION, OPT_HELP, OPT_VERSION, OPT_DEBUG };
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "date", BX_OPTION_REQUIRED_VALUE},
+        {OPT_DEBUG, 0, "debug", BX_OPTION_NO_VALUE},
+        {'f', 'f', "file", BX_OPTION_REQUIRED_VALUE},
+        {'I', 'I', "iso-8601", BX_OPTION_OPTIONAL_VALUE},
+        {'R', 'R', "rfc-email", BX_OPTION_NO_VALUE},
+        {OPT_RFC_3339, 0, "rfc-3339", BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', "reference", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "set", BX_OPTION_REQUIRED_VALUE},
+        {'u', 'u', "utc", BX_OPTION_NO_VALUE},
+        {'u', 0, "universal", BX_OPTION_NO_VALUE},
+        {OPT_RESOLUTION, 0, "resolution", BX_OPTION_NO_VALUE},
+        {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "date");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "d:f:I::Rr:s:u", long_options, &option_index);
-        if (c == -1) {
-            break;
+    *operand_count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (*operand_count < 3)
+                operands[(*operand_count)++] = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_AMBIGUOUS)
+                bx_diag(diag, "option '%s' is ambiguous", option.token);
+            else if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'd':
-                options->date_str = optarg;
+                options->date_str = option.value;
                 break;
             case 'f':
-                options->file = optarg;
+                options->file = option.value;
                 break;
             case 'I':
-                options->iso_8601_fmt = optarg ? optarg : "date";
+                options->iso_8601_fmt = option.value ? option.value : "date";
                 options->rfc_email = false;
                 options->rfc_3339 = false;
                 break;
@@ -240,43 +255,32 @@ static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options*
                 options->rfc_3339 = false;
                 break;
             case 'r':
-                options->reference_file = optarg;
+                options->reference_file = option.value;
                 break;
             case 's':
-                options->set_str = optarg;
+                options->set_str = option.value;
                 break;
             case 'u':
                 options->utc = true;
                 break;
-            case 1:
+            case OPT_RFC_3339:
                 options->rfc_3339 = true;
-                options->rfc_3339_fmt = optarg;
+                options->rfc_3339_fmt = option.value;
                 options->iso_8601_fmt = NULL;
                 options->rfc_email = false;
                 break;
-            case 2:
+            case OPT_RESOLUTION:
                 options->resolution = true;
                 break;
-            case 3:
+            case OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 4:
+            case OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case 5:
+            case OPT_DEBUG:
                 options->debug = true;
                 break;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "invalid option");
-                }
-                return false;
             default:
                 return false;
         }
@@ -300,7 +304,6 @@ static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options*
         options->rfc_3339_fmt = normalized;
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -909,9 +912,10 @@ static bool format_and_print(const struct timespec* ts, const struct bx_date_opt
 int bx_date_main(int argc, char** argv) {
     struct bx_date_options options;
     struct bx_diag_ctx diag = {.progname = "date", .exit_status = 0};
-    int first_operand = 0;
+    const char* operands[3];
+    size_t num_operands;
 
-    if (!bx_date_parse_options(argc, argv, &options, &first_operand, &diag))
+    if (!bx_date_parse_options(argc, argv, &options, operands, &num_operands, &diag))
         return 1;
     if (options.show_help) {
         bx_date_print_help(stdout, options.progname);
@@ -925,32 +929,26 @@ int bx_date_main(int argc, char** argv) {
         return 1;
     }
 
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
-        bx_diag(&diag, "cannot get current time: %s", strerror(errno));
-        return 1;
-    }
-
     const char* set_operand = NULL;
     const char* format = "%a %b %e %H:%M:%S %Z %Y";
-    int num_operands = argc - first_operand;
+    size_t first_operand = 0;
     bool format_from_operand = false;
 
-    if (num_operands >= 1 && argv[first_operand][0] == '+') {
-        format = argv[first_operand] + 1;
+    if (num_operands >= 1 && operands[first_operand][0] == '+') {
+        format = operands[first_operand] + 1;
         format_from_operand = true;
         first_operand++;
         num_operands--;
     }
 
     if (num_operands >= 1) {
-        set_operand = argv[first_operand];
+        set_operand = operands[first_operand];
         first_operand++;
         num_operands--;
     }
 
     if (num_operands > 0) {
-        bx_diag(&diag, "extra operand '%s'", argv[first_operand]);
+        bx_diag(&diag, "extra operand '%s'", operands[first_operand]);
         return 1;
     }
 
@@ -970,6 +968,12 @@ int bx_date_main(int argc, char** argv) {
 
     if (options.set_str != NULL && set_operand != NULL) {
         bx_diag(&diag, "cannot specify date to set with both --set and an operand");
+        return 1;
+    }
+
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        bx_diag(&diag, "cannot get current time: %s", strerror(errno));
         return 1;
     }
 
