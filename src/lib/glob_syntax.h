@@ -147,6 +147,7 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                     }
                     const char* hyphen = strchr(p + 3, '-');
                     if (end[-1] != '-' ||
+                        (end - p == 5 && p[3] == '[') ||
                         (end - p >= 5 && hyphen == end - 2 && !strchr(p + 3, '\\')) ||
                         bx_glob_terminal_hyphen_is_member(p + 2, end)) {
                         memmove(p + 1, p, (size_t)(end - p) + 1);
