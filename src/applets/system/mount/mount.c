@@ -2,7 +2,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +18,7 @@
 #include "lib/fs_probe.h"
 #include "lib/loop_device.h"
 #include "lib/mount_table.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 #ifdef __linux__
 #include <linux/magic.h>
@@ -74,7 +73,8 @@ struct bx_mount_options {
     unsigned long flag_mentions;
     bool explicit_source;
     bool explicit_target;
-    int operand_index;
+    const char* operands[2];
+    size_t operand_count;
 };
 
 static void bx_mount_print_help(FILE* stream, const char* progname) {
@@ -387,31 +387,33 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
         BX_MOUNT_OPT_MAKE_RSLAVE,
     };
 
-    static const struct option long_options[] = {
-        {"all", no_argument, NULL, 'a'},
-        {"fstab", required_argument, NULL, 'T'},
-        {"types", required_argument, NULL, 't'},
-        {"type", required_argument, NULL, 't'},
-        {"options", required_argument, NULL, 'o'},
-        {"read-only", no_argument, NULL, 'r'},
-        {"ro", no_argument, NULL, 'r'},
-        {"read-write", no_argument, NULL, 'w'},
-        {"rw", no_argument, NULL, 'w'},
-        {"no-mtab", no_argument, NULL, 'n'},
-        {"bind", no_argument, NULL, BX_MOUNT_OPT_BIND},
-        {"rbind", no_argument, NULL, BX_MOUNT_OPT_RBIND},
-        {"move", no_argument, NULL, BX_MOUNT_OPT_MOVE},
-        {"remount", no_argument, NULL, BX_MOUNT_OPT_REMOUNT},
-        {"make-shared", no_argument, NULL, BX_MOUNT_OPT_MAKE_SHARED},
-        {"make-rslave", no_argument, NULL, BX_MOUNT_OPT_MAKE_RSLAVE},
-        {"source", required_argument, NULL, BX_MOUNT_OPT_SOURCE},
-        {"target", required_argument, NULL, BX_MOUNT_OPT_TARGET},
-        {"label", required_argument, NULL, 'L'},
-        {"uuid", required_argument, NULL, 'U'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, BX_MOUNT_OPT_HELP},
-        {"version", no_argument, NULL, BX_MOUNT_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'T', 'T', "fstab", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "types", BX_OPTION_REQUIRED_VALUE},
+        {'t', 0, "type", BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', "options", BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', "read-only", BX_OPTION_NO_VALUE},
+        {'r', 0, "ro", BX_OPTION_NO_VALUE},
+        {'w', 'w', "read-write", BX_OPTION_NO_VALUE},
+        {'w', 0, "rw", BX_OPTION_NO_VALUE},
+        {'n', 'n', "no-mtab", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_BIND, 0, "bind", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_RBIND, 0, "rbind", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_MOVE, 0, "move", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_REMOUNT, 0, "remount", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_MAKE_SHARED, 0, "make-shared", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_MAKE_RSLAVE, 0, "make-rslave", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_SOURCE, 0, "source", BX_OPTION_REQUIRED_VALUE},
+        {BX_MOUNT_OPT_TARGET, 0, "target", BX_OPTION_REQUIRED_VALUE},
+        {'L', 'L', "label", BX_OPTION_REQUIRED_VALUE},
+        {'U', 'U', "uuid", BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_MOUNT_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {'B', 'B', NULL, BX_OPTION_NO_VALUE},
+        {'M', 'M', NULL, BX_OPTION_NO_VALUE},
+        {'R', 'R', NULL, BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -419,31 +421,51 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
     diag->progname = options->progname;
     diag->verbose = false;
 
-    bx_args_getopt_reset();
-
-    int next_operand = 1;
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-:aT:BMo:t:rwnRL:U:v",
-                                                 long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->operand_count < sizeof(options->operands) / sizeof(options->operands[0]))
+                options->operands[options->operand_count] = result.token;
+            options->operand_count++;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.spec->short_name != 0)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+                else
+                    bx_diag(diag, "option requires an argument -- '%s'", result.token);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
+        const char* value = result.value;
+        int c = result.spec->id;
         switch (c) {
             case 'a':
                 options->all = true;
                 break;
             case 'T':
-                options->fstab = optarg;
+                options->fstab = value;
                 break;
             case 'o':
                 options->option_list_set = true;
-                if (!bx_mount_parse_option_list(optarg, options, diag, false)) {
+                if (!bx_mount_parse_option_list(value, options, diag, false)) {
                     return false;
                 }
                 break;
             case 't':
-                if (!bx_mount_parse_fstype(optarg, options, diag)) {
+                if (!bx_mount_parse_fstype(value, options, diag)) {
                     return false;
                 }
                 break;
@@ -485,19 +507,19 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
                 return false;
 #endif
             case BX_MOUNT_OPT_SOURCE:
-                options->source = optarg;
+                options->source = value;
                 options->explicit_source = true;
                 break;
             case BX_MOUNT_OPT_TARGET:
-                options->target = optarg;
+                options->target = value;
                 options->explicit_target = true;
                 break;
             case 'L':
             {
-                size_t len = strlen(optarg);
+                size_t len = strlen(value);
                 char* tagged = xmalloc(6u + len + 1u);
                 memcpy(tagged, "LABEL=", 6u);
-                memcpy(tagged + 6u, optarg, len + 1u);
+                memcpy(tagged + 6u, value, len + 1u);
                 free(options->owned_source);
                 options->owned_source = tagged;
                 options->source = options->owned_source;
@@ -506,10 +528,10 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
             }
             case 'U':
             {
-                size_t len = strlen(optarg);
+                size_t len = strlen(value);
                 char* tagged = xmalloc(5u + len + 1u);
                 memcpy(tagged, "UUID=", 5u);
-                memcpy(tagged + 5u, optarg, len + 1u);
+                memcpy(tagged + 5u, value, len + 1u);
                 free(options->owned_source);
                 options->owned_source = tagged;
                 options->source = options->owned_source;
@@ -526,19 +548,10 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
             case BX_MOUNT_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
-
-    options->operand_index = optind;
-    return true;
 }
 
 static bool bx_mount_data_present(const struct bx_mount_options* options) {
@@ -680,17 +693,17 @@ static int bx_mount_print_mounts(const struct bx_mount_options* options, const c
     return rc;
 }
 
-static bool bx_mount_assign_regular_operands(int argc, char** argv, struct bx_mount_options* options, struct bx_diag_ctx* diag) {
-    int remaining = argc - options->operand_index;
+static bool bx_mount_assign_regular_operands(struct bx_mount_options* options, struct bx_diag_ctx* diag) {
+    size_t remaining = options->operand_count;
 
     if (options->explicit_source && options->explicit_target) {
         if (remaining != 0) {
-            bx_diag(diag, "unexpected operand '%s'", argv[options->operand_index]);
+            bx_diag(diag, "unexpected operand '%s'", options->operands[0]);
             return false;
         }
     }
     else if (options->explicit_source) {
-        if (remaining <= 0) {
+        if (remaining == 0) {
             bx_diag(diag, "missing target operand");
             return false;
         }
@@ -698,10 +711,10 @@ static bool bx_mount_assign_regular_operands(int argc, char** argv, struct bx_mo
             bx_diag(diag, "too many operands");
             return false;
         }
-        options->target = argv[options->operand_index];
+        options->target = options->operands[0];
     }
     else if (options->explicit_target) {
-        if (remaining <= 0) {
+        if (remaining == 0) {
             bx_diag(diag, "missing source operand");
             return false;
         }
@@ -709,39 +722,39 @@ static bool bx_mount_assign_regular_operands(int argc, char** argv, struct bx_mo
             bx_diag(diag, "too many operands");
             return false;
         }
-        options->source = argv[options->operand_index];
+        options->source = options->operands[0];
     }
     else {
-        if (remaining <= 0) {
+        if (remaining == 0) {
             bx_diag(diag, "missing source and target operands");
             return false;
         }
         if (remaining == 1) {
-            bx_diag(diag, "missing target operand after '%s'", argv[options->operand_index]);
+            bx_diag(diag, "missing target operand after '%s'", options->operands[0]);
             return false;
         }
         if (remaining > 2) {
             bx_diag(diag, "too many operands");
             return false;
         }
-        options->source = argv[options->operand_index];
-        options->target = argv[options->operand_index + 1];
+        options->source = options->operands[0];
+        options->target = options->operands[1];
     }
 
     return bx_mount_validate_operand("source", options->source, diag) && bx_mount_validate_operand("target", options->target, diag);
 }
 
-static bool bx_mount_assign_remount_operands(int argc, char** argv, struct bx_mount_options* options, struct bx_diag_ctx* diag) {
-    int remaining = argc - options->operand_index;
+static bool bx_mount_assign_remount_operands(struct bx_mount_options* options, struct bx_diag_ctx* diag) {
+    size_t remaining = options->operand_count;
 
     if (options->explicit_source && options->explicit_target) {
         if (remaining != 0) {
-            bx_diag(diag, "unexpected operand '%s'", argv[options->operand_index]);
+            bx_diag(diag, "unexpected operand '%s'", options->operands[0]);
             return false;
         }
     }
     else if (options->explicit_source) {
-        if (remaining <= 0) {
+        if (remaining == 0) {
             bx_diag(diag, "missing target operand");
             return false;
         }
@@ -749,16 +762,16 @@ static bool bx_mount_assign_remount_operands(int argc, char** argv, struct bx_mo
             bx_diag(diag, "too many operands");
             return false;
         }
-        options->target = argv[options->operand_index];
+        options->target = options->operands[0];
     }
     else if (options->explicit_target) {
         if (remaining > 0) {
-            bx_diag(diag, "unexpected operand '%s'", argv[options->operand_index]);
+            bx_diag(diag, "unexpected operand '%s'", options->operands[0]);
             return false;
         }
     }
     else {
-        if (remaining <= 0) {
+        if (remaining == 0) {
             bx_diag(diag, "missing target operand");
             return false;
         }
@@ -768,11 +781,11 @@ static bool bx_mount_assign_remount_operands(int argc, char** argv, struct bx_mo
         }
 
         if (remaining == 1) {
-            options->target = argv[options->operand_index];
+            options->target = options->operands[0];
         }
         else {
-            options->source = argv[options->operand_index];
-            options->target = argv[options->operand_index + 1];
+            options->source = options->operands[0];
+            options->target = options->operands[1];
         }
     }
 
@@ -782,12 +795,12 @@ static bool bx_mount_assign_remount_operands(int argc, char** argv, struct bx_mo
     return bx_mount_validate_operand("target", options->target, diag);
 }
 
-static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_options* options, struct bx_diag_ctx* diag, bool* print_only, const char** single_target) {
+static bool bx_mount_validate_request(struct bx_mount_options* options, struct bx_diag_ctx* diag, bool* print_only, const char** single_target) {
     bool has_bind = bx_mount_has_bind(options);
     bool has_move = bx_mount_has_move(options);
     bool has_remount = bx_mount_has_remount(options);
     bool has_rec = bx_mount_has_rec(options);
-    int remaining = argc - options->operand_index;
+    size_t remaining = options->operand_count;
 
     *print_only = false;
     *single_target = NULL;
@@ -799,12 +812,12 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
             bx_diag(diag, "propagation operations cannot be combined with a source, type or mount options");
             return false;
         }
-        if (remaining != (options->explicit_target ? 0 : 1)) {
+        if (remaining != (options->explicit_target ? 0u : 1u)) {
             bx_diag(diag, "propagation operations require exactly one target");
             return false;
         }
         if (!options->explicit_target)
-            options->target = argv[options->operand_index];
+            options->target = options->operands[0];
         return bx_mount_validate_operand("target", options->target, diag);
     }
 
@@ -826,7 +839,7 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
 
     if (!options->explicit_source && !options->explicit_target && remaining == 1 && options->fstype == NULL && !has_bind && !has_move && !has_remount && !bx_mount_data_present(options) && options->flag_mentions == 0ul) {
         *print_only = true;
-        *single_target = argv[options->operand_index];
+        *single_target = options->operands[0];
         return true;
     }
 
@@ -853,7 +866,7 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
             bx_diag(diag, "move mounts do not accept mount flag changes");
             return false;
         }
-        return bx_mount_assign_regular_operands(argc, argv, options, diag);
+        return bx_mount_assign_regular_operands(options, diag);
     }
 
     if (has_bind && !has_remount) {
@@ -869,7 +882,7 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
             bx_diag(diag, "bind mounts cannot change mount flags in one step; use a remount");
             return false;
         }
-        return bx_mount_assign_regular_operands(argc, argv, options, diag);
+        return bx_mount_assign_regular_operands(options, diag);
     }
 
     if (has_remount) {
@@ -885,10 +898,10 @@ static bool bx_mount_validate_request(int argc, char** argv, struct bx_mount_opt
             bx_diag(diag, "bind remounts do not accept filesystem-specific options in bx");
             return false;
         }
-        return bx_mount_assign_remount_operands(argc, argv, options, diag);
+        return bx_mount_assign_remount_operands(options, diag);
     }
 
-    return bx_mount_assign_regular_operands(argc, argv, options, diag);
+    return bx_mount_assign_regular_operands(options, diag);
 }
 
 static void bx_mount_diag_failure(const struct bx_mount_options* options, const char* fstype,
@@ -1165,7 +1178,7 @@ static int bx_mount_all(const struct bx_mount_options* cli, struct bx_diag_ctx* 
             row->fstype = NULL;
         bool print_only;
         const char* single_target;
-        if (!bx_mount_validate_request(0, NULL, row, diag, &print_only, &single_target)) {
+        if (!bx_mount_validate_request(row, diag, &print_only, &single_target)) {
             bx_diag(diag, "%s:%zu: invalid mount for '%s'", path, entry->line, entry->target);
             goto done;
         }
@@ -1230,7 +1243,7 @@ int bx_mount_main(int argc, char** argv) {
         if (!options.all || (options.fstab && !*options.fstab) ||
             options.explicit_source || options.explicit_target ||
             options.fstype || options.option_list_set || options.flag_mentions ||
-            options.op_flags || options.propagation || options.operand_index != argc) {
+            options.op_flags || options.propagation || options.operand_count != 0) {
             bx_diag(&diag, "use -a with only -T, -n or -v and no operands");
         } else {
 #ifdef __linux__
@@ -1244,7 +1257,7 @@ int bx_mount_main(int argc, char** argv) {
         return status;
     }
 
-    if (!bx_mount_validate_request(argc, argv, &options, &diag, &print_only, &single_target)) {
+    if (!bx_mount_validate_request(&options, &diag, &print_only, &single_target)) {
         free(options.owned_source);
         free(options.data);
         bx_cli_print_try_help(options.progname);
