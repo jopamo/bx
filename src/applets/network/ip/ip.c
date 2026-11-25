@@ -434,7 +434,7 @@ static int ip_route_record(const struct nlmsghdr* header, void* context) {
     if (index && !if_indextoname(index, name))
         return errno == ENODEV || errno == ENXIO ? 0 : -1;
 
-    char prefix[sizeof(dst) + 3], priority[sizeof(" metric 4294967295")];
+    char prefix[sizeof(dst) + sizeof("/255") - 1], priority[sizeof(" metric 4294967295")];
     const char* scope = ip_scope(route.rtm_scope);
     snprintf(prefix, sizeof(prefix), "%s/%u", dst, (unsigned int)route.rtm_dst_len);
     if (fields[RTA_PRIORITY].seen)
