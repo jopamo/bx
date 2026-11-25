@@ -467,11 +467,14 @@ static int ash_pattern_compile_sequence(
                         &term.value.span,
                         compiler->input + compiler->position,
                         end - compiler->position
-                    ) != 0 ||
-                    ash_pattern_sequence_take_term(
-                        sequence,
-                        &term
                     ) != 0) {
+                    return -1;
+                }
+                /* Use the negation spelling that libc accepts regardless
+                 * of the environment, only inside a complete bracket. */
+                if (term.value.span.text[1] == '^')
+                    term.value.span.text[1] = '!';
+                if (ash_pattern_sequence_take_term(sequence, &term) != 0) {
                     ash_pattern_term_destroy(&term);
                     return -1;
                 }
@@ -764,7 +767,7 @@ static enum ash_pattern_match_result ash_pattern_bracket(const struct ash_patter
 
     const char* cursor = span->text + 1u;
     const char* end = span->text + span->length - 1u;
-    bool negate = *cursor == '!' || *cursor == '^';
+    bool negate = *cursor == '!';
     cursor += negate ? 1u : 0u;
     char* member = NULL;
     bool matched = false;
