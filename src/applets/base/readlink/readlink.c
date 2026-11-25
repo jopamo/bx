@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,10 +11,8 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
-
-char* realpath(const char* restrict path, char* restrict resolved_path);
+#include "lib/option_scan.h"
 
 enum bx_readlink_mode {
     BX_READLINK_MODE_READ_SYMLINK = 0,
@@ -30,14 +27,10 @@ enum {
 };
 
 struct bx_readlink_options {
-    const char* progname;
     enum bx_readlink_mode mode;
     bool no_newline;
     bool zero_terminated;
     bool verbose_errors;
-    bool posixly_correct;
-    bool show_help;
-    bool show_version;
 };
 
 static void bx_readlink_print_help(FILE* stream, const char* progname) {
@@ -60,93 +53,15 @@ static void bx_readlink_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "         do not output the trailing delimiter\n");
     fprintf(stream, "  -q, --quiet\n");
     fprintf(stream, "  -s, --silent\n");
-    fprintf(stream, "         suppress most error messages\n");
-    fprintf(stream, "         (on by default if POSIXLY_CORRECT is not set)\n");
+    fprintf(stream, "         suppress most error messages (the default)\n");
     fprintf(stream, "  -v, --verbose\n");
     fprintf(stream, "         report error messages\n");
-    fprintf(stream, "         (on by default if POSIXLY_CORRECT is set)\n");
     fprintf(stream, "  -z, --zero\n");
     fprintf(stream, "         end each output line with NUL, not newline\n");
     fprintf(stream, "      --help\n");
     fprintf(stream, "         display this help and exit\n");
     fprintf(stream, "      --version\n");
     fprintf(stream, "         output version information and exit\n");
-}
-
-static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"canonicalize", no_argument, NULL, 'f'},
-        {"canonicalize-existing", no_argument, NULL, 'e'},
-        {"canonicalize-missing", no_argument, NULL, 'm'},
-        {"no-newline", no_argument, NULL, 'n'},
-        {"quiet", no_argument, NULL, 'q'},
-        {"silent", no_argument, NULL, 's'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, BX_READLINK_OPT_HELP},
-        {"version", no_argument, NULL, BX_READLINK_OPT_VERSION},
-        {NULL, 0, NULL, 0},
-    };
-
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "readlink");
-    options->mode = BX_READLINK_MODE_READ_SYMLINK;
-    options->posixly_correct = (getenv("POSIXLY_CORRECT") != NULL);
-    options->verbose_errors = options->posixly_correct;
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-efmnqsvz", long_options, &next_operand);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 'f':
-                options->mode = BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST;
-                break;
-            case 'e':
-                options->mode = BX_READLINK_MODE_CANONICALIZE_EXISTING;
-                break;
-            case 'm':
-                options->mode = BX_READLINK_MODE_CANONICALIZE_MISSING;
-                break;
-            case 'n':
-                options->no_newline = true;
-                break;
-            case 'q':
-            case 's':
-                if (!options->posixly_correct) {
-                    options->verbose_errors = false;
-                }
-                break;
-            case 'v':
-                if (!options->posixly_correct) {
-                    options->verbose_errors = true;
-                }
-                break;
-            case 'z':
-                options->zero_terminated = true;
-                break;
-            case BX_READLINK_OPT_HELP:
-                options->show_help = true;
-                return true;
-            case BX_READLINK_OPT_VERSION:
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
-    }
-
-    *first_operand = optind;
-    return true;
 }
 
 static void bx_readlink_components_append_normalized_and_clear(struct bx_path_components* components, struct bx_path_components* remainder) {
@@ -412,40 +327,73 @@ static bool bx_readlink_process_operand(const char* operand,
 }
 
 int bx_readlink_main(int argc, char** argv) {
-    struct bx_readlink_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "readlink",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+    static const struct bx_option_spec specs[] = {
+        {'f', 'f', "canonicalize", BX_OPTION_NO_VALUE},
+        {'e', 'e', "canonicalize-existing", BX_OPTION_NO_VALUE},
+        {'m', 'm', "canonicalize-missing", BX_OPTION_NO_VALUE},
+        {'n', 'n', "no-newline", BX_OPTION_NO_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'s', 's', "silent", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero", BX_OPTION_NO_VALUE},
+        {BX_READLINK_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_READLINK_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
-    int first_operand = 0;
-
-    if (!bx_readlink_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        bx_cli_print_try_help(options.progname);
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_readlink_print_help(stdout, options.progname);
-        return 0;
-    }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
-    }
-
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        bx_cli_print_try_help(options.progname);
+    struct bx_readlink_options options = {0};
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "readlink"),
+    };
+    size_t first = argc > 0 ? 1u : 0u;
+    const char** operands = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*operands)) : NULL;
+    if (argc > 1 && operands == NULL) {
+        bx_diag(&diag, "memory exhausted");
         return diag.exit_status;
+    }
+    size_t operand_count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, first, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            operands[operand_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(diag.progname);
+            goto done;
+        }
+        switch (option.spec->id) {
+            case 'f': options.mode = BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST; break;
+            case 'e': options.mode = BX_READLINK_MODE_CANONICALIZE_EXISTING; break;
+            case 'm': options.mode = BX_READLINK_MODE_CANONICALIZE_MISSING; break;
+            case 'n': options.no_newline = true; break;
+            case 'q':
+            case 's': options.verbose_errors = false; break;
+            case 'v': options.verbose_errors = true; break;
+            case 'z': options.zero_terminated = true; break;
+            case BX_READLINK_OPT_HELP:
+                bx_readlink_print_help(stdout, diag.progname);
+                goto done;
+            case BX_READLINK_OPT_VERSION:
+                bx_cli_print_version(diag.progname);
+                goto done;
+        }
+    }
+
+    if (operand_count == 0) {
+        bx_diag(&diag, "missing operand");
+        bx_cli_print_try_help(diag.progname);
+        goto done;
     }
 
     bool no_newline = options.no_newline;
     if (no_newline && operand_count > 1) {
-        fprintf(stderr, "%s: ignoring --no-newline with multiple arguments\n", options.progname);
+        fprintf(stderr, "%s: ignoring --no-newline with multiple arguments\n", diag.progname);
         no_newline = false;
     }
 
@@ -453,16 +401,14 @@ int bx_readlink_main(int argc, char** argv) {
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    char** operands = argv + first_operand;
-    for (int i = 0; i < operand_count; i++) {
-        if (!bx_readlink_process_operand(operands[i], &options, no_newline, &diag, &writer)) {
-            continue;
-        }
-    }
+    for (size_t i = 0; i < operand_count; i++)
+        bx_readlink_process_operand(operands[i], &options, no_newline, &diag, &writer);
 
     if (!bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 
+done:
+    free(operands);
     return diag.exit_status;
 }
