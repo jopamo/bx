@@ -13,10 +13,14 @@ static void usage(FILE* out, const char* name) {
 }
 
 int bx_swapoff_main(int argc, char** argv) {
+    if (argc != 2) {
+        usage(stderr, "swapoff");
+        return 1;
+    }
     int help = bx_cli_maybe_handle_help_or_version(argc, argv, "swapoff", NULL, NULL, usage);
     if (help >= 0)
         return help;
-    if (argc != 2 || strcmp(argv[1], "-a")) {
+    if (strcmp(argv[1], "-a")) {
         usage(stderr, "swapoff");
         return 1;
     }
