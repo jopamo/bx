@@ -51,6 +51,7 @@
 #include "extern.h"
 #include "metadata.h"
 #include "daemon.h"
+#include "lib/glob_syntax.h"
 #include "lib/option_scan.h"
 
 #ifdef __APPLE__
@@ -370,15 +371,37 @@ daemon_add_glob(struct sess *sess, const char *module, size_t *oargc,
     char ***oargv, size_t *oargvsz, char *buf, struct sbuf *argsb)
 {
 	glob_t glb = { 0 };
+	const char *pattern = buf;
+	char *copy = NULL;
 	int error;
 	bool ret;
 
 	/* Strip any <module>/ off the beginning. */
 	daemon_normalize_path(module, 0, buf);
 
-	if ((error = glob(buf, 0, NULL, &glb)) != 0 &&
-	    error != GLOB_NOMATCH) {
+	/* glob() matches path components separately. Keep buf for literal fallback. */
+	if (strstr(buf, "[^") != NULL) {
+		copy = strdup(buf);
+		if (copy == NULL) {
+			daemon_client_error(sess, "daemon out of memory");
+			return false;
+		}
+		for (char *part = copy, *slash;; part = slash + 1) {
+			slash = strchr(part, '/');
+			if (slash != NULL)
+				*slash = '\0';
+			bx_glob_normalize_caret(part);
+			if (slash == NULL)
+				break;
+			*slash = '/';
+		}
+		pattern = copy;
+	}
+	error = glob(pattern, 0, NULL, &glb);
+	free(copy);
+	if (error != 0 && error != GLOB_NOMATCH) {
 		daemon_client_error(sess, "glob '%s' failed", buf);
+		globfree(&glb);
 		return false;
 	}
 
