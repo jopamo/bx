@@ -7,15 +7,14 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 #include "lib/random_bytes.h"
 #include "crypto/sha256.h"
 
@@ -1175,25 +1174,25 @@ static bool sort_write_line(struct bx_line_writer* writer, const char* line, cha
 }
 
 int bx_sort_main(int argc, char** argv) {
-    static const struct option long_options[] = {
-        {"ignore-leading-blanks", no_argument, NULL, 'b'},
-        {"human-numeric-sort", no_argument, NULL, 'h'},
-        {"numeric-sort", no_argument, NULL, 'n'},
-        {"reverse", no_argument, NULL, 'r'},
-        {"unique", no_argument, NULL, 'u'},
-        {"ignore-case", no_argument, NULL, 'f'},
-        {"output", required_argument, NULL, 'o'},
-        {"check", no_argument, NULL, 'c'},
-        {"stable", no_argument, NULL, 's'},
-        {"field-separator", required_argument, NULL, 't'},
-        {"key", required_argument, NULL, 'k'},
-        {"zero-terminated", no_argument, NULL, 'z'},
-        {"version-sort", no_argument, NULL, 'V'},
-        {"random-sort", no_argument, NULL, 'R'},
-        {"random-source", required_argument, NULL, SORT_OPT_RANDOM_SOURCE},
-        {"help", no_argument, NULL, SORT_OPT_HELP},
-        {"version", no_argument, NULL, SORT_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', "ignore-leading-blanks", BX_OPTION_NO_VALUE},
+        {'h', 'h', "human-numeric-sort", BX_OPTION_NO_VALUE},
+        {'n', 'n', "numeric-sort", BX_OPTION_NO_VALUE},
+        {'r', 'r', "reverse", BX_OPTION_NO_VALUE},
+        {'u', 'u', "unique", BX_OPTION_NO_VALUE},
+        {'f', 'f', "ignore-case", BX_OPTION_NO_VALUE},
+        {'o', 'o', "output", BX_OPTION_REQUIRED_VALUE},
+        {'c', 'c', "check", BX_OPTION_NO_VALUE},
+        {'C', 'C', NULL, BX_OPTION_NO_VALUE},
+        {'s', 's', "stable", BX_OPTION_NO_VALUE},
+        {'t', 't', "field-separator", BX_OPTION_REQUIRED_VALUE},
+        {'k', 'k', "key", BX_OPTION_REQUIRED_VALUE},
+        {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version-sort", BX_OPTION_NO_VALUE},
+        {'R', 'R', "random-sort", BX_OPTION_NO_VALUE},
+        {SORT_OPT_RANDOM_SOURCE, 0, "random-source", BX_OPTION_REQUIRED_VALUE},
+        {SORT_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {SORT_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sort");
@@ -1203,42 +1202,51 @@ int bx_sort_main(int argc, char** argv) {
     };
     (void)setlocale(LC_ALL, "");
 
-    sort_opts_t opts = {
-        .mode = SORT_MODE_LEXICOGRAPHIC,
-        .reverse = false,
-        .unique = false,
-        .ignore_case = false,
-        .ignore_leading_blanks = false,
-        .check = false,
-        .check_quiet = false,
-        .stable = false,
-        .zero_terminated = false,
-        .has_field_separator = false,
-        .field_separator = 0,
-        .key_specs = {0},
-        .output_path = NULL,
-    };
+    sort_opts_t opts = {.mode = SORT_MODE_LEXICOGRAPHIC};
     bool has_global_mode = false;
-
-    int c;
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, ":bhnrufo:cCszt:k:VR", long_options, NULL)) != -1) {
-        switch (c) {
+    bool had_error = true;
+    const char** inputs = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*inputs)) : NULL;
+    if (argc > 1 && !inputs) {
+        sort_report_memory_exhausted(progname);
+        return 1;
+    }
+    size_t input_count = 0;
+    bool empty_input = false;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            empty_input |= option.token[0] == '\0';
+            inputs[input_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(&diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%s'", option.token);
+            else if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
             case 'b':
                 opts.ignore_leading_blanks = true;
                 break;
             case 'h':
                 if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_HUMAN)) {
                     fprintf(stderr, "%s: incompatible sorting options\n", progname);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                    goto done;
                 }
                 break;
             case 'n':
                 if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_NUMERIC)) {
                     fprintf(stderr, "%s: incompatible sorting options\n", progname);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                    goto done;
                 }
                 break;
             case 'r':
@@ -1251,7 +1259,7 @@ int bx_sort_main(int argc, char** argv) {
                 opts.ignore_case = true;
                 break;
             case 'o':
-                opts.output_path = optarg;
+                opts.output_path = option.value;
                 break;
             case 'c':
                 opts.check = true;
@@ -1265,30 +1273,26 @@ int bx_sort_main(int argc, char** argv) {
                 opts.stable = true;
                 break;
             case 't':
-                if (!optarg || optarg[0] == '\0') {
+                if (option.value[0] == '\0') {
                     fprintf(stderr, "%s: empty tab\n", progname);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                    goto done;
                 }
-                if (optarg[1] != '\0') {
-                    fprintf(stderr, "%s: multi-character tab '%s'\n", progname, optarg);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                if (option.value[1] != '\0') {
+                    fprintf(stderr, "%s: multi-character tab '%s'\n", progname, option.value);
+                    goto done;
                 }
                 opts.has_field_separator = true;
-                opts.field_separator = (unsigned char)optarg[0];
+                opts.field_separator = (unsigned char)option.value[0];
                 break;
             case 'k': {
                 sort_key_spec_t spec = {0};
-                if (!sort_parse_key_spec(optarg, &spec)) {
-                    fprintf(stderr, "%s: invalid key specification '%s'\n", progname, optarg);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                if (!sort_parse_key_spec(option.value, &spec)) {
+                    fprintf(stderr, "%s: invalid key specification '%s'\n", progname, option.value);
+                    goto done;
                 }
                 if (!sort_key_spec_vec_push(&opts.key_specs, &spec)) {
                     sort_report_memory_exhausted(progname);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                    goto done;
                 }
                 break;
             }
@@ -1298,77 +1302,68 @@ int bx_sort_main(int argc, char** argv) {
             case 'V':
                 if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_VERSION)) {
                     fprintf(stderr, "%s: incompatible sorting options\n", progname);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                    goto done;
                 }
                 break;
             case 'R':
                 if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_RANDOM)) {
                     fprintf(stderr, "%s: incompatible sorting options\n", progname);
-                    sort_key_spec_vec_free(&opts.key_specs);
-                    return 1;
+                    goto done;
                 }
                 break;
             case SORT_OPT_RANDOM_SOURCE:
-                opts.random_source = optarg;
+                opts.random_source = option.value;
                 break;
             case SORT_OPT_HELP:
                 sort_print_help(progname);
-                sort_key_spec_vec_free(&opts.key_specs);
-                return 0;
+                had_error = false;
+                goto done;
             case SORT_OPT_VERSION:
                 printf("sort (bx) %s\n", BX_VERSION);
-                sort_key_spec_vec_free(&opts.key_specs);
-                return 0;
-            case ':':
-                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-                sort_key_spec_vec_free(&opts.key_specs);
-                return 1;
-            default:
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                sort_key_spec_vec_free(&opts.key_specs);
-                return 1;
+                had_error = false;
+                goto done;
         }
     }
 
     if (opts.check && opts.output_path) {
         fprintf(stderr, "%s: cannot use -o with -c or -C\n", progname);
-        sort_key_spec_vec_free(&opts.key_specs);
-        return 1;
+        goto done;
     }
-
+    if (empty_input || (opts.output_path && opts.output_path[0] == '\0')) {
+        bx_diag(&diag, "empty %s path", empty_input ? "input" : "output");
+        goto done;
+    }
     if (!sort_seed_random_order(&opts, progname)) {
-        sort_key_spec_vec_free(&opts.key_specs);
-        return 1;
+        goto done;
     }
 
-    bool had_error = false;
+    had_error = false;
 
     if (opts.check) {
         char* previous_line = NULL;
         char** previous_keys = NULL;
         bool have_previous_line = false;
 
-        if (optind == argc) {
+        if (input_count == 0) {
             sort_stream_status_t status = sort_check_stream(stdin, "standard input", &opts, &previous_line, &previous_keys, &have_previous_line, progname);
             if (status != SORT_STREAM_OK) {
                 had_error = true;
             }
         }
         else {
-            for (int i = optind; i < argc; i++) {
+            for (size_t i = 0; i < input_count; i++) {
                 FILE* stream = NULL;
                 const char* source_label = NULL;
 
-                if (strcmp(argv[i], "-") == 0) {
+                if (strcmp(inputs[i], "-") == 0) {
                     stream = stdin;
                     source_label = "standard input";
                 }
                 else {
-                    source_label = argv[i];
-                    stream = fopen(argv[i], "r");
+                    source_label = inputs[i];
+                    stream = fopen(inputs[i], "r");
                     if (!stream) {
-                        sort_report_errno(progname, argv[i]);
+                        sort_report_errno(progname, source_label);
                         had_error = true;
                         continue;
                     }
@@ -1380,7 +1375,7 @@ int bx_sort_main(int argc, char** argv) {
                 }
 
                 if (stream != stdin && fclose(stream) != 0) {
-                    sort_report_errno(progname, argv[i]);
+                    sort_report_errno(progname, source_label);
                     had_error = true;
                 }
 
@@ -1392,15 +1387,14 @@ int bx_sort_main(int argc, char** argv) {
 
         free(previous_line);
         sort_free_key_texts(previous_keys, sort_cached_key_count(&opts));
-        sort_key_spec_vec_free(&opts.key_specs);
-        return had_error ? 1 : 0;
+        goto done;
     }
 
     sort_line_vec_t lines = {0};
     size_t next_index = 0;
     bool fatal_read_error = false;
 
-    if (optind == argc) {
+    if (input_count == 0) {
         sort_stream_status_t status = sort_read_stream(stdin, "standard input", &opts, &lines, &next_index, progname);
         if (status != SORT_STREAM_OK) {
             had_error = true;
@@ -1408,19 +1402,19 @@ int bx_sort_main(int argc, char** argv) {
         }
     }
     else {
-        for (int i = optind; i < argc; i++) {
+        for (size_t i = 0; i < input_count; i++) {
             FILE* stream = NULL;
             const char* source_label = NULL;
 
-            if (strcmp(argv[i], "-") == 0) {
+            if (strcmp(inputs[i], "-") == 0) {
                 stream = stdin;
                 source_label = "standard input";
             }
             else {
-                stream = fopen(argv[i], "r");
-                source_label = argv[i];
+                source_label = inputs[i];
+                stream = fopen(inputs[i], "r");
                 if (!stream) {
-                    sort_report_errno(progname, argv[i]);
+                    sort_report_errno(progname, source_label);
                     had_error = true;
                     continue;
                 }
@@ -1435,7 +1429,7 @@ int bx_sort_main(int argc, char** argv) {
             }
 
             if (stream != stdin && fclose(stream) != 0) {
-                sort_report_errno(progname, argv[i]);
+                sort_report_errno(progname, source_label);
                 had_error = true;
             }
 
@@ -1515,6 +1509,8 @@ int bx_sort_main(int argc, char** argv) {
     }
 
     sort_line_vec_free(&lines, sort_cached_key_count(&opts));
+done:
+    free(inputs);
     sort_key_spec_vec_free(&opts.key_specs);
     return had_error ? 1 : 0;
 }
