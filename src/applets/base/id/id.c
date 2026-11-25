@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +13,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 struct bx_id_options {
     const char* progname;
@@ -48,26 +47,33 @@ static void bx_id_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Without any OPTION, print uid/gid/groups summary information.\n");
 }
 
-static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"context", no_argument, NULL, 'Z'}, {"group", no_argument, NULL, 'g'}, {"groups", no_argument, NULL, 'G'}, {"name", no_argument, NULL, 'n'},  {"real", no_argument, NULL, 'r'},
-        {"user", no_argument, NULL, 'u'},    {"zero", no_argument, NULL, 'z'},  {"help", no_argument, NULL, 1},     {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
+static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* options, const char** users, size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', NULL, BX_OPTION_NO_VALUE},   {'Z', 'Z', "context", BX_OPTION_NO_VALUE}, {'g', 'g', "group", BX_OPTION_NO_VALUE}, {'G', 'G', "groups", BX_OPTION_NO_VALUE},
+        {'n', 'n', "name", BX_OPTION_NO_VALUE}, {'r', 'r', "real", BX_OPTION_NO_VALUE},    {'u', 'u', "user", BX_OPTION_NO_VALUE},  {'z', 'z', "zero", BX_OPTION_NO_VALUE},
+        {1, 0, "help", BX_OPTION_NO_VALUE},     {2, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = "id";
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "aZgGnruz", long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            users[(*count)++] = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'a':
                 break;  // ignored
             case 'Z':
@@ -97,17 +103,6 @@ static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* opt
             case 2:
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
@@ -126,13 +121,12 @@ static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* opt
         return false;
     }
 
-    int count = (options->only_user ? 1 : 0) + (options->only_group ? 1 : 0) + (options->all_groups ? 1 : 0) + (options->only_context ? 1 : 0);
-    if (count > 1) {
+    int mode_count = (options->only_user ? 1 : 0) + (options->only_group ? 1 : 0) + (options->all_groups ? 1 : 0) + (options->only_context ? 1 : 0);
+    if (mode_count > 1) {
         bx_diag(diag, "cannot print \"only\" of more than one choice");
         return false;
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -380,33 +374,44 @@ static void print_id_info(const char* username, struct bx_id_options* options, s
 int bx_id_main(int argc, char** argv) {
     struct bx_id_options options;
     struct bx_diag_ctx diag = {.progname = "id", .exit_status = 0};
-    int first_operand = 0;
+    const char** users = NULL;
+    size_t num_users = 0;
+    if (argc > 1) {
+        users = calloc((size_t)argc - 1u, sizeof(*users));
+        if (!users) {
+            bx_perror_path(&diag, "allocate user operands");
+            return 1;
+        }
+    }
 
-    if (!bx_id_parse_options(argc, argv, &options, &first_operand, &diag))
-        return 1;
+    if (!bx_id_parse_options(argc, argv, &options, users, &num_users, &diag)) {
+        if (diag.exit_status == 0)
+            diag.exit_status = 1;
+        goto done;
+    }
     if (options.show_help) {
         bx_id_print_help(stdout, options.progname);
-        return 0;
+        goto done;
     }
     if (options.show_version) {
         bx_cli_print_version(options.progname);
-        return 0;
+        goto done;
     }
 
     if (options.only_context) {
         bx_diag(&diag, "--context (-Z) is not supported in this build");
-        return diag.exit_status;
+        goto done;
     }
 
-    int num_users = argc - first_operand;
     if (num_users == 0) {
         print_id_info(NULL, &options, &diag);
     }
     else {
-        for (int i = 0; i < num_users; i++) {
-            print_id_info(argv[first_operand + i], &options, &diag);
-        }
+        for (size_t i = 0; i < num_users; i++)
+            print_id_info(users[i], &options, &diag);
     }
 
+done:
+    free(users);
     return diag.exit_status;
 }
