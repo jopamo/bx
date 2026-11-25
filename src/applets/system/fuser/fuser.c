@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -17,9 +16,9 @@
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
-#include "lib/args_common.h"
 
 struct bx_fuser_options {
     int signal_number;
@@ -37,6 +36,7 @@ struct bx_fuser_options {
     bool ipv4;
     bool ipv6;
     const char* namespace_name;
+    int informational_option;
     int first_name_index;
 };
 
@@ -131,87 +131,93 @@ static void bx_fuser_add_hit(struct bx_fuser_hit_list* list,
     list->len++;
 }
 
-static bool bx_fuser_is_signal_short_option(const char* arg) {
-    static const char* known = "acfIiKlMnsuvw46hV";
-    if (arg == NULL || arg[0] != '-' || arg[1] == '\0' || arg[1] == '-') {
+static bool bx_fuser_is_signal_short_option(const char* arg, const struct bx_option_spec* specs, size_t count) {
+    if (arg[0] != '-' || arg[1] == '\0' || arg[1] == '-')
         return false;
-    }
-    return strchr(known, arg[1]) == NULL || (arg[1] >= '0' && arg[1] <= '9');
+    /* In the first slot digits have historically denoted signal numbers. */
+    if (arg[1] >= '0' && arg[1] <= '9')
+        return true;
+    for (size_t i = 0; i < count; i++)
+        if (specs[i].short_name == (unsigned char)arg[1])
+            return false;
+    return arg[1] != 'K'; /* Preserve the invalid -K spelling. */
 }
 
 static bool bx_fuser_parse_options(struct bx_fuser_options* options,
-                                   int argc,
-                                   char** argv,
-                                   struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"all", no_argument, NULL, 'a'},
-        {"mount", no_argument, NULL, 'm'},
-        {"interactive", no_argument, NULL, 'i'},
-        {"inode", no_argument, NULL, 'I'},
-        {"kill", no_argument, NULL, 'k'},
-        {"list-signals", no_argument, NULL, 'l'},
-        {"ismountpoint", no_argument, NULL, 'M'},
-        {"namespace", required_argument, NULL, 'n'},
-        {"silent", no_argument, NULL, 's'},
-        {"user", no_argument, NULL, 'u'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"writeonly", no_argument, NULL, 'w'},
-        {"ipv4", no_argument, NULL, '4'},
-        {"ipv6", no_argument, NULL, '6'},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+                                   int argc, char** argv, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'c', 'c', NULL, BX_OPTION_NO_VALUE},
+        {'m', 'm', "mount", BX_OPTION_NO_VALUE},
+        {'f', 'f', NULL, BX_OPTION_NO_VALUE},
+        {'i', 'i', "interactive", BX_OPTION_NO_VALUE},
+        {'I', 'I', "inode", BX_OPTION_NO_VALUE},
+        {'k', 'k', "kill", BX_OPTION_NO_VALUE},
+        {'l', 'l', "list-signals", BX_OPTION_NO_VALUE},
+        {'M', 'M', "ismountpoint", BX_OPTION_NO_VALUE},
+        {'n', 'n', "namespace", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "silent", BX_OPTION_NO_VALUE},
+        {'u', 'u', "user", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'w', 'w', "writeonly", BX_OPTION_NO_VALUE},
+        {'4', '4', "ipv4", BX_OPTION_NO_VALUE},
+        {'6', '6', "ipv6", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
-    int c;
-
+    size_t spec_count = sizeof(specs) / sizeof(specs[0]);
     memset(options, 0, sizeof(*options));
     options->signal_number = SIGKILL;
     options->namespace_name = "file";
 
-    if (argc > 1 && bx_fuser_is_signal_short_option(argv[1])) {
+    if (argc > 1 && bx_fuser_is_signal_short_option(argv[1], specs, spec_count)) {
+        /* A legacy signal alone never enables signaling. Its tail is literal. */
         options->signal_number = get_signal(argv[1] + 1, diag->progname);
-        argv[1] = (char*)"--";
-    }
-
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "+acfiIklMn:suvw46hV", long_options, NULL)) != -1) {
-        switch (c) {
-            case 'a': options->all = true; break;
-            case 'c':
-            case 'm': options->mount = true; break;
-            case 'f': break;
-            case 'i': options->interactive = true; break;
-            case 'I': options->inode = true; break;
-            case 'k': options->kill = true; break;
-            case 'l': options->list_signals = true; break;
-            case 'M': options->ismountpoint = true; break;
-            case 'n': options->namespace_name = optarg; break;
-            case 's': options->silent = true; break;
-            case 'u': options->user = true; break;
-            case 'v': options->verbose = true; break;
-            case 'w': options->writeonly = true; break;
-            case '4': options->ipv4 = true; break;
-            case '6': options->ipv6 = true; break;
-            case 'h':
-            case 'V':
-                return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+        options->first_name_index = 2;
+    } else {
+        struct bx_option_cursor cursor;
+        bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                              specs, spec_count);
+        for (;;) {
+            struct bx_option_result result = bx_option_next(&cursor);
+            if (result.event == BX_OPTION_END) {
+                options->first_name_index = (int)result.index;
+                break;
+            }
+            if (result.event != BX_OPTION_MATCH) {
+                if (result.event == BX_OPTION_MISSING_VALUE)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+                else if (result.short_name)
+                    bx_diag(diag, "invalid option -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "unrecognized option '%s'", result.token);
                 return false;
-            default:
-                return false;
+            }
+            switch (result.spec->id) {
+                case 'a': options->all = true; break;
+                case 'c':
+                case 'm': options->mount = true; break;
+                case 'f': break;
+                case 'i': options->interactive = true; break;
+                case 'I': options->inode = true; break;
+                case 'k': options->kill = true; break;
+                case 'l': options->list_signals = true; break;
+                case 'M': options->ismountpoint = true; break;
+                case 'n': options->namespace_name = result.value; break;
+                case 's': options->silent = true; break;
+                case 'u': options->user = true; break;
+                case 'v': options->verbose = true; break;
+                case 'w': options->writeonly = true; break;
+                case '4': options->ipv4 = true; break;
+                case '6': options->ipv6 = true; break;
+                case 'h':
+                case 'V':
+                    options->informational_option = result.spec->id;
+                    return true;
+            }
         }
     }
 
-    options->first_name_index = optind;
     if (!options->list_signals && options->first_name_index >= argc) {
         bx_diag(diag, "missing file operand");
         return false;
@@ -433,19 +439,21 @@ int bx_fuser_main(int argc, char** argv) {
     struct bx_fuser_options options;
     struct bx_proc_list procs = {0};
     struct bx_fuser_target* targets = NULL;
-    int handled;
     int i;
     int rc = 1;
 
-    handled = bx_psmisc_maybe_handle_help_or_version(argc, argv, "fuser", "-h", bx_fuser_print_help);
-    if (handled >= 0) {
-        return handled;
-    }
     if (!bx_fuser_parse_options(&options, argc, argv, &diag)) {
         if (diag.exit_status != 0) {
             bx_cli_print_try_help(diag.progname);
         }
         return diag.exit_status != 0 ? diag.exit_status : 1;
+    }
+    if (options.informational_option) {
+        if (options.informational_option == 'h')
+            bx_fuser_print_help(stdout, diag.progname);
+        else
+            bx_cli_print_version(diag.progname);
+        return 0;
     }
     if (options.list_signals) {
         list_signals();
@@ -457,6 +465,7 @@ int bx_fuser_main(int argc, char** argv) {
     }
 
     targets = xmalloc((size_t)(argc - options.first_name_index) * sizeof(*targets));
+    bool invalid_target = false;
     for (i = options.first_name_index; i < argc; i++) {
         struct bx_fuser_target* target = &targets[i - options.first_name_index];
         target->name = argv[i];
@@ -465,13 +474,20 @@ int bx_fuser_main(int argc, char** argv) {
             if (!options.silent) {
                 bx_diag(&diag, "%s: %s", argv[i], strerror(errno));
             }
+            invalid_target = true;
             continue;
         }
         if (options.ismountpoint && !bx_fuser_is_mountpoint(argv[i])) {
             bx_diag(&diag, "%s is not a mountpoint", argv[i]);
+            invalid_target = true;
             continue;
         }
         target->valid = true;
+    }
+
+    if (options.kill && invalid_target) {
+        free(targets);
+        return 1;
     }
 
     if (!bx_proc_list_read(&procs, BX_PROC_READ_CMDLINE)) {
