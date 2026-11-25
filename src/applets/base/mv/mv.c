@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -24,8 +24,8 @@
 #include "lib/copy_tree.h"
 #include "lib/remove_ops.h"
 #include "lib/copy_metadata.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 
 #ifndef RENAME_EXCHANGE
 #define RENAME_EXCHANGE (1 << 1)
@@ -49,6 +49,8 @@ struct bx_mv_options {
     const char* target_directory;
     bool no_target_directory;
     bool backup_conflict_warning;
+    const char** operands;
+    int operand_count;
 };
 
 static bool bx_mv_operand_had_trailing_slashes(const char* path) {
@@ -191,44 +193,75 @@ enum {
     BX_MV_OPT_NO_COPY,
     BX_MV_OPT_EXCHANGE,
     BX_MV_OPT_DEBUG,
+    BX_MV_OPT_HELP,
+    BX_MV_OPT_VERSION,
 };
 
-static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {{"backup", optional_argument, NULL, BX_MV_OPT_BACKUP},
-                                                 {"force", no_argument, NULL, 'f'},
-                                                 {"interactive", no_argument, NULL, 'i'},
-                                                 {"no-clobber", no_argument, NULL, 'n'},
-                                                 {"no-copy", no_argument, NULL, BX_MV_OPT_NO_COPY},
-                                                 {"exchange", no_argument, NULL, BX_MV_OPT_EXCHANGE},
-                                                 {"strip-trailing-slashes", no_argument, NULL, BX_MV_OPT_STRIP_TRAILING_SLASHES},
-                                                 {"suffix", required_argument, NULL, 'S'},
-                                                 {"target-directory", required_argument, NULL, 't'},
-                                                 {"no-target-directory", no_argument, NULL, 'T'},
-                                                 {"update", optional_argument, NULL, BX_MV_OPT_UPDATE},
-                                                 {"verbose", no_argument, NULL, 'v'},
-                                                 {"debug", no_argument, NULL, BX_MV_OPT_DEBUG},
-                                                 {"help", no_argument, NULL, 1},
-                                                 {"version", no_argument, NULL, 2},
-                                                 {NULL, 0, NULL, 0}};
-    char short_opts[] = ":bfint:TuvS:";
+static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {BX_MV_OPT_BACKUP, 0, "backup", BX_OPTION_OPTIONAL_VALUE},
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'i', 'i', "interactive", BX_OPTION_NO_VALUE},
+        {'n', 'n', "no-clobber", BX_OPTION_NO_VALUE},
+        {BX_MV_OPT_NO_COPY, 0, "no-copy", BX_OPTION_NO_VALUE},
+        {BX_MV_OPT_EXCHANGE, 0, "exchange", BX_OPTION_NO_VALUE},
+        {BX_MV_OPT_STRIP_TRAILING_SLASHES, 0, "strip-trailing-slashes", BX_OPTION_NO_VALUE},
+        {'S', 'S', "suffix", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "target-directory", BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', "no-target-directory", BX_OPTION_NO_VALUE},
+        {BX_MV_OPT_UPDATE, 0, "update", BX_OPTION_OPTIONAL_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {BX_MV_OPT_DEBUG, 0, "debug", BX_OPTION_NO_VALUE},
+        {BX_MV_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_MV_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {'b', 'b', NULL, BX_OPTION_NO_VALUE},
+        {'u', 'u', NULL, BX_OPTION_NO_VALUE},
+    };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mv");
     diag->progname = options->progname;
     options->update_mode = BX_UPDATE_ALL;
 
-    bx_args_getopt_reset();
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->operands == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->operands) ||
+                    (options->operands = malloc(capacity * sizeof(*options->operands))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->operands[options->operand_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
+        }
 
-    int c;
-    while ((c = bx_args_getopt_long(argc, argv, short_opts, long_options, NULL)) != -1) {
-        switch (c) {
+        const char* value = result.value;
+        switch (result.spec->id) {
             case 'b':
                 bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case BX_MV_OPT_BACKUP:
-                if (optarg) {
-                    if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
-                        bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                if (value) {
+                    if (!bx_args_parse_backup_mode(value, &options->backup_mode)) {
+                        bx_diag(diag, "invalid --backup control value '%s'", value);
                         return false;
                     }
                 }
@@ -252,7 +285,7 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
                 options->interactive = false;
                 break;
             case 't':
-                options->target_directory = optarg;
+                options->target_directory = value;
                 break;
             case 'T':
                 options->no_target_directory = true;
@@ -261,8 +294,8 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
                 options->update_mode = BX_UPDATE_OLDER;
                 break;
             case BX_MV_OPT_UPDATE:
-                if (!bx_args_parse_update_mode(optarg, &options->update_mode)) {
-                    bx_diag(diag, "invalid --update mode '%s'", optarg);
+                if (!bx_args_parse_update_mode(value, &options->update_mode)) {
+                    bx_diag(diag, "invalid --update mode '%s'", value);
                     return false;
                 }
                 break;
@@ -274,7 +307,7 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
                 options->verbose = true;
                 break;
             case 'S':
-                options->suffix = optarg;
+                options->suffix = value;
                 bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case BX_MV_OPT_NO_COPY:
@@ -286,18 +319,12 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
             case BX_MV_OPT_STRIP_TRAILING_SLASHES:
                 options->strip_trailing_slashes = true;
                 break;
-            case 1:
+            case BX_MV_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_MV_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
@@ -314,8 +341,6 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
             return false;
         }
     }
-
-    *first_operand = optind;
     return true;
 }
 
@@ -637,90 +662,80 @@ finish:
     return ok;
 }
 
-int bx_mv_main(int argc, char** argv) {
-    struct bx_mv_options options;
-    struct bx_diag_ctx diag = {0};
-    int first_operand = 0;
+static int bx_mv_run(const struct bx_mv_options* options, struct bx_diag_ctx* diag) {
     struct bx_mv_context ctx;
-    int exit_status = 0;
+    int exit_status;
 
-    if (!bx_mv_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return 1;
-    }
+    diag->progname = options->progname;
+    diag->verbose = options->verbose;
+    diag->debug = options->debug;
 
-    diag.progname = options.progname;
-    diag.verbose = options.verbose;
-    diag.debug = options.debug;
-
-    if (options.show_help) {
-        bx_mv_print_help(stdout, options.progname);
+    if (options->show_help) {
+        bx_mv_print_help(stdout, options->progname);
         return 0;
     }
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
 
-    int operand_count = argc - first_operand;
+    int operand_count = options->operand_count;
     if (operand_count < 1) {
-        bx_diag(&diag, "missing file operand");
+        bx_diag(diag, "missing file operand");
         return 1;
     }
-    if (operand_count < 2 && !options.target_directory) {
-        bx_diag(&diag, "missing destination file operand after '%s'", argv[first_operand]);
+    if (operand_count < 2 && !options->target_directory) {
+        bx_diag(diag, "missing destination file operand after '%s'", options->operands[0]);
         return 1;
     }
-    if (options.exchange && (options.target_directory || operand_count != 2)) {
-        bx_diag(&diag, "--exchange requires exactly two path operands and cannot be used with -t");
+    if (options->exchange && (options->target_directory || operand_count != 2)) {
+        bx_diag(diag, "--exchange requires exactly two path operands and cannot be used with -t");
         return 1;
     }
 
     memset(&ctx, 0, sizeof(ctx));
-    ctx.options = &options;
-    ctx.diag = &diag;
-    bx_backup_get_params(options.backup_mode, options.suffix, &ctx.backup_params);
+    ctx.options = options;
+    ctx.diag = diag;
+    bx_backup_get_params(options->backup_mode, options->suffix, &ctx.backup_params);
     bx_mv_init_cross_device_copy_context(&ctx);
 
     const char* destination_root = NULL;
     int source_count = 0;
-    char** source_operands = NULL;
+    const char* const* source_operands = options->operands;
     bool destination_is_directory = false;
     char* resolved_destination_root = NULL;
 
-    if (options.target_directory != NULL) {
-        destination_root = options.target_directory;
-        source_operands = argv + first_operand;
+    if (options->target_directory != NULL) {
+        destination_root = options->target_directory;
         source_count = operand_count;
         if (!bx_stat_is_dir_path(destination_root)) {
-            bx_diag(&diag, "target '%s' is not a directory", destination_root);
+            bx_diag(diag, "target '%s' is not a directory", destination_root);
             exit_status = 1;
             goto finish;
         }
         destination_is_directory = true;
     }
-    else if (options.no_target_directory) {
+    else if (options->no_target_directory) {
         if (operand_count < 2) {
-            bx_diag(&diag, "missing destination file operand after '%s'", argv[first_operand]);
+            bx_diag(diag, "missing destination file operand after '%s'", options->operands[0]);
             exit_status = 1;
             goto finish;
         }
         if (operand_count > 2) {
-            bx_diag(&diag, "extra operand '%s'", argv[first_operand + 2]);
+            bx_diag(diag, "extra operand '%s'", source_operands[2]);
             exit_status = 1;
             goto finish;
         }
-        destination_root = argv[first_operand + 1];
-        source_operands = argv + first_operand;
+        destination_root = source_operands[1];
         source_count = 1;
     }
     else {
-        destination_root = argv[argc - 1];
-        source_operands = argv + first_operand;
+        destination_root = source_operands[operand_count - 1];
         source_count = operand_count - 1;
 
         if (source_count > 1) {
             if (!bx_stat_is_dir_path(destination_root)) {
-                bx_diag(&diag, "target '%s' is not a directory", destination_root);
+                bx_diag(diag, "target '%s' is not a directory", destination_root);
                 exit_status = 1;
                 goto finish;
             }
@@ -739,19 +754,19 @@ int bx_mv_main(int argc, char** argv) {
         }
     }
 
-    if (options.backup_conflict_warning && (options.target_directory != NULL || options.no_target_directory || source_count != 1 || destination_is_directory)) {
-        exit_status = diag.exit_status;
+    if (options->backup_conflict_warning && (options->target_directory != NULL || options->no_target_directory || source_count != 1 || destination_is_directory)) {
+        exit_status = diag->exit_status;
         goto finish;
     }
 
     for (int i = 0; i < source_count; i++) {
         bool source_had_trailing_slashes = bx_mv_operand_had_trailing_slashes(source_operands[i]);
-        char* source_operand = options.strip_trailing_slashes ? bx_path_strip_trailing_slashes_dup(source_operands[i]) : xstrdup(source_operands[i]);
+        char* source_operand = options->strip_trailing_slashes ? bx_path_strip_trailing_slashes_dup(source_operands[i]) : xstrdup(source_operands[i]);
 
         char* dest_path = bx_path_build_dest(source_operand, destination_root, destination_is_directory, false);
 
-        if (bx_mv_should_reject_stripped_missing_dest(&options, source_operand, dest_path, source_had_trailing_slashes, destination_is_directory, source_count)) {
-            bx_diag(&diag, "cannot move '%s' to '%s': Not a directory", source_operand, dest_path);
+        if (bx_mv_should_reject_stripped_missing_dest(options, source_operand, dest_path, source_had_trailing_slashes, destination_is_directory, source_count)) {
+            bx_diag(diag, "cannot move '%s' to '%s': Not a directory", source_operand, dest_path);
             free(dest_path);
             free(source_operand);
             continue;
@@ -763,11 +778,19 @@ int bx_mv_main(int argc, char** argv) {
         free(source_operand);
     }
 
-    exit_status = diag.exit_status;
+    exit_status = diag->exit_status;
 
 finish:
     free(resolved_destination_root);
     bx_mv_free_cross_device_copy_context(&ctx);
     bx_overwrite_free_written(&ctx.written);
     return exit_status;
+}
+
+int bx_mv_main(int argc, char** argv) {
+    struct bx_mv_options options;
+    struct bx_diag_ctx diag = {0};
+    int status = bx_mv_parse_options(argc, argv, &options, &diag) ? bx_mv_run(&options, &diag) : 1;
+    free(options.operands);
+    return status;
 }
