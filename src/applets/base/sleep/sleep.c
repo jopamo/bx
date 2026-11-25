@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,7 +10,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/time_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 static void bx_sleep_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s NUMBER[SUFFIX]...\n", progname);
@@ -90,10 +89,9 @@ static int bx_sleep_forever(struct bx_diag_ctx* diag) {
 }
 
 int bx_sleep_main(int argc, char** argv) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {1, 0, "help", BX_OPTION_NO_VALUE},
+        {2, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sleep");
@@ -102,62 +100,54 @@ int bx_sleep_main(int argc, char** argv) {
         .exit_status = 1,
     };
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "", long_options, NULL);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 1:
-                bx_sleep_print_help(stdout, progname);
-                return 0;
-            case 2:
-                bx_cli_print_version(progname);
-                return 0;
-            case '?':
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(progname);
-                return 1;
-            default:
-                bx_cli_print_try_help(progname);
-                return 1;
-        }
-    }
-
-    int first_operand = optind;
-    if (first_operand >= argc) {
-        if (argc == 2 && strcmp(argv[1], "--") == 0) {
-            return 0;
-        }
-
-        bx_cli_diag_missing_operand(&diag);
-        bx_cli_print_try_help(progname);
-        return 1;
-    }
-
     double total_seconds = 0.0;
     bool sleep_forever = false;
-    for (int i = first_operand; i < argc; i++) {
-        double value_seconds = 0.0;
-        bool value_infinite = false;
-        if (!bx_sleep_parse_interval(argv[i], &value_seconds, &value_infinite)) {
-            bx_diag(&diag, "invalid time interval '%s'", argv[i]);
+    bool have_operand = false;
+    const char* invalid = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_MATCH) {
+            if (option.spec->id == 1)
+                bx_sleep_print_help(stdout, progname);
+            else
+                bx_cli_print_version(progname);
+            return 0;
+        }
+        if (option.event != BX_OPTION_OPERAND) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
             bx_cli_print_try_help(progname);
             return 1;
         }
-
-        if (value_infinite) {
-            sleep_forever = true;
+        have_operand = true;
+        if (invalid)
+            continue;
+        double seconds;
+        bool infinite;
+        if (!bx_sleep_parse_interval(option.token, &seconds, &infinite)) {
+            invalid = option.token;
             continue;
         }
+        if (!infinite)
+            total_seconds += seconds;
+        sleep_forever = sleep_forever || infinite || isinf(total_seconds);
+    }
 
-        total_seconds += value_seconds;
-        if (isinf(total_seconds)) {
-            sleep_forever = true;
-        }
+    if (invalid) {
+        bx_diag(&diag, "invalid time interval '%s'", invalid);
+        bx_cli_print_try_help(progname);
+        return 1;
+    }
+    if (!have_operand) {
+        if (argc == 2 && strcmp(argv[1], "--") == 0)
+            return 0;
+        bx_cli_diag_missing_operand(&diag);
+        bx_cli_print_try_help(progname);
+        return 1;
     }
 
     if (sleep_forever) {
