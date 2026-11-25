@@ -181,24 +181,54 @@ done:
     return published;
 }
 
-static int transform_to_new_file(const char* name, const char* suffix,
-                                 const struct bx_archive_codec* codec,
-                                 const struct bx_archive_codec_encode_options* encoding,
-                                 bool replace, bool keep, struct bx_diag_ctx* diag) {
+struct archive_operand {
+    const char* name;
+    struct bx_path_split parts; /* Populated only for checked named outputs. */
+    size_t suffix_len;
+};
+
+static bool preflight_transform_name(struct archive_operand* operand, const char* suffix,
+                                     const struct bx_archive_codec* codec, bool compress,
+                                     struct bx_diag_ctx* diag) {
+    const char* name = operand->name;
     struct bx_path_split parts = bx_path_split(name, false);
-    if (!encoding && legacy_lzma(codec, name))
+    if (!compress && legacy_lzma(codec, name))
         suffix = ".lzma";
     size_t suffix_len = strlen(suffix);
     bool has_suffix = parts.basename_length >= suffix_len &&
                       strcmp(parts.basename + parts.basename_length - suffix_len, suffix) == 0;
-    if (!parts.basename_length || (encoding ? has_suffix :
+    if (!parts.basename_length || (compress ? has_suffix :
         (!has_suffix || parts.basename_length == suffix_len))) {
-        if (encoding)
+        if (compress)
             bx_diag(diag, "%s: expected a filename without suffix %s", name, suffix);
         else
             bx_diag(diag, "%s: expected suffix %s", name, suffix);
-        return 1;
+        return false;
     }
+    if (bx_path_is_dot_or_dotdot(parts.basename)) {
+        bx_diag(diag, "%s: invalid input name", name);
+        return false;
+    }
+    if (!compress) {
+        size_t target_len = parts.basename_length - suffix_len;
+        if ((target_len == 1 && parts.basename[0] == '.') ||
+            (target_len == 2 && memcmp(parts.basename, "..", 2) == 0)) {
+            bx_diag(diag, "%s: invalid destination name", name);
+            return false;
+        }
+    }
+    operand->parts = parts;
+    operand->suffix_len = suffix_len;
+    return true;
+}
+
+static int transform_to_new_file(const struct archive_operand* operand, const char* suffix,
+                                 const struct bx_archive_codec* codec,
+                                 const struct bx_archive_codec_encode_options* encoding,
+                                 bool replace, bool keep, struct bx_diag_ctx* diag) {
+    const char* name = operand->name;
+    struct bx_path_split parts = operand->parts;
+    size_t suffix_len = operand->suffix_len;
     char* parent = parts.parent_length ? strndup(name, parts.parent_length) : NULL;
     char* target = NULL;
     if (encoding) {
@@ -213,10 +243,6 @@ static int transform_to_new_file(const char* name, const char* suffix,
     int status = 1;
     if (!target || (parts.parent_length && !parent)) {
         bx_perror_path(diag, name);
-        goto done;
-    }
-    if (strcmp(target, ".") == 0 || strcmp(target, "..") == 0) {
-        bx_diag(diag, "%s: invalid destination name", name);
         goto done;
     }
     dir = bx_fd_open_cloexec(parent ? parent : ".", O_RDONLY | O_DIRECTORY, 0);
@@ -336,7 +362,7 @@ static int archive_command(int argc, char** argv, const char* progname,
     bool keep = false;
     bool replace = false;
     struct bx_archive_codec_encode_options encoding = {0};
-    const char** paths = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*paths)) : NULL;
+    struct archive_operand* paths = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*paths)) : NULL;
     if (argc > 1 && paths == NULL) {
         bx_diag(&diag, "memory exhausted");
         return 1;
@@ -349,7 +375,7 @@ static int archive_command(int argc, char** argv, const char* progname,
     struct bx_option_result option;
     while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
         if (option.event == BX_OPTION_OPERAND) {
-            paths[count++] = option.token;
+            paths[count++].name = option.token;
             continue;
         }
         if (option.event != BX_OPTION_MATCH) {
@@ -420,14 +446,17 @@ static int archive_command(int argc, char** argv, const char* progname,
         goto done;
     }
     for (size_t i = 0; i < count; i++) {
-        if (!paths[i][0]) {
+        if (!paths[i].name[0]) {
             bx_diag(&diag, "empty input path");
             goto done;
         }
-        if (replace && strcmp(paths[i], "-") == 0) {
+        bool from_stdin = strcmp(paths[i].name, "-") == 0;
+        if (replace && from_stdin) {
             bx_diag(&diag, "replacement requires named file output");
             goto done;
         }
+        if (!to_stdout && !from_stdin && !preflight_transform_name(&paths[i], suffix, codec, compress, &diag))
+            goto done;
     }
     bool output_error = false;
     if (count == 0) {
@@ -438,12 +467,12 @@ static int archive_command(int argc, char** argv, const char* progname,
     status = 0;
     for (size_t i = 0; i < count && !output_error; i++) {
         int result;
-        if (to_stdout || strcmp(paths[i], "-") == 0)
+        if (to_stdout || paths[i].parts.basename == NULL)
             result = compress ?
-                encode(paths[i], -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
-                decode(paths[i], -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
+                encode(paths[i].name, -1, STDOUT_FILENO, codec, &encoding, &diag, &output_error) :
+                decode(paths[i].name, -1, STDOUT_FILENO, "standard output", codec, &diag, &output_error);
         else
-            result = transform_to_new_file(paths[i], suffix, codec, compress ? &encoding : NULL, replace, keep, &diag);
+            result = transform_to_new_file(&paths[i], suffix, codec, compress ? &encoding : NULL, replace, keep, &diag);
         if (status < result)
             status = result;
     }
