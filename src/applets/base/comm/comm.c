@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,8 +10,8 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 enum {
     BX_COMM_OPT_CHECK_ORDER = 256,
@@ -24,7 +23,6 @@ enum {
 };
 
 struct bx_comm_options {
-    const char* progname;
     bool suppress_1;
     bool suppress_2;
     bool suppress_3;
@@ -67,33 +65,42 @@ static void bx_comm_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  %s -3 file1 file2   Print lines in file1 not in file2, and vice versa.\n", progname);
 }
 
-static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"check-order", no_argument, NULL, BX_COMM_OPT_CHECK_ORDER},
-        {"nocheck-order", no_argument, NULL, BX_COMM_OPT_NOCHECK_ORDER},
-        {"output-delimiter", required_argument, NULL, BX_COMM_OPT_OUTPUT_DELIMITER},
-        {"total", no_argument, NULL, BX_COMM_OPT_TOTAL},
-        {"zero-terminated", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, BX_COMM_OPT_HELP},
-        {"version", no_argument, NULL, BX_COMM_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options* options,
+                                  const char* operands[3], size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'1', '1', NULL, BX_OPTION_NO_VALUE},
+        {'2', '2', NULL, BX_OPTION_NO_VALUE},
+        {'3', '3', NULL, BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE},
+        {BX_COMM_OPT_CHECK_ORDER, 0, "check-order", BX_OPTION_NO_VALUE},
+        {BX_COMM_OPT_NOCHECK_ORDER, 0, "nocheck-order", BX_OPTION_NO_VALUE},
+        {BX_COMM_OPT_OUTPUT_DELIMITER, 0, "output-delimiter", BX_OPTION_REQUIRED_VALUE},
+        {BX_COMM_OPT_TOTAL, 0, "total", BX_OPTION_NO_VALUE},
+        {BX_COMM_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_COMM_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = "comm";
-    options->output_delimiter = "\t";
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-123z", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (*count < 3)
+                operands[(*count)++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case '1':
                 options->suppress_1 = true;
                 break;
@@ -115,7 +122,7 @@ static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options*
                 options->check_order = false;
                 break;
             case BX_COMM_OPT_OUTPUT_DELIMITER:
-                options->output_delimiter = optarg;
+                options->output_delimiter = option.value;
                 break;
             case BX_COMM_OPT_TOTAL:
                 options->total = true;
@@ -126,15 +133,9 @@ static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options*
             case BX_COMM_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
-                return false;
-            default:
-                return false;
         }
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -226,36 +227,37 @@ static bool check_file_order(struct bx_diag_ctx* diag, int filenum, struct line_
 }
 
 int bx_comm_main(int argc, char** argv) {
-    struct bx_comm_options options;
+    struct bx_comm_options options = {.output_delimiter = "\t"};
     struct bx_diag_ctx diag = {
         .progname = "comm",
         .exit_status = 0,
     };
-    int first_operand = 0;
+    const char* operands[3];
+    size_t count = 0;
 
-    if (!bx_comm_parse_options(argc, argv, &options, &first_operand, &diag)) {
+    if (!bx_comm_parse_options(argc, argv, &options, operands, &count, &diag)) {
         return 1;
     }
 
     if (options.show_help) {
-        bx_comm_print_help(stdout, options.progname);
+        bx_comm_print_help(stdout, diag.progname);
         return 0;
     }
     if (options.show_version) {
-        bx_cli_print_version(options.progname);
+        bx_cli_print_version(diag.progname);
         return 0;
     }
 
-    if (argc - first_operand != 2) {
-        bx_diag(&diag, "missing operand");
-        if (argc - first_operand > 2) {
-            bx_diag(&diag, "extra operand '%s'", argv[first_operand + 2]);
-        }
+    if (count != 2) {
+        if (count < 2)
+            bx_diag(&diag, "missing operand");
+        else
+            bx_diag(&diag, "extra operand '%s'", operands[2]);
         return 1;
     }
 
-    const char* file1_name = argv[first_operand];
-    const char* file2_name = argv[first_operand + 1];
+    const char* file1_name = operands[0];
+    const char* file2_name = operands[1];
 
     if (strcmp(file1_name, "-") == 0 && strcmp(file2_name, "-") == 0) {
         bx_diag(&diag, "both files cannot be standard input");
