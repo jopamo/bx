@@ -48,6 +48,7 @@ struct bx_fuser_target {
 struct bx_fuser_hit {
     pid_t pid;
     uid_t uid;
+    unsigned long long starttime_ticks;
     char* command;
     bool write_access;
 };
@@ -108,6 +109,7 @@ static struct bx_fuser_hit* bx_fuser_find_hit(struct bx_fuser_hit_list* list, pi
 static void bx_fuser_add_hit(struct bx_fuser_hit_list* list,
                              pid_t pid,
                              uid_t uid,
+                             unsigned long long starttime_ticks,
                              const char* command,
                              bool write_access) {
     struct bx_fuser_hit* hit = bx_fuser_find_hit(list, pid);
@@ -122,6 +124,7 @@ static void bx_fuser_add_hit(struct bx_fuser_hit_list* list,
     }
     list->items[list->len].pid = pid;
     list->items[list->len].uid = uid;
+    list->items[list->len].starttime_ticks = starttime_ticks;
     list->items[list->len].command = xstrdup(command != NULL ? command : "?");
     list->items[list->len].write_access = write_access;
     list->len++;
@@ -337,6 +340,7 @@ static bool bx_fuser_collect_target_hits(const struct bx_fuser_options* options,
             bx_fuser_add_hit(hits,
                              info->pid,
                              info->uid,
+                             info->starttime_ticks,
                              bx_fuser_command_name(info, command_storage, sizeof(command_storage)),
                              write_access);
         }
@@ -385,7 +389,7 @@ static int bx_fuser_emit_hits(const struct bx_fuser_options* options,
 }
 
 static int bx_fuser_kill_hits(const struct bx_fuser_options* options,
-                              const struct bx_fuser_hit_list* hits) {
+                              const struct bx_fuser_hit_list* hits, struct bx_diag_ctx* diag) {
     size_t i;
     int rc = 1;
     for (i = 0u; i < hits->len; i++) {
@@ -402,6 +406,11 @@ static int bx_fuser_kill_hits(const struct bx_fuser_options* options,
             }
         }
         if (!bx_proc_read_ns_pid(hits->items[i].pid, &signal_pid, &vanished)) {
+            continue;
+        }
+        if (!bx_proc_signal_target_matches(signal_pid, hits->items[i].starttime_ticks, 0)) {
+            if (!options->silent)
+                bx_diag(diag, "process %ld changed or exited before signaling", (long)signal_pid);
             continue;
         }
         if (kill(signal_pid, options->signal_number) == 0) {
@@ -476,7 +485,7 @@ int bx_fuser_main(int argc, char** argv) {
             rc = 0;
         }
         if (options.kill) {
-            if (bx_fuser_kill_hits(&options, &hits) == 0) {
+            if (bx_fuser_kill_hits(&options, &hits, &diag) == 0) {
                 rc = 0;
             }
         }

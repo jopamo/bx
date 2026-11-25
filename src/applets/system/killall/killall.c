@@ -624,6 +624,13 @@ int bx_killall_main(int argc, char** argv) {
             }
         }
 
+        if ((options.process_group && signal_id != info->pgrp) ||
+            !bx_proc_signal_target_matches(info->pid, info->starttime_ticks,
+                                            options.process_group ? signal_id : 0)) {
+            if (!options.quiet)
+                bx_diag(&diag, "process %ld changed or exited before signaling", (long)info->pid);
+            continue;
+        }
         if (bx_killall_signal(signal_id, options.process_group, options.signal_number) != 0) {
             if (!options.quiet) {
                 fprintf(stderr,

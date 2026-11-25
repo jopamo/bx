@@ -695,6 +695,19 @@ bool bx_proc_read_ns_pgid(pid_t pid, pid_t* ns_pgid_out, bool* vanished_out) {
     return bx_proc_read_status_pid_field(pid, "NSpgid:", false, ns_pgid_out, vanished_out);
 }
 
+bool bx_proc_signal_target_matches(pid_t pid, unsigned long long starttime_ticks, pid_t pgrp) {
+    struct bx_proc_stat current;
+    bool vanished;
+    if (!bx_proc_read_stat(pid, &current, &vanished))
+        return false;
+    bool matches = current.pid == pid && current.starttime_ticks == starttime_ticks &&
+                   (pgrp == 0 || current.pgrp == pgrp);
+    bx_proc_stat_free(&current);
+    if (!matches)
+        errno = ESTALE;
+    return matches;
+}
+
 bool bx_proc_read_info(pid_t pid, unsigned flags, struct bx_proc_info* info_out, bool* vanished_out) {
     struct bx_proc_stat stat_info;
     uid_t uid = (uid_t)-1;
