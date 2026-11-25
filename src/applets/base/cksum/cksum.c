@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,9 +16,9 @@
 #include "crypto/sha1.h"
 #include "crypto/sha256.h"
 #include "crypto/sha512.h"
-#include "lib/args_common.h"
 #include "lib/base64.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
 enum {
@@ -48,9 +47,7 @@ enum cksum_output_mode {
 };
 
 enum cksum_longopt {
-    CKSUM_OPT_ALGORITHM = 256,
-    CKSUM_OPT_BASE64,
-    CKSUM_OPT_CHECK,
+    CKSUM_OPT_BASE64 = 256,
     CKSUM_OPT_DEBUG,
     CKSUM_OPT_IGNORE_MISSING,
     CKSUM_OPT_QUIET,
@@ -59,8 +56,6 @@ enum cksum_longopt {
     CKSUM_OPT_STRICT,
     CKSUM_OPT_TAG,
     CKSUM_OPT_UNTAGGED,
-    CKSUM_OPT_WARN,
-    CKSUM_OPT_ZERO,
     CKSUM_OPT_HELP,
     CKSUM_OPT_VERSION,
 };
@@ -92,7 +87,6 @@ struct cksum_options {
     bool show_help;
     bool show_version;
     bool base64_output;
-    int first_operand;
 };
 
 struct cksum_result {
@@ -253,52 +247,56 @@ static bool cksum_parse_length_bits(const char* text, uintmax_t* out_bits) {
     return true;
 }
 
-static bool cksum_parse_options(int argc, char** argv, struct cksum_options* options) {
-    static const struct option long_options[] = {
-        {"algorithm", required_argument, NULL, CKSUM_OPT_ALGORITHM},
-        {"base64", no_argument, NULL, CKSUM_OPT_BASE64},
-        {"check", no_argument, NULL, CKSUM_OPT_CHECK},
-        {"debug", no_argument, NULL, CKSUM_OPT_DEBUG},
-        {"ignore-missing", no_argument, NULL, CKSUM_OPT_IGNORE_MISSING},
-        {"length", required_argument, NULL, 'l'},
-        {"quiet", no_argument, NULL, CKSUM_OPT_QUIET},
-        {"raw", no_argument, NULL, CKSUM_OPT_RAW},
-        {"status", no_argument, NULL, CKSUM_OPT_STATUS},
-        {"strict", no_argument, NULL, CKSUM_OPT_STRICT},
-        {"tag", no_argument, NULL, CKSUM_OPT_TAG},
-        {"untagged", no_argument, NULL, CKSUM_OPT_UNTAGGED},
-        {"warn", no_argument, NULL, CKSUM_OPT_WARN},
-        {"zero", no_argument, NULL, CKSUM_OPT_ZERO},
-        {"help", no_argument, NULL, CKSUM_OPT_HELP},
-        {"version", no_argument, NULL, CKSUM_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool cksum_parse_options(int argc, char** argv, struct cksum_options* options,
+                                const char** paths, size_t* count) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "algorithm", BX_OPTION_REQUIRED_VALUE},
+        {'c', 'c', "check", BX_OPTION_NO_VALUE},
+        {'l', 'l', "length", BX_OPTION_REQUIRED_VALUE},
+        {'w', 'w', "warn", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_BASE64, 0, "base64", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_DEBUG, 0, "debug", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_IGNORE_MISSING, 0, "ignore-missing", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_QUIET, 0, "quiet", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_RAW, 0, "raw", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_STATUS, 0, "status", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_STRICT, 0, "strict", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_TAG, 0, "tag", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_UNTAGGED, 0, "untagged", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {CKSUM_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = cksum_progname(argv[0]);
-    options->algorithm = CKSUM_ALGORITHM_CRC;
-    options->output_mode = CKSUM_OUTPUT_AUTO;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-:a:cl:wz", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            paths[(*count)++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                fprintf(stderr, "%s: option requires an argument -- '%c'\n", options->progname, option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                fprintf(stderr, "%s: option '%s' requires an argument\n", options->progname, option.token);
+            else
+                fprintf(stderr, "%s: unrecognized option '%s'\n", options->progname, option.token);
+            return false;
         }
 
-        switch (c) {
-            case 'a':
-            case CKSUM_OPT_ALGORITHM: {
+        switch (option.spec->id) {
+            case 'a': {
                 enum cksum_algorithm parsed_algorithm = CKSUM_ALGORITHM_CRC;
-                enum cksum_algorithm_parse_status status = cksum_parse_algorithm_name(optarg, &parsed_algorithm);
+                enum cksum_algorithm_parse_status status = cksum_parse_algorithm_name(option.value, &parsed_algorithm);
                 if (status == CKSUM_ALGORITHM_PARSE_UNSUPPORTED) {
-                    fprintf(stderr, "%s: algorithm '%s' is not yet supported\n", options->progname, optarg ? optarg : "");
+                    fprintf(stderr, "%s: algorithm '%s' is not yet supported\n", options->progname, option.value);
                     return false;
                 }
                 if (status == CKSUM_ALGORITHM_PARSE_INVALID) {
-                    fprintf(stderr, "%s: invalid argument '%s' for '--algorithm'\n", options->progname, optarg ? optarg : "");
+                    fprintf(stderr, "%s: invalid argument '%s' for '--algorithm'\n", options->progname, option.value);
                     return false;
                 }
                 options->algorithm = parsed_algorithm;
@@ -306,7 +304,6 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
                 break;
             }
             case 'c':
-            case CKSUM_OPT_CHECK:
                 options->check_mode = true;
                 break;
             case CKSUM_OPT_BASE64:
@@ -320,10 +317,10 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
                 break;
             case 'l':
                 options->length_specified = true;
-                if (!cksum_parse_length_bits(optarg, &options->length_bits)) {
+                if (!cksum_parse_length_bits(option.value, &options->length_bits)) {
                     options->length_invalid = true;
                     if (options->invalid_length_text == NULL) {
-                        options->invalid_length_text = optarg;
+                        options->invalid_length_text = option.value;
                     }
                 }
                 break;
@@ -340,7 +337,6 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
                 options->strict = true;
                 break;
             case 'w':
-            case CKSUM_OPT_WARN:
                 options->warn = true;
                 break;
             case CKSUM_OPT_TAG:
@@ -350,7 +346,6 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
                 options->output_mode = CKSUM_OUTPUT_UNTAGGED;
                 break;
             case 'z':
-            case CKSUM_OPT_ZERO:
                 options->zero_terminated = true;
                 break;
             case CKSUM_OPT_HELP:
@@ -359,28 +354,9 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
             case CKSUM_OPT_VERSION:
                 options->show_version = true;
                 break;
-            case ':':
-                if (optopt != 0) {
-                    fprintf(stderr, "%s: option requires an argument -- '%c'\n", options->progname, optopt);
-                }
-                else {
-                    fprintf(stderr, "%s: option requires an argument\n", options->progname);
-                }
-                return false;
-            case '?':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    fprintf(stderr, "%s: unrecognized option '%s'\n", options->progname, argv[optind - 1]);
-                }
-                else {
-                    fprintf(stderr, "%s: unrecognized option\n", options->progname);
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
-    options->first_operand = optind;
     return true;
 }
 
@@ -1620,14 +1596,7 @@ static const char* cksum_find_check_only_option(const struct cksum_options* opti
     return NULL;
 }
 
-int bx_cksum_main(int argc, char** argv) {
-    struct cksum_options options;
-
-    if (!cksum_parse_options(argc, argv, &options)) {
-        cksum_print_help(stderr, cksum_progname(argv[0]));
-        return CKSUM_EXIT_USAGE;
-    }
-
+static int cksum_run(struct cksum_options options, size_t count, const char* const* paths) {
     if (options.length_invalid) {
         fprintf(stderr, "%s: invalid length: '%s'\n", options.progname, options.invalid_length_text ? options.invalid_length_text : "");
         return CKSUM_EXIT_FAIL;
@@ -1657,7 +1626,7 @@ int bx_cksum_main(int argc, char** argv) {
         }
     }
 
-    if (!options.check_mode && options.raw_output && (argc - options.first_operand) > 1) {
+    if (!options.check_mode && options.raw_output && count > 1) {
         fprintf(stderr, "%s: the --raw option is not supported with multiple files\n", options.progname);
         return CKSUM_EXIT_FAIL;
     }
@@ -1674,12 +1643,12 @@ int bx_cksum_main(int argc, char** argv) {
         bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
         int rc = CKSUM_EXIT_OK;
-        if (options.first_operand >= argc) {
+        if (count == 0) {
             rc = cksum_check_file(&options, "-", &writer);
         }
         else {
-            for (int i = options.first_operand; i < argc; i++) {
-                if (cksum_check_file(&options, argv[i], &writer) != CKSUM_EXIT_OK) {
+            for (size_t i = 0; i < count; i++) {
+                if (cksum_check_file(&options, paths[i], &writer) != CKSUM_EXIT_OK) {
                     rc = CKSUM_EXIT_FAIL;
                     if (bx_line_writer_error(&writer) != 0) {
                         break;
@@ -1700,14 +1669,14 @@ int bx_cksum_main(int argc, char** argv) {
 
     int rc = CKSUM_EXIT_OK;
 
-    if (options.first_operand >= argc) {
+    if (count == 0) {
         if (!cksum_process_path(&options, "-", false, &writer)) {
             rc = CKSUM_EXIT_FAIL;
         }
     }
     else {
-        for (int i = options.first_operand; i < argc; i++) {
-            if (!cksum_process_path(&options, argv[i], true, &writer)) {
+        for (size_t i = 0; i < count; i++) {
+            if (!cksum_process_path(&options, paths[i], true, &writer)) {
                 rc = CKSUM_EXIT_FAIL;
                 if (bx_line_writer_error(&writer) != 0) {
                     break;
@@ -1719,5 +1688,27 @@ int bx_cksum_main(int argc, char** argv) {
     if (!bx_line_writer_flush(&writer)) {
         return CKSUM_EXIT_FAIL;
     }
+    return rc;
+}
+
+int bx_cksum_main(int argc, char** argv) {
+    struct cksum_options options = {
+        .progname = cksum_progname(argc > 0 ? argv[0] : NULL),
+        .algorithm = CKSUM_ALGORITHM_CRC,
+        .output_mode = CKSUM_OUTPUT_AUTO,
+    };
+    const char** paths = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*paths)) : NULL;
+    if (argc > 1 && paths == NULL) {
+        fprintf(stderr, "%s: memory exhausted\n", options.progname);
+        return CKSUM_EXIT_FAIL;
+    }
+
+    size_t count = 0;
+    int rc = CKSUM_EXIT_USAGE;
+    if (cksum_parse_options(argc, argv, &options, paths, &count))
+        rc = cksum_run(options, count, paths);
+    else
+        cksum_print_help(stderr, options.progname);
+    free(paths);
     return rc;
 }
