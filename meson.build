@@ -127,7 +127,6 @@ add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
 static_binary_opt = get_option('static_binary')
 compiler_targets_glibc = cc.has_header_symbol('features.h', '__GLIBC__')
-musl_gcc = find_program('musl-gcc', required : false)
 static_link_probe_src = 'int main(void) { return 0; }'
 static_link_probe_args = []
 
@@ -166,15 +165,8 @@ if static_binary_opt == 'enabled'
   endif
   use_static_binary = true
 elif static_binary_opt == 'auto'
-  if compiler_targets_glibc
-    if musl_gcc.found()
-      warning('static_binary=auto: musl-gcc is available but this configure did not select it; using shared linkage. Re-run setup with CC=musl-gcc if you want musl static linkage.')
-    endif
-  elif static_link_supported
-    use_static_binary = true
-  else
-    warning('static_binary=auto: toolchain lacks -static; using shared linkage')
-  endif
+  # Static glibc NSS and resolver calls can still require matching shared libraries.
+  use_static_binary = not compiler_targets_glibc and static_link_supported
 endif
 
 bx_static_link_args = []

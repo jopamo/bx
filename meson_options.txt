@@ -20,8 +20,8 @@ option(
   'static_binary',
   type : 'combo',
   choices : ['auto', 'enabled', 'disabled'],
-  value : 'enabled',
-  description : 'Static link policy: enabled (default), auto (musl toolchains), or disabled'
+  value : 'auto',
+  description : 'Static link policy: auto (default; shared on glibc), enabled, or disabled'
 )
 option(
   'fetch',
