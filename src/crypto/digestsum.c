@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "crypto/digestsum.h"
+#include "lib/args_common.h"
 #include "lib/line_writer.h"
 
 enum {
@@ -23,8 +24,8 @@ enum bx_digestsum_longopt {
     BX_DIGESTSUM_OPT_STATUS,
     BX_DIGESTSUM_OPT_STRICT,
     BX_DIGESTSUM_OPT_TAG,
-    BX_DIGESTSUM_OPT_WARN,
-    BX_DIGESTSUM_OPT_ZERO,
+    BX_DIGESTSUM_OPT_HELP,
+    BX_DIGESTSUM_OPT_VERSION,
 };
 
 struct bx_digestsum_options {
@@ -575,20 +576,21 @@ static bool bx_digestsum_parse_options(int argc,
         {"status", no_argument, NULL, BX_DIGESTSUM_OPT_STATUS},
         {"strict", no_argument, NULL, BX_DIGESTSUM_OPT_STRICT},
         {"tag", no_argument, NULL, BX_DIGESTSUM_OPT_TAG},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_DIGESTSUM_OPT_HELP},
+        {"version", no_argument, NULL, BX_DIGESTSUM_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_digestsum_progname(impl, argv[0]);
 
-    opterr = 0;
-    optind = 1;
+    bool posix = getenv("POSIXLY_CORRECT") != NULL;
+    int next_operand = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int option_index = 0;
-        int c = getopt_long(argc, argv, "+bctwz", long_options, &option_index);
+        int c = posix ? bx_args_getopt_long(argc, argv, "+bctwz", long_options, NULL)
+                      : bx_args_getopt_long_interspersed(argc, argv, "-bctwz", long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -626,10 +628,10 @@ static bool bx_digestsum_parse_options(int argc,
             case BX_DIGESTSUM_OPT_TAG:
                 options->tag = true;
                 break;
-            case 1:
+            case BX_DIGESTSUM_OPT_HELP:
                 options->show_help = true;
                 break;
-            case 2:
+            case BX_DIGESTSUM_OPT_VERSION:
                 options->show_version = true;
                 break;
             case '?': {
