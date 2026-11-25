@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,7 +19,9 @@
 #include "lib/size_parse.h"
 #include "lib/option_scan.h"
 #include "lib/dir_cycle.h"
+#include "lib/fd_ops.h"
 #include "lib/path_ops.h"
+#include "lib/same_file.h"
 
 enum bx_du_symlink_mode {
     BX_DU_SYMLINK_NEVER = 0,
@@ -422,10 +425,6 @@ static bool bx_du_emit_line(uintmax_t size_bytes, const char* path, const struct
     return true;
 }
 
-static bool bx_du_is_dot_or_dotdot(const char* name) {
-    return (name[0] == '.' && name[1] == '\0') || (name[0] == '.' && name[1] == '.' && name[2] == '\0');
-}
-
 static uintmax_t bx_du_disk_usage_bytes(const struct stat* st) {
     if (st->st_blocks <= 0) {
         return 0u;
@@ -457,115 +456,116 @@ static bool bx_du_should_follow_symlink(const struct bx_du_options* options, boo
     return false;
 }
 
+static DIR* bx_du_open_directory(int parent_fd, const char* name, bool follow,
+                                 const struct stat* expected) {
+    int flags = O_RDONLY | O_DIRECTORY | (follow ? 0 : O_NOFOLLOW);
+    int fd = parent_fd == AT_FDCWD ? bx_fd_open_cloexec(name, flags, 0)
+                                  : bx_fd_openat_child(parent_fd, name, flags, 0);
+    if (fd < 0)
+        return NULL;
+
+    struct stat opened;
+    int error;
+    if (fstat(fd, &opened) != 0) {
+        error = errno;
+    } else if (!bx_same_file(expected, &opened)) {
+        error = ESTALE;
+    } else {
+        DIR* dir = fdopendir(fd);
+        if (dir)
+            return dir;
+        error = errno;
+    }
+    bx_fd_cleanup(&fd);
+    errno = error;
+    return NULL;
+}
+
 static uintmax_t bx_du_walk_path(struct bx_du_context* ctx,
+                                 int parent_fd,
+                                 const char* name,
                                  const char* path,
-                                 bool top_level,
                                  uintmax_t depth,
                                  dev_t root_dev,
-                                 bool root_dev_set,
-                                 struct bx_dir_stack* dir_stack,
-                                 bool* ok_out) {
+                                 struct bx_dir_stack* dir_stack) {
     const struct bx_du_options* options = ctx->options;
+    bool top_level = dir_stack == NULL;
 
-    struct stat lst;
-    if (lstat(path, &lst) != 0) {
+    struct stat st;
+    int status = top_level ? lstat(name, &st) : bx_fd_fstatat_child_nofollow(parent_fd, name, &st);
+    if (status != 0) {
         bx_perror_path(ctx->diag, path);
-        *ok_out = false;
         return 0u;
     }
 
-    struct stat st = lst;
-    if (S_ISLNK(lst.st_mode) && bx_du_should_follow_symlink(options, top_level)) {
-        if (stat(path, &st) != 0) {
+    bool follow = S_ISLNK(st.st_mode) && bx_du_should_follow_symlink(options, top_level);
+    if (follow) {
+        status = top_level ? stat(name, &st) : bx_fd_fstatat_child(parent_fd, name, &st, 0);
+        if (status != 0) {
             bx_perror_path(ctx->diag, path);
-            *ok_out = false;
             return 0u;
         }
     }
 
-    if (!root_dev_set) {
+    if (top_level)
         root_dev = st.st_dev;
-        root_dev_set = true;
-    }
 
-    if (!top_level && options->one_file_system && S_ISDIR(st.st_mode) && st.st_dev != root_dev) {
-        *ok_out = true;
+    bool is_dir = S_ISDIR(st.st_mode);
+    if (is_dir && ((!top_level && options->one_file_system && st.st_dev != root_dev) ||
+                   bx_dir_stack_contains(dir_stack, &st)))
         return 0u;
-    }
 
-    if (S_ISDIR(st.st_mode) && bx_dir_stack_contains(dir_stack, &st)) {
-        *ok_out = true;
+    if (!options->count_links && bx_du_inode_set_mark_seen(&ctx->seen, st.st_dev, st.st_ino))
         return 0u;
-    }
 
-    if (!options->count_links && bx_du_inode_set_mark_seen(&ctx->seen, st.st_dev, st.st_ino)) {
-        *ok_out = true;
-        return 0u;
-    }
-
-    bool ok = true;
     uintmax_t total_bytes = bx_du_path_usage_bytes(&st, options);
 
-    if (S_ISDIR(st.st_mode)) {
+    if (is_dir) {
         struct bx_dir_stack stack_entry = {
             .dev = st.st_dev,
             .ino = st.st_ino,
             .parent = dir_stack,
         };
 
-        DIR* dir = opendir(path);
+        DIR* dir = bx_du_open_directory(parent_fd, name, follow, &st);
         if (dir == NULL) {
             bx_perror_path(ctx->diag, path);
-            ok = false;
         }
         else {
-            while (true) {
+            int fd = dirfd(dir);
+            if (fd < 0)
+                bx_perror_path(ctx->diag, path);
+            while (fd >= 0) {
                 errno = 0;
                 struct dirent* entry = readdir(dir);
                 if (entry == NULL) {
-                    if (errno != 0) {
+                    if (errno != 0)
                         bx_perror_path(ctx->diag, path);
-                        ok = false;
-                    }
                     break;
                 }
 
-                if (bx_du_is_dot_or_dotdot(entry->d_name)) {
+                if (bx_path_is_dot_or_dotdot(entry->d_name)) {
                     continue;
                 }
 
                 char* child_path = bx_path_join(path, entry->d_name);
-                bool child_ok = true;
                 uintmax_t child_depth = depth == UINTMAX_MAX ? UINTMAX_MAX : depth + 1u;
-                uintmax_t child_total = bx_du_walk_path(ctx, child_path, false, child_depth, root_dev, root_dev_set, &stack_entry, &child_ok);
+                uintmax_t child_total = bx_du_walk_path(ctx, fd, entry->d_name, child_path, child_depth,
+                                                       root_dev, &stack_entry);
                 total_bytes = bx_du_saturating_add(total_bytes, child_total);
-                if (!child_ok) {
-                    ok = false;
-                }
                 free(child_path);
             }
 
-            if (closedir(dir) != 0) {
+            if (closedir(dir) != 0)
                 bx_perror_path(ctx->diag, path);
-                ok = false;
-            }
         }
     }
 
-    bool should_print = false;
-    if (S_ISDIR(st.st_mode)) {
-        should_print = !options->summarize || top_level;
-    }
-    else if (top_level || (!options->summarize && options->all)) {
-        should_print = true;
-    }
-
+    bool should_print = top_level || (!options->summarize && (is_dir || options->all));
     bool within_max_depth = !options->limit_depth || depth <= options->max_depth;
-    if (should_print && within_max_depth && !bx_du_emit_line(total_bytes, path, options, ctx->diag, ctx->writer)) {
-        ok = false;
-    }
+    if (should_print && within_max_depth)
+        bx_du_emit_line(total_bytes, path, options, ctx->diag, ctx->writer);
 
-    *ok_out = ok;
     return total_bytes;
 }
 
@@ -610,14 +610,11 @@ int bx_du_main(int argc, char** argv) {
     uintmax_t grand_total_bytes = 0u;
 
     if (operand_count == 0) {
-        bool operand_ok = true;
-        uintmax_t total_bytes = bx_du_walk_path(&ctx, ".", true, 0u, 0, false, NULL, &operand_ok);
-        grand_total_bytes = bx_du_saturating_add(grand_total_bytes, total_bytes);
+        grand_total_bytes = bx_du_walk_path(&ctx, AT_FDCWD, ".", ".", 0, 0, NULL);
     }
     else {
         for (size_t i = 0; i < operand_count; i++) {
-            bool operand_ok = true;
-            uintmax_t total_bytes = bx_du_walk_path(&ctx, operands[i], true, 0u, 0, false, NULL, &operand_ok);
+            uintmax_t total_bytes = bx_du_walk_path(&ctx, AT_FDCWD, operands[i], operands[i], 0, 0, NULL);
             grand_total_bytes = bx_du_saturating_add(grand_total_bytes, total_bytes);
         }
     }
