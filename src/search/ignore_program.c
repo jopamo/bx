@@ -7,6 +7,7 @@
 
 #include "dev_counters.h"
 #include "ignore_program.h"
+#include "lib/glob_syntax.h"
 
 enum bx_ignore_rule_kind {
     BX_IGNORE_RULE_INVALID = 0,
@@ -252,6 +253,8 @@ static bool bx_ignore_rule_compile(struct bx_ignore_rule *rule,
     rule->pattern = strndup(pattern, pattern_len);
     if (!rule->pattern)
         return false;
+    if (strstr(rule->pattern, "[^"))
+        bx_glob_normalize_caret(rule->pattern);
     rule->kind = bx_ignore_rule_classify(rule->uses_relative_path,
                                          rule->directory_only,
                                          rule->pattern);
