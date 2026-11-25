@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <grp.h>
 #include <inttypes.h>
 #include <pwd.h>
@@ -24,12 +23,11 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 #include "lib/path_quote.h"
 
 struct bx_stat_options {
-    const char* progname;
     bool dereference;
     bool file_system;
     bool terse;
@@ -76,34 +74,42 @@ static void bx_stat_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version        output version information and exit\n");
 }
 
-static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"format", required_argument, NULL, 'c'},
-        {"printf", required_argument, NULL, BX_STAT_OPT_PRINTF},
-        {"file-system", no_argument, NULL, 'f'},
-        {"dereference", no_argument, NULL, 'L'},
-        {"terse", no_argument, NULL, 't'},
-        {"help", no_argument, NULL, BX_STAT_OPT_HELP},
-        {"version", no_argument, NULL, BX_STAT_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options* options,
+                                  const char** operands, size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "format", BX_OPTION_REQUIRED_VALUE},
+        {'f', 'f', "file-system", BX_OPTION_NO_VALUE},
+        {'L', 'L', "dereference", BX_OPTION_NO_VALUE},
+        {'t', 't', "terse", BX_OPTION_NO_VALUE},
+        {BX_STAT_OPT_PRINTF, 0, "printf", BX_OPTION_REQUIRED_VALUE},
+        {BX_STAT_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_STAT_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "stat");
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-c:fLt", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            operands[(*count)++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case 'c':
-                options->format = optarg;
+                options->format = option.value;
                 options->format_interpret_escapes = false;
                 break;
             case 'f':
@@ -116,7 +122,7 @@ static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options*
                 options->terse = true;
                 break;
             case BX_STAT_OPT_PRINTF:
-                options->format = optarg;
+                options->format = option.value;
                 options->format_interpret_escapes = true;
                 break;
             case BX_STAT_OPT_HELP:
@@ -125,15 +131,9 @@ static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options*
             case BX_STAT_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
         }
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -848,32 +848,32 @@ static const char* bx_stat_effective_format(const struct bx_stat_options* option
 }
 
 int bx_stat_main(int argc, char** argv) {
-    struct bx_stat_options options;
+    struct bx_stat_options options = {0};
     struct bx_diag_ctx diag = {
-        .progname = "stat",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "stat"),
     };
-    int first_operand = 0;
-
-    if (!bx_stat_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+    const char** operands = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*operands)) : NULL;
+    if (argc > 1 && operands == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
     }
+    size_t count = 0;
+    if (!bx_stat_parse_options(argc, argv, &options, operands, &count, &diag))
+        goto done;
 
     if (options.show_help) {
-        bx_stat_print_help(stdout, options.progname);
-        return 0;
+        bx_stat_print_help(stdout, diag.progname);
+        goto done;
     }
 
     if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
+        bx_cli_print_version(diag.progname);
+        goto done;
     }
 
-    if (first_operand >= argc) {
+    if (count == 0) {
         bx_diag(&diag, "missing operand");
-        return diag.exit_status;
+        goto done;
     }
 
     bool format_interpret_escapes = false;
@@ -885,11 +885,12 @@ int bx_stat_main(int argc, char** argv) {
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
     bool printed_entry = false;
-    for (int i = first_operand; i < argc; i++) {
+    for (size_t i = 0; i < count; i++) {
+        const char* path = operands[i];
         if (options.file_system) {
             struct statfs fs;
-            if (statfs(argv[i], &fs) != 0) {
-                bx_perror_path(&diag, argv[i]);
+            if (statfs(path, &fs) != 0) {
+                bx_perror_path(&diag, path);
                 continue;
             }
 
@@ -900,11 +901,11 @@ int bx_stat_main(int argc, char** argv) {
             }
 
             if (format != NULL) {
-                if (!bx_stat_print_fs_using_format(argv[i], &fs, format, format_interpret_escapes, format_append_newline, &writer, &diag)) {
+                if (!bx_stat_print_fs_using_format(path, &fs, format, format_interpret_escapes, format_append_newline, &writer, &diag)) {
                     break;
                 }
             }
-            else if (!bx_stat_print_fs_info(argv[i], &fs, &writer, &diag)) {
+            else if (!bx_stat_print_fs_info(path, &fs, &writer, &diag)) {
                 break;
             }
 
@@ -913,9 +914,9 @@ int bx_stat_main(int argc, char** argv) {
         }
 
         struct stat st;
-        int rc = options.dereference ? stat(argv[i], &st) : lstat(argv[i], &st);
+        int rc = options.dereference ? stat(path, &st) : lstat(path, &st);
         if (rc != 0) {
-            bx_perror_path(&diag, argv[i]);
+            bx_perror_path(&diag, path);
             continue;
         }
 
@@ -926,11 +927,11 @@ int bx_stat_main(int argc, char** argv) {
         }
 
         if (format != NULL) {
-            if (!bx_stat_print_file_using_format(argv[i], &st, &options, format, format_interpret_escapes, format_append_newline, &writer, &diag)) {
+            if (!bx_stat_print_file_using_format(path, &st, &options, format, format_interpret_escapes, format_append_newline, &writer, &diag)) {
                 break;
             }
         }
-        else if (!bx_stat_print_file_info(argv[i], &st, &options, &writer, &diag)) {
+        else if (!bx_stat_print_file_info(path, &st, &options, &writer, &diag)) {
             break;
         }
         printed_entry = true;
@@ -940,5 +941,7 @@ int bx_stat_main(int argc, char** argv) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 
+done:
+    free(operands);
     return diag.exit_status;
 }
