@@ -1,13 +1,12 @@
 #define _GNU_SOURCE
 #include "applets.h"
-#include "lib/args_common.h"
 #include "lib/fetch/exit_code.h"
 #include "lib/fetch/http_header.h"
 #include "lib/fetch/http_status.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 #include "wget.h"
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
@@ -34,7 +33,6 @@ enum {
     WGET_OPT_PASSWORD,
     WGET_OPT_UNLINK,
     WGET_OPT_XATTR,
-    WGET_OPT_FORCE_DIRECTORIES,
     WGET_OPT_NO_HOST_DIRECTORIES,
     WGET_OPT_PROTOCOL_DIRECTORIES,
     WGET_OPT_CUT_DIRS,
@@ -66,73 +64,73 @@ enum {
     WGET_OPT_HSTS_FILE,
 };
 
-static const struct option wget_options[] = {
-    {"version", no_argument, NULL, 'V'},
-    {"help", no_argument, NULL, 'h'},
-    {"quiet", no_argument, NULL, 'q'},
-    {"verbose", no_argument, NULL, 'v'},
-    {"no-verbose", no_argument, NULL, WGET_OPT_NO_VERBOSE},
-    {"tries", required_argument, NULL, 't'},
-    {"retry-connrefused", no_argument, NULL, WGET_OPT_RETRY_CONNREFUSED},
-    {"retry-on-http-error", required_argument, NULL, WGET_OPT_RETRY_ON_HTTP_ERROR},
-    {"output-document", required_argument, NULL, 'O'},
-    {"continue", no_argument, NULL, 'c'},
-    {"timestamping", no_argument, NULL, 'N'},
-    {"server-response", no_argument, NULL, 'S'},
-    {"spider", no_argument, NULL, WGET_OPT_SPIDER},
-    {"timeout", required_argument, NULL, 'T'},
-    {"dns-timeout", required_argument, NULL, WGET_OPT_DNS_TIMEOUT},
-    {"connect-timeout", required_argument, NULL, WGET_OPT_CONNECT_TIMEOUT},
-    {"read-timeout", required_argument, NULL, WGET_OPT_READ_TIMEOUT},
-    {"wait", required_argument, NULL, 'w'},
-    {"waitretry", required_argument, NULL, WGET_OPT_WAITRETRY},
-    {"random-wait", no_argument, NULL, WGET_OPT_RANDOM_WAIT},
-    {"proxy", required_argument, NULL, 'Y'},
-    {"no-proxy", no_argument, NULL, WGET_OPT_NO_PROXY},
-    {"quota", required_argument, NULL, 'Q'},
-    {"bind-address", required_argument, NULL, WGET_OPT_BIND_ADDRESS},
-    {"limit-rate", required_argument, NULL, WGET_OPT_LIMIT_RATE},
-    {"no-dns-cache", no_argument, NULL, WGET_OPT_NO_DNS_CACHE},
-    {"inet4-only", no_argument, NULL, '4'},
-    {"inet6-only", no_argument, NULL, '6'},
-    {"user", required_argument, NULL, WGET_OPT_USER},
-    {"password", required_argument, NULL, WGET_OPT_PASSWORD},
-    {"unlink", no_argument, NULL, WGET_OPT_UNLINK},
-    {"xattr", no_argument, NULL, WGET_OPT_XATTR},
-    {"no-directories", no_argument, NULL, WGET_OPT_NO_DIRECTORIES},
-    {"force-directories", no_argument, NULL, WGET_OPT_FORCE_DIRECTORIES},
-    {"no-host-directories", no_argument, NULL, WGET_OPT_NO_HOST_DIRECTORIES},
-    {"protocol-directories", no_argument, NULL, WGET_OPT_PROTOCOL_DIRECTORIES},
-    {"directory-prefix", required_argument, NULL, 'P'},
-    {"cut-dirs", required_argument, NULL, WGET_OPT_CUT_DIRS},
-    {"http-user", required_argument, NULL, WGET_OPT_HTTP_USER},
-    {"http-password", required_argument, NULL, WGET_OPT_HTTP_PASSWORD},
-    {"header", required_argument, NULL, WGET_OPT_HEADER},
-    {"max-redirect", required_argument, NULL, WGET_OPT_MAX_REDIRECT},
-    {"proxy-user", required_argument, NULL, WGET_OPT_PROXY_USER},
-    {"proxy-password", required_argument, NULL, WGET_OPT_PROXY_PASSWORD},
-    {"referer", required_argument, NULL, WGET_OPT_REFERER},
-    {"save-headers", no_argument, NULL, WGET_OPT_SAVE_HEADERS},
-    {"user-agent", required_argument, NULL, 'U'},
-    {"no-http-keep-alive", no_argument, NULL, WGET_OPT_NO_HTTP_KEEP_ALIVE},
-    {"no-cookies", no_argument, NULL, WGET_OPT_NO_COOKIES},
-    {"load-cookies", required_argument, NULL, WGET_OPT_LOAD_COOKIES},
-    {"save-cookies", required_argument, NULL, WGET_OPT_SAVE_COOKIES},
-    {"keep-session-cookies", no_argument, NULL, WGET_OPT_KEEP_SESSION_COOKIES},
-    {"post-data", required_argument, NULL, WGET_OPT_POST_DATA},
-    {"post-file", required_argument, NULL, WGET_OPT_POST_FILE},
-    {"method", required_argument, NULL, WGET_OPT_METHOD},
-    {"auth-no-challenge", no_argument, NULL, WGET_OPT_AUTH_NO_CHALLENGE},
-    {"https-only", no_argument, NULL, WGET_OPT_HTTPS_ONLY},
-    {"no-check-certificate", no_argument, NULL, WGET_OPT_NO_CHECK_CERTIFICATE},
-    {"certificate", required_argument, NULL, WGET_OPT_CERTIFICATE},
-    {"private-key", required_argument, NULL, WGET_OPT_PRIVATE_KEY},
-    {"ca-certificate", required_argument, NULL, WGET_OPT_CA_CERTIFICATE},
-    {"ca-directory", required_argument, NULL, WGET_OPT_CA_DIRECTORY},
-    {"pinnedpubkey", required_argument, NULL, WGET_OPT_PINNEDPUBKEY},
-    {"no-hsts", no_argument, NULL, WGET_OPT_NO_HSTS},
-    {"hsts-file", required_argument, NULL, WGET_OPT_HSTS_FILE},
-    {NULL, 0, NULL, 0},
+static const struct bx_option_spec wget_options[] = {
+    {'V', 'V', "version", BX_OPTION_NO_VALUE},
+    {'h', 'h', "help", BX_OPTION_NO_VALUE},
+    {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+    {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+    {WGET_OPT_NO_VERBOSE, 0, "no-verbose", BX_OPTION_NO_VALUE},
+    {'t', 't', "tries", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_RETRY_CONNREFUSED, 0, "retry-connrefused", BX_OPTION_NO_VALUE},
+    {WGET_OPT_RETRY_ON_HTTP_ERROR, 0, "retry-on-http-error", BX_OPTION_REQUIRED_VALUE},
+    {'O', 'O', "output-document", BX_OPTION_REQUIRED_VALUE},
+    {'c', 'c', "continue", BX_OPTION_NO_VALUE},
+    {'N', 'N', "timestamping", BX_OPTION_NO_VALUE},
+    {'S', 'S', "server-response", BX_OPTION_NO_VALUE},
+    {WGET_OPT_SPIDER, 0, "spider", BX_OPTION_NO_VALUE},
+    {'T', 'T', "timeout", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_DNS_TIMEOUT, 0, "dns-timeout", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_CONNECT_TIMEOUT, 0, "connect-timeout", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_READ_TIMEOUT, 0, "read-timeout", BX_OPTION_REQUIRED_VALUE},
+    {'w', 'w', "wait", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_WAITRETRY, 0, "waitretry", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_RANDOM_WAIT, 0, "random-wait", BX_OPTION_NO_VALUE},
+    {'Y', 'Y', "proxy", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_NO_PROXY, 0, "no-proxy", BX_OPTION_NO_VALUE},
+    {'Q', 'Q', "quota", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_BIND_ADDRESS, 0, "bind-address", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_LIMIT_RATE, 0, "limit-rate", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_NO_DNS_CACHE, 0, "no-dns-cache", BX_OPTION_NO_VALUE},
+    {'4', '4', "inet4-only", BX_OPTION_NO_VALUE},
+    {'6', '6', "inet6-only", BX_OPTION_NO_VALUE},
+    {WGET_OPT_USER, 0, "user", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_PASSWORD, 0, "password", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_UNLINK, 0, "unlink", BX_OPTION_NO_VALUE},
+    {WGET_OPT_XATTR, 0, "xattr", BX_OPTION_NO_VALUE},
+    {WGET_OPT_NO_DIRECTORIES, 0, "no-directories", BX_OPTION_NO_VALUE},
+    {'x', 'x', "force-directories", BX_OPTION_NO_VALUE},
+    {WGET_OPT_NO_HOST_DIRECTORIES, 0, "no-host-directories", BX_OPTION_NO_VALUE},
+    {WGET_OPT_PROTOCOL_DIRECTORIES, 0, "protocol-directories", BX_OPTION_NO_VALUE},
+    {'P', 'P', "directory-prefix", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_CUT_DIRS, 0, "cut-dirs", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_HTTP_USER, 0, "http-user", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_HTTP_PASSWORD, 0, "http-password", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_HEADER, 0, "header", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_MAX_REDIRECT, 0, "max-redirect", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_PROXY_USER, 0, "proxy-user", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_PROXY_PASSWORD, 0, "proxy-password", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_REFERER, 0, "referer", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_SAVE_HEADERS, 0, "save-headers", BX_OPTION_NO_VALUE},
+    {'U', 'U', "user-agent", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_NO_HTTP_KEEP_ALIVE, 0, "no-http-keep-alive", BX_OPTION_NO_VALUE},
+    {WGET_OPT_NO_COOKIES, 0, "no-cookies", BX_OPTION_NO_VALUE},
+    {WGET_OPT_LOAD_COOKIES, 0, "load-cookies", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_SAVE_COOKIES, 0, "save-cookies", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_KEEP_SESSION_COOKIES, 0, "keep-session-cookies", BX_OPTION_NO_VALUE},
+    {WGET_OPT_POST_DATA, 0, "post-data", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_POST_FILE, 0, "post-file", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_METHOD, 0, "method", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_AUTH_NO_CHALLENGE, 0, "auth-no-challenge", BX_OPTION_NO_VALUE},
+    {WGET_OPT_HTTPS_ONLY, 0, "https-only", BX_OPTION_NO_VALUE},
+    {WGET_OPT_NO_CHECK_CERTIFICATE, 0, "no-check-certificate", BX_OPTION_NO_VALUE},
+    {WGET_OPT_CERTIFICATE, 0, "certificate", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_PRIVATE_KEY, 0, "private-key", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_CA_CERTIFICATE, 0, "ca-certificate", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_CA_DIRECTORY, 0, "ca-directory", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_PINNEDPUBKEY, 0, "pinnedpubkey", BX_OPTION_REQUIRED_VALUE},
+    {WGET_OPT_NO_HSTS, 0, "no-hsts", BX_OPTION_NO_VALUE},
+    {WGET_OPT_HSTS_FILE, 0, "hsts-file", BX_OPTION_REQUIRED_VALUE},
+    {'n', 'n', NULL, BX_OPTION_OPTIONAL_VALUE},
 };
 
 static void wget_usage_hint(FILE* stream) {
@@ -205,18 +203,18 @@ static bool wget_retry_statuses_valid(const char* list) {
     return true;
 }
 
-#define WGET_SET_STRING(field)                     \
-    do {                                           \
-        if (wget_replace_string(&(field), optarg)) \
-            goto allocation_failure;               \
+#define WGET_SET_STRING(field)                        \
+    do {                                              \
+        if (wget_replace_string(&(field), option.value)) \
+            goto allocation_failure;                  \
     } while (0)
 
-#define WGET_PARSE_INT(field, name)                                       \
-    do {                                                                  \
-        if (!wget_parse_nonnegative_int(optarg, &(field))) {              \
+#define WGET_PARSE_INT(field, name)                                      \
+    do {                                                                 \
+        if (!wget_parse_nonnegative_int(option.value, &(field))) {        \
             fprintf(stderr, "wget: --%s: invalid numeric value\n", name); \
-            goto parse_failure;                                           \
-        }                                                                 \
+            goto parse_failure;                                          \
+        }                                                                \
     } while (0)
 
 static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_code_out) {
@@ -224,6 +222,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
     struct bx_fetch_config* config = bx_fetch_config_new();
     if (!config)
         return NULL;
+    char** urls = NULL;
     config->logging.structured_errors = false;
     config->logging.verbosity = BX_FETCH_VERBOSITY_VERBOSE;
     config->download.show_progress = true;
@@ -232,12 +231,31 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
     if (wget_replace_string(&config->http.user_agent, "Wget/1.25.0") != 0)
         goto allocation_failure;
 
-    bx_args_getopt_reset();
-    for (;;) {
-        int option = bx_args_getopt_long(argc, argv, "Vhqvn:t:O:cNST:w:Y:Q:46P:U:x", wget_options, NULL);
-        if (option == -1)
-            break;
-        switch (option) {
+    urls = calloc((size_t)argc, sizeof(*urls));
+    if (urls == NULL)
+        goto allocation_failure;
+    int url_count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          wget_options, sizeof(wget_options) / sizeof(wget_options[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (option.token[0] == '\0') {
+                wget_parse_error("empty URL operand", *exit_code_out);
+                goto parse_failure;
+            }
+            urls[url_count++] = argv[option.index];
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            const char* reason = option.event == BX_OPTION_MISSING_VALUE ? "option requires an argument" :
+                option.event == BX_OPTION_AMBIGUOUS ? "ambiguous option" : "unrecognized option";
+            fprintf(stderr, "wget: %s '%s'\n", reason, option.token);
+            wget_usage_hint(stderr);
+            goto parse_failure;
+        }
+        switch (option.spec->id) {
             case 'V':
                 config->startup.show_version = true;
                 break;
@@ -252,7 +270,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 config->logging.verbosity = BX_FETCH_VERBOSITY_VERBOSE;
                 break;
             case 'n': {
-                const char* token = optind > 0 && optind <= argc ? argv[optind - 1] : "";
+                const char* token = option.token;
                 if (strcmp(token, "-nd") == 0)
                     config->dirs.no_directories = true;
                 else if (strcmp(token, "-nH") == 0)
@@ -273,7 +291,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 config->download.show_progress = false;
                 break;
             case 't':
-                if (!wget_parse_positive_int(optarg, &config->download.tries)) {
+                if (!wget_parse_positive_int(option.value, &config->download.tries)) {
                     fputs("wget: --tries: retries must be a bounded positive integer\n", stderr);
                     goto parse_failure;
                 }
@@ -282,7 +300,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 config->download.retry_connrefused = true;
                 break;
             case WGET_OPT_RETRY_ON_HTTP_ERROR:
-                if (!wget_retry_statuses_valid(optarg)) {
+                if (!wget_retry_statuses_valid(option.value)) {
                     fputs("wget: --retry-on-http-error: invalid HTTP status list\n", stderr);
                     goto parse_failure;
                 }
@@ -305,8 +323,8 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 break;
             case 'T': {
                 int timeout = 0;
-                if (!wget_parse_nonnegative_int(optarg, &timeout)) {
-                    fprintf(stderr, "wget: --timeout: Invalid time period '%s'\n", optarg);
+                if (!wget_parse_nonnegative_int(option.value, &timeout)) {
+                    fprintf(stderr, "wget: --timeout: Invalid time period '%s'\n", option.value);
                     goto parse_failure;
                 }
                 config->download.dns_timeout = timeout;
@@ -333,9 +351,9 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 config->download.random_wait = true;
                 break;
             case 'Y':
-                if (strcasecmp(optarg, "off") == 0)
+                if (strcasecmp(option.value, "off") == 0)
                     config->download.no_proxy = true;
-                else if (strcasecmp(optarg, "on") == 0)
+                else if (strcasecmp(option.value, "on") == 0)
                     config->download.no_proxy = false;
                 else {
                     fputs("wget: --proxy: expected `on' or `off'\n", stderr);
@@ -346,7 +364,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 config->download.no_proxy = true;
                 break;
             case 'Q':
-                if (!wget_parse_scaled_long(optarg, &config->download.quota)) {
+                if (!wget_parse_scaled_long(option.value, &config->download.quota)) {
                     fputs("wget: --quota: invalid byte count\n", stderr);
                     goto parse_failure;
                 }
@@ -355,7 +373,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 WGET_SET_STRING(config->download.bind_address);
                 break;
             case WGET_OPT_LIMIT_RATE:
-                if (!wget_parse_scaled_i64(optarg, &config->download.limit_rate_bytes_per_sec) || config->download.limit_rate_bytes_per_sec <= 0) {
+                if (!wget_parse_scaled_i64(option.value, &config->download.limit_rate_bytes_per_sec) || config->download.limit_rate_bytes_per_sec <= 0) {
                     fputs("wget: --limit-rate: invalid byte rate\n", stderr);
                     goto parse_failure;
                 }
@@ -384,7 +402,6 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
             case WGET_OPT_NO_DIRECTORIES:
                 config->dirs.no_directories = true;
                 break;
-            case WGET_OPT_FORCE_DIRECTORIES:
             case 'x':
                 config->dirs.force_directories = true;
                 break;
@@ -407,7 +424,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 WGET_SET_STRING(config->http.http_password);
                 break;
             case WGET_OPT_HEADER:
-                if (bx_fetch_config_add_http_header(config, optarg) != BX_FETCH_HTTP_HEADER_OK) {
+                if (bx_fetch_config_add_http_header(config, option.value) != BX_FETCH_HTTP_HEADER_OK) {
                     fputs("wget: --header: invalid or forbidden HTTP header\n", stderr);
                     goto parse_failure;
                 }
@@ -452,7 +469,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 WGET_SET_STRING(config->http.post_file);
                 break;
             case WGET_OPT_METHOD:
-                if (!bx_fetch_http_method_is_valid(optarg)) {
+                if (!bx_fetch_http_method_is_valid(option.value)) {
                     fputs("wget: --method: invalid HTTP method\n", stderr);
                     goto parse_failure;
                 }
@@ -488,19 +505,13 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
             case WGET_OPT_HSTS_FILE:
                 WGET_SET_STRING(config->https.hsts_file);
                 break;
-            case '?': {
-                const char* token = optind > 0 && optind <= argc ? argv[optind - 1] : "";
-                fprintf(stderr, "wget: unrecognized option '%s'\n", token);
-                wget_usage_hint(stderr);
-                goto parse_failure;
-            }
             default:
                 fputs("wget: unsupported option\n", stderr);
                 goto parse_failure;
         }
     }
 
-    if (bx_fetch_config_copy_urls(config, argc - optind, &argv[optind]) != 0)
+    if (bx_fetch_config_copy_urls(config, url_count, urls) != 0)
         goto allocation_failure;
     if (config->download.inet4_only && config->download.inet6_only) {
         fputs("Cannot specify both --inet4-only and --inet6-only.\n", stderr);
@@ -527,12 +538,14 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
         fputs("wget: --no-cookies cannot be combined with cookie file options\n", stderr);
         goto parse_failure;
     }
+    free(urls);
     return config;
 
 allocation_failure:
     fputs("wget: memory exhausted while parsing command line\n", stderr);
     *exit_code_out = 1;
 parse_failure:
+    free(urls);
     bx_fetch_config_free(config);
     return NULL;
 }
