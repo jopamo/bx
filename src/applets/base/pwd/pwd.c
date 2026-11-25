@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +10,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 enum bx_pwd_mode {
     BX_PWD_MODE_LOGICAL = 0,
@@ -23,6 +22,7 @@ struct bx_pwd_options {
     enum bx_pwd_mode mode;
     bool show_help;
     bool show_version;
+    bool extra_operand;
 };
 
 static void bx_pwd_print_help(FILE* stream, const char* progname) {
@@ -35,9 +35,12 @@ static void bx_pwd_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version   output version information and exit\n");
 }
 
-static bool bx_pwd_parse_options(int argc, char** argv, struct bx_pwd_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"logical", no_argument, NULL, 'L'}, {"physical", no_argument, NULL, 'P'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
+static bool bx_pwd_parse_options(int argc, char** argv, struct bx_pwd_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'L', 'L', "logical", BX_OPTION_NO_VALUE},
+        {'P', 'P', "physical", BX_OPTION_NO_VALUE},
+        {1, 0, "help", BX_OPTION_NO_VALUE},
+        {2, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -45,15 +48,22 @@ static bool bx_pwd_parse_options(int argc, char** argv, struct bx_pwd_options* o
     options->mode = BX_PWD_MODE_PHYSICAL;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "LP", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            options->extra_operand = true;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'L':
                 options->mode = BX_PWD_MODE_LOGICAL;
                 break;
@@ -66,15 +76,11 @@ static bool bx_pwd_parse_options(int argc, char** argv, struct bx_pwd_options* o
             case 2:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -159,9 +165,8 @@ static char* bx_pwd_getcwd_dup(void) {
 int bx_pwd_main(int argc, char** argv) {
     struct bx_pwd_options options;
     struct bx_diag_ctx diag = {.progname = "pwd", .exit_status = 0};
-    int first_operand = 1;
 
-    if (!bx_pwd_parse_options(argc, argv, &options, &first_operand, &diag)) {
+    if (!bx_pwd_parse_options(argc, argv, &options, &diag)) {
         return 1;
     }
 
@@ -175,7 +180,7 @@ int bx_pwd_main(int argc, char** argv) {
         return 0;
     }
 
-    if (first_operand < argc) {
+    if (options.extra_operand) {
         fprintf(stderr, "%s: ignoring non-option arguments\n", options.progname);
     }
 
