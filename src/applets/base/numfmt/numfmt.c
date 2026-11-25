@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <locale.h>
@@ -15,7 +14,9 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
+
+enum { BX_NUMFMT_NUMBER_SIZE = 256 };
 
 enum unit_type { UNIT_NONE, UNIT_SI, UNIT_IEC, UNIT_IEC_I, UNIT_AUTO };
 
@@ -38,6 +39,8 @@ struct bx_numfmt_options {
     bool grouping;
     bool show_help;
     bool show_version;
+    const char** numbers;
+    size_t number_count;
 };
 
 static void bx_numfmt_print_help(FILE* stream, const char* progname) {
@@ -55,7 +58,7 @@ static void bx_numfmt_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  --field=N          replace the number in input field N (default is 1)\n");
     fprintf(stream, "  --delimiter=C      use C as the field separator instead of whitespace\n");
     fprintf(stream, "  --suffix=S         add S to output numbers and accept S in input numbers\n");
-    fprintf(stream, "  --format=F         use printf-style floating-point format F\n");
+    fprintf(stream, "  --format=F         use one printf-style floating-point conversion\n");
     fprintf(stream, "  --grouping         use locale-defined grouping of digits, e.g. 1,000,000\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
@@ -131,67 +134,58 @@ static bool bx_numfmt_parse_field_index(const char* text, int* value_out, struct
     return true;
 }
 
-static bool bx_numfmt_long_option_requires_arg(const char* arg) {
-    static const char* required[] = {
-        "--from",
-        "--to",
-        "--padding",
-        "--field",
-        "--delimiter",
-        "--suffix",
-        "--format",
-    };
-
-    for (size_t i = 0; i < (sizeof(required) / sizeof(required[0])); i++) {
-        if (strcmp(arg, required[i]) == 0) {
-            return true;
-        }
+static bool bx_numfmt_format_size(const char** cursor) {
+    unsigned size = 0;
+    while (**cursor >= '0' && **cursor <= '9') {
+        size = size * 10 + (unsigned)(**cursor - '0');
+        if (size >= BX_NUMFMT_NUMBER_SIZE)
+            return false;
+        (*cursor)++;
     }
-
-    return false;
+    return true;
 }
 
-static const char* bx_numfmt_missing_arg_name(int opt_value) {
-    switch (opt_value) {
-        case 1:
-            return "--from";
-        case 2:
-            return "--to";
-        case 3:
-            return "--padding";
-        case 5:
-            return "--field";
-        case 6:
-            return "--delimiter";
-        case 7:
-            return "--suffix";
-        case 8:
-            return "--format";
-        default:
-            return NULL;
+/* snprintf receives exactly one double, with no auxiliary arguments. */
+static bool bx_numfmt_valid_format(const char* format) {
+    if (strnlen(format, BX_NUMFMT_NUMBER_SIZE) >= BX_NUMFMT_NUMBER_SIZE)
+        return false;
+
+    bool conversion = false;
+    for (const char* p = format; *p; p++) {
+        if (*p != '%')
+            continue;
+        if (*++p == '%')
+            continue;
+        if (conversion)
+            return false;
+        while (*p && strchr("-+ #0'", *p))
+            p++;
+        if (!bx_numfmt_format_size(&p))
+            return false;
+        if (*p == '.') {
+            p++;
+            if (!bx_numfmt_format_size(&p))
+                return false;
+        }
+        if (*p == 'l')
+            p++;
+        if (!*p || !strchr("aAeEfFgG", *p))
+            return false;
+        conversion = true;
     }
+    return conversion;
 }
 
 static enum bx_numfmt_parse_status bx_numfmt_parse_options(
     int argc,
     char** argv,
     struct bx_numfmt_options* options,
-    int* first_operand,
     struct bx_diag_ctx* diag
 ) {
-    static const struct option long_options[] = {
-        {"from", required_argument, NULL, 1},
-        {"to", required_argument, NULL, 2},
-        {"padding", required_argument, NULL, 3},
-        {"header", optional_argument, NULL, 4},
-        {"field", required_argument, NULL, 5},
-        {"delimiter", required_argument, NULL, 6},
-        {"suffix", required_argument, NULL, 7},
-        {"format", required_argument, NULL, 8},
-        {"grouping", no_argument, NULL, 9},
-        {"help", no_argument, NULL, 10},
-        {"version", no_argument, NULL, 11},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {1, 0, "from", BX_OPTION_REQUIRED_VALUE},  {2, 0, "to", BX_OPTION_REQUIRED_VALUE},        {3, 0, "padding", BX_OPTION_REQUIRED_VALUE}, {4, 0, "header", BX_OPTION_OPTIONAL_VALUE},
+        {5, 0, "field", BX_OPTION_REQUIRED_VALUE}, {6, 0, "delimiter", BX_OPTION_REQUIRED_VALUE}, {7, 0, "suffix", BX_OPTION_REQUIRED_VALUE},  {8, 0, "format", BX_OPTION_REQUIRED_VALUE},
+        {9, 0, "grouping", BX_OPTION_NO_VALUE},    {10, 0, "help", BX_OPTION_NO_VALUE},           {11, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -199,57 +193,77 @@ static enum bx_numfmt_parse_status bx_numfmt_parse_options(
     options->field = 1;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "", long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!options->numbers) {
+                options->numbers = calloc((size_t)argc - option.index, sizeof(*options->numbers));
+                if (!options->numbers) {
+                    bx_perror_path(diag, "allocate number operands");
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
+            }
+            options->numbers[options->number_count++] = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '--%s'", option.spec->long_name);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return BX_NUMFMT_PARSE_ERROR_TRY_HELP;
+        }
+        const char* value = option.value;
+        switch (option.spec->id) {
             case 1:
-                if (!bx_numfmt_parse_unit(optarg, &options->from_unit, diag)) {
+                if (!bx_numfmt_parse_unit(value, &options->from_unit, diag)) {
                     return BX_NUMFMT_PARSE_ERROR;
                 }
                 break;
             case 2:
-                if (!bx_numfmt_parse_unit(optarg, &options->to_unit, diag)) {
+                if (!bx_numfmt_parse_unit(value, &options->to_unit, diag)) {
                     return BX_NUMFMT_PARSE_ERROR;
                 }
                 break;
             case 3:
-                if (!bx_numfmt_parse_padding(optarg, &options->padding, diag)) {
+                if (!bx_numfmt_parse_padding(value, &options->padding, diag)) {
                     return BX_NUMFMT_PARSE_ERROR;
                 }
                 break;
             case 4:
-                if (optarg == NULL) {
+                if (value == NULL) {
                     options->header = 1;
                     break;
                 }
-                if (!bx_numfmt_parse_header_count(optarg, &options->header, diag)) {
+                if (!bx_numfmt_parse_header_count(value, &options->header, diag)) {
                     return BX_NUMFMT_PARSE_ERROR;
                 }
                 break;
             case 5:
-                if (!bx_numfmt_parse_field_index(optarg, &options->field, diag)) {
+                if (!bx_numfmt_parse_field_index(value, &options->field, diag)) {
                     return BX_NUMFMT_PARSE_ERROR;
                 }
                 break;
             case 6:
-                if (optarg[0] == '\0' || optarg[1] != '\0') {
-                    bx_diag(diag, "delimiter must be a single character: '%s'", optarg);
+                if (value[0] == '\0' || value[1] != '\0') {
+                    bx_diag(diag, "delimiter must be a single character: '%s'", value);
                     return BX_NUMFMT_PARSE_ERROR;
                 }
-                options->delimiter = optarg[0];
+                options->delimiter = value[0];
                 break;
             case 7:
-                options->suffix = optarg;
+                options->suffix = value;
                 break;
             case 8:
-                options->format = optarg;
+                if (!bx_numfmt_valid_format(value)) {
+                    bx_diag(diag, "invalid floating-point format");
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
+                options->format = value;
                 break;
             case 9:
                 options->grouping = true;
@@ -260,32 +274,11 @@ static enum bx_numfmt_parse_status bx_numfmt_parse_options(
             case 11:
                 options->show_version = true;
                 return BX_NUMFMT_PARSE_OK;
-            case '?': {
-                const char* missing_name = bx_numfmt_missing_arg_name(optopt);
-                if (missing_name != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", missing_name);
-                    return BX_NUMFMT_PARSE_ERROR_TRY_HELP;
-                }
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    const char* current = argv[optind - 1];
-                    if (strncmp(current, "--", 2) == 0 && bx_numfmt_long_option_requires_arg(current)) {
-                        bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                    }
-                    else {
-                        bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                    }
-                }
-                else {
-                    bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                }
-                return BX_NUMFMT_PARSE_ERROR_TRY_HELP;
-            }
             default:
                 return BX_NUMFMT_PARSE_ERROR;
         }
     }
 
-    *first_operand = optind;
     return BX_NUMFMT_PARSE_OK;
 }
 
@@ -457,7 +450,7 @@ static const char* bx_numfmt_output_unit_label(enum unit_type to_unit, unsigned 
 }
 
 static char* bx_numfmt_format_number(double value, const struct bx_numfmt_options* options) {
-    char number_buf[256];
+    char number_buf[BX_NUMFMT_NUMBER_SIZE];
     double scaled = value;
     unsigned int power = 0u;
 
@@ -491,21 +484,33 @@ static char* bx_numfmt_format_number(double value, const struct bx_numfmt_option
         }
     }
 
-    snprintf(number_buf, sizeof(number_buf), format, scaled);
+    errno = 0;
+    int len = snprintf(number_buf, sizeof(number_buf), format, scaled);
+    if (len < 0) {
+        if (errno == 0)
+            errno = EIO;
+        return NULL;
+    }
+    if ((size_t)len >= sizeof(number_buf)) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
 
     const char* unit = bx_numfmt_output_unit_label(options->to_unit, power);
-    size_t number_len = strlen(number_buf);
+    size_t number_len = (size_t)len;
     size_t unit_len = strlen(unit);
     size_t suffix_len = (options->suffix != NULL) ? strlen(options->suffix) : 0;
     if (number_len > SIZE_MAX - unit_len
         || number_len + unit_len > SIZE_MAX - suffix_len
         || number_len + unit_len + suffix_len > SIZE_MAX - 1u) {
+        errno = EOVERFLOW;
         return NULL;
     }
     size_t total_len = number_len + unit_len + suffix_len;
 
     char* unpadded = malloc(total_len + 1);
     if (unpadded == NULL) {
+        errno = ENOMEM;
         return NULL;
     }
     strcpy(unpadded, number_buf);
@@ -531,12 +536,14 @@ static char* bx_numfmt_format_number(double value, const struct bx_numfmt_option
 
     if (target_width > SIZE_MAX - 1u) {
         free(unpadded);
+        errno = EOVERFLOW;
         return NULL;
     }
 
     char* padded = malloc(target_width + 1);
     if (padded == NULL) {
         free(unpadded);
+        errno = ENOMEM;
         return NULL;
     }
     if (abs_padding <= width || options->padding == 0) {
@@ -557,6 +564,15 @@ static char* bx_numfmt_format_number(double value, const struct bx_numfmt_option
     return padded;
 }
 
+static bool bx_numfmt_format_error(struct bx_diag_ctx* diag) {
+    int err = errno;
+    if (err == ENOMEM)
+        bx_diag(diag, "out of memory");
+    else
+        bx_diag(diag, "cannot format number: %s", bx_strerror(err));
+    return false;
+}
+
 static bool bx_numfmt_process_direct_number(
     const char* text,
     size_t len,
@@ -571,10 +587,8 @@ static bool bx_numfmt_process_direct_number(
     }
 
     char* formatted = bx_numfmt_format_number(value, options);
-    if (formatted == NULL) {
-        bx_diag(diag, "out of memory");
-        return false;
-    }
+    if (formatted == NULL)
+        return bx_numfmt_format_error(diag);
     puts(formatted);
     free(formatted);
     return true;
@@ -598,10 +612,8 @@ static bool bx_numfmt_process_line(char* line, const struct bx_numfmt_options* o
         }
 
         char* formatted = bx_numfmt_format_number(value, options);
-        if (formatted == NULL) {
-            bx_diag(diag, "out of memory");
-            return false;
-        }
+        if (formatted == NULL)
+            return bx_numfmt_format_error(diag);
         fputs(formatted, stdout);
         if (has_newline) {
             fputc('\n', stdout);
@@ -674,10 +686,8 @@ static bool bx_numfmt_process_line(char* line, const struct bx_numfmt_options* o
     }
 
     char* formatted = bx_numfmt_format_number(value, options);
-    if (formatted == NULL) {
-        bx_diag(diag, "out of memory");
-        return false;
-    }
+    if (formatted == NULL)
+        return bx_numfmt_format_error(diag);
     fwrite(line, 1, (size_t)(field_start - line), stdout);
     fputs(formatted, stdout);
     fputs(field_end, stdout);
@@ -688,36 +698,33 @@ static bool bx_numfmt_process_line(char* line, const struct bx_numfmt_options* o
 int bx_numfmt_main(int argc, char** argv) {
     struct bx_numfmt_options options;
     struct bx_diag_ctx diag = {.progname = "numfmt", .exit_status = 0};
-    int first_operand = 0;
-
     setlocale(LC_ALL, "");
 
-    enum bx_numfmt_parse_status parse_status =
-        bx_numfmt_parse_options(argc, argv, &options, &first_operand, &diag);
+    enum bx_numfmt_parse_status parse_status = bx_numfmt_parse_options(argc, argv, &options, &diag);
     if (parse_status != BX_NUMFMT_PARSE_OK) {
         if (parse_status == BX_NUMFMT_PARSE_ERROR_TRY_HELP) {
             bx_cli_print_try_help(options.progname);
         }
-        return diag.exit_status;
+        diag.exit_status = 1;
+        goto done;
     }
 
     if (options.show_help) {
         bx_numfmt_print_help(stdout, options.progname);
-        return 0;
+        goto done;
     }
     if (options.show_version) {
         bx_cli_print_version(options.progname);
-        return 0;
+        goto done;
     }
 
-    int num_args = argc - first_operand;
-    if (num_args > 0) {
-        for (int i = 0; i < num_args; i++) {
-            if (!bx_numfmt_process_direct_number(argv[first_operand + i], strlen(argv[first_operand + i]), &options, &diag)) {
-                return diag.exit_status;
-            }
+    if (options.number_count) {
+        for (size_t i = 0; i < options.number_count; i++) {
+            const char* number = options.numbers[i];
+            if (!bx_numfmt_process_direct_number(number, strlen(number), &options, &diag))
+                break;
         }
-        return diag.exit_status;
+        goto done;
     }
 
     char* line = NULL;
@@ -742,8 +749,7 @@ int bx_numfmt_main(int argc, char** argv) {
             continue;
         }
         if (!bx_numfmt_process_line(line, &options, &diag)) {
-            free(line);
-            return diag.exit_status;
+            break;
         }
     }
     free(line);
@@ -751,5 +757,7 @@ int bx_numfmt_main(int argc, char** argv) {
         bx_diag(&diag, "standard input: %s", bx_strerror(read_errno));
     }
 
+done:
+    free(options.numbers);
     return diag.exit_status;
 }
