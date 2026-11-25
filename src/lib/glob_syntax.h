@@ -235,13 +235,24 @@ static inline bool bx_glob_should_quote_fallback(const char* p, const char* end)
         return false;
     if (n == 7 && memcmp(p, "[^]-", 4) == 0)
         return false;
+    if (n >= 5 && memcmp(p, "[^]-", 4) == 0 && p[4] != '[')
+        return false;
     if (n == 8 && memcmp(p, "[^][^-", 6) == 0 && p[6] != '[' && p[6] != '\\' && p[6] != '-')
         return false;
     if (n == 8 && memcmp(p, "[^][--", 6) == 0)
         return false;
-    if (n == 8 && memcmp(p, "[^][-", 5) == 0 && p[6] == '-' && p[7] == '-' &&
-        p[5] != '[' && p[5] != '^' && p[5] != 'a')
-        return false;
+    /* [^][-X-- matches itself under unset only when X collates at or
+     * after '^'. Quoting any other X invents that literal match. */
+    if (n == 8 && memcmp(p, "[^][-", 5) == 0 && p[6] == '-' && p[7] == '-') {
+        char sample[2] = {p[5], '\0'};
+        int saved = errno;
+        errno = 0;
+        int order = strcoll(sample, "^");
+        int failed = errno != 0;
+        errno = saved;
+        if (failed || order < 0)
+            return false;
+    }
     if (n == 9 && memcmp(p, "[^]-[^-", 7) == 0 && p[7] != '[' && p[7] != '\\' && p[7] != '-')
         return false;
     return end[-1] == '-' || (n >= 2 && end[-2] == '\\' && end[-1] == '-');
