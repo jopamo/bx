@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,7 +10,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 #define BX_PATHCHK_POSIX_PATH_MAX 255L
 #define BX_PATHCHK_POSIX_NAME_MAX 14L
@@ -29,11 +28,8 @@
 #endif
 
 struct bx_pathchk_options {
-    const char* progname;
     bool portability;
     bool posix_safety;
-    bool show_help;
-    bool show_version;
 };
 
 static void bx_pathchk_print_help(FILE* stream, const char* progname) {
@@ -51,56 +47,6 @@ enum {
     BX_PATHCHK_OPT_HELP,
     BX_PATHCHK_OPT_VERSION,
 };
-
-static bool bx_pathchk_parse_options(int argc, char** argv, struct bx_pathchk_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"portability", no_argument, NULL, BX_PATHCHK_OPT_PORTABILITY},
-        {"help", no_argument, NULL, BX_PATHCHK_OPT_HELP},
-        {"version", no_argument, NULL, BX_PATHCHK_OPT_VERSION},
-        {NULL, 0, NULL, 0},
-    };
-
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "pathchk");
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-pP", long_options, &next_operand);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 'p':
-                options->portability = true;
-                break;
-            case 'P':
-                options->posix_safety = true;
-                break;
-            case BX_PATHCHK_OPT_PORTABILITY:
-                options->portability = true;
-                options->posix_safety = true;
-                break;
-            case BX_PATHCHK_OPT_HELP:
-                options->show_help = true;
-                return true;
-            case BX_PATHCHK_OPT_VERSION:
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
-    }
-
-    *first_operand = optind;
-    return true;
-}
 
 static long bx_pathchk_query_limit(int selector, long fallback) {
     errno = 0;
@@ -257,40 +203,66 @@ static void bx_pathchk_check_name(const char* name, const struct bx_pathchk_opti
 }
 
 int bx_pathchk_main(int argc, char** argv) {
-    struct bx_pathchk_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "pathchk",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+    static const struct bx_option_spec specs[] = {
+        {'p', 'p', NULL, BX_OPTION_NO_VALUE},
+        {'P', 'P', NULL, BX_OPTION_NO_VALUE},
+        {BX_PATHCHK_OPT_PORTABILITY, 0, "portability", BX_OPTION_NO_VALUE},
+        {BX_PATHCHK_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_PATHCHK_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
-    int first_operand = 0;
-
-    if (!bx_pathchk_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        bx_cli_print_try_help(options.progname);
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_pathchk_print_help(stdout, options.progname);
-        return 0;
-    }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
-    }
-
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        bx_cli_print_try_help(options.progname);
+    struct bx_pathchk_options options = {0};
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "pathchk"),
+    };
+    const char** names = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*names)) : NULL;
+    if (argc > 1 && names == NULL) {
+        bx_diag(&diag, "memory exhausted");
         return diag.exit_status;
     }
-
-    for (int i = first_operand; i < argc; i++) {
-        bx_pathchk_check_name(argv[i], &options, &diag);
+    size_t count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            names[count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(diag.progname);
+            goto done;
+        }
+        switch (option.spec->id) {
+            case 'p': options.portability = true; break;
+            case 'P': options.posix_safety = true; break;
+            case BX_PATHCHK_OPT_PORTABILITY:
+                options.portability = true;
+                options.posix_safety = true;
+                break;
+            case BX_PATHCHK_OPT_HELP:
+                bx_pathchk_print_help(stdout, diag.progname);
+                goto done;
+            case BX_PATHCHK_OPT_VERSION:
+                bx_cli_print_version(diag.progname);
+                goto done;
+        }
     }
 
+    if (count == 0) {
+        bx_diag(&diag, "missing operand");
+        bx_cli_print_try_help(diag.progname);
+        goto done;
+    }
+
+    for (size_t i = 0; i < count; i++)
+        bx_pathchk_check_name(names[i], &options, &diag);
+
+done:
+    free(names);
     return diag.exit_status;
 }
