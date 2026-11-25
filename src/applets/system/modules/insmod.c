@@ -13,7 +13,7 @@ int bx_insmod_main(int argc, char** argv) {
 #ifdef __linux__
     struct bx_diag_ctx diag = {.progname = "insmod"};
     int operand = 1;
-    if (argc > 1 && strcmp(argv[1], "--help") == 0) {
+    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
         puts("usage: insmod [--] MODULE [PARAMETER ...]\n"
              "Load a specified Linux module without resolving dependencies.");
         return 0;
@@ -24,7 +24,7 @@ int bx_insmod_main(int argc, char** argv) {
         bx_diag(&diag, "unsupported option: '%s'", argv[1]);
         return 1;
     }
-    if (operand >= argc) {
+    if (operand >= argc || argv[operand][0] == '\0') {
         bx_diag(&diag, "a module pathname is required");
         return 1;
     }
