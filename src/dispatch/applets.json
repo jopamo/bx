@@ -1054,6 +1054,7 @@
         "recursive-traversal",
         "child-execution",
         "network-access",
+        "privilege-sensitive",
         "raw-output"
       ],
       "self_dispatch": true,
@@ -1285,7 +1286,7 @@
     {
       "name": "diff",
       "main": "bx_diff_main",
-      "capabilities": ["filesystem-read"],
+      "capabilities": ["filesystem-read", "recursive-traversal"],
       "execution_class": "exec-only"
     },
     {
