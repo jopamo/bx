@@ -57,6 +57,10 @@ void
 bc_args(int argc, const char* argv[], bool exit_exprs, BcBigDig* scale,
         BcBigDig* ibase, BcBigDig* obase);
 
+/// Load queued expressions after validating the environment and CLI options.
+void
+bc_args_finish(void);
+
 #if BC_ENABLED
 
 #if DC_ENABLED

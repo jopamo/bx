@@ -50,6 +50,27 @@
 #include <num.h>
 #include <vm.h>
 
+struct bc_arg_expr
+{
+	const char* text;
+	bool is_file;
+};
+
+static void
+bc_args_queue_expr(const char* text, bool is_file, bool exit_exprs)
+{
+	struct bc_arg_expr expr = { text, is_file };
+
+	BC_SIG_ASSERT_LOCKED;
+
+	if (vm->arg_exprs.v == NULL)
+	{
+		bc_vec_init(&vm->arg_exprs, sizeof(expr), BC_DTOR_NONE);
+	}
+	bc_vec_push(&vm->arg_exprs, &expr);
+	vm->exit_exprs = exit_exprs || vm->exit_exprs;
+}
+
 /**
  * Adds @a str to the list of expressions to execute later.
  * @param str  The string to add to the list of expressions.
@@ -190,9 +211,7 @@ bc_args(int argc, const char* argv[], bool exit_exprs, BcBigDig* scale,
 					bc_verr(BC_ERR_FATAL_OPTION, "-e (--expression)");
 				}
 
-				// Add the expressions and set exit.
-				bc_args_exprs(opts.optarg);
-				vm->exit_exprs = (exit_exprs || vm->exit_exprs);
+				bc_args_queue_expr(opts.optarg, false, exit_exprs);
 
 				break;
 			}
@@ -209,9 +228,7 @@ bc_args(int argc, const char* argv[], bool exit_exprs, BcBigDig* scale,
 						bc_verr(BC_ERR_FATAL_OPTION, "-f (--file)");
 					}
 
-					// Add the expressions and set exit.
-					bc_args_file(opts.optarg);
-					vm->exit_exprs = (exit_exprs || vm->exit_exprs);
+					bc_args_queue_expr(opts.optarg, true, exit_exprs);
 				}
 
 				break;
@@ -368,9 +385,6 @@ bc_args(int argc, const char* argv[], bool exit_exprs, BcBigDig* scale,
 		BC_JMP;
 	}
 
-	// We do not print the banner if expressions are used or dc is used.
-	if (BC_ARGS_SHOULD_BE_QUIET) vm->flags &= ~(BC_FLAG_Q);
-
 	// We need to make sure the files list is initialized. We don't want to
 	// initialize it if there are no files because it's just a waste of memory.
 	if (opts.optind < (size_t) argc && vm->files.v == NULL)
@@ -402,4 +416,23 @@ bc_args(int argc, const char* argv[], bool exit_exprs, BcBigDig* scale,
 		bc_num_free(&n);
 	}
 #endif // BC_ENABLE_EXTRA_MATH
+}
+
+void
+bc_args_finish(void)
+{
+	BC_SIG_ASSERT_LOCKED;
+
+	// Both option ranges have been validated. Read -f inputs in the same
+	// sequence as -e expressions; positional files are handled separately.
+	for (size_t i = 0; i < vm->arg_exprs.len; ++i)
+	{
+		const struct bc_arg_expr* expr = bc_vec_item(&vm->arg_exprs, i);
+		if (expr->is_file) bc_args_file(expr->text);
+		else bc_args_exprs(expr->text);
+	}
+	bc_vec_free(&vm->arg_exprs);
+	bc_vec_clear(&vm->arg_exprs);
+
+	if (BC_ARGS_SHOULD_BE_QUIET) vm->flags &= ~(BC_FLAG_Q);
 }

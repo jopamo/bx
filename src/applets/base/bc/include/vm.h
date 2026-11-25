@@ -647,6 +647,9 @@ typedef struct BcVm
 	/// A vector of filenames to process.
 	BcVec files;
 
+	/// Borrowed -e and -f arguments, queued until validation finishes.
+	BcVec arg_exprs;
+
 	/// A vector of expressions to process.
 	BcVec exprs;
 

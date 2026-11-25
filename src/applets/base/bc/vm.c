@@ -751,6 +751,7 @@ bc_vm_shutdown(void)
 	bc_vec_free(&vm->env_args);
 	free(vm->env_args_buffer);
 	bc_vec_free(&vm->files);
+	bc_vec_free(&vm->arg_exprs);
 	bc_vec_free(&vm->exprs);
 
 	if (BC_PARSE_IS_INITED(&vm->read_prs, &vm->prog))
@@ -1727,9 +1728,9 @@ bc_vm_boot(int argc, const char* argv[])
 	bc_vm_setenvFlag(env_exit, env_exit_def, BC_FLAG_EXPR_EXIT);
 	bc_vm_setenvFlag(env_clamp, env_clamp_def, BC_FLAG_DIGIT_CLAMP);
 
-	// Clear the files and expressions vectors, just in case. This marks them as
-	// *not* allocated.
+	// Mark the files and expressions vectors as not allocated.
 	bc_vec_clear(&vm->files);
+	bc_vec_clear(&vm->arg_exprs);
 	bc_vec_clear(&vm->exprs);
 
 #if !BC_ENABLE_LIBRARY
@@ -1811,6 +1812,8 @@ bc_vm_boot(int argc, const char* argv[])
 
 		BC_SIG_LOCK;
 	}
+
+	bc_args_finish();
 
 	// If we are in interactive mode...
 	if (BC_I)
