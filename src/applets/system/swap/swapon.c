@@ -15,15 +15,14 @@ static void usage(FILE* out, const char* name) {
 }
 
 #ifdef __linux__
-#include <getopt.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/swap.h>
 
-#include "lib/args_common.h"
 #include "lib/disk_tag.h"
 #include "lib/mount_table.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 #include "lib/swap_table.h"
 
@@ -160,54 +159,69 @@ int bx_swapon_main(int argc, char** argv) {
         return handled;
     struct bx_diag_ctx diag = {.progname = "swapon"};
 #ifdef __linux__
-    static const struct option opts[] = {
-        {"all", no_argument, NULL, 'a'},
-        {"fstab", required_argument, NULL, 'T'},
-        {"priority", required_argument, NULL, 'p'}, {NULL, 0, NULL, 0},
+    static const struct bx_option_spec options[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'T', 'T', "fstab", BX_OPTION_REQUIRED_VALUE},
+        {'p', 'p', "priority", BX_OPTION_REQUIRED_VALUE},
     };
     int flags = 0;
     bool all = false;
     bool priority = false;
     const char* fstab = NULL;
-    bx_args_getopt_reset();
-    for (int opt; (opt = bx_args_getopt_long(argc, argv, "+:aT:p:", opts, NULL)) != -1;) {
-        if (opt == 'a') {
-            all = true;
-        } else if (opt == 'T') {
-            fstab = optarg;
-        } else if (opt == 'p') {
-            priority = true;
-            flags = swap_priority_flags(optarg);
-            if (flags < 0) {
-                bx_diag(&diag, "invalid priority: '%s'", optarg);
-                return 1;
-            }
-        } else {
-            if (opt == ':')
-                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
+    struct bx_option_cursor cursor;
+    size_t first;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            first = result.index;
+            break;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", result.short_name);
             else
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
+                bx_diag(&diag, "unrecognized option '%s'", result.token);
             return 1;
         }
+        switch (result.spec->id) {
+        case 'a':
+            all = true;
+            break;
+        case 'T':
+            fstab = result.value;
+            break;
+        case 'p':
+            priority = true;
+            flags = swap_priority_flags(result.value);
+            if (flags < 0) {
+                bx_diag(&diag, "invalid priority: '%s'", result.value);
+                return 1;
+            }
+            break;
+        }
     }
+    size_t count = (size_t)argc - first;
     if (all || fstab) {
-        if (!all || (fstab && !*fstab) || priority || optind != argc) {
+        if (!all || (fstab && !*fstab) || priority || count) {
             bx_diag(&diag, "use -a with only -T and no operands");
             return 1;
         }
         return swap_enable_fstab(fstab ? fstab : "/etc/fstab", &diag);
     }
-    if (optind == argc) {
+    if (!count) {
         bx_diag(&diag, "a swap area is required");
         return 1;
     }
-    size_t count = (size_t)(argc - optind);
     char** devices = calloc(count, sizeof(*devices));
     if (devices == NULL) {
         bx_perror_path(&diag, "swap areas");
         return 1;
     }
-    char** specs = argv + optind;
+    char** specs = argv + first;
     int status = 1;
     /* Validate every operand and resolve tags before asking the kernel to activate swap. */
     for (size_t i = 0; i < count; i++) {

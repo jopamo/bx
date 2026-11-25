@@ -13,13 +13,12 @@ static void usage(FILE* out, const char* name) {
 }
 
 #ifdef __linux__
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/random_bytes.h"
 #include "lib/size_parse.h"
@@ -112,35 +111,47 @@ int bx_mkswap_main(int argc, char** argv) {
         return handled;
     struct bx_diag_ctx diag = {.progname = "mkswap"};
 #ifdef __linux__
-    static const struct option opts[] = {
-        {"file", no_argument, NULL, 'F'}, {"size", required_argument, NULL, 's'},
-        {"label", required_argument, NULL, 'L'}, {"uuid", required_argument, NULL, 'U'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec options[] = {
+        {'F', 'F', "file", BX_OPTION_NO_VALUE},
+        {'s', 's', "size", BX_OPTION_REQUIRED_VALUE},
+        {'L', 'L', "label", BX_OPTION_REQUIRED_VALUE},
+        {'U', 'U', "uuid", BX_OPTION_REQUIRED_VALUE},
     };
     const char* label = "", *uuid_text = NULL;
     uintmax_t bytes = 0;
     bool create = false;
-    bx_args_getopt_reset();
-    for (int opt; (opt = bx_args_getopt_long(argc, argv, "+:Fs:L:U:", opts, NULL)) != -1;) {
-        switch (opt) {
+    struct bx_option_cursor cursor;
+    size_t first;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            first = result.index;
+            break;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", result.token);
+            return 1;
+        }
+        switch (result.spec->id) {
         case 'F': create = true; break;
         case 's':
-            if (!bx_size_parse_scaled_uint(optarg, &bytes) || bytes > INT64_MAX) {
-                bx_diag(&diag, "invalid swap size: '%s'", optarg);
+            if (!bx_size_parse_scaled_uint(result.value, &bytes) || bytes > INT64_MAX) {
+                bx_diag(&diag, "invalid swap size: '%s'", result.value);
                 return 1;
             }
             break;
-        case 'L': label = optarg; break;
-        case 'U': uuid_text = optarg; break;
-        case ':':
-            bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-            return 1;
-        default:
-            bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
+        case 'L': label = result.value; break;
+        case 'U': uuid_text = result.value; break;
         }
     }
-    if (!create || argc - optind != 1) {
+    if (!create || (size_t)argc - first != 1) {
         usage(stderr, diag.progname);
         return 1;
     }
@@ -186,7 +197,7 @@ int bx_mkswap_main(int argc, char** argv) {
     memcpy(header + BX_SWAP_LABEL_OFFSET, label, label_len);
     memcpy(header + page - (sizeof(BX_SWAP_V1_MAGIC) - 1),
            BX_SWAP_V1_MAGIC, sizeof(BX_SWAP_V1_MAGIC) - 1);
-    bool ok = create_swap(argv[optind], header, page, (off_t)bytes, &diag);
+    bool ok = create_swap(argv[first], header, page, (off_t)bytes, &diag);
     free(header);
     return ok ? 0 : 1;
 #else
