@@ -2,7 +2,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <float.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <locale.h>
@@ -24,7 +23,7 @@
 #include "lib/line_writer.h"
 #include "lib/size_parse.h"
 #include "lib/xreadwrite.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 enum bx_od_endian_mode {
     BX_OD_ENDIAN_NATIVE = 0,
@@ -204,10 +203,6 @@ static void bx_od_traditional_extra_operand(struct bx_diag_ctx* diag, const char
     fprintf(stderr, "%s: compatibility mode supports at most one file\n", diag->progname);
     fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
     diag->exit_status = 1;
-}
-
-static bool bx_od_short_option_requires_argument(int c) {
-    return c == 'A' || c == 'j' || c == 'N' || c == 'S' || c == 't' || c == 'w';
 }
 
 static bool bx_od_safe_mul(uintmax_t a, uintmax_t b, uintmax_t* out) {
@@ -1126,7 +1121,7 @@ static void bx_od_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Binary prefixes can be used, too: KiB=K, MiB=M, and so on.\n");
 }
 
-static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* options, int* first_operand, struct bx_diag_ctx* diag) {
+static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* options, struct bx_od_operands* operands, struct bx_diag_ctx* diag) {
     enum {
         BX_OD_OPT_HELP = 256,
         BX_OD_OPT_VERSION,
@@ -1135,19 +1130,29 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
         BX_OD_OPT_TRADITIONAL,
     };
 
-    static const struct option long_options[] = {
-        {"address-radix", required_argument, NULL, 'A'},
-        {"endian", required_argument, NULL, BX_OD_OPT_ENDIAN},
-        {"skip-bytes", required_argument, NULL, 'j'},
-        {"read-bytes", required_argument, NULL, 'N'},
-        {"strings", optional_argument, NULL, BX_OD_OPT_STRINGS},
-        {"format", required_argument, NULL, 't'},
-        {"output-duplicates", no_argument, NULL, 'v'},
-        {"width", optional_argument, NULL, 'w'},
-        {"traditional", no_argument, NULL, BX_OD_OPT_TRADITIONAL},
-        {"help", no_argument, NULL, BX_OD_OPT_HELP},
-        {"version", no_argument, NULL, BX_OD_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'A', 'A', "address-radix", BX_OPTION_REQUIRED_VALUE},
+        {BX_OD_OPT_ENDIAN, 0, "endian", BX_OPTION_REQUIRED_VALUE},
+        {'j', 'j', "skip-bytes", BX_OPTION_REQUIRED_VALUE},
+        {'N', 'N', "read-bytes", BX_OPTION_REQUIRED_VALUE},
+        {BX_OD_OPT_STRINGS, 0, "strings", BX_OPTION_OPTIONAL_VALUE},
+        {'t', 't', "format", BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', "output-duplicates", BX_OPTION_NO_VALUE},
+        {'w', 'w', "width", BX_OPTION_OPTIONAL_VALUE},
+        {BX_OD_OPT_TRADITIONAL, 0, "traditional", BX_OPTION_NO_VALUE},
+        {BX_OD_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_OD_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {'a', 'a', NULL, BX_OPTION_NO_VALUE},
+        {'b', 'b', NULL, BX_OPTION_NO_VALUE},
+        {'c', 'c', NULL, BX_OPTION_NO_VALUE},
+        {'d', 'd', NULL, BX_OPTION_NO_VALUE},
+        {'f', 'f', NULL, BX_OPTION_NO_VALUE},
+        {'i', 'i', NULL, BX_OPTION_NO_VALUE},
+        {'l', 'l', NULL, BX_OPTION_NO_VALUE},
+        {'o', 'o', NULL, BX_OPTION_NO_VALUE},
+        {'s', 's', NULL, BX_OPTION_NO_VALUE},
+        {'x', 'x', NULL, BX_OPTION_NO_VALUE},
+        {'S', 'S', NULL, BX_OPTION_REQUIRED_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -1159,41 +1164,60 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
     options->endian_mode = BX_OD_ENDIAN_NATIVE;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "A:j:N:S:t:vw::abcdfilosx", long_options, &option_index);
-
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 'A':
-                if (optarg == NULL || optarg[0] == '\0' || optarg[1] != '\0' ||
-                    (optarg[0] != 'd' && optarg[0] != 'o' && optarg[0] != 'x' && optarg[0] != 'n')) {
-                    bx_diag(diag, "invalid output address radix '%s'; it must be one character from [doxn]",
-                            optarg ? optarg : "");
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!operands->files) {
+                operands->files = calloc((size_t)argc - option.index, sizeof(*operands->files));
+                if (!operands->files) {
+                    bx_perror_path(diag, "allocate input operands");
                     return false;
                 }
-                options->address_radix = optarg[0];
+            }
+            operands->files[operands->file_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE) {
+                if (option.spec->short_name)
+                    fprintf(stderr, "%s: option requires an argument -- '%c'\n", diag->progname, option.spec->short_name);
+                else
+                    fprintf(stderr, "%s: option '%s' requires an argument\n", diag->progname, option.token);
+                bx_od_try_help(diag);
+                diag->exit_status = 1;
+            }
+            else if (option.short_name && isprint(option.short_name))
+                bx_od_invalid_option_short(diag, option.short_name);
+            else
+                bx_od_unrecognized_option(diag, option.token);
+            return false;
+        }
+        const char* value = option.value;
+        switch (option.spec->id) {
+            case 'A':
+                if (value[0] == '\0' || value[1] != '\0' || !strchr("doxn", value[0])) {
+                    bx_diag(diag, "invalid output address radix '%s'; it must be one character from [doxn]", value);
+                    return false;
+                }
+                options->address_radix = value[0];
                 options->saw_nontraditional_option = true;
                 break;
             case BX_OD_OPT_ENDIAN:
                 {
                     bool ambiguous = false;
 
-                    if (bx_od_parse_endian_value(optarg, &options->endian_mode, &ambiguous)) {
+                    if (bx_od_parse_endian_value(value, &options->endian_mode, &ambiguous)) {
                         options->saw_nontraditional_option = true;
                         break;
                     }
 
                     if (ambiguous) {
-                        fprintf(stderr, "%s: ambiguous argument '%s' for '--endian'\n", diag->progname, optarg);
+                        fprintf(stderr, "%s: ambiguous argument '%s' for '--endian'\n", diag->progname, value);
                     }
                     else {
-                        fprintf(stderr, "%s: invalid argument '%s' for '--endian'\n", diag->progname, optarg);
+                        fprintf(stderr, "%s: invalid argument '%s' for '--endian'\n", diag->progname, value);
                     }
                     fprintf(stderr, "Valid arguments are:\n");
                     fprintf(stderr, "  - 'little'\n");
@@ -1203,20 +1227,20 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                     return false;
                 }
             case 'j':
-                if (!bx_od_parse_bytes_with_diag("-j", optarg, &options->skip_bytes, diag)) {
+                if (!bx_od_parse_bytes_with_diag("-j", value, &options->skip_bytes, diag)) {
                     return false;
                 }
                 options->saw_nontraditional_option = true;
                 break;
             case 'N':
-                if (!bx_od_parse_bytes_with_diag("-N", optarg, &options->read_bytes, diag)) {
+                if (!bx_od_parse_bytes_with_diag("-N", value, &options->read_bytes, diag)) {
                     return false;
                 }
                 options->read_bytes_set = true;
                 options->saw_nontraditional_option = true;
                 break;
             case 'S':
-                if (!bx_od_parse_bytes_with_diag("-S", optarg, &options->strings_min, diag)) {
+                if (!bx_od_parse_bytes_with_diag("-S", value, &options->strings_min, diag)) {
                     return false;
                 }
                 options->strings_mode = true;
@@ -1224,15 +1248,15 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                 break;
             case BX_OD_OPT_STRINGS:
                 options->strings_mode = true;
-                if (optarg != NULL) {
-                    if (!bx_od_parse_bytes_with_diag("--strings", optarg, &options->strings_min, diag)) {
+                if (value != NULL) {
+                    if (!bx_od_parse_bytes_with_diag("--strings", value, &options->strings_min, diag)) {
                         return false;
                     }
                 }
                 options->saw_nontraditional_option = true;
                 break;
             case 't':
-                if (!bx_od_parse_type_string(optarg, options, diag)) {
+                if (!bx_od_parse_type_string(value, options, diag)) {
                     return false;
                 }
                 options->saw_nontraditional_option = true;
@@ -1242,30 +1266,24 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                 options->saw_nontraditional_option = true;
                 break;
             case 'w':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL &&
-                    strncmp(argv[optind - 1], "--width", 7u) == 0) {
-                    options->width_option_name = "--width";
-                }
-                else {
-                    options->width_option_name = "-w";
-                }
-                if (optarg == NULL) {
+                options->width_option_name = option.short_name ? "-w" : "--width";
+                if (value == NULL) {
                     options->width = 32u;
                 }
                 else {
                     bool invalid_suffix = false;
-                    enum bx_od_parse_result status = bx_od_parse_width(optarg, &options->width, &invalid_suffix);
+                    enum bx_od_parse_result status = bx_od_parse_width(value, &options->width, &invalid_suffix);
 
                     if (status == BX_OD_PARSE_TOO_LARGE) {
-                        bx_od_option_too_large(diag, options->width_option_name, optarg);
+                        bx_od_option_too_large(diag, options->width_option_name, value);
                         return false;
                     }
                     if (status != BX_OD_PARSE_OK) {
                         if (invalid_suffix) {
-                            bx_od_invalid_suffix_in_argument(diag, options->width_option_name, optarg);
+                            bx_od_invalid_suffix_in_argument(diag, options->width_option_name, value);
                         }
                         else {
-                            bx_diag(diag, "invalid %s argument '%s'", options->width_option_name, optarg);
+                            bx_diag(diag, "invalid %s argument '%s'", options->width_option_name, value);
                         }
                         return false;
                     }
@@ -1283,7 +1301,7 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
             case 'o':
             case 's':
             case 'x':
-                if (!bx_od_append_named_shortcut(options, c)) {
+                if (!bx_od_append_named_shortcut(options, option.spec->id)) {
                     bx_diag(diag, "out of memory");
                     return false;
                 }
@@ -1293,30 +1311,10 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                 break;
             case BX_OD_OPT_HELP:
                 options->show_help = true;
-                *first_operand = optind;
                 return true;
             case BX_OD_OPT_VERSION:
                 options->show_version = true;
-                *first_operand = optind;
                 return true;
-            case '?':
-            default:
-                if (bx_od_short_option_requires_argument(optopt)) {
-                    fprintf(stderr, "%s: option requires an argument -- '%c'\n", diag->progname, optopt);
-                    bx_od_try_help(diag);
-                    diag->exit_status = 1;
-                    return false;
-                }
-                if (optopt != 0 && isprint(optopt)) {
-                    bx_od_invalid_option_short(diag, optopt);
-                }
-                else if (optind > 0 && optind <= argc) {
-                    bx_od_unrecognized_option(diag, argv[optind - 1]);
-                }
-                else {
-                    bx_od_unrecognized_option(diag, NULL);
-                }
-                return false;
         }
     }
 
@@ -1336,7 +1334,6 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
         return false;
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -1344,42 +1341,26 @@ static bool bx_od_is_legacy_offset_candidate(const char* text) {
     return text != NULL && (text[0] == '+' || isdigit((unsigned char)text[0]));
 }
 
-static bool bx_od_parse_operands(int argc,
-                                 char** argv,
-                                 int first_operand,
-                                 const struct bx_od_options* options,
-                                 struct bx_od_operands* operands,
-                                 struct bx_diag_ctx* diag) {
-    int count = argc - first_operand;
-    const char** files = NULL;
-
-    memset(operands, 0, sizeof(*operands));
+static bool bx_od_parse_operands(const struct bx_od_options* options, struct bx_od_operands* operands, struct bx_diag_ctx* diag) {
+    size_t count = operands->file_count;
+    const char* const* files = operands->files;
+    operands->file_count = 0;
     operands->offset = options->skip_bytes;
-
-    if (count > 0) {
-        files = xmalloc((size_t)count * sizeof(*files));
-        for (int i = 0; i < count; i++) {
-            files[i] = argv[first_operand + i];
-        }
-    }
 
     if (options->traditional_mode) {
         uintmax_t value1;
         uintmax_t value2;
 
         if (count == 0) {
-            operands->files = files;
             return true;
         }
 
         if (count == 1) {
             if (bx_od_parse_traditional_offset(files[0], &value1)) {
-                operands->files = files;
                 operands->offset = value1;
                 return true;
             }
 
-            operands->files = files;
             operands->file_count = 1u;
             return true;
         }
@@ -1389,7 +1370,6 @@ static bool bx_od_parse_operands(int argc,
             bool second_is_offset = bx_od_parse_traditional_offset(files[1], &value2);
 
             if (first_is_offset && second_is_offset) {
-                operands->files = files;
                 operands->offset = value1;
                 operands->have_label = true;
                 operands->label = value2;
@@ -1397,25 +1377,21 @@ static bool bx_od_parse_operands(int argc,
             }
 
             if (!first_is_offset && second_is_offset) {
-                operands->files = files;
                 operands->file_count = 1u;
                 operands->offset = value2;
                 return true;
             }
 
             bx_od_traditional_extra_operand(diag, files[1]);
-            free((void*)files);
             return false;
         }
 
         if (count == 3) {
             if (!bx_od_parse_traditional_offset(files[1], &value1) || !bx_od_parse_traditional_offset(files[2], &value2)) {
                 bx_od_traditional_extra_operand(diag, files[1]);
-                free((void*)files);
                 return false;
             }
 
-            operands->files = files;
             operands->file_count = 1u;
             operands->offset = value1;
             operands->have_label = true;
@@ -1424,7 +1400,6 @@ static bool bx_od_parse_operands(int argc,
         }
 
         bx_od_traditional_extra_operand(diag, files[1]);
-        free((void*)files);
         return false;
     }
 
@@ -1432,21 +1407,18 @@ static bool bx_od_parse_operands(int argc,
         uintmax_t value;
 
         if (count == 1 && files[0][0] == '+' && bx_od_parse_traditional_offset(files[0], &value)) {
-            operands->files = files;
             operands->offset = value;
             return true;
         }
 
         if (count == 2 && bx_od_is_legacy_offset_candidate(files[1]) && bx_od_parse_traditional_offset(files[1], &value)) {
-            operands->files = files;
             operands->file_count = 1u;
             operands->offset = value;
             return true;
         }
     }
 
-    operands->files = files;
-    operands->file_count = (size_t)((count > 0) ? count : 0);
+    operands->file_count = count;
     return true;
 }
 
@@ -2485,37 +2457,35 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
 
 int bx_od_main(int argc, char** argv) {
     struct bx_od_options options;
-    struct bx_od_operands operands;
+    struct bx_od_operands operands = {0};
     struct bx_diag_ctx diag = {.progname = "od", .exit_status = 0};
-    int first_operand = 0;
-    bool ok;
+    int status = 1;
 
-    if (!bx_od_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        free(options.formats);
-        return 1;
+    if (!bx_od_parse_options(argc, argv, &options, &operands, &diag)) {
+        goto done;
     }
 
     if (options.show_help) {
         bx_od_print_help(stdout, options.progname);
-        free(options.formats);
-        return 0;
+        status = 0;
+        goto done;
     }
 
     if (options.show_version) {
         bx_cli_print_version(options.progname);
-        free(options.formats);
-        return 0;
+        status = 0;
+        goto done;
     }
 
-    if (!bx_od_parse_operands(argc, argv, first_operand, &options, &operands, &diag)) {
-        free(options.formats);
-        return 1;
+    if (!bx_od_parse_operands(&options, &operands, &diag)) {
+        goto done;
     }
 
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
+    bool ok;
     if (options.strings_mode) {
         ok = bx_od_dump_strings(&options, &operands, &writer, &diag);
     }
@@ -2528,7 +2498,9 @@ int bx_od_main(int argc, char** argv) {
         ok = false;
     }
 
-    free((void*)operands.files);
+    status = ok ? diag.exit_status : 1;
+done:
+    free(operands.files);
     free(options.formats);
-    return ok ? diag.exit_status : 1;
+    return status;
 }
