@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "dispatch/applets.h"
+#include "lib/option_scan.h"
 
 struct options { bool change, remove, other, recurse, shorten, test, verbose; int status; };
 
@@ -231,35 +232,104 @@ static void scan(struct options *o, int fd, const char *base, const char *displa
     closedir(dir);
 }
 
-int bx_symlinks_main(int argc, char **argv) {
+int bx_symlinks_main(int argc, char** argv) {
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', NULL, BX_OPTION_NO_VALUE}, {'d', 'd', NULL, BX_OPTION_NO_VALUE}, {'o', 'o', NULL, BX_OPTION_NO_VALUE}, {'r', 'r', NULL, BX_OPTION_NO_VALUE},
+        {'s', 's', NULL, BX_OPTION_NO_VALUE}, {'t', 't', NULL, BX_OPTION_NO_VALUE}, {'v', 'v', NULL, BX_OPTION_NO_VALUE}, {'h', 'h', NULL, BX_OPTION_NO_VALUE},
+    };
+    const char* usage = "usage: symlinks [-cdorstv] directory ...";
     struct options o = {0};
-    int ch;
-    while ((ch = getopt(argc, argv, "cdorstvh")) != -1) {
-        switch (ch) {
-        case 'c': o.change = true; break;
-        case 'd': o.remove = true; break;
-        case 'o': o.other = true; break;
-        case 'r': o.recurse = true; break;
-        case 's': o.shorten = true; break;
-        case 't': o.test = true; break;
-        case 'v': o.verbose = true; break;
-        case 'h': puts("usage: symlinks [-cdorstv] directory ..."); return 0;
-        default: return 1;
+    const char** paths = NULL;
+    size_t count = 0;
+    int status = 1;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!paths) {
+                paths = calloc((size_t)argc - option.index, sizeof(*paths));
+                if (!paths) {
+                    perror("symlinks: allocate directories");
+                    goto done;
+                }
+            }
+            paths[count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                fprintf(stderr, "symlinks: invalid option -- '%c'\n", option.short_name);
+            else
+                fprintf(stderr, "symlinks: unrecognized option '%s'\n", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
+            case 'c':
+                o.change = true;
+                break;
+            case 'd':
+                o.remove = true;
+                break;
+            case 'o':
+                o.other = true;
+                break;
+            case 'r':
+                o.recurse = true;
+                break;
+            case 's':
+                o.shorten = true;
+                break;
+            case 't':
+                o.test = true;
+                break;
+            case 'v':
+                o.verbose = true;
+                break;
+            case 'h':
+                puts(usage);
+                status = 0;
+                goto done;
+            default:
+                goto done;
         }
     }
-    if (optind == argc) { fputs("usage: symlinks [-cdorstv] directory ...\n", stderr); return 1; }
-    for (int i = optind; i < argc; i++) {
-        char *base = realpath(argv[i], NULL);
-        if (!base) { error(&o, argv[i]); continue; }
+    if (!count) {
+        fprintf(stderr, "%s\n", usage);
+        goto done;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (!*paths[i]) {
+            fputs("symlinks: empty directory operand\n", stderr);
+            goto done;
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
+        char* base = realpath(paths[i], NULL);
+        if (!base) {
+            error(&o, paths[i]);
+            continue;
+        }
         int fd = open(base, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (fd < 0) error(&o, argv[i]);
+        if (fd < 0)
+            error(&o, paths[i]);
         else {
             struct stat st;
-            if (fstat(fd, &st)) { error(&o, argv[i]); close(fd); }
-            else scan(&o, fd, base, argv[i], st.st_dev, 0);
+            if (fstat(fd, &st)) {
+                error(&o, paths[i]);
+                close(fd);
+            }
+            else
+                scan(&o, fd, base, paths[i], st.st_dev, 0);
         }
         free(base);
     }
-    if (fflush(stdout) || ferror(stdout)) { errno = EIO; error(&o, "stdout"); }
-    return o.status;
+    if (fflush(stdout) || ferror(stdout)) {
+        errno = EIO;
+        error(&o, "stdout");
+    }
+    status = o.status;
+done:
+    free(paths);
+    return status;
 }
