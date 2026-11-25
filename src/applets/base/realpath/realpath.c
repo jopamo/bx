@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,10 +11,8 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
-
-char* realpath(const char* restrict path, char* restrict resolved_path);
+#include "lib/option_scan.h"
 
 enum bx_realpath_canonicalization_mode {
     BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST = 0,
@@ -37,15 +34,12 @@ enum {
 };
 
 struct bx_realpath_options {
-    const char* progname;
     enum bx_realpath_canonicalization_mode canonicalization_mode;
     enum bx_realpath_symlink_mode symlink_mode;
     const char* relative_to_arg;
     const char* relative_base_arg;
     bool quiet;
     bool zero;
-    bool show_help;
-    bool show_version;
 };
 
 static void bx_realpath_print_help(FILE* stream, const char* progname) {
@@ -64,88 +58,6 @@ static void bx_realpath_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -z, --zero     end each output line with NUL, not newline\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"canonicalize", no_argument, NULL, 'E'},
-        {"canonicalize-existing", no_argument, NULL, 'e'},
-        {"canonicalize-missing", no_argument, NULL, 'm'},
-        {"logical", no_argument, NULL, 'L'},
-        {"physical", no_argument, NULL, 'P'},
-        {"quiet", no_argument, NULL, 'q'},
-        {"relative-to", required_argument, NULL, BX_REALPATH_OPT_RELATIVE_TO},
-        {"relative-base", required_argument, NULL, BX_REALPATH_OPT_RELATIVE_BASE},
-        {"strip", no_argument, NULL, 's'},
-        {"no-symlinks", no_argument, NULL, 's'},
-        {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, BX_REALPATH_OPT_HELP},
-        {"version", no_argument, NULL, BX_REALPATH_OPT_VERSION},
-        {NULL, 0, NULL, 0},
-    };
-
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "realpath");
-    options->canonicalization_mode = BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST;
-    options->symlink_mode = BX_REALPATH_SYMLINK_PHYSICAL;
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-EeLmPqsz", long_options, &next_operand);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 'E':
-                options->canonicalization_mode = BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST;
-                break;
-            case 'e':
-                options->canonicalization_mode = BX_REALPATH_CANONICALIZE_EXISTING;
-                break;
-            case 'm':
-                options->canonicalization_mode = BX_REALPATH_CANONICALIZE_MISSING;
-                break;
-            case 'L':
-                options->symlink_mode = BX_REALPATH_SYMLINK_LOGICAL;
-                break;
-            case 'P':
-                options->symlink_mode = BX_REALPATH_SYMLINK_PHYSICAL;
-                break;
-            case 'q':
-                options->quiet = true;
-                break;
-            case BX_REALPATH_OPT_RELATIVE_TO:
-                options->relative_to_arg = optarg;
-                break;
-            case BX_REALPATH_OPT_RELATIVE_BASE:
-                options->relative_base_arg = optarg;
-                break;
-            case 's':
-                options->symlink_mode = BX_REALPATH_SYMLINK_NONE;
-                break;
-            case 'z':
-                options->zero = true;
-                break;
-            case BX_REALPATH_OPT_HELP:
-                options->show_help = true;
-                return true;
-            case BX_REALPATH_OPT_VERSION:
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
-    }
-
-    *first_operand = optind;
-    return true;
 }
 
 static char* bx_realpath_readlink_dup(const char* path) {
@@ -506,36 +418,87 @@ static bool bx_realpath_process_path(const char* path,
 }
 
 int bx_realpath_main(int argc, char** argv) {
-    struct bx_realpath_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "realpath",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+    static const struct bx_option_spec specs[] = {
+        {'E', 'E', "canonicalize", BX_OPTION_NO_VALUE},
+        {'e', 'e', "canonicalize-existing", BX_OPTION_NO_VALUE},
+        {'m', 'm', "canonicalize-missing", BX_OPTION_NO_VALUE},
+        {'L', 'L', "logical", BX_OPTION_NO_VALUE},
+        {'P', 'P', "physical", BX_OPTION_NO_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {BX_REALPATH_OPT_RELATIVE_TO, 0, "relative-to", BX_OPTION_REQUIRED_VALUE},
+        {BX_REALPATH_OPT_RELATIVE_BASE, 0, "relative-base", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "strip", BX_OPTION_NO_VALUE},
+        {'s', 0, "no-symlinks", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero", BX_OPTION_NO_VALUE},
+        {BX_REALPATH_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_REALPATH_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
-    int first_operand = 0;
+    struct bx_realpath_options options = {0};
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "realpath"),
+    };
     char* relative_to = NULL;
     char* relative_base = NULL;
-
-    if (!bx_realpath_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+    const char** operands = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*operands)) : NULL;
+    if (argc > 1 && operands == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
+    }
+    size_t operand_count = 0;
+    size_t first = argc > 0 ? 1u : 0u;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, first, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            operands[operand_count++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
+            case 'E': options.canonicalization_mode = BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST; break;
+            case 'e': options.canonicalization_mode = BX_REALPATH_CANONICALIZE_EXISTING; break;
+            case 'm': options.canonicalization_mode = BX_REALPATH_CANONICALIZE_MISSING; break;
+            case 'L': options.symlink_mode = BX_REALPATH_SYMLINK_LOGICAL; break;
+            case 'P': options.symlink_mode = BX_REALPATH_SYMLINK_PHYSICAL; break;
+            case 's': options.symlink_mode = BX_REALPATH_SYMLINK_NONE; break;
+            case 'q': options.quiet = true; break;
+            case 'z': options.zero = true; break;
+            case BX_REALPATH_OPT_RELATIVE_TO: options.relative_to_arg = option.value; break;
+            case BX_REALPATH_OPT_RELATIVE_BASE: options.relative_base_arg = option.value; break;
+            case BX_REALPATH_OPT_HELP:
+                bx_realpath_print_help(stdout, diag.progname);
+                goto done;
+            case BX_REALPATH_OPT_VERSION:
+                bx_cli_print_version(diag.progname);
+                goto done;
+        }
     }
 
-    if (options.show_help) {
-        bx_realpath_print_help(stdout, options.progname);
-        return 0;
+    if (operand_count == 0) {
+        bx_diag(&diag, "missing operand");
+        goto done;
     }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
+    if ((options.relative_to_arg && !options.relative_to_arg[0]) ||
+        (options.relative_base_arg && !options.relative_base_arg[0])) {
+        bx_diag(&diag, "cannot resolve '': %s", strerror(ENOENT));
+        goto done;
     }
 
     if (options.relative_to_arg != NULL) {
         relative_to = bx_realpath_canonicalize_path(options.relative_to_arg, options.canonicalization_mode, options.symlink_mode);
         if (relative_to == NULL) {
             bx_diag(&diag, "cannot resolve '%s': %s", options.relative_to_arg, strerror(errno));
-            return diag.exit_status;
+            goto done;
         }
     }
 
@@ -543,8 +506,7 @@ int bx_realpath_main(int argc, char** argv) {
         relative_base = bx_realpath_canonicalize_path(options.relative_base_arg, options.canonicalization_mode, options.symlink_mode);
         if (relative_base == NULL) {
             bx_diag(&diag, "cannot resolve '%s': %s", options.relative_base_arg, strerror(errno));
-            free(relative_to);
-            return diag.exit_status;
+            goto done;
         }
 
         if (relative_to == NULL) {
@@ -552,31 +514,23 @@ int bx_realpath_main(int argc, char** argv) {
         }
     }
 
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        free(relative_base);
-        free(relative_to);
-        return diag.exit_status;
-    }
-
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    char** operands = argv + first_operand;
-    for (int i = 0; i < operand_count; i++) {
-        if (!bx_realpath_process_path(operands[i], options.canonicalization_mode, options.symlink_mode, relative_to, relative_base, options.quiet, options.zero, &diag, &writer)) {
-            continue;
-        }
+    for (size_t i = 0; i < operand_count; i++) {
+        bx_realpath_process_path(operands[i], options.canonicalization_mode, options.symlink_mode,
+                                 relative_to, relative_base, options.quiet, options.zero, &diag, &writer);
     }
 
     if (!bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 
+done:
     free(relative_base);
     free(relative_to);
+    free(operands);
 
     return diag.exit_status;
 }
