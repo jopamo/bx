@@ -1,9 +1,7 @@
 #ifndef BX_APPLETS_NETWORK_MIRA_OPTIONS_H
 #define BX_APPLETS_NETWORK_MIRA_OPTIONS_H
 
-#include <getopt.h>
-#include <stdbool.h>
-#include <stddef.h>
+#include "lib/option_scan.h"
 
 typedef enum {
     MIRA_OPTION_CATEGORY_STARTUP = 0,
@@ -13,18 +11,15 @@ typedef enum {
     MIRA_OPTION_CATEGORY_TLS,
     MIRA_OPTION_CATEGORY_FTP,
     MIRA_OPTION_CATEGORY_RECURSIVE,
-    MIRA_OPTION_CATEGORY_UNSUPPORTED,
 } MiraOptionCategory;
 
 typedef struct {
     const char* name;
     int value;
-    int has_arg;
     const char* alias;
     const char* metavar;
     const char* description;
     MiraOptionCategory category;
-    bool supported;
 } MiraOptionSpec;
 
 enum {
@@ -119,9 +114,7 @@ enum {
     MIRA_OPT_NO_USER_AGENT_FALLBACK,
 };
 
-const struct option* bx_mira_long_options(void);
-const char* bx_mira_short_options(void);
+void bx_mira_option_cursor_init(struct bx_option_cursor* cursor, char* const argv[], size_t first, size_t end);
 const MiraOptionSpec* bx_mira_option_specs(size_t* count_out);
-const MiraOptionSpec* bx_mira_option_spec_for_value(int value);
 
 #endif

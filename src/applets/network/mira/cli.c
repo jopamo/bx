@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 #include "mira.h"
 #include "options.h"
-#include "lib/args_common.h"
 #include "lib/fetch/credential_file.h"
 #include "lib/fetch/error.h"
 #include "lib/fetch/html.h"
@@ -10,7 +9,6 @@
 #include "lib/fetch/regex.h"
 #include "lib/size_parse.h"
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <regex.h>
@@ -180,16 +178,6 @@ static int mira_validate_accept_regex(const struct bx_fetch_config* config) {
     return result == 0 ? 0 : -1;
 }
 
-static const char* mira_current_token(int argc, char** argv) {
-    if (!argv || argc <= 1)
-        return NULL;
-    if (optind <= 1)
-        return argv[1];
-    if (optind > argc)
-        return argv[argc - 1];
-    return argv[optind - 1];
-}
-
 static bool mira_configured_method_is_get(const struct bx_fetch_config* config) {
     const char* method = config->http.method;
     if (!method || method[0] == '\0')
@@ -224,20 +212,21 @@ static int mira_validate_config(struct bx_fetch_config* config, const MiraOption
             return -1;
         }
     }
+    if (presence->bearer_token_file && config->http.bearer_token)
+        return mira_conflicting_tokens(config, "--bearer-token", "--bearer-token-file");
+    if (!bx_fetch_config_tls_policy_valid(config) ||
+        (presence->bearer_token_file && config->https.no_check_certificate)) {
+        bx_mira_emit_parse_error(config, "Bearer authentication requires certificate verification; --no-check-certificate is not allowed");
+        errno = EINVAL;
+        return -1;
+    }
     if (presence->bearer_token_file) {
-        if (config->http.bearer_token)
-            return mira_conflicting_tokens(config, "--bearer-token", "--bearer-token-file");
         if (bx_fetch_bearer_token_load_file(presence->bearer_token_file, &config->http.bearer_token) != 0) {
             if (errno == ENOMEM)
                 return -1;
             mira_parse_errorf(config, "cannot load --bearer-token-file: %s", strerror(errno));
             return -1;
         }
-    }
-    if (!bx_fetch_config_tls_policy_valid(config)) {
-        bx_mira_emit_parse_error(config, "Bearer authentication requires certificate verification; --no-check-certificate is not allowed");
-        errno = EINVAL;
-        return -1;
     }
     if (config->http.post_data && config->http.post_file) {
         bx_mira_emit_parse_error(config, "conflicting option tokens: --post-data and --post-file");
@@ -360,14 +349,14 @@ static int mira_validate_config(struct bx_fetch_config* config, const MiraOption
 
 #define MIRA_SET_STRING(field)                          \
     do {                                                \
-        if (mira_replace_string(&(field), optarg) != 0) \
+        if (mira_replace_string(&(field), slot.value) != 0) \
             goto allocation_failure;                    \
     } while (0)
 
 #define MIRA_PARSE_INT(field, minimum, name)                                       \
     do {                                                                           \
-        if (!mira_parse_int(optarg, minimum, &(field))) {                          \
-            mira_parse_errorf(config, "invalid value for --%s: %s", name, optarg); \
+        if (!mira_parse_int(slot.value, minimum, &(field))) {                          \
+            mira_parse_errorf(config, "invalid value for --%s: %s", name, slot.value); \
             goto parse_failure;                                                    \
         }                                                                          \
     } while (0)
@@ -376,20 +365,25 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     struct bx_fetch_config* config = bx_mira_config_new();
     if (!config)
         return NULL;
+    char** urls = NULL;
     config->download.metadata_sidecars = true;
     bool reading = argc > 1 && strcmp(argv[1], "read") == 0;
-    if (reading) {
-        argc--;
-        argv++;
-    }
-
-    /* Discover the output format before reporting any parse error. Use the
-     * same grammar so an option argument named --json-diagnostics is data. */
-    bx_args_getopt_reset();
-    int diagnostic_option;
-    while ((diagnostic_option = bx_args_getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), NULL)) != -1) {
-        if (diagnostic_option == MIRA_OPT_JSON_DIAGNOSTICS)
-            config->logging.json_diagnostics = true;
+    size_t first = reading ? 2 : 1;
+    struct bx_option_cursor cursor;
+    struct bx_option_result slot;
+    bx_mira_option_cursor_init(&cursor, argv, first, (size_t)argc);
+    /* This pass only chooses diagnostic format, never enables an operation. */
+    while ((slot = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (slot.event == BX_OPTION_MATCH) {
+            if (slot.spec->id == MIRA_OPT_JSON_DIAGNOSTICS) {
+                config->logging.json_diagnostics = true;
+                break;
+            }
+        }
+        else if (slot.event != BX_OPTION_OPERAND) {
+            /* Skip the invalid token and keep looking for a diagnostic flag. */
+            bx_mira_option_cursor_init(&cursor, argv, slot.index + 1, (size_t)argc);
+        }
     }
     if (reading && bx_mira_apply_read_preset(config) != 0)
         goto allocation_failure;
@@ -397,19 +391,23 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     MiraTimeoutPresence timeout_presence = {0};
     MiraOptionPresence presence = {0};
     int timeout_value = 0;
-    bx_args_getopt_reset();
-    for (;;) {
-        int long_index = -1;
-        int option = bx_args_getopt_long(argc, argv, bx_mira_short_options(), bx_mira_long_options(), &long_index);
-        if (option == -1)
-            break;
-        const MiraOptionSpec* spec = bx_mira_option_spec_for_value(option);
-        if (spec && !spec->supported) {
-            mira_parse_errorf(config, "unsupported option token: --%s", spec->name);
+    urls = calloc((size_t)argc, sizeof(*urls));
+    if (urls == NULL)
+        goto allocation_failure;
+    int url_count = 0;
+    bx_mira_option_cursor_init(&cursor, argv, first, (size_t)argc);
+    while ((slot = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (slot.event == BX_OPTION_OPERAND) {
+            urls[url_count++] = argv[slot.index];
+            continue;
+        }
+        if (slot.event != BX_OPTION_MATCH) {
+            /* Never quote an attached value on an unrecognized option. */
+            mira_parse_errorf(config, "invalid option token: %.*s",
+                              (int)strcspn(slot.token, "="), slot.token);
             goto parse_failure;
         }
-
-        switch (option) {
+        switch (slot.spec->id) {
             case MIRA_OPT_JSON_DIAGNOSTICS:
                 break;
             case MIRA_OPT_RAW:
@@ -420,9 +418,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->download.text_document = false;
                 break;
             case MIRA_OPT_EXPECT:
-                if (strcmp(optarg, "json") == 0)
+                if (strcmp(slot.value, "json") == 0)
                     config->download.expected_representation = BX_FETCH_EXPECT_JSON;
-                else if (strcmp(optarg, "archive") == 0)
+                else if (strcmp(slot.value, "archive") == 0)
                     config->download.expected_representation = BX_FETCH_EXPECT_ARCHIVE;
                 else {
                     bx_mira_emit_parse_error(config, "--expect requires json or archive");
@@ -461,27 +459,27 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_SET_STRING(config->logging.rejected_log);
                 break;
             case 'i':
-                if (!optarg || optarg[0] == '\0') {
+                if (!slot.value || slot.value[0] == '\0') {
                     bx_mira_emit_parse_error(config, "--input-file requires a non-empty path");
                     goto parse_failure;
                 }
                 MIRA_SET_STRING(config->input.input_file);
-                presence.input_file = mira_current_token(argc, argv);
+                presence.input_file = slot.token;
                 break;
             case 'F':
                 config->input.force_html = true;
-                presence.force_html = mira_current_token(argc, argv);
+                presence.force_html = slot.token;
                 break;
             case 'B':
                 MIRA_SET_STRING(config->input.base_url);
-                presence.base = mira_current_token(argc, argv);
+                presence.base = slot.token;
                 break;
             case MIRA_OPT_NO_CLOBBER:
                 config->download.no_clobber = true;
-                presence.no_clobber = mira_current_token(argc, argv);
+                presence.no_clobber = slot.token;
                 break;
             case 'n': {
-                const char* token = mira_current_token(argc, argv);
+                const char* token = slot.token;
                 if (token && strcmp(token, "-nd") == 0)
                     config->dirs.no_directories = true;
                 else if (token && strcmp(token, "-nH") == 0)
@@ -518,27 +516,27 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->download.retry_connrefused = true;
                 break;
             case MIRA_OPT_RETRY_ON_HTTP_ERROR:
-                if (!mira_retry_statuses_valid(optarg)) {
-                    mira_parse_errorf(config, "invalid value for --retry-on-http-error: %s", optarg);
+                if (!mira_retry_statuses_valid(slot.value)) {
+                    mira_parse_errorf(config, "invalid value for --retry-on-http-error: %s", slot.value);
                     goto parse_failure;
                 }
                 MIRA_SET_STRING(config->download.retry_on_http_error);
                 break;
             case 'O':
                 MIRA_SET_STRING(config->download.output_document);
-                presence.output_document = mira_current_token(argc, argv);
+                presence.output_document = slot.token;
                 break;
             case 'c':
                 config->download.continue_download = true;
-                presence.continue_download = mira_current_token(argc, argv);
+                presence.continue_download = slot.token;
                 break;
             case MIRA_OPT_PROGRESS:
-                if (strcasecmp(optarg, "bar") == 0)
+                if (strcasecmp(slot.value, "bar") == 0)
                     config->download.show_progress = true;
-                else if (strcasecmp(optarg, "none") == 0)
+                else if (strcasecmp(slot.value, "none") == 0)
                     config->download.show_progress = false;
                 else {
-                    mira_parse_errorf(config, "invalid value for --progress: %s", optarg);
+                    mira_parse_errorf(config, "invalid value for --progress: %s", slot.value);
                     goto parse_failure;
                 }
                 break;
@@ -598,12 +596,12 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_PARSE_INT(config->download.max_threads, 1, "max-threads");
                 break;
             case 'Y':
-                if (strcasecmp(optarg, "off") == 0)
+                if (strcasecmp(slot.value, "off") == 0)
                     config->download.no_proxy = true;
-                else if (strcasecmp(optarg, "on") == 0)
+                else if (strcasecmp(slot.value, "on") == 0)
                     config->download.no_proxy = false;
                 else {
-                    mira_parse_errorf(config, "invalid value for --proxy: %s", optarg);
+                    mira_parse_errorf(config, "invalid value for --proxy: %s", slot.value);
                     goto parse_failure;
                 }
                 break;
@@ -611,8 +609,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->download.no_proxy = true;
                 break;
             case 'Q':
-                if (!mira_parse_scaled_long(optarg, &config->download.quota)) {
-                    mira_parse_errorf(config, "invalid value for --quota: %s", optarg);
+                if (!mira_parse_scaled_long(slot.value, &config->download.quota)) {
+                    mira_parse_errorf(config, "invalid value for --quota: %s", slot.value);
                     goto parse_failure;
                 }
                 break;
@@ -620,8 +618,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_SET_STRING(config->download.bind_address);
                 break;
             case MIRA_OPT_LIMIT_RATE:
-                if (!mira_parse_scaled_i64(optarg, &config->download.limit_rate_bytes_per_sec)) {
-                    mira_parse_errorf(config, "invalid value for --limit-rate: %s", optarg);
+                if (!mira_parse_scaled_i64(slot.value, &config->download.limit_rate_bytes_per_sec)) {
+                    mira_parse_errorf(config, "invalid value for --limit-rate: %s", slot.value);
                     goto parse_failure;
                 }
                 break;
@@ -629,11 +627,11 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->download.no_dns_cache = true;
                 break;
             case MIRA_OPT_RESTRICT_FILE_NAMES: {
-                int validity = mira_restrict_names_valid(optarg);
+                int validity = mira_restrict_names_valid(slot.value);
                 if (validity < 0)
                     goto allocation_failure;
                 if (validity == 0) {
-                    mira_parse_errorf(config, "invalid value for --restrict-file-names: %s", optarg);
+                    mira_parse_errorf(config, "invalid value for --restrict-file-names: %s", slot.value);
                     goto parse_failure;
                 }
             }
@@ -648,8 +646,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->download.inet4_only = false;
                 break;
             case MIRA_OPT_PREFER_FAMILY:
-                if (strcasecmp(optarg, "none") != 0 && strcasecmp(optarg, "IPv4") != 0 && strcasecmp(optarg, "IPv6") != 0) {
-                    mira_parse_errorf(config, "invalid value for --prefer-family: %s", optarg);
+                if (strcasecmp(slot.value, "none") != 0 && strcasecmp(slot.value, "IPv4") != 0 && strcasecmp(slot.value, "IPv6") != 0) {
+                    mira_parse_errorf(config, "invalid value for --prefer-family: %s", slot.value);
                     goto parse_failure;
                 }
                 MIRA_SET_STRING(config->download.prefer_family);
@@ -662,7 +660,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case MIRA_OPT_UNLINK:
                 config->download.unlink = true;
-                presence.unlink = mira_current_token(argc, argv);
+                presence.unlink = slot.token;
                 break;
             case MIRA_OPT_XATTR:
                 config->download.xattr = true;
@@ -702,17 +700,17 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_SET_STRING(config->http.http_password);
                 break;
             case MIRA_OPT_HTTP_PASSWORD_FILE:
-                presence.http_password_file = optarg;
+                presence.http_password_file = slot.value;
                 break;
             case MIRA_OPT_BEARER_TOKEN:
-                if (!bx_fetch_http_bearer_token_is_valid(optarg)) {
+                if (!bx_fetch_http_bearer_token_is_valid(slot.value)) {
                     bx_mira_emit_parse_error(config, "invalid value for --bearer-token");
                     goto parse_failure;
                 }
                 MIRA_SET_STRING(config->http.bearer_token);
                 break;
             case MIRA_OPT_BEARER_TOKEN_FILE:
-                presence.bearer_token_file = optarg;
+                presence.bearer_token_file = slot.value;
                 break;
             case MIRA_OPT_DEFAULT_PAGE:
                 MIRA_SET_STRING(config->http.default_page);
@@ -724,7 +722,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->http.content_disposition = true;
                 break;
             case MIRA_OPT_HEADER: {
-                BxFetchHttpHeaderError error = bx_fetch_config_add_http_header(config, optarg);
+                BxFetchHttpHeaderError error = bx_fetch_config_add_http_header(config, slot.value);
                 if (error != BX_FETCH_HTTP_HEADER_OK) {
                     mira_parse_errorf(config, "invalid value for --header: %s", bx_fetch_http_header_error_string(error));
                     goto parse_failure;
@@ -735,11 +733,11 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_PARSE_INT(config->http.max_redirect, 0, "max-redirect");
                 break;
             case MIRA_OPT_REDIRECT_METHOD:
-                if (strcasecmp(optarg, "legacy") != 0 && strcasecmp(optarg, "default") != 0 && strcasecmp(optarg, "strict") != 0) {
-                    mira_parse_errorf(config, "invalid value for --redirect-method: %s", optarg);
+                if (strcasecmp(slot.value, "legacy") != 0 && strcasecmp(slot.value, "default") != 0 && strcasecmp(slot.value, "strict") != 0) {
+                    mira_parse_errorf(config, "invalid value for --redirect-method: %s", slot.value);
                     goto parse_failure;
                 }
-                if (mira_replace_string(&config->http.redirect_method, strcasecmp(optarg, "strict") == 0 ? "strict" : "legacy") != 0) {
+                if (mira_replace_string(&config->http.redirect_method, strcasecmp(slot.value, "strict") == 0 ? "strict" : "legacy") != 0) {
                     goto allocation_failure;
                 }
                 break;
@@ -759,23 +757,23 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->http.save_headers = true;
                 break;
             case 'U':
-                if (long_index >= 0) {
+                if (slot.short_name == 0) {
                     BxFetchClientProfile profile = BX_FETCH_PROFILE_LITERAL;
-                    if (strcmp(optarg, "auto") == 0)
+                    if (strcmp(slot.value, "auto") == 0)
                         profile = BX_FETCH_PROFILE_AUTO;
-                    else if (strcmp(optarg, "mira") == 0)
+                    else if (strcmp(slot.value, "mira") == 0)
                         profile = BX_FETCH_PROFILE_MIRA;
-                    else if (strcmp(optarg, "browser") == 0 || strcmp(optarg, "chrome") == 0)
+                    else if (strcmp(slot.value, "browser") == 0 || strcmp(slot.value, "chrome") == 0)
                         profile = BX_FETCH_PROFILE_CHROME;
-                    else if (strcmp(optarg, "firefox") == 0)
+                    else if (strcmp(slot.value, "firefox") == 0)
                         profile = BX_FETCH_PROFILE_FIREFOX;
-                    else if (strcmp(optarg, "curl") == 0)
+                    else if (strcmp(slot.value, "curl") == 0)
                         profile = BX_FETCH_PROFILE_CURL;
                     if (profile != BX_FETCH_PROFILE_LITERAL) {
                         const char* selected = config->http.profile_agents[
                             profile == BX_FETCH_PROFILE_AUTO ? BX_FETCH_PROFILE_CURL : profile];
                         if (!selected) {
-                            mira_parse_errorf(config, "client profile '%s' is disabled in this build", optarg);
+                            mira_parse_errorf(config, "client profile '%s' is disabled in this build", slot.value);
                             goto parse_failure;
                         }
                         char* agent = strdup(selected);
@@ -815,8 +813,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_SET_STRING(config->http.post_file);
                 break;
             case MIRA_OPT_METHOD:
-                if (!bx_fetch_http_method_is_valid(optarg)) {
-                    mira_parse_errorf(config, "invalid value for --method: %s", optarg);
+                if (!bx_fetch_http_method_is_valid(slot.value)) {
+                    mira_parse_errorf(config, "invalid value for --method: %s", slot.value);
                     goto parse_failure;
                 }
                 MIRA_SET_STRING(config->http.method);
@@ -874,7 +872,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case MIRA_OPT_BACKUPS:
                 MIRA_PARSE_INT(config->recursive.backups, 0, "backups");
-                presence.backups = mira_current_token(argc, argv);
+                presence.backups = slot.token;
                 break;
             case 'K':
                 config->recursive.backup_converted = true;
@@ -897,10 +895,10 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_SET_STRING(config->recursive.accept_regex);
                 break;
             case MIRA_OPT_REGEX_TYPE:
-                if (mira_set_regex_type(&config->recursive.regex_type, optarg) != 0) {
+                if (mira_set_regex_type(&config->recursive.regex_type, slot.value) != 0) {
                     if (errno == ENOMEM)
                         goto allocation_failure;
-                    mira_parse_errorf(config, "invalid value for --regex-type: %s", optarg);
+                    mira_parse_errorf(config, "invalid value for --regex-type: %s", slot.value);
                     goto parse_failure;
                 }
                 break;
@@ -925,12 +923,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case MIRA_OPT_NO_PARENT:
                 config->recursive.no_parent = true;
                 break;
-            case '?':
-            default: {
-                const char* token = mira_current_token(argc, argv);
-                mira_parse_errorf(config, "invalid option token%s%s", token ? ": " : "", token ? token : "");
+            default:
+                bx_mira_emit_parse_error(config, "unsupported option token");
                 goto parse_failure;
-            }
         }
     }
 
@@ -948,22 +943,24 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         if (!timeout_presence.read_timeout)
             config->download.read_timeout = timeout_value;
     }
-    /* getopt has separated option arguments from operands. Reject misplaced
-     * commands before any URL can reach the download engine. */
-    for (int index = optind; index < argc; index++) {
-        if (strcmp(argv[index], "read") == 0 || strcmp(argv[index], "github") == 0 ||
-            strcmp(argv[index], "gitlab") == 0) {
-            mira_parse_errorf(config, "subcommand '%s' must precede options and URLs", argv[index]);
+    /* Reject misplaced commands before handing URLs to the download engine. */
+    for (int index = 0; index < url_count; index++) {
+        const char* url = urls[index];
+        if (strcmp(url, "read") == 0 || strcmp(url, "github") == 0 ||
+            strcmp(url, "gitlab") == 0) {
+            mira_parse_errorf(config, "subcommand '%s' must precede options and URLs", url);
             goto parse_failure;
         }
     }
-    if (bx_fetch_config_copy_urls(config, argc - optind, argv ? &argv[optind] : NULL) != 0) {
+    if (bx_fetch_config_copy_urls(config, url_count, urls) != 0) {
         if (errno == EFBIG)
             bx_mira_emit_parse_error(config, "URL operands exceed the bounded URL-state contract");
         else
             goto allocation_failure;
         goto parse_failure;
     }
+    free(urls);
+    urls = NULL;
     errno = 0;
     if (reading && (config->startup.show_help || config->startup.show_version))
         return config;
@@ -985,6 +982,7 @@ allocation_failure:
     mira_emit_allocation_error(config);
     errno = ENOMEM;
 parse_failure:
+    free(urls);
     bx_fetch_config_free(config);
     return NULL;
 }

@@ -1,44 +1,25 @@
 #include "options.h"
 
-static const struct option mira_long_options[] = {
-#define MIRA_OPTION(name, has_arg, value, short_fragment, alias, metavar, description, category, supported) {name, has_arg, NULL, value},
+static const struct bx_option_spec mira_scan_options[] = {
+#define MIRA_OPTION(name, arity, id, short_name, alias, metavar, description, category) {id, short_name, name, arity},
 #include "options.def"
 #undef MIRA_OPTION
-    {NULL, 0, NULL, 0},
+    {'n', 'n', NULL, BX_OPTION_OPTIONAL_VALUE},
 };
-
-static const char mira_short_options[] =
-#define MIRA_OPTION(name, has_arg, value, short_fragment, alias, metavar, description, category, supported) short_fragment
-#include "options.def"
-#undef MIRA_OPTION
-    "n:";
 
 static const MiraOptionSpec mira_option_specs[] = {
-#define MIRA_OPTION(name, has_arg, value, short_fragment, alias, metavar, description, category, supported) {name, value, has_arg, alias, metavar, description, category, supported},
+#define MIRA_OPTION(name, arity, id, short_name, alias, metavar, description, category) {name, id, alias, metavar, description, category},
 #include "options.def"
 #undef MIRA_OPTION
 };
 
-const struct option* bx_mira_long_options(void) {
-    return mira_long_options;
-}
-
-const char* bx_mira_short_options(void) {
-    return mira_short_options;
+void bx_mira_option_cursor_init(struct bx_option_cursor* cursor, char* const argv[], size_t first, size_t end) {
+    bx_option_cursor_init(cursor, argv, first, end, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          mira_scan_options, sizeof(mira_scan_options) / sizeof(mira_scan_options[0]));
 }
 
 const MiraOptionSpec* bx_mira_option_specs(size_t* count_out) {
     if (count_out)
         *count_out = sizeof(mira_option_specs) / sizeof(mira_option_specs[0]);
     return mira_option_specs;
-}
-
-const MiraOptionSpec* bx_mira_option_spec_for_value(int value) {
-    size_t count = 0;
-    const MiraOptionSpec* specs = bx_mira_option_specs(&count);
-    for (size_t index = 0; index < count; index++) {
-        if (specs[index].value == value)
-            return &specs[index];
-    }
-    return NULL;
 }

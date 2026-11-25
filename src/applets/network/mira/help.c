@@ -48,8 +48,6 @@ static const char* mira_category_heading(MiraOptionCategory category) {
             return "FTP";
         case MIRA_OPTION_CATEGORY_RECURSIVE:
             return "Recursive retrieval";
-        case MIRA_OPTION_CATEGORY_UNSUPPORTED:
-            return "Explicitly unsupported until shared mechanics exist";
     }
     return NULL;
 }
@@ -70,7 +68,7 @@ void bx_mira_print_help(void) {
 
     size_t count = 0;
     const MiraOptionSpec* specs = bx_mira_option_specs(&count);
-    for (MiraOptionCategory category = MIRA_OPTION_CATEGORY_STARTUP; category <= MIRA_OPTION_CATEGORY_UNSUPPORTED; category++) {
+    for (MiraOptionCategory category = MIRA_OPTION_CATEGORY_STARTUP; category <= MIRA_OPTION_CATEGORY_RECURSIVE; category++) {
         bool heading_printed = false;
         for (size_t index = 0; index < count; index++) {
             const MiraOptionSpec* spec = &specs[index];
@@ -92,7 +90,7 @@ void bx_mira_print_help(void) {
 
             if (written < 0 || (size_t)written >= sizeof(syntax))
                 continue;
-            fprintf(stdout, "  %-34s %s%s\n", syntax, spec->supported ? "" : "[unsupported] ", spec->description);
+            fprintf(stdout, "  %-34s %s\n", syntax, spec->description);
         }
     }
 
