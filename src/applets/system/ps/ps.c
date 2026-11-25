@@ -3,7 +3,6 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
-#include <getopt.h>
 #include <grp.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -18,8 +17,8 @@
 #include "applets/system/psmisc/procfs.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
 #include "lib/cli_common.h"
+#include "lib/option_scan.h"
 
 enum bx_ps_field {
     BX_PS_FIELD_PID,
@@ -331,27 +330,33 @@ static bool bx_ps_add_pid_list(struct bx_ps_options* options, const char* list,
 
 static bool bx_ps_parse_options(int argc, char** argv, struct bx_ps_options* options,
                                 struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {"format", required_argument, NULL, 'o'},
-        {"pid", required_argument, NULL, 'p'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},      {'V', 'V', "version", BX_OPTION_NO_VALUE}, {'o', 'o', "format", BX_OPTION_REQUIRED_VALUE},
+        {'p', 'p', "pid", BX_OPTION_REQUIRED_VALUE}, {'A', 'A', NULL, BX_OPTION_NO_VALUE},      {'e', 'e', NULL, BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "ps");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+hVAeo:p:", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE) {
+                if (option.short_name)
+                    bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", option.token);
+            }
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
-
-        switch (c) {
+        switch (option.spec->id) {
             case 'h':
                 options->show_help = true;
                 return true;
@@ -364,25 +369,22 @@ static bool bx_ps_parse_options(int argc, char** argv, struct bx_ps_options* opt
                 break;
             case 'o':
                 options->format_given = true;
-                if (!bx_ps_add_format(options, optarg, diag)) {
+                if (!bx_ps_add_format(options, option.value, diag)) {
                     return false;
                 }
                 break;
             case 'p':
-                if (!bx_ps_add_pid_list(options, optarg, diag)) {
+                if (!bx_ps_add_pid_list(options, option.value, diag)) {
                     return false;
                 }
                 break;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    if (optind < argc) {
-        bx_diag(diag, "unexpected operand '%s'", argv[optind]);
+    if (option.index < (size_t)argc) {
+        bx_diag(diag, "unexpected operand '%s'", argv[option.index]);
         return false;
     }
 
