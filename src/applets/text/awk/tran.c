@@ -104,27 +104,27 @@ void syminit(void)	/* initialize symbol table with builtin vars */
 	symtabloc->sval = (char *) symtab;
 }
 
-void arginit(int ac, char **av)	/* set up ARGV and ARGC */
+void arginit(const char *name, int ac, char *const *av)	/* set up ARGV and ARGC */
 {
 	Array *ap;
 	Cell *cp;
 	int i;
 	char temp[50];
 
-	ARGC = &setsymtab("ARGC", "", (Awkfloat) ac, NUM, symtab)->fval;
+	ARGC = &setsymtab("ARGC", "", (Awkfloat) ac + 1, NUM, symtab)->fval;
 	cp = setsymtab("ARGV", "", 0.0, ARR, symtab);
 	ap = makesymtab(NSYMTAB);	/* could be (int) ARGC as well */
 	free(cp->sval);
 	cp->sval = (char *) ap;
-	for (i = 0; i < ac; i++) {
+	for (i = 0; i <= ac; i++) {
+		const char *arg = i == 0 ? name : av[i - 1];
 		double result;
 
 		sprintf(temp, "%d", i);
-		if (is_number(*av, & result))
-			setsymtab(temp, *av, result, STR|NUM, ap);
+		if (is_number(arg, &result))
+			setsymtab(temp, arg, result, STR|NUM, ap);
 		else
-			setsymtab(temp, *av, 0.0, STR, ap);
-		av++;
+			setsymtab(temp, arg, 0.0, STR, ap);
 	}
 	ARGVcell = cp;
 }

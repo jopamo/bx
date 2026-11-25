@@ -252,9 +252,8 @@ int bx_awk_main(int argc, char *argv[])
 	recinit(recsize);
 	syminit();
 	compile_time = COMPILING;
-	argv[0] = cmdname;	/* put prog name at front of arglist */
-	DPRINTF("argc=%d, argv[0]=%s\n", argc, argv[0]);
-	arginit(argc, argv);
+	DPRINTF("argc=%d, argv[0]=%s\n", argc, cmdname);
+	arginit(cmdname, argc - 1, argv + 1);
 	if (!safe)
 		envinit(environ);
 	yyparse();

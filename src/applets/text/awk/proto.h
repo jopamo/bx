@@ -91,7 +91,7 @@ extern	int	ptoi(void *);
 extern	Node	*itonp(int);
 
 extern	void	syminit(void);
-extern	void	arginit(int, char **);
+extern	void	arginit(const char *, int, char *const *);
 extern	void	envinit(char **);
 extern	Array	*makesymtab(int);
 extern	void	freesymtab(Cell *);
@@ -120,7 +120,7 @@ extern	int	getrec(char **, int *, bool);
 extern	void	nextfile(void);
 extern	int	readrec(char **buf, int *bufsize, FILE *inf, bool isnew);
 extern	char	*getargv(int);
-extern	void	setclvar(char *);
+extern	void	setclvar(const char *);
 extern	void	fldbld(void);
 extern	void	cleanfld(int, int);
 extern	void	newfld(int);

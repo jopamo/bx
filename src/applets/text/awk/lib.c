@@ -350,29 +350,26 @@ char *getargv(int n)	/* get ARGV[n] */
 	return s;
 }
 
-void setclvar(char *s)	/* set var=value from s */
+void setclvar(const char *s)	/* set a validated var=value from s */
 {
-	char *e, *p;
+	const char *e = strchr(s, '=');
+	char *name, *p;
 	Cell *q;
 	double result;
 
-/* commit f3d9187d4e0f02294fb1b0e31152070506314e67 broke T.argv test */
-/* I don't understand why it was changed. */
-
-	for (p=s; *p != '='; p++)
-		;
-	e = p;
-	*p++ = 0;
-	p = qstring(p, '\0');
-	q = setsymtab(s, p, 0.0, STR, symtab);
+	name = strndup(s, (size_t)(e - s));
+	if (name == NULL)
+		FATAL("out of space for command line assignment");
+	p = qstring(e + 1, '\0');
+	q = setsymtab(name, p, 0.0, STR, symtab);
 	setsval(q, p);
 	if (is_number(q->sval, & result)) {
 		q->fval = result;
 		q->tval |= NUM;
 	}
-	DPRINTF("command line set %s to |%s|\n", s, p);
+	DPRINTF("command line set %s to |%s|\n", name, p);
 	free(p);
-	*e = '=';
+	free(name);
 }
 
 
