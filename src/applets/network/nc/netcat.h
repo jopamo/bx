@@ -128,8 +128,8 @@ int nc_sleep_monotonic(double seconds);
 int nc_wait_fd_events_monotonic(int fd, short events, int timeout_ms);
 int is_address(const char*);
 
-int strtoport(char* portstr, int udp);
-void build_ports(char*);
+int strtoport(const char* portstr, int udp);
+void build_ports(const char*);
 void help(void) __attribute__((noreturn));
 int local_listen(const char*, const char*, struct addrinfo);
 int readwrite(int);

@@ -234,7 +234,7 @@ uint32_t nc_random_uniform(uint32_t upper_bound) {
     }
 }
 
-int strtoport(char* portstr, int udp) {
+int strtoport(const char* portstr, int udp) {
     struct servent* entry;
     const char* errstr;
     char* proto;
@@ -257,18 +257,20 @@ int strtoport(char* portstr, int udp) {
  * Build an array of ports in portlist[], listing each port
  * that we should try to connect to.
  */
-void build_ports(char* p) {
-    char* n;
+void build_ports(const char* p) {
+    const char* n;
     int hi, lo, cp;
     int x = 0;
 
     if (isdigit((unsigned char)*p) && (n = strchr(p, '-')) != NULL) {
-        *n = '\0';
-        n++;
+        char* first = strndup(p, (size_t)(n - p));
+        if (first == NULL)
+            err(EXIT_RUNTIME, "strndup");
 
         /* Make sure the ports are in order: lowest->highest. */
-        hi = strtoport(n, uflag);
-        lo = strtoport(p, uflag);
+        hi = strtoport(n + 1, uflag);
+        lo = strtoport(first, uflag);
+        free(first);
         if (lo > hi) {
             cp = hi;
             hi = lo;

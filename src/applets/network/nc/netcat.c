@@ -38,12 +38,11 @@
 #include "quic.h"
 #include "version.h"
 #include "lib/fd_ops.h"
-#include <getopt.h>
 #include <sched.h>
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/stat.h>
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
 
@@ -194,7 +193,7 @@ static void parse_vsock(const char* address, int listener, unsigned int* cid, un
 }
 
 int main(int argc, char* argv[]) {
-    int ch, s = -1, ret, socksv;
+    int s = -1, ret, socksv;
     char *host, *uport;
     char ipaddr[NI_MAXHOST];
     struct addrinfo hints;
@@ -204,61 +203,89 @@ int main(int argc, char* argv[]) {
     const char* errstr;
     struct addrinfo proxyhints;
     char unix_dg_tmp_socket_buf[UNIX_DG_TMP_SOCKET_SIZE];
-    int option_index = 0;
     int pcap_path_explicit = 0;
     int pcap_path_default = 0;
     const char* vsock_address = NULL;
     unsigned int vsock_cid = 0, vsock_port = 0;
     const char* progname = nc_progname(argc > 0 ? argv[0] : NULL);
-    static struct option long_options[] = {{"mptcp", no_argument, NULL, 1001},
-                                           {"help", no_argument, NULL, 'h'},
-                                           {"tfo", no_argument, NULL, 1002},
-                                           {"mark", required_argument, NULL, 1003},
-                                           {"quic", no_argument, NULL, 1004},
-                                           {"proxy-proto", no_argument, NULL, 1006},
-                                           {"send-proxy", no_argument, NULL, 1007},
-                                           {"vsock", required_argument, NULL, 1008},
-                                           {"namespace", required_argument, NULL, 1009},
-                                           {"pcap", required_argument, NULL, 1010},
-                                           {"pcap-snaplen", required_argument, NULL, 1029},
-                                           {"pcap-filter", required_argument, NULL, 1030},
-                                           {"pcap-rotate-size", required_argument, NULL, 1031},
-                                           {"pcap-rotate-seconds", required_argument, NULL, 1032},
-                                           {"pcap-default-path", no_argument, NULL, 1033},
-                                           {"fuzz-tcp", no_argument, NULL, 1011},
-                                           {"fuzz-udp", no_argument, NULL, 1012},
-                                           {"hex-dump", required_argument, NULL, 1015},
-                                           {"keep-open", no_argument, NULL, 1017},
-                                           {"interface", required_argument, NULL, 1018},
-                                           {"transparent", no_argument, NULL, 1019},
-                                           {"jitter", required_argument, NULL, 1021},
-                                           {"profile", required_argument, NULL, 1022},
-                                           {"version", no_argument, NULL, 1025},
-                                           {"mptcp-netlink", no_argument, NULL, 1026},
-                                           {"quiet", no_argument, NULL, 1027},
-                                           {"log-file", required_argument, NULL, 1028},
-                                           {NULL, 0, NULL, 0}};
-
-    /* Fast-path for --help and --version to succeed despite malformed flags */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
-            help();
-        if (strcmp(argv[i], "--version") == 0) {
-            printf("netcat %s (commit %s %s)\n", NC_VERSION, NC_GIT_HASH, NC_GIT_DATE);
-            exit(EXIT_OK);
-        }
-    }
+    static const struct bx_option_spec specs[] = {
+        {1001, 0, "mptcp", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {1002, 0, "tfo", BX_OPTION_NO_VALUE},
+        {1003, 0, "mark", BX_OPTION_REQUIRED_VALUE},
+        {1004, 0, "quic", BX_OPTION_NO_VALUE},
+        {1006, 0, "proxy-proto", BX_OPTION_NO_VALUE},
+        {1007, 0, "send-proxy", BX_OPTION_NO_VALUE},
+        {1008, 0, "vsock", BX_OPTION_REQUIRED_VALUE},
+        {1009, 0, "namespace", BX_OPTION_REQUIRED_VALUE},
+        {1010, 0, "pcap", BX_OPTION_REQUIRED_VALUE},
+        {1029, 0, "pcap-snaplen", BX_OPTION_REQUIRED_VALUE},
+        {1030, 0, "pcap-filter", BX_OPTION_REQUIRED_VALUE},
+        {1031, 0, "pcap-rotate-size", BX_OPTION_REQUIRED_VALUE},
+        {1032, 0, "pcap-rotate-seconds", BX_OPTION_REQUIRED_VALUE},
+        {1033, 0, "pcap-default-path", BX_OPTION_NO_VALUE},
+        {1011, 0, "fuzz-tcp", BX_OPTION_NO_VALUE},
+        {1012, 0, "fuzz-udp", BX_OPTION_NO_VALUE},
+        {1015, 0, "hex-dump", BX_OPTION_REQUIRED_VALUE},
+        {1017, 0, "keep-open", BX_OPTION_NO_VALUE},
+        {1018, 0, "interface", BX_OPTION_REQUIRED_VALUE},
+        {1019, 0, "transparent", BX_OPTION_NO_VALUE},
+        {1021, 0, "jitter", BX_OPTION_REQUIRED_VALUE},
+        {1022, 0, "profile", BX_OPTION_REQUIRED_VALUE},
+        {1025, 0, "version", BX_OPTION_NO_VALUE},
+        {1026, 0, "mptcp-netlink", BX_OPTION_NO_VALUE},
+        {1027, 0, "quiet", BX_OPTION_NO_VALUE},
+        {1028, 0, "log-file", BX_OPTION_REQUIRED_VALUE},
+        {'4', '4', NULL, BX_OPTION_NO_VALUE},
+        {'6', '6', NULL, BX_OPTION_NO_VALUE},
+        {'D', 'D', NULL, BX_OPTION_NO_VALUE},
+        {'d', 'd', NULL, BX_OPTION_NO_VALUE},
+        {'F', 'F', NULL, BX_OPTION_NO_VALUE},
+        {'I', 'I', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'j', 'j', NULL, BX_OPTION_NO_VALUE},
+        {'l', 'l', NULL, BX_OPTION_NO_VALUE},
+        {'M', 'M', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'m', 'm', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'N', 'N', NULL, BX_OPTION_NO_VALUE},
+        {'n', 'n', NULL, BX_OPTION_NO_VALUE},
+        {'O', 'O', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'P', 'P', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'p', 'p', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', NULL, BX_OPTION_NO_VALUE},
+        {'s', 's', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'U', 'U', NULL, BX_OPTION_NO_VALUE},
+        {'u', 'u', NULL, BX_OPTION_NO_VALUE},
+        {'v', 'v', NULL, BX_OPTION_NO_VALUE},
+        {'W', 'W', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'w', 'w', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'X', 'X', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'x', 'x', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'z', 'z', NULL, BX_OPTION_NO_VALUE},
+    };
 
     ret = EXIT_RUNTIME;
     socksv = 5;
     host = NULL;
     uport = NULL;
 
-    signal(SIGPIPE, SIG_IGN);
-
-    while ((ch = bx_args_getopt_long(argc, argv, "46DdFhI:i:jlM:m:NnO:P:p:rs:T:UuvW:w:X:x:z", long_options,
-                             &option_index)) != -1) {
-        switch (ch) {
+    // Endpoint arity is at most two. Keep one extra slot to detect excess operands.
+    char* endpoints[3];
+    int endpoint_count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (endpoint_count < 3)
+                endpoints[endpoint_count++] = argv[option.index];
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH)
+            usage(1);
+        char* value = option.value;
+        switch (option.spec->id) {
             case 1001:
                 mptcpflag = 1;
                 break;
@@ -266,7 +293,7 @@ int main(int argc, char* argv[]) {
                 tfoflag = 1;
                 break;
             case 1003:
-                sockmark = nc_strtonum(optarg, 0, INT_MAX, &errstr);
+                sockmark = nc_strtonum(value, 0, INT_MAX, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "mark is %s", errstr);
                 break;
@@ -281,40 +308,40 @@ int main(int argc, char* argv[]) {
                 send_proxy = 1;
                 break;
             case 1008:
-                if (strchr(optarg, ':') == NULL)
+                if (strchr(value, ':') == NULL)
                     errx(EXIT_USAGE, "vsock: expected CID:PORT");
-                vsock_address = optarg;
+                vsock_address = value;
                 break;
             case 1009:
-                netns = optarg;
+                netns = value;
                 break;
             case 1010:
-                pcapfile = optarg;
+                pcapfile = value;
                 pcap_path_explicit = 1;
                 break;
             case 1029:
-                pcap_snaplen = (unsigned int)nc_strtonum(optarg, 1, 65535, &errstr);
+                pcap_snaplen = (unsigned int)nc_strtonum(value, 1, 65535, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "pcap snaplen is %s", errstr);
                 break;
             case 1030:
-                if (strcmp(optarg, "in") == 0 || strcmp(optarg, "rx") == 0)
+                if (strcmp(value, "in") == 0 || strcmp(value, "rx") == 0)
                     pcap_filter = PCAP_FILTER_IN;
-                else if (strcmp(optarg, "out") == 0 || strcmp(optarg, "tx") == 0)
+                else if (strcmp(value, "out") == 0 || strcmp(value, "tx") == 0)
                     pcap_filter = PCAP_FILTER_OUT;
-                else if (strcmp(optarg, "both") == 0)
+                else if (strcmp(value, "both") == 0)
                     pcap_filter = PCAP_FILTER_BOTH;
                 else
                     errx(EXIT_USAGE, "pcap filter must be one of: in, out, both");
                 break;
             case 1031:
-                if (!parse_pcap_rotate_size(optarg, &pcap_rotate_size)) {
+                if (!parse_pcap_rotate_size(value, &pcap_rotate_size)) {
                     fprintf(stderr, "%s: pcap rotate size is invalid\n", progname);
                     exit(EXIT_USAGE);
                 }
                 break;
             case 1032:
-                pcap_rotate_seconds = (unsigned int)nc_strtonum(optarg, 0, INT_MAX, &errstr);
+                pcap_rotate_seconds = (unsigned int)nc_strtonum(value, 0, INT_MAX, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "pcap rotate seconds is %s", errstr);
                 break;
@@ -329,24 +356,24 @@ int main(int argc, char* argv[]) {
                 fuzz_udp = 1;
                 break;
             case 1015:
-                hex_path = optarg;
+                hex_path = value;
                 break;
             case 1017:
                 keepopen = 1;
                 break;
             case 1018:
-                iface = optarg;
+                iface = value;
                 break;
             case 1019:
                 transparent = 1;
                 break;
             case 1021:
-                jitter = nc_strtonum(optarg, 0, INT_MAX, &errstr);
+                jitter = nc_strtonum(value, 0, INT_MAX, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "jitter is %s", errstr);
                 break;
             case 1022:
-                profile = parse_profile(optarg);
+                profile = parse_profile(value);
                 break;
             case 1025:
                 printf("netcat %s (commit %s %s)\n", NC_VERSION, NC_GIT_HASH, NC_GIT_DATE);
@@ -358,7 +385,7 @@ int main(int argc, char* argv[]) {
                 quietflag = 1;
                 break;
             case 1028:
-                log_file_path = optarg;
+                log_file_path = value;
                 break;
             case '4':
                 family = AF_INET;
@@ -373,9 +400,9 @@ int main(int argc, char* argv[]) {
                 family = AF_UNIX;
                 break;
             case 'X':
-                if (strcasecmp(optarg, "connect") == 0)
+                if (strcasecmp(value, "connect") == 0)
                     socksv = -1; /* HTTP proxy CONNECT */
-                else if (strcmp(optarg, "5") == 0)
+                else if (strcmp(value, "5") == 0)
                     socksv = 5; /* SOCKS v.5 */
                 else
                     errx(EXIT_USAGE, "unsupported proxy protocol");
@@ -390,20 +417,20 @@ int main(int argc, char* argv[]) {
                 help();
                 break;
             case 'i':
-                iflag = nc_strtonum(optarg, 0, UINT_MAX, &errstr);
+                iflag = nc_strtonum(value, 0, UINT_MAX, &errstr);
                 if (errstr)
-                    errx(EXIT_USAGE, "interval %s: %s", errstr, optarg);
+                    errx(EXIT_USAGE, "interval %s: %s", errstr, value);
                 break;
             case 'l':
                 lflag = 1;
                 break;
             case 'M':
-                ttl = nc_strtonum(optarg, 0, 255, &errstr);
+                ttl = nc_strtonum(value, 0, 255, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "ttl is %s", errstr);
                 break;
             case 'm':
-                minttl = nc_strtonum(optarg, 0, 255, &errstr);
+                minttl = nc_strtonum(value, 0, 255, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "minttl is %s", errstr);
                 break;
@@ -414,16 +441,16 @@ int main(int argc, char* argv[]) {
                 nflag = 1;
                 break;
             case 'P':
-                Pflag = optarg;
+                Pflag = value;
                 break;
             case 'p':
-                pflag = optarg;
+                pflag = value;
                 break;
             case 'r':
                 rflag = 1;
                 break;
             case 's':
-                sflag = optarg;
+                sflag = value;
                 break;
             case 'u':
                 uflag = 1;
@@ -432,26 +459,26 @@ int main(int argc, char* argv[]) {
                 vflag++;
                 break;
             case 'W':
-                recvlimit = nc_strtonum(optarg, 1, INT_MAX, &errstr);
+                recvlimit = nc_strtonum(value, 1, INT_MAX, &errstr);
                 if (errstr)
-                    errx(EXIT_USAGE, "receive limit %s: %s", errstr, optarg);
+                    errx(EXIT_USAGE, "receive limit %s: %s", errstr, value);
                 break;
             case 'w': {
                 long long timeout_seconds;
                 int timeout_ms = 0;
 
-                timeout_seconds = nc_strtonum(optarg, 0, INT_MAX, &errstr);
+                timeout_seconds = nc_strtonum(value, 0, INT_MAX, &errstr);
                 if (errstr)
-                    errx(EXIT_USAGE, "timeout %s: %s", errstr, optarg);
+                    errx(EXIT_USAGE, "timeout %s: %s", errstr, value);
                 if (!bx_time_seconds_to_milliseconds_int((uintmax_t)timeout_seconds, &timeout_ms))
-                    errx(EXIT_USAGE, "timeout too large: %s", optarg);
+                    errx(EXIT_USAGE, "timeout too large: %s", value);
                 timeout = timeout_ms;
                 break;
             }
             case 'x':
                 xflag = 1;
                 free(proxy_alloc);
-                if ((proxy_alloc = strdup(optarg)) == NULL)
+                if ((proxy_alloc = strdup(value)) == NULL)
                     err(EXIT_USAGE, NULL);
                 proxy = proxy_alloc;
                 break;
@@ -462,28 +489,28 @@ int main(int argc, char* argv[]) {
                 Dflag = 1;
                 break;
             case 'I':
-                Iflag = nc_strtonum(optarg, 1, 65536 << 14, &errstr);
+                Iflag = nc_strtonum(value, 1, 65536 << 14, &errstr);
                 if (errstr != NULL)
-                    errx(EXIT_USAGE, "TCP receive window %s: %s", errstr, optarg);
+                    errx(EXIT_USAGE, "TCP receive window %s: %s", errstr, value);
                 break;
             case 'O':
-                Oflag = nc_strtonum(optarg, 1, 65536 << 14, &errstr);
+                Oflag = nc_strtonum(value, 1, 65536 << 14, &errstr);
                 if (errstr != NULL)
-                    errx(EXIT_USAGE, "TCP send window %s: %s", errstr, optarg);
+                    errx(EXIT_USAGE, "TCP send window %s: %s", errstr, value);
                 break;
             case 'T':
                 errstr = NULL;
                 errno = 0;
-                if (process_tos_opt(optarg, &Tflag))
+                if (process_tos_opt(value, &Tflag))
                     break;
-                if (strlen(optarg) > 1 && optarg[0] == '0' && optarg[1] == 'x') {
-                    if (!parse_hex_tos_value(optarg, &Tflag))
+                if (strlen(value) > 1 && value[0] == '0' && value[1] == 'x') {
+                    if (!parse_hex_tos_value(value, &Tflag))
                         errstr = "invalid";
                 }
                 else
-                    Tflag = (int)nc_strtonum(optarg, 0, 255, &errstr);
+                    Tflag = (int)nc_strtonum(value, 0, 255, &errstr);
                 if (Tflag < 0 || Tflag > 255 || errstr || errno) {
-                    fprintf(stderr, "%s: illegal tos value %s\n", progname, optarg);
+                    fprintf(stderr, "%s: illegal tos value %s\n", progname, value);
                     exit(EXIT_USAGE);
                 }
                 break;
@@ -491,9 +518,6 @@ int main(int argc, char* argv[]) {
                 usage(1);
         }
     }
-    argc -= optind;
-    argv += optind;
-
     if (quietflag) {
         vflag = 0;
         jflag = 0;
@@ -584,70 +608,47 @@ int main(int argc, char* argv[]) {
     if (send_proxy && xflag)
         errx(EXIT_USAGE, "cannot use --send-proxy with -x");
 
-    if (log_file_path != NULL) {
-        int logfd;
-
-        logfd = bx_fd_open_cloexec(log_file_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
-        if (logfd == -1)
-            err(EXIT_USAGE, "cannot open log file %s", log_file_path);
-        if (bx_fd_dup2_exact(logfd, STDERR_FILENO) == -1) {
-            close(logfd);
-            err(EXIT_RUNTIME, "dup2 log file");
-        }
-        if (logfd != STDERR_FILENO)
-            close(logfd);
-        if (setvbuf(stderr, NULL, _IOLBF, 0) != 0)
-            err(EXIT_RUNTIME, "setvbuf stderr");
-    }
-
-    if (netns) {
-#ifdef CLONE_NEWNET
-        int fd;
-        if ((fd = bx_fd_open_cloexec(netns, O_RDONLY, 0)) == -1)
-            err(EXIT_USAGE, "open namespace %s", netns);
-        if (setns(fd, CLONE_NEWNET) == -1)
-            err(EXIT_USAGE, "setns %s", netns);
-        close(fd);
-#else
-        errx(EXIT_USAGE, "Namespaces not supported on this platform");
-#endif
-    }
-
-    /* Cruft to make sure options are clean, and used properly. */
+    /* Assign operand positions to endpoint roles before setup. */
     if (family == AF_VSOCK) {
-        if (argc != 0)
+        if (endpoint_count != 0)
             usage(1);
     }
     else if (family == AF_UNIX) {
-        if (argc != 1)
+        if (endpoint_count != 1)
             usage(1);
-        host = argv[0];
+        host = endpoints[0];
     }
     else if (lflag) {
-        if (argc == 1) {
-            if (is_address(argv[0]))
-                errx(EXIT_USAGE, "port number required for listen on %s", argv[0]);
-            uport = argv[0];
+        if (endpoint_count == 1) {
+            if (is_address(endpoints[0]))
+                errx(EXIT_USAGE, "port number required for listen on %s", endpoints[0]);
+            uport = endpoints[0];
         }
-        else if (argc == 2) {
-            host = argv[0];
-            uport = argv[1];
+        else if (endpoint_count == 2) {
+            host = endpoints[0];
+            uport = endpoints[1];
         }
         else {
             errx(EXIT_USAGE, "listen mode requires a port number (and optional host)");
         }
     }
     else {
-        if (argc == 2) {
-            host = argv[0];
-            uport = argv[1];
+        if (endpoint_count == 2) {
+            host = endpoints[0];
+            uport = endpoints[1];
         }
         else {
             usage(1);
         }
     }
 
-    /* No filesystem visibility restrictions. */
+    if ((host && *host == '\0') || (uport && *uport == '\0'))
+        errx(EXIT_USAGE, "empty endpoint");
+    if ((netns && *netns == '\0') || (log_file_path && *log_file_path == '\0') || (hex_path && *hex_path == '\0') || (sflag && *sflag == '\0') || (pflag && *pflag == '\0') ||
+        (iface && *iface == '\0'))
+        errx(EXIT_USAGE, "empty option value");
+    if (pcap_path_explicit && !pcap_path_default && *pcapfile == '\0')
+        errx(EXIT_USAGE, "empty pcap path; use --pcap-default-path to choose a path automatically");
 
     /*
      * Flag precedence and conflict matrix:
@@ -690,22 +691,6 @@ int main(int argc, char* argv[]) {
          pcap_rotate_seconds != 0) &&
         pcapfile == NULL)
         errx(EXIT_USAGE, "pcap options require --pcap or --pcap-default-path");
-    /* Get name of temporary socket for unix datagram client */
-    if ((family == AF_UNIX) && uflag && !lflag) {
-        if (sflag) {
-            unix_dg_tmp_socket = sflag;
-        }
-        else {
-            int tmpfd;
-
-            nc_strlcpy(unix_dg_tmp_socket_buf, "/tmp/nc.XXXXXXXXXX", UNIX_DG_TMP_SOCKET_SIZE);
-            if ((tmpfd = mkstemp(unix_dg_tmp_socket_buf)) == -1)
-                err(EXIT_USAGE, "mkstemp");
-            close(tmpfd);
-            unlink(unix_dg_tmp_socket_buf);
-            unix_dg_tmp_socket = unix_dg_tmp_socket_buf;
-        }
-    }
 
     /* Initialize addrinfo structure. */
     if (family != AF_UNIX) {
@@ -751,6 +736,8 @@ int main(int argc, char* argv[]) {
             if (proxyport != NULL)
                 *proxyport++ = '\0';
         }
+        if (*proxy == '\0' || (proxyport && *proxyport == '\0'))
+            errx(EXIT_USAGE, "empty proxy endpoint");
 
         memset(&proxyhints, 0, sizeof(struct addrinfo));
         proxyhints.ai_family = family;
@@ -760,18 +747,63 @@ int main(int argc, char* argv[]) {
             proxyhints.ai_flags |= AI_NUMERICHOST;
     }
 
+    if (netns) {
+#ifdef CLONE_NEWNET
+        int fd = bx_fd_open_cloexec(netns, O_RDONLY, 0);
+        if (fd == -1)
+            err(EXIT_USAGE, "open namespace %s", netns);
+        if (setns(fd, CLONE_NEWNET) == -1)
+            err(EXIT_USAGE, "setns %s", netns);
+        close(fd);
+#else
+        errx(EXIT_USAGE, "Namespaces not supported on this platform");
+#endif
+    }
+
+    /* Service names must be resolved in the selected network namespace. */
+    if (uport) {
+        if (!lflag)
+            build_ports(uport);
+        else if (strcmp(uport, "0") != 0)
+            strtoport(uport, uflag);
+    }
+
+    signal(SIGPIPE, SIG_IGN);
+
+    if (log_file_path != NULL) {
+        int logfd;
+
+        logfd = bx_fd_open_cloexec(log_file_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (logfd == -1)
+            err(EXIT_USAGE, "cannot open log file %s", log_file_path);
+        if (bx_fd_dup2_exact(logfd, STDERR_FILENO) == -1) {
+            close(logfd);
+            err(EXIT_RUNTIME, "dup2 log file");
+        }
+        if (logfd != STDERR_FILENO)
+            close(logfd);
+        if (setvbuf(stderr, NULL, _IOLBF, 0) != 0)
+            err(EXIT_RUNTIME, "setvbuf stderr");
+    }
+
+    /* Get name of temporary socket for unix datagram client */
+    if ((family == AF_UNIX) && uflag && !lflag) {
+        if (sflag) {
+            unix_dg_tmp_socket = sflag;
+        }
+        else {
+            int tmpfd;
+
+            nc_strlcpy(unix_dg_tmp_socket_buf, "/tmp/nc.XXXXXXXXXX", UNIX_DG_TMP_SOCKET_SIZE);
+            if ((tmpfd = mkstemp(unix_dg_tmp_socket_buf)) == -1)
+                err(EXIT_USAGE, "mkstemp");
+            close(tmpfd);
+            unlink(unix_dg_tmp_socket_buf);
+            unix_dg_tmp_socket = unix_dg_tmp_socket_buf;
+        }
+    }
     if (lflag) {
         ret = 0;
-
-        if (uport) {
-            /* Validate port number (allow 0 for ephemeral listen ports). */
-            if (strcmp(uport, "0") != 0)
-                strtoport(uport, uflag);
-        }
-        else if (family != AF_UNIX && family != AF_VSOCK) {
-            /* Port required for TCP/UDP listen unless random port feature is explicit */
-            errx(EXIT_USAGE, "missing port number");
-        }
 
         if (family == AF_UNIX) {
             if (uflag)
@@ -899,9 +931,6 @@ int main(int argc, char* argv[]) {
     }
     else {
         int i = 0;
-
-        /* Construct the portlist[] array. */
-        build_ports(uport);
 
         /* Cycle through portlist, connecting to each port. */
         for (s = -1, i = 0; portlist[i] != NULL; i++) {
