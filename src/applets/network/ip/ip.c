@@ -492,10 +492,9 @@ static int ip_route(int argc, char** argv, struct bx_diag_ctx* diag) {
     }
 
     struct in_addr gateway = {0};
-    uint32_t index = 0;
+    const char* interface = NULL;
     uint32_t metric = 0;
     bool has_gateway = false;
-    bool has_index = false;
     bool has_metric = false;
 
     for (int i = 2; i < argc; i += 2) {
@@ -508,11 +507,8 @@ static int ip_route(int argc, char** argv, struct bx_diag_ctx* diag) {
             }
             has_gateway = true;
         }
-        else if (strcmp(argv[i], "dev") == 0 && !has_index) {
-            index = ip_ifindex(argv[i + 1], diag);
-            if (index == 0)
-                return 1;
-            has_index = true;
+        else if (strcmp(argv[i], "dev") == 0 && interface == NULL) {
+            interface = argv[i + 1];
         }
         else if (strcmp(argv[i], "metric") == 0 && !has_metric) {
             uintmax_t number = 0;
@@ -526,6 +522,13 @@ static int ip_route(int argc, char** argv, struct bx_diag_ctx* diag) {
         else {
             return ip_usage(diag);
         }
+    }
+
+    uint32_t index = 0;
+    if (interface != NULL) {
+        index = ip_ifindex(interface, diag);
+        if (index == 0)
+            return 1;
     }
 
     struct {
@@ -548,7 +551,7 @@ static int ip_route(int argc, char** argv, struct bx_diag_ctx* diag) {
                                                &destination, sizeof(destination))) ||
         (has_gateway && !bx_rtnl_attr(&request, sizeof(request), RTA_GATEWAY,
                                       &gateway, sizeof(gateway))) ||
-        (has_index && !bx_rtnl_attr(&request, sizeof(request), RTA_OIF,
+        (interface != NULL && !bx_rtnl_attr(&request, sizeof(request), RTA_OIF,
                                     &index, sizeof(index))) ||
         (has_metric && !bx_rtnl_attr(&request, sizeof(request), RTA_PRIORITY,
                                      &metric, sizeof(metric)))) {
