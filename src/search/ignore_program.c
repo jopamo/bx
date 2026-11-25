@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <errno.h>
 #include <fnmatch.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -213,13 +214,12 @@ bx_ignore_rule_classify(bool uses_relative_path,
     return BX_IGNORE_RULE_GENERIC_GLOB;
 }
 
-static bool bx_ignore_rule_compile(struct bx_ignore_rule *rule,
-                                   const char *line,
-                                   enum bx_ignore_source_kind source) {
+/* Return 1 for a rule, 0 for an empty/comment line, and -1 on error. */
+static int bx_ignore_rule_compile(struct bx_ignore_rule *rule,
+                                  const char *line,
+                                  enum bx_ignore_source_kind source) {
     const char *pattern = line;
 
-    if (!rule || !line)
-        return false;
     rule->source = bx_ignore_source_kind_is_valid(source)
         ? source
         : BX_IGNORE_SOURCE_BUILTIN;
@@ -227,7 +227,7 @@ static bool bx_ignore_rule_compile(struct bx_ignore_rule *rule,
     while (*pattern == ' ')
         pattern++;
     if (*pattern == '#' || *pattern == '\0')
-        return false;
+        return 0;
 
     rule->negate = false;
     if (*pattern == '!') {
@@ -237,7 +237,7 @@ static bool bx_ignore_rule_compile(struct bx_ignore_rule *rule,
     if (*pattern == '/')
         pattern++;
     if (*pattern == '\0')
-        return false;
+        return 0;
 
     size_t pattern_len = strlen(pattern);
     if (pattern_len > 0u && pattern[pattern_len - 1u] == '/') {
@@ -247,18 +247,20 @@ static bool bx_ignore_rule_compile(struct bx_ignore_rule *rule,
         rule->directory_only = false;
     }
     if (pattern_len == 0u)
-        return false;
+        return 0;
 
     rule->uses_relative_path = memchr(pattern, '/', pattern_len) != NULL;
-    rule->pattern = strndup(pattern, pattern_len);
+    rule->pattern = malloc(pattern_len + 2u);
     if (!rule->pattern)
-        return false;
+        return -1;
+    memcpy(rule->pattern, pattern, pattern_len);
+    rule->pattern[pattern_len] = '\0';
     if (strstr(rule->pattern, "[^"))
-        bx_glob_normalize_caret(rule->pattern);
+        bx_glob_normalize_caret_with_spare(rule->pattern, 1);
     rule->kind = bx_ignore_rule_classify(rule->uses_relative_path,
                                          rule->directory_only,
                                          rule->pattern);
-    return rule->kind != BX_IGNORE_RULE_INVALID;
+    return 1;
 }
 
 static void bx_ignore_program_build_source_masks(struct bx_ignore_program *program) {
@@ -917,12 +919,10 @@ bx_ignore_program_compile_with_sources(char *const *patterns,
         enum bx_ignore_source_kind source = sources
             ? sources[i]
             : BX_IGNORE_SOURCE_BUILTIN;
-        if (!bx_ignore_rule_compile(&program->rules[program->rule_count], patterns[i], source)) {
-            if (program->rules[program->rule_count].pattern)
-                goto fail;
-            continue;
-        }
-        program->rule_count++;
+        int status = bx_ignore_rule_compile(&program->rules[program->rule_count], patterns[i], source);
+        if (status < 0)
+            goto fail;
+        program->rule_count += status;
     }
 
     if (program->rule_count == 0) {
@@ -944,9 +944,12 @@ bx_ignore_program_compile_with_sources(char *const *patterns,
         goto fail;
     return program;
 
-fail:
-    bx_ignore_program_destroy(program);
-    return NULL;
+fail: {
+        int error = errno;
+        bx_ignore_program_destroy(program);
+        errno = error;
+        return NULL;
+    }
 }
 
 struct bx_ignore_program *bx_ignore_program_compile(char *const *patterns,
