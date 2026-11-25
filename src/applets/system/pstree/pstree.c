@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <pwd.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -13,7 +12,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 enum bx_pstree_charset {
     BX_PSTREE_CHARSET_ASCII = 0,
@@ -76,40 +75,52 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
                                     int argc,
                                     char** argv,
                                     struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"arguments", no_argument, NULL, 'a'},
-        {"ascii", no_argument, NULL, 'A'},
-        {"compact-not", no_argument, NULL, 'c'},
-        {"color", required_argument, NULL, 'C'},
-        {"vt100", no_argument, NULL, 'G'},
-        {"highlight-all", no_argument, NULL, 'h'},
-        {"highlight-pid", required_argument, NULL, 'H'},
-        {"kthreads", no_argument, NULL, 'k'},
-        {"long", no_argument, NULL, 'l'},
-        {"numeric-sort", no_argument, NULL, 'n'},
-        {"show-pids", no_argument, NULL, 'p'},
-        {"show-paths", no_argument, NULL, 'P'},
-        {"show-parents", no_argument, NULL, 's'},
-        {"ns-changes", no_argument, NULL, 'S'},
-        {"thread-names", no_argument, NULL, 't'},
-        {"hide-threads", no_argument, NULL, 'T'},
-        {"uid-changes", no_argument, NULL, 'u'},
-        {"unicode", no_argument, NULL, 'U'},
-        {"security-context", no_argument, NULL, 'Z'},
-        {"help", no_argument, NULL, BX_PSTREE_OPT_HELP},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "arguments", BX_OPTION_NO_VALUE},
+        {'A', 'A', "ascii", BX_OPTION_NO_VALUE},
+        {'c', 'c', "compact-not", BX_OPTION_NO_VALUE},
+        {'C', 'C', "color", BX_OPTION_REQUIRED_VALUE},
+        {'G', 'G', "vt100", BX_OPTION_NO_VALUE},
+        {'h', 'h', "highlight-all", BX_OPTION_NO_VALUE},
+        {'H', 'H', "highlight-pid", BX_OPTION_REQUIRED_VALUE},
+        {'k', 'k', "kthreads", BX_OPTION_NO_VALUE},
+        {'l', 'l', "long", BX_OPTION_NO_VALUE},
+        {'n', 'n', "numeric-sort", BX_OPTION_NO_VALUE},
+        {'p', 'p', "show-pids", BX_OPTION_NO_VALUE},
+        {'P', 'P', "show-paths", BX_OPTION_NO_VALUE},
+        {'s', 's', "show-parents", BX_OPTION_NO_VALUE},
+        {'S', 'S', "ns-changes", BX_OPTION_NO_VALUE},
+        {'t', 't', "thread-names", BX_OPTION_NO_VALUE},
+        {'T', 'T', "hide-threads", BX_OPTION_NO_VALUE},
+        {'u', 'u', "uid-changes", BX_OPTION_NO_VALUE},
+        {'U', 'U', "unicode", BX_OPTION_NO_VALUE},
+        {'Z', 'Z', "security-context", BX_OPTION_NO_VALUE},
+        {BX_PSTREE_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
-    int c;
 
     memset(options, 0, sizeof(*options));
-    options->charset = BX_PSTREE_CHARSET_ASCII;
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while ((c = bx_args_getopt_long_interspersed(
-                argc, argv, "-aAcC:GhH:klnpPsStTuUZV", long_options, &next_operand)) != -1) {
-        switch (c) {
+    const char* operand = NULL;
+    const char* extra = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!operand)
+                operand = option.token;
+            else if (!extra)
+                extra = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'a': options->show_args = true; break;
             case 'A':
             case 'G': options->charset = BX_PSTREE_CHARSET_ASCII; break;
@@ -119,8 +130,8 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
             case 'P': options->show_paths = true; break;
             case 's': options->show_parents = true; break;
             case 'H':
-                if (!bx_proc_parse_pid_arg(optarg, &options->pid_filter)) {
-                    bx_diag(diag, "invalid process id: %s", optarg);
+                if (!bx_proc_parse_pid_arg(option.value, &options->pid_filter)) {
+                    bx_diag(diag, "invalid process id: %s", option.value);
                     return false;
                 }
                 options->pid_filter_set = true;
@@ -143,41 +154,28 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
             case 'V':
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
     }
 
-    if (optind < argc) {
-        if (!options->pid_filter_set && bx_proc_parse_pid_arg(argv[optind], &options->pid_filter)) {
+    if (extra) {
+        bx_diag(diag, "unexpected operand '%s'", extra);
+        return false;
+    }
+    if (operand) {
+        if (!options->pid_filter_set && bx_proc_parse_pid_arg(operand, &options->pid_filter)) {
             options->pid_filter_set = true;
-            optind++;
         }
         else {
-            struct passwd* pw = getpwnam(argv[optind]);
-            if (pw == NULL) {
-                bx_diag(diag, "unknown user: %s", argv[optind]);
+            struct passwd* pw = getpwnam(operand);
+            if (!pw) {
+                bx_diag(diag, "unknown user: %s", operand);
                 return false;
             }
             options->user_filter = pw->pw_uid;
             options->user_filter_set = true;
-            optind++;
         }
-    }
-    if (optind < argc) {
-        bx_diag(diag, "unexpected operand '%s'", argv[optind]);
-        return false;
     }
     if (options->show_parents && !options->pid_filter_set) {
         options->pid_filter = getpid();

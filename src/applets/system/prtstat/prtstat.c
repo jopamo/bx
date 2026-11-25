@@ -1,7 +1,7 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "applets.h"
@@ -9,13 +9,15 @@
 #include "applets/system/psmisc/psmisc_wrapper.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 struct bx_prtstat_options {
     bool raw;
     bool show_help;
     bool show_version;
-    int first_pid_index;
+    pid_t* pids;
+    size_t pid_count;
+    const char* invalid_pid;
 };
 
 static void bx_prtstat_print_help(FILE* stream, const char* progname) {
@@ -31,20 +33,41 @@ static bool bx_prtstat_parse_options(struct bx_prtstat_options* options,
                                      int argc,
                                      char** argv,
                                      struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"raw", no_argument, NULL, 'r'},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'r', 'r', "raw", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
-    int c;
-
-    memset(options, 0, sizeof(*options));
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while ((c = bx_args_getopt_long_interspersed(argc, argv, "-rhV", long_options, &next_operand)) != -1) {
-        switch (c) {
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (options->invalid_pid)
+                continue;
+            pid_t pid;
+            if (!bx_proc_parse_pid_arg(option.token, &pid)) {
+                options->invalid_pid = option.token;
+                continue;
+            }
+            if (!options->pids) {
+                options->pids = calloc((size_t)argc - option.index, sizeof(*options->pids));
+                if (!options->pids) {
+                    bx_diag(diag, "allocate process ids: %s", strerror(errno));
+                    return false;
+                }
+            }
+            options->pids[options->pid_count++] = pid;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'r':
                 options->raw = true;
                 break;
@@ -54,24 +77,12 @@ static bool bx_prtstat_parse_options(struct bx_prtstat_options* options,
             case 'V':
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
     }
 
-    options->first_pid_index = optind;
-    if (options->first_pid_index >= argc) {
+    if (options->pid_count == 0 && !options->invalid_pid) {
         bx_diag(diag, "missing process id");
         return false;
     }
@@ -157,38 +168,38 @@ int bx_prtstat_main(int argc, char** argv) {
         .progname = bx_psmisc_progname((argc > 0) ? argv[0] : NULL, "prtstat"),
         .exit_status = 0,
     };
-    struct bx_prtstat_options options;
-    int i;
-    int rc = 0;
+    struct bx_prtstat_options options = {0};
+    int rc = 1;
 
     if (!bx_prtstat_parse_options(&options, argc, argv, &diag)) {
-        if (diag.exit_status != 0) {
+        if (diag.exit_status != 0)
             bx_cli_print_try_help(diag.progname);
-        }
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+        goto cleanup;
     }
     if (options.show_help) {
         bx_prtstat_print_help(stdout, diag.progname);
-        return 0;
+        rc = 0;
+        goto cleanup;
     }
     if (options.show_version) {
         bx_cli_print_version(diag.progname);
-        return 0;
+        rc = 0;
+        goto cleanup;
+    }
+    if (options.invalid_pid) {
+        bx_diag(&diag, "invalid process id: %s", options.invalid_pid);
+        goto cleanup;
     }
 
-    for (i = options.first_pid_index; i < argc; i++) {
-        pid_t pid;
-        if (!bx_proc_parse_pid_arg(argv[i], &pid)) {
-            bx_diag(&diag, "invalid process id: %s", argv[i]);
-            return diag.exit_status != 0 ? diag.exit_status : 1;
-        }
-        if (i > options.first_pid_index) {
+    rc = 0;
+    for (size_t i = 0; i < options.pid_count; i++) {
+        if (i > 0)
             putchar('\n');
-        }
-        if (bx_prtstat_print_one(pid, &options, &diag) != 0) {
+        if (bx_prtstat_print_one(options.pids[i], &options, &diag) != 0)
             rc = 1;
-        }
     }
 
-    return rc;
+cleanup:
+    free(options.pids);
+    return diag.exit_status != 0 ? diag.exit_status : rc;
 }
