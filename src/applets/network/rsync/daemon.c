@@ -72,21 +72,6 @@ extern struct cleanup_ctx	*cleanup_ctx;
 
 static const char proto_prefix[] = "@RSYNCD: ";
 
-static void
-daemon_reset_getopt(void)
-{
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || \
-    defined(__DragonFly__) || defined(__APPLE__)
-	optreset = 1;
-	optind = 1;
-#elif defined(__linux__)
-	/* Linux getopt implementations reinitialize when optind is zero. */
-	optind = 0;
-#else
-	optind = 1;
-#endif
-}
-
 enum {
 	OP_DAEMON = CHAR_MAX + 1,
 	OP_NO_DETACH,
@@ -354,10 +339,9 @@ daemon_add_option(struct sess *sess, size_t *oargc, char ***oargv,
 	}
 
 	/*
-	 * If argc == argvsz, we need more to be able to null terminate
-	 * the array properly.
+	 * Retain a spare slot for the null terminator.
 	 */
-	if (argc == argvsz) {
+	if (argc + 1 == argvsz) {
 		pargv = argv;
 		nextsz = argvsz + OPT_ALLOC_SLOTS;
 		argv = recallocarray(pargv, argvsz, nextsz,
@@ -486,7 +470,7 @@ daemon_read_options(struct sess *sess, const char *module, int fd,
 		return -1;
 	}
 
-	/* Fake first arg, because we can't actually reset to the 0'th argv */
+	/* Leave argv[0] unused, as in the applet invocation. */
 	argv[argc++] = NULL;
 
 	for (;;) {
@@ -584,43 +568,27 @@ fail:
 }
 
 static int
-daemon_reject(struct sess *sess, int shopt, const struct option *lopt)
+daemon_reject(struct sess *sess, const struct bx_option_spec *spec)
 {
-	struct daemon_role *role;
+	struct daemon_role *role = (void *)sess->role;
 
-	role = (void *)sess->role;
-
-	if (lopt != NULL && strcmp(lopt->name, "daemon") == 0) {
+	if (spec->long_name != NULL && strcmp(spec->long_name, "daemon") == 0) {
 		daemon_client_error(sess,
 		    "protection error: --daemon sent as client option");
 		return 0;
 	}
 
-	/*
-	 * Short options are quick, we just search the short opt string and
-	 * refuse it if it's there.  dameon_parse_refuse() adds the short option
-	 * for each long option, so we don't need to fallback to searching the
-	 * long options.
-	 */
-	if (role->refused.refused_shopts != NULL && shopt != 0) {
-		if (strchr(role->refused.refused_shopts, shopt) != NULL) {
-			daemon_client_error(sess, "option refused: -%c",
-			    shopt);
-			return 0;
-		}
-
-		return 1;
+	if (spec->id <= UCHAR_MAX && role->refused.refused_shopts != NULL &&
+	    strchr(role->refused.refused_shopts, spec->id) != NULL) {
+		daemon_client_error(sess, "option refused: -%c", spec->id);
+		return 0;
 	}
 
-	if (role->refused.refused_lopts != NULL && lopt != NULL) {
-		const struct option * const *chkopt = role->refused.refused_lopts;
-
-		for (size_t i = 0; i < role->refused.refused_loptsz; i++) {
-			if (chkopt[i] == lopt) {
-				daemon_client_error(sess,
-				    "option refused: --%s", lopt->name);
-				return 0;
-			}
+	/* Equivalent long spellings share an id. */
+	for (size_t i = 0; i < role->refused.refused_loptsz; i++) {
+		if (role->refused.refused_lopts[i]->id == spec->id) {
+			daemon_client_error(sess, "option refused: --%s", spec->long_name);
+			return 0;
 		}
 	}
 
@@ -1244,19 +1212,7 @@ rsync_daemon_handler(struct sess *sess, int fd, struct sockaddr_storage *saddr,
 	if (daemon_read_options(sess, module, fd, &cargc, &cargv) < 0)
 		goto fail;	/* Error already logged. */
 
-	/*
-	 * We'll mutate argc/argv, cargc/cargv maintained to avoid leaking the
-	 * strings later.
-	 */
-	argc = cargc;
-	argv = cargv;
-
-	/*
-	 * Reset some state; our default poll_timeout is no longer valid, and
-	 * we need to reset getopt_long(3).  poll_timeout after this point will
-	 * not be overwritten by the client unless the client wants a little bit
-	 * longer.
-	 */
+	/* Preserve the configured timeout floor during peer option parsing. */
 	poll_timeout = 0;
 	if (cfg_param_int(role->dcfg, module, "timeout", &poll_timeout) != 0)
 		WARN("%s: bad value for 'timeout'", module);
@@ -1264,8 +1220,8 @@ rsync_daemon_handler(struct sess *sess, int fd, struct sockaddr_storage *saddr,
 	if (!daemon_parse_refuse(sess, module))
 		goto fail;
 
-	daemon_reset_getopt();
-	client_opts = rsync_getopt(argc, argv, &daemon_reject, sess);
+	int stop;
+	client_opts = rsync_parse_options(cargc, cargv, NULL, &stop, daemon_reject, sess);
 	if (client_opts == NULL)
 		goto fail;	/* Should have been logged. */
 
@@ -1278,17 +1234,8 @@ rsync_daemon_handler(struct sess *sess, int fd, struct sockaddr_storage *saddr,
 		goto fail;
 	}
 
-	argc -= optind;
-	argv += optind;
-
-	if (strcmp(argv[0], ".") != 0) {
-		daemon_client_error(sess,
-		    "protocol violation: expected hard stop before file list");
-		goto fail;
-	}
-
-	argc--;
-	argv++;
+	argc = cargc - stop - 1;
+	argv = cargv + stop + 1;
 
 	if (!daemon_limit_verbosity(sess, module))
 		goto fail;
@@ -1358,6 +1305,8 @@ done:
 
 	close(role->prexfer_pipe);
 	free(role->auth_user);
+	free(role->refused.refused_shopts);
+	free(role->refused.refused_lopts);
 	for (int i = 0; i < cargc; i++)
 		free(cargv[i]);
 	free(cargv);
@@ -1376,6 +1325,8 @@ fail:
 
 	close(role->prexfer_pipe);
 	free(role->auth_user);
+	free(role->refused.refused_shopts);
+	free(role->refused.refused_lopts);
 	for (int i = 0; i < cargc; i++)
 		free(cargv[i]);
 	free(cargv);

@@ -28,7 +28,6 @@
 #endif
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
@@ -43,6 +42,7 @@
 #endif
 
 #include "extern.h"
+#include "daemon.h"
 #include <zlib.h>
 
 #include "dispatch/applets.h"
@@ -884,8 +884,9 @@ chmod_parse(const char *arg, struct sess *sess)
 
 static struct opts	 opts;
 
+/* Short spellings use their byte as the id; equivalent long names share ids. */
 enum {
-	OP_ADDRESS = CHAR_MAX + 1,
+	OP_ADDRESS = UCHAR_MAX + 1,
 	OP_PORT,
 	OP_RSYNCPATH,
 	OP_TIMEOUT,
@@ -953,168 +954,202 @@ enum {
 	OP_LISTONLY,
 	OP_PFLISTSZ,
 
+	OP_NO_ACLS,
+	OP_NO_XATTRS,
+	OP_CACHE,
+	OP_NO_CACHE,
+	OP_DELETE_EXCLUDED,
+	OP_DEVICES,
+	OP_NO_DEVICES,
+	OP_NO_GROUP,
+	OP_INPLACE,
+	OP_MOTD,
+	OP_NO_MOTD,
+	OP_NO_LINKS,
+	OP_NO_OWNER,
+	OP_PARTIAL,
+	OP_NO_PARTIAL,
+	OP_NO_PERMS,
+	OP_NO_RECURSIVE,
+	OP_SENDER,
+	OP_SERVER,
+	OP_SIZE_ONLY,
+	OP_SPECIALS,
+	OP_NO_SPECIALS,
+	OP_SUPER,
+	OP_NO_SUPER,
+	OP_NO_TIMES,
+	OP_NO_VERBOSE,
+	OP_NO_WHOLE_FILE,
+	OP_PROGRESS,
+	OP_NO_PROGRESS,
+	OP_REMOVE_SOURCE,
+	OP_DELAY_UPDATES,
+
 #ifdef __APPLE__
 	OP_TRACE,
 #endif
 };
 
-const char rsync_shopts[] = "0468AB:CDEFHIKLOPRST:VWXabcde:f:ghiklmnopqrtuvxyz";
-const struct option	 rsync_lopts[] = {
-    { "acls",		no_argument,	NULL,			'A' },
-    { "xattrs",		no_argument,	NULL,			'X' },
-    { "no-acls",		no_argument,	&opts.preserve_acls,	0 },
-    { "no-xattrs",	no_argument,	&opts.preserve_xattrs,	0 },
-    { "bx-protocol",	required_argument, NULL,		OP_BX_PROTOCOL },
-    { "address",	required_argument, NULL,		OP_ADDRESS },
-    { "append",		no_argument,	NULL,			OP_APPEND },
-    { "archive",	no_argument,	NULL,			'a' },
-    { "backup",		no_argument,	NULL,			'b' },
-    { "backup-dir",	required_argument,	NULL,		OP_BACKUP_DIR },
-    { "block-size",	required_argument, NULL,		'B' },
-    { "blocking-io",	no_argument,	NULL,			OP_BLOCKING_IO },
-    { "bwlimit",	required_argument, NULL,		OP_BWLIMIT },
-    { "cache",		no_argument,	&opts.no_cache,		0 },
-    { "no-cache",	no_argument,	&opts.no_cache,		1 },
-    { "checksum",	no_argument,	NULL,			'c' },
-    { "checksum-seed",	required_argument, NULL,		OP_CHECKSUM_SEED },
-    { "chmod",		required_argument, NULL,		OP_CHMOD },
-    { "compare-dest",	required_argument, NULL,		OP_COMP_DEST },
-    { "copy-dest",	required_argument, NULL,		OP_COPY_DEST },
-    { "link-dest",	required_argument, NULL,		OP_LINK_DEST },
-    { "compress",	no_argument,	NULL,			'z' },
-    { "compress-level",	required_argument, NULL,		OP_COMPLEVEL },
-    { "contimeout",	required_argument, NULL,		OP_CONTIMEOUT },
-    { "copy-dirlinks",	no_argument,	NULL,			'k' },
-    { "copy-links",	no_argument,	&opts.copy_links,	'L' },
-    { "copy-unsafe-links",	no_argument,	&opts.copy_unsafe_links,	OP_COPY_UNSAFE_LINKS },
-    { "cvs-exclude",	no_argument,	NULL,			'C' },
-    { "no-D",		no_argument,	NULL,			OP_NO_D },
-    { "daemon",		no_argument,	NULL,			OP_DAEMON },
-    { "del",		no_argument,	NULL,			OP_DEL },
-    { "delete",		no_argument,	NULL,			OP_DEL },
-    { "delete-before",	no_argument,	NULL,		OP_DEL_BEFORE },
-    { "delete-during",	no_argument,	NULL,		OP_DEL_DURING },
-    { "delete-delay",	no_argument,	NULL,		OP_DEL_DELAY },
-    { "delete-after",	no_argument,	NULL,		OP_DEL_AFTER },
-    { "delete-excluded",	no_argument,	&opts.del_excl,	1 },
-    { "devices",	no_argument,	&opts.devices,		1 },
-    { "no-devices",	no_argument,	&opts.devices,		0 },
-    { "dry-run",	no_argument,	NULL,			'n' },
-    { "exclude",	required_argument, NULL,		OP_EXCLUDE },
-    { "exclude-from",	required_argument, NULL,		OP_EXCLUDE_FROM },
-    { "executability",	no_argument,	NULL,			OP_EXECUTABILITY },
-    { "existing",	no_argument, NULL,			OP_IGNORE_NON_EXISTING },
+const struct bx_option_spec rsync_options[] = {
+	{ 'A', 'A', "acls", BX_OPTION_NO_VALUE },
+	{ 'X', 'X', "xattrs", BX_OPTION_NO_VALUE },
+	{ OP_NO_ACLS, 0, "no-acls", BX_OPTION_NO_VALUE },
+	{ OP_NO_XATTRS, 0, "no-xattrs", BX_OPTION_NO_VALUE },
+	{ OP_BX_PROTOCOL, 0, "bx-protocol", BX_OPTION_REQUIRED_VALUE },
+	{ OP_ADDRESS, 0, "address", BX_OPTION_REQUIRED_VALUE },
+	{ OP_APPEND, 0, "append", BX_OPTION_NO_VALUE },
+	{ 'a', 'a', "archive", BX_OPTION_NO_VALUE },
+	{ 'b', 'b', "backup", BX_OPTION_NO_VALUE },
+	{ OP_BACKUP_DIR, 0, "backup-dir", BX_OPTION_REQUIRED_VALUE },
+	{ 'B', 'B', "block-size", BX_OPTION_REQUIRED_VALUE },
+	{ OP_BLOCKING_IO, 0, "blocking-io", BX_OPTION_NO_VALUE },
+	{ OP_BWLIMIT, 0, "bwlimit", BX_OPTION_REQUIRED_VALUE },
+	{ OP_CACHE, 0, "cache", BX_OPTION_NO_VALUE },
+	{ OP_NO_CACHE, 0, "no-cache", BX_OPTION_NO_VALUE },
+	{ 'c', 'c', "checksum", BX_OPTION_NO_VALUE },
+	{ OP_CHECKSUM_SEED, 0, "checksum-seed", BX_OPTION_REQUIRED_VALUE },
+	{ OP_CHMOD, 0, "chmod", BX_OPTION_REQUIRED_VALUE },
+	{ OP_COMP_DEST, 0, "compare-dest", BX_OPTION_REQUIRED_VALUE },
+	{ OP_COPY_DEST, 0, "copy-dest", BX_OPTION_REQUIRED_VALUE },
+	{ OP_LINK_DEST, 0, "link-dest", BX_OPTION_REQUIRED_VALUE },
+	{ 'z', 'z', "compress", BX_OPTION_NO_VALUE },
+	{ OP_COMPLEVEL, 0, "compress-level", BX_OPTION_REQUIRED_VALUE },
+	{ OP_CONTIMEOUT, 0, "contimeout", BX_OPTION_REQUIRED_VALUE },
+	{ 'k', 'k', "copy-dirlinks", BX_OPTION_NO_VALUE },
+	{ 'L', 'L', "copy-links", BX_OPTION_NO_VALUE },
+	{ OP_COPY_UNSAFE_LINKS, 0, "copy-unsafe-links", BX_OPTION_NO_VALUE },
+	{ 'C', 'C', "cvs-exclude", BX_OPTION_NO_VALUE },
+	{ OP_NO_D, 0, "no-D", BX_OPTION_NO_VALUE },
+	{ OP_DAEMON, 0, "daemon", BX_OPTION_NO_VALUE },
+	{ OP_DEL, 0, "del", BX_OPTION_NO_VALUE },
+	{ OP_DEL, 0, "delete", BX_OPTION_NO_VALUE },
+	{ OP_DEL_BEFORE, 0, "delete-before", BX_OPTION_NO_VALUE },
+	{ OP_DEL_DURING, 0, "delete-during", BX_OPTION_NO_VALUE },
+	{ OP_DEL_DELAY, 0, "delete-delay", BX_OPTION_NO_VALUE },
+	{ OP_DEL_AFTER, 0, "delete-after", BX_OPTION_NO_VALUE },
+	{ OP_DELETE_EXCLUDED, 0, "delete-excluded", BX_OPTION_NO_VALUE },
+	{ OP_DEVICES, 0, "devices", BX_OPTION_NO_VALUE },
+	{ OP_NO_DEVICES, 0, "no-devices", BX_OPTION_NO_VALUE },
+	{ 'n', 'n', "dry-run", BX_OPTION_NO_VALUE },
+	{ OP_EXCLUDE, 0, "exclude", BX_OPTION_REQUIRED_VALUE },
+	{ OP_EXCLUDE_FROM, 0, "exclude-from", BX_OPTION_REQUIRED_VALUE },
+	{ OP_EXECUTABILITY, 0, "executability", BX_OPTION_NO_VALUE },
+	{ OP_IGNORE_NON_EXISTING, 0, "existing", BX_OPTION_NO_VALUE },
 #ifdef __APPLE__
-    { "extended-attributes",	no_argument, NULL,		'E' },
+	{ 'E', 0, "extended-attributes", BX_OPTION_NO_VALUE },
 #endif
-    { "filter",		required_argument, NULL,		'f' },
-    { "force",		no_argument,	NULL,			OP_FORCE },
-    { "fuzzy",		no_argument,	NULL,			'y' },
-    { "group",		no_argument,	NULL,			'g' },
-    { "no-group",	no_argument,	&opts.preserve_gids,	0 },
-    { "no-g",		no_argument,	&opts.preserve_gids,	0 },
-    { "hard-links",	no_argument,	&opts.hard_links,	'H' },
-    { "help",		no_argument,	NULL,			OP_HELP },
-    { "human-readable",	no_argument,	NULL,			'h' },
-    { "ignore-errors",	no_argument,	NULL,			OP_IGNORE_ERRORS },
-    { "ignore-existing", no_argument,	NULL,			OP_IGNORE_EXISTING },
-    { "ignore-non-existing", no_argument, NULL,			OP_IGNORE_NON_EXISTING },
-    { "ignore-times",	no_argument,	NULL,			'I' },
-    { "include",	required_argument, NULL,		OP_INCLUDE },
-    { "include-from",	required_argument, NULL,		OP_INCLUDE_FROM },
-    { "inplace",	no_argument,	&opts.inplace,		1 },
-    { "ipv4",		no_argument,	NULL,			'4' },
-    { "ipv6",		no_argument,	NULL,			'6' },
-    { "keep-dirlinks",	no_argument,	NULL,			'K' },
-    { "links",		no_argument,	NULL,			'l' },
-    { "list-only",	no_argument,	NULL,			OP_LISTONLY },
-    { "max-delete",	required_argument, NULL,		OP_MAX_DELETE },
-    { "max-size",	required_argument, NULL,		OP_MAX_SIZE },
-    { "min-size",	required_argument, NULL,		OP_MIN_SIZE },
-    { "motd",		no_argument,	&opts.no_motd,		0 },
-    { "no-motd",	no_argument,	&opts.no_motd,		1 },
-    { "no-links",	no_argument,	&opts.preserve_links,	0 },
-    { "no-l",		no_argument,	&opts.preserve_links,	0 },
-    { "numeric-ids",	no_argument,	NULL,			OP_NUMERIC_IDS },
-    { "omit-dir-times",	no_argument,	NULL,			'O' },
-    { "owner",		no_argument,	NULL,			'o' },
-    { "no-owner",	no_argument,	&opts.preserve_uids,	0 },
-    { "no-o",		no_argument,	&opts.preserve_uids,	0 },
-    { "one-file-system",no_argument,	NULL,			'x' },
-    { "password-file",	required_argument, NULL,		OP_PASSWORD_FILE },
-    { "partial",	no_argument,	&opts.partial,		1 },
-    { "no-partial",	no_argument,	&opts.partial,		0 },
-    { "partial-dir",	required_argument,	NULL,		OP_PARTIAL_DIR },
-    { "perms",		no_argument,	NULL,			'p' },
-    { "no-perms",	no_argument,	&opts.preserve_perms,	0 },
-    { "no-p",		no_argument,	&opts.preserve_perms,	0 },
-    { "port",		required_argument, NULL,		OP_PORT },
-    { "print-flist-chunk-size",	no_argument, NULL,		OP_PFLISTSZ },
-    { "prune-empty-dirs",	no_argument, NULL,		'm' },
-    { "protocol",	required_argument, NULL,		OP_PROTOCOL },
-    { "quiet",		no_argument,	NULL,			'q' },
-    { "read-batch",	required_argument, NULL,		OP_READ_BATCH },
-    { "recursive",	no_argument,	NULL,			'r' },
-    { "no-recursive",	no_argument,	&opts.recursive,	0 },
-    { "no-r",		no_argument,	&opts.recursive,	0 },
-    { "rsh",		required_argument, NULL,		'e' },
-    { "rsync-path",	required_argument, NULL,		OP_RSYNCPATH },
-    { "safe-links",	no_argument,	&opts.safe_links,	1 },
-    { "sender",		no_argument,	&opts.sender,		1 },
-    { "server",		no_argument,	&opts.server,		1 },
-    { "size-only",	no_argument,	&opts.size_only,	1 },
-    { "sockopts",	required_argument,	NULL,		OP_SOCKOPTS },
-    { "specials",	no_argument,	&opts.specials,		1 },
-    { "no-specials",	no_argument,	&opts.specials,		0 },
-    { "sparse",		no_argument,	NULL,			'S' },
-    { "stats",		no_argument,	NULL,			OP_STATS },
-    { "suffix",		required_argument,	NULL,		OP_BACKUP_SUFFIX },
-    { "super",		no_argument,	&opts.supermode,	SMODE_ON },
-    { "no-super",	no_argument,	&opts.supermode,	SMODE_OFF },
-#if 0
-    { "sync-file",	required_argument, NULL,		6 },
-#endif
+	{ 'f', 'f', "filter", BX_OPTION_REQUIRED_VALUE },
+	{ OP_FORCE, 0, "force", BX_OPTION_NO_VALUE },
+	{ 'y', 'y', "fuzzy", BX_OPTION_NO_VALUE },
+	{ 'g', 'g', "group", BX_OPTION_NO_VALUE },
+	{ OP_NO_GROUP, 0, "no-group", BX_OPTION_NO_VALUE },
+	{ OP_NO_GROUP, 0, "no-g", BX_OPTION_NO_VALUE },
+	{ 'H', 'H', "hard-links", BX_OPTION_NO_VALUE },
+	{ OP_HELP, 0, "help", BX_OPTION_NO_VALUE },
+	{ 'h', 'h', "human-readable", BX_OPTION_NO_VALUE },
+	{ OP_IGNORE_ERRORS, 0, "ignore-errors", BX_OPTION_NO_VALUE },
+	{ OP_IGNORE_EXISTING, 0, "ignore-existing", BX_OPTION_NO_VALUE },
+	{ OP_IGNORE_NON_EXISTING, 0, "ignore-non-existing", BX_OPTION_NO_VALUE },
+	{ 'I', 'I', "ignore-times", BX_OPTION_NO_VALUE },
+	{ OP_INCLUDE, 0, "include", BX_OPTION_REQUIRED_VALUE },
+	{ OP_INCLUDE_FROM, 0, "include-from", BX_OPTION_REQUIRED_VALUE },
+	{ OP_INPLACE, 0, "inplace", BX_OPTION_NO_VALUE },
+	{ '4', '4', "ipv4", BX_OPTION_NO_VALUE },
+	{ '6', '6', "ipv6", BX_OPTION_NO_VALUE },
+	{ 'K', 'K', "keep-dirlinks", BX_OPTION_NO_VALUE },
+	{ 'l', 'l', "links", BX_OPTION_NO_VALUE },
+	{ OP_LISTONLY, 0, "list-only", BX_OPTION_NO_VALUE },
+	{ OP_MAX_DELETE, 0, "max-delete", BX_OPTION_REQUIRED_VALUE },
+	{ OP_MAX_SIZE, 0, "max-size", BX_OPTION_REQUIRED_VALUE },
+	{ OP_MIN_SIZE, 0, "min-size", BX_OPTION_REQUIRED_VALUE },
+	{ OP_MOTD, 0, "motd", BX_OPTION_NO_VALUE },
+	{ OP_NO_MOTD, 0, "no-motd", BX_OPTION_NO_VALUE },
+	{ OP_NO_LINKS, 0, "no-links", BX_OPTION_NO_VALUE },
+	{ OP_NO_LINKS, 0, "no-l", BX_OPTION_NO_VALUE },
+	{ OP_NUMERIC_IDS, 0, "numeric-ids", BX_OPTION_NO_VALUE },
+	{ 'O', 'O', "omit-dir-times", BX_OPTION_NO_VALUE },
+	{ 'o', 'o', "owner", BX_OPTION_NO_VALUE },
+	{ OP_NO_OWNER, 0, "no-owner", BX_OPTION_NO_VALUE },
+	{ OP_NO_OWNER, 0, "no-o", BX_OPTION_NO_VALUE },
+	{ 'x', 'x', "one-file-system", BX_OPTION_NO_VALUE },
+	{ OP_PASSWORD_FILE, 0, "password-file", BX_OPTION_REQUIRED_VALUE },
+	{ OP_PARTIAL, 0, "partial", BX_OPTION_NO_VALUE },
+	{ OP_NO_PARTIAL, 0, "no-partial", BX_OPTION_NO_VALUE },
+	{ OP_PARTIAL_DIR, 0, "partial-dir", BX_OPTION_REQUIRED_VALUE },
+	{ 'p', 'p', "perms", BX_OPTION_NO_VALUE },
+	{ OP_NO_PERMS, 0, "no-perms", BX_OPTION_NO_VALUE },
+	{ OP_NO_PERMS, 0, "no-p", BX_OPTION_NO_VALUE },
+	{ OP_PORT, 0, "port", BX_OPTION_REQUIRED_VALUE },
+	{ OP_PFLISTSZ, 0, "print-flist-chunk-size", BX_OPTION_NO_VALUE },
+	{ 'm', 'm', "prune-empty-dirs", BX_OPTION_NO_VALUE },
+	{ OP_PROTOCOL, 0, "protocol", BX_OPTION_REQUIRED_VALUE },
+	{ 'q', 'q', "quiet", BX_OPTION_NO_VALUE },
+	{ OP_READ_BATCH, 0, "read-batch", BX_OPTION_REQUIRED_VALUE },
+	{ 'r', 'r', "recursive", BX_OPTION_NO_VALUE },
+	{ OP_NO_RECURSIVE, 0, "no-recursive", BX_OPTION_NO_VALUE },
+	{ OP_NO_RECURSIVE, 0, "no-r", BX_OPTION_NO_VALUE },
+	{ 'e', 'e', "rsh", BX_OPTION_REQUIRED_VALUE },
+	{ OP_RSYNCPATH, 0, "rsync-path", BX_OPTION_REQUIRED_VALUE },
+	{ OP_SAFE_LINKS, 0, "safe-links", BX_OPTION_NO_VALUE },
+	{ OP_SENDER, 0, "sender", BX_OPTION_NO_VALUE },
+	{ OP_SERVER, 0, "server", BX_OPTION_NO_VALUE },
+	{ OP_SIZE_ONLY, 0, "size-only", BX_OPTION_NO_VALUE },
+	{ OP_SOCKOPTS, 0, "sockopts", BX_OPTION_REQUIRED_VALUE },
+	{ OP_SPECIALS, 0, "specials", BX_OPTION_NO_VALUE },
+	{ OP_NO_SPECIALS, 0, "no-specials", BX_OPTION_NO_VALUE },
+	{ 'S', 'S', "sparse", BX_OPTION_NO_VALUE },
+	{ OP_STATS, 0, "stats", BX_OPTION_NO_VALUE },
+	{ OP_BACKUP_SUFFIX, 0, "suffix", BX_OPTION_REQUIRED_VALUE },
+	{ OP_SUPER, 0, "super", BX_OPTION_NO_VALUE },
+	{ OP_NO_SUPER, 0, "no-super", BX_OPTION_NO_VALUE },
 #ifdef __APPLE__
-    { "syslog-trace",	no_argument,	&syslog_trace,		1 },
+	{ OP_TRACE, 0, "syslog-trace", BX_OPTION_NO_VALUE },
 #endif
-    { "temp-dir",	required_argument, NULL,		'T' },
-    { "timeout",	required_argument, NULL,		OP_TIMEOUT },
-    { "times",		no_argument,	NULL,			't' },
-    { "no-times",	no_argument,	&opts.preserve_times,	0 },
-    { "no-t",		no_argument,	&opts.preserve_times,	0 },
-    { "update",		no_argument,	NULL,			'u' },
-    { "verbose",	no_argument,	NULL,			'v' },
-    { "no-verbose",	no_argument,	&verbose,		0 },
-    { "no-v",		no_argument,	&verbose,		0 },
-    { "whole-file",	no_argument,	NULL,			'W' },
-    { "no-whole-file",	no_argument,	&opts.whole_file,	0 },
-    { "no-W",		no_argument,	&opts.whole_file,	0 },
-    { "only-write-batch",	required_argument, NULL,	OP_ONLY_WRITE_BATCH },
-    { "write-batch",	required_argument, NULL,		OP_WRITE_BATCH },
-    { "progress",	no_argument,	&opts.progress,		1 },
-    { "no-progress",	no_argument,	&opts.progress,		0 },
-    { "relative",	no_argument,	NULL,			'R' },
-    { "no-R",		no_argument,	NULL,			OP_NO_RELATIVE },
-    { "no-relative",	no_argument,	NULL,			OP_NO_RELATIVE },
-    { "remove-sent-files",	no_argument,	&opts.remove_source,	1 },
-    { "remove-source-files",	no_argument,	&opts.remove_source,	1 },
-    { "version",	no_argument,	NULL,			'V' },
-    { "dirs",		no_argument,	NULL,			'd' },
-    { "no-dirs",	no_argument,	NULL,			OP_NO_DIRS },
-    { "no-implied-dirs", no_argument,	NULL,			OP_NO_IMPLIED_DIRS },
-    { "files-from",	required_argument,	NULL,		OP_FILESFROM },
-    { "from0",		no_argument,	NULL,			'0' },
-    { "out-format",	required_argument,	NULL,		OP_OUTFORMAT },
-    { "log-file",	required_argument,	NULL,		OP_LOGFILE },
-    { "log-file-format",	required_argument,	NULL,	OP_LOGFORMAT },
+	{ 'T', 'T', "temp-dir", BX_OPTION_REQUIRED_VALUE },
+	{ OP_TIMEOUT, 0, "timeout", BX_OPTION_REQUIRED_VALUE },
+	{ 't', 't', "times", BX_OPTION_NO_VALUE },
+	{ OP_NO_TIMES, 0, "no-times", BX_OPTION_NO_VALUE },
+	{ OP_NO_TIMES, 0, "no-t", BX_OPTION_NO_VALUE },
+	{ 'u', 'u', "update", BX_OPTION_NO_VALUE },
+	{ 'v', 'v', "verbose", BX_OPTION_NO_VALUE },
+	{ OP_NO_VERBOSE, 0, "no-verbose", BX_OPTION_NO_VALUE },
+	{ OP_NO_VERBOSE, 0, "no-v", BX_OPTION_NO_VALUE },
+	{ 'W', 'W', "whole-file", BX_OPTION_NO_VALUE },
+	{ OP_NO_WHOLE_FILE, 0, "no-whole-file", BX_OPTION_NO_VALUE },
+	{ OP_NO_WHOLE_FILE, 0, "no-W", BX_OPTION_NO_VALUE },
+	{ OP_ONLY_WRITE_BATCH, 0, "only-write-batch", BX_OPTION_REQUIRED_VALUE },
+	{ OP_WRITE_BATCH, 0, "write-batch", BX_OPTION_REQUIRED_VALUE },
+	{ OP_PROGRESS, 0, "progress", BX_OPTION_NO_VALUE },
+	{ OP_NO_PROGRESS, 0, "no-progress", BX_OPTION_NO_VALUE },
+	{ 'R', 'R', "relative", BX_OPTION_NO_VALUE },
+	{ OP_NO_RELATIVE, 0, "no-R", BX_OPTION_NO_VALUE },
+	{ OP_NO_RELATIVE, 0, "no-relative", BX_OPTION_NO_VALUE },
+	{ OP_REMOVE_SOURCE, 0, "remove-sent-files", BX_OPTION_NO_VALUE },
+	{ OP_REMOVE_SOURCE, 0, "remove-source-files", BX_OPTION_NO_VALUE },
+	{ 'V', 'V', "version", BX_OPTION_NO_VALUE },
+	{ 'd', 'd', "dirs", BX_OPTION_NO_VALUE },
+	{ OP_NO_DIRS, 0, "no-dirs", BX_OPTION_NO_VALUE },
+	{ OP_NO_IMPLIED_DIRS, 0, "no-implied-dirs", BX_OPTION_NO_VALUE },
+	{ OP_FILESFROM, 0, "files-from", BX_OPTION_REQUIRED_VALUE },
+	{ '0', '0', "from0", BX_OPTION_NO_VALUE },
+	{ OP_OUTFORMAT, 0, "out-format", BX_OPTION_REQUIRED_VALUE },
+	{ OP_LOGFILE, 0, "log-file", BX_OPTION_REQUIRED_VALUE },
+	{ OP_LOGFORMAT, 0, "log-file-format", BX_OPTION_REQUIRED_VALUE },
     /* Deprecated, same as --out-format */
-    { "log-format",	required_argument,	NULL,		OP_OUTFORMAT },
-    { "itemize-changes", no_argument,	NULL,			OP_ITEMIZE },
-    { "delay-updates",	no_argument,	&opts.dlupdates,	1 },
-    { "modify-window",	required_argument,	NULL,		OP_MODWIN },
-    { "8-bit-output",	no_argument,	NULL,			OP_BIT8 },
-    { NULL,		0,		NULL,			0 }
+	{ OP_OUTFORMAT, 0, "log-format", BX_OPTION_REQUIRED_VALUE },
+	{ OP_ITEMIZE, 0, "itemize-changes", BX_OPTION_NO_VALUE },
+	{ OP_DELAY_UPDATES, 0, "delay-updates", BX_OPTION_NO_VALUE },
+	{ OP_MODWIN, 0, "modify-window", BX_OPTION_REQUIRED_VALUE },
+	{ OP_BIT8, 0, "8-bit-output", BX_OPTION_NO_VALUE },
+	{ '8', '8', NULL, BX_OPTION_NO_VALUE },
+	{ 'D', 'D', NULL, BX_OPTION_NO_VALUE },
+	{ 'E', 'E', NULL, BX_OPTION_NO_VALUE },
+	{ 'F', 'F', NULL, BX_OPTION_NO_VALUE },
+	{ 'P', 'P', NULL, BX_OPTION_NO_VALUE },
+	{ 'i', 'i', NULL, BX_OPTION_NO_VALUE },
 };
+const size_t rsync_options_count = nitems(rsync_options);
 
 static void
 usage(int exitcode)
@@ -1286,25 +1321,15 @@ rsync_parse_numeric_option(const char *option, const char *text)
 	return value;
 }
 
-/*
- * Parse options out of argv; this is shared with daemon mode to parse options
- * sent over the wire from clients.  Filtering is primarily so that the daemon
- * can reject arguments based on their names.
- *
- * Returns NULL on error or the client options struct on success -- for
- * convenience we'll just use the global we've setup so that we don't need to
- * change the definition of lopts, but if we wanted to be able to take a
- * caller-allocated struct opts we'd need to return OP_* or 'f'lags from every
- * option.
- */
+/* Validate option spelling, arity and peer refusal policy before applying options. */
 struct opts *
-rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
-    struct sess *sess)
+rsync_parse_options(int argc, char *argv[], char **operands, int *operand_end,
+    rsync_option_filter *filter, struct sess *sess)
 {
 	long long	 tmplong;
 	size_t		 basedir_cnt = 0;
 	const char	*errstr;
-	int		 c, cvs_excl, lidx;
+	int		 cvs_excl;
 	int		 implied_recursive = -1;
 	int		 opts_F = 0, opts_no_relative = 0, opts_no_dirs = 0;
 	int		 opts_only_batch = 0;
@@ -1318,7 +1343,6 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 	memset(&opts, 0, sizeof(opts));
 
 	cvs_excl = 0;
-	lidx = -1;
 	opts.max_size = opts.min_size = -1;
 	opts.compression_level = Z_DEFAULT_COMPRESSION;
 	opts.whole_file = -1;
@@ -1327,44 +1351,64 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 #endif
 	opts.protocol = RSYNC_PROTOCOL;
 
-	while ((c = getopt_long(argc, argv, rsync_shopts, rsync_lopts, &lidx)) != -1) {
-		/* Give the filter a shot to reject the option. */
-		if (filter != NULL) {
-			const struct option *lopt;
-			int rc;
-			char shopt;
-
-			/*
-			 * If we can tie this particular option to a long opt,
-			 * even if the short option version of it was specified,
-			 * then we should.  The daemon needs to be able to
-			 * reject based on either name.
-			 */
-			if (lidx == -1) {
-				shopt = c;
-
-				for (lopt = rsync_lopts; lopt->name != NULL; lopt++) {
-					if (lopt->flag == NULL &&
-					    lopt->val == c)
-						break;
-				}
-
-				if (lopt->name == NULL)
-					lopt = NULL;
-			} else {
-				lopt = &rsync_lopts[lidx];
-				if (isprint(lopt->val))
-					shopt = lopt->val;
-				else
-					shopt = 0;
-			}
-
-			rc = (*filter)(sess, shopt, lopt);
-			if (rc < 0)
-				continue;
-			else if (rc == 0)
-				return NULL;
+	unsigned mode = BX_OPTION_ABBREVIATE | (filter ? BX_OPTION_PREFIX : BX_OPTION_ORDERED);
+	struct bx_option_cursor cursor;
+	struct bx_option_result option;
+	int count = 0;
+	bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, mode,
+	    rsync_options, rsync_options_count);
+	while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+		if (option.event == BX_OPTION_OPERAND) {
+			operands[count++] = argv[option.index];
+			continue;
 		}
+		if (option.event != BX_OPTION_MATCH) {
+			const char *reason =
+			    option.event == BX_OPTION_AMBIGUOUS ? "ambiguous option" :
+			    option.event == BX_OPTION_MISSING_VALUE ? "option requires an argument" :
+			    option.event == BX_OPTION_UNEXPECTED_VALUE ? "option does not take an argument" :
+			    "unrecognized option";
+			if (filter)
+				daemon_client_error(sess, "%s: %s", reason, option.token);
+			else
+				warnx("%s: %s", reason, option.token);
+			return NULL;
+		}
+		int id = option.spec->id;
+		if (filter) {
+			if (!filter(sess, option.spec))
+				return NULL;
+			if (id == OP_HELP || id == 'V' || id == OP_PFLISTSZ) {
+				daemon_client_error(sess, "invalid peer option: --%s", option.spec->long_name);
+				return NULL;
+			}
+		} else {
+			if (id == OP_DAEMON)
+				exit(rsync_daemon(argc, argv, &opts));
+			if (id == OP_HELP || id == 'V' || id == OP_PFLISTSZ || (id == 'h' && argc == 2))
+				break;
+		}
+	}
+	if (filter) {
+		if (option.index >= (size_t)argc || strcmp(argv[option.index], ".") != 0) {
+			daemon_client_error(sess,
+			    "protocol violation: expected hard stop before file list");
+			return NULL;
+		}
+		*operand_end = (int)option.index;
+	} else {
+		operands[count] = NULL;
+		*operand_end = count;
+	}
+
+	bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, mode,
+	    rsync_options, rsync_options_count);
+	while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+		if (option.event == BX_OPTION_OPERAND)
+			continue;
+		assert(option.event == BX_OPTION_MATCH);
+		char *value = option.value;
+		int c = option.spec->id;
 		switch (c) {
 		case 'A':
 			opts.preserve_acls = 1;
@@ -1386,10 +1430,10 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 			opts.bit8++;
 			break;
 		case 'B':
-			if (rsync_scan_scaled(optarg, &tmplong) == -1)
-				errx(1, "--block-size=%s: invalid numeric value", optarg);
+			if (rsync_scan_scaled(value, &tmplong) == -1)
+				errx(1, "--block-size=%s: invalid numeric value", value);
 			if (tmplong < 0)
-				errx(1, "--block-size=%s: must be no less than 0", optarg);
+				errx(1, "--block-size=%s: must be no less than 0", value);
 			/* Upper bound checked only if differential transfer is required */
 			opts.block_size = tmplong;
 			break;
@@ -1463,13 +1507,13 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 			opts.dirs = DIRMODE_REQUESTED;
 			break;
 		case 'e':
-			opts.ssh_prog = optarg;
+			opts.ssh_prog = value;
 			break;
 		case 'f':
-			if (parse_rule(optarg, RULE_NONE,
+			if (parse_rule(value, RULE_NONE,
 			    opts.from0 ? 0 : '\n') == -1)
 				errx(ERR_SYNTAX, "syntax error in filter: %s",
-				    optarg);
+				    value);
 			break;
 		case 'g':
 			opts.preserve_gids = 1;
@@ -1535,63 +1579,156 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 			break;
 		case 'T':
 			free(opts.temp_dir);
-			opts.temp_dir = strdup(optarg);
+			opts.temp_dir = strdup(value);
 			if (opts.temp_dir == NULL)
 				errx(ERR_NOMEM, NULL);
 			break;
 		case 'W':
 			opts.whole_file = 1;
 			break;
-		case 0:
-			/* Non-NULL flag values (e.g., --sender). */
+		case OP_NO_ACLS:
+			opts.preserve_acls = 0;
 			break;
-#if 0
-		case 6:
-			opts.syncfile = optarg;
+		case OP_NO_XATTRS:
+			opts.preserve_xattrs = 0;
+			break;
+		case OP_CACHE:
+			opts.no_cache = 0;
+			break;
+		case OP_NO_CACHE:
+			opts.no_cache = 1;
+			break;
+		case OP_DELETE_EXCLUDED:
+			opts.del_excl = 1;
+			break;
+		case OP_DEVICES:
+			opts.devices = 1;
+			break;
+		case OP_NO_DEVICES:
+			opts.devices = 0;
+			break;
+		case OP_NO_GROUP:
+			opts.preserve_gids = 0;
+			break;
+		case OP_INPLACE:
+			opts.inplace = 1;
+			break;
+		case OP_MOTD:
+			opts.no_motd = 0;
+			break;
+		case OP_NO_MOTD:
+			opts.no_motd = 1;
+			break;
+		case OP_NO_LINKS:
+			opts.preserve_links = 0;
+			break;
+		case OP_NO_OWNER:
+			opts.preserve_uids = 0;
+			break;
+		case OP_PARTIAL:
+			opts.partial = 1;
+			break;
+		case OP_NO_PARTIAL:
+			opts.partial = 0;
+			break;
+		case OP_NO_PERMS:
+			opts.preserve_perms = 0;
+			break;
+		case OP_NO_RECURSIVE:
+			opts.recursive = 0;
+			break;
+		case OP_SAFE_LINKS:
+			opts.safe_links = 1;
+			break;
+		case OP_SENDER:
+			opts.sender = 1;
+			break;
+		case OP_SERVER:
+			opts.server = 1;
+			break;
+		case OP_SIZE_ONLY:
+			opts.size_only = 1;
+			break;
+		case OP_SPECIALS:
+			opts.specials = 1;
+			break;
+		case OP_NO_SPECIALS:
+			opts.specials = 0;
+			break;
+		case OP_SUPER:
+			opts.supermode = SMODE_ON;
+			break;
+		case OP_NO_SUPER:
+			opts.supermode = SMODE_OFF;
+			break;
+#ifdef __APPLE__
+		case OP_TRACE:
+			syslog_trace = 1;
 			break;
 #endif
+		case OP_NO_TIMES:
+			opts.preserve_times = 0;
+			break;
+		case OP_NO_VERBOSE:
+			verbose = 0;
+			break;
+		case OP_NO_WHOLE_FILE:
+			opts.whole_file = 0;
+			break;
+		case OP_PROGRESS:
+			opts.progress = 1;
+			break;
+		case OP_NO_PROGRESS:
+			opts.progress = 0;
+			break;
+		case OP_REMOVE_SOURCE:
+			opts.remove_source = 1;
+			break;
+		case OP_DELAY_UPDATES:
+			opts.dlupdates = 1;
+			break;
 		case OP_ADDRESS:
-			opts.address = optarg;
+			opts.address = value;
 			break;
 		case OP_CONTIMEOUT:
-			poll_contimeout = (int)strtonum(optarg, 0, INT_MAX,
+			poll_contimeout = (int)strtonum(value, 0, INT_MAX,
 			    &errstr);
 			if (errstr != NULL)
 				errx(ERR_SYNTAX, "timeout is %s: %s",
-				    errstr, optarg);
+				    errstr, value);
 			break;
 		case OP_PFLISTSZ:
 			printf("%zu\n", FLIST_CHUNK_SIZE);
 			exit(0);
 			break;
 		case OP_PORT:
-			opts.port = optarg;
+			opts.port = value;
 			break;
 		case OP_RSYNCPATH:
-			opts.rsync_path = optarg;
+			opts.rsync_path = value;
 			break;
 		case OP_TIMEOUT:
-			opts_timeout = (int)strtonum(optarg, 0, INT_MAX,
+			opts_timeout = (int)strtonum(value, 0, INT_MAX,
 			    &errstr);
 			if (errstr != NULL)
 				errx(ERR_SYNTAX, "timeout is %s: %s",
-				    errstr, optarg);
+				    errstr, value);
 			break;
 		case OP_EXCLUDE:
-			if (parse_rule(optarg, RULE_EXCLUDE, 0) == -1)
+			if (parse_rule(value, RULE_EXCLUDE, 0) == -1)
 				errx(ERR_SYNTAX, "syntax error in exclude: %s",
-				    optarg);
+				    value);
 			break;
 		case OP_INCLUDE:
-			if (parse_rule(optarg, RULE_INCLUDE, 0) == -1)
+			if (parse_rule(value, RULE_INCLUDE, 0) == -1)
 				errx(ERR_SYNTAX, "syntax error in include: %s",
-				    optarg);
+				    value);
 			break;
 		case OP_EXCLUDE_FROM:
-			parse_file(optarg, RULE_EXCLUDE, opts.from0 ? 0 : '\n');
+			parse_file(value, RULE_EXCLUDE, opts.from0 ? 0 : '\n');
 			break;
 		case OP_INCLUDE_FROM:
-			parse_file(optarg, RULE_INCLUDE, opts.from0 ? 0 : '\n');
+			parse_file(value, RULE_INCLUDE, opts.from0 ? 0 : '\n');
 			break;
 		case OP_BLOCKING_IO:
 			/* We ignore this flag */
@@ -1600,7 +1737,7 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 			if (opts.alt_base_mode != 0 &&
 			    opts.alt_base_mode != BASE_MODE_COMPARE) {
 				errx(1, "option --%s conflicts with %s",
-				    rsync_lopts[lidx].name,
+				    option.spec->long_name,
 				    alt_base_mode(opts.alt_base_mode));
 			}
 			opts.alt_base_mode = BASE_MODE_COMPARE;
@@ -1609,14 +1746,11 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 			if (opts.alt_base_mode != 0 &&
 			    opts.alt_base_mode != BASE_MODE_COPY) {
 				errx(1, "option --%s conflicts with %s",
-				    rsync_lopts[lidx].name,
+				    option.spec->long_name,
 				    alt_base_mode(opts.alt_base_mode));
 			}
 			opts.alt_base_mode = BASE_MODE_COPY;
 			goto basedir;
-		case OP_DAEMON:
-			exit(rsync_daemon(argc, argv, &opts));
-			break;
 		case OP_DEL:
 			/* nop if a --delete-* option has already been specified. */
 			if (opts.del == DMODE_NONE)
@@ -1650,7 +1784,7 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 			if (opts.alt_base_mode != 0 &&
 			    opts.alt_base_mode != BASE_MODE_LINK) {
 				errx(1, "option --%s conflicts with %s",
-				    rsync_lopts[lidx].name,
+				    option.spec->long_name,
 				    alt_base_mode(opts.alt_base_mode));
 			}
 			opts.alt_base_mode = BASE_MODE_LINK;
@@ -1658,28 +1792,28 @@ rsync_getopt(int argc, char *argv[], rsync_option_filter *filter,
 basedir:
 			if (basedir_cnt >= MAX_BASEDIR)
 				errx(1, "too many --%s directories specified",
-				    rsync_lopts[lidx].name);
-			opts.basedir[basedir_cnt++] = optarg;
+				    option.spec->long_name);
+			opts.basedir[basedir_cnt++] = value;
 			break;
 		case OP_READ_BATCH:
-			opts.read_batch = optarg;
+			opts.read_batch = value;
 			break;
 		case OP_ONLY_WRITE_BATCH:
 			opts_only_batch = 1;
 			/* FALLTHROUGH */
 		case OP_WRITE_BATCH:
-			opts.write_batch = optarg;
+			opts.write_batch = value;
 			break;
 		case OP_SPARSE:
 			opts.sparse++;
 			break;
 		case OP_MAX_SIZE:
-			if (rsync_scan_scaled(optarg, &tmplong) == -1)
+			if (rsync_scan_scaled(value, &tmplong) == -1)
 				err(1, "bad max-size");
 			opts.max_size = tmplong;
 			break;
 		case OP_MIN_SIZE:
-			if (rsync_scan_scaled(optarg, &tmplong) == -1)
+			if (rsync_scan_scaled(value, &tmplong) == -1)
 				err(1, "bad min-size");
 			opts.min_size = tmplong;
 			break;
@@ -1711,23 +1845,23 @@ basedir:
 			opts.noimpdirs = 1;
 			break;
 		case OP_FILESFROM:
-			opts.filesfrom = optarg;
+			opts.filesfrom = value;
 			break;
 		case OP_MODWIN:
-		        opts.modwin = atoi(optarg);
+		        opts.modwin = atoi(value);
 			break;
 		case OP_LOGFILE:
 			if (opts.logformat == NULL)
 				opts.logformat = strdup("%i %n%L");
-			opts.logfile = optarg;
+			opts.logfile = value;
 			break;
 		case OP_LOGFORMAT:
 			free(opts.logformat);
-		        opts.logformat = strdup(optarg);
+		        opts.logformat = strdup(value);
 			break;
 		case OP_OUTFORMAT:
 			free(opts.outformat);
-		        opts.outformat = strdup(optarg);
+		        opts.outformat = strdup(value);
 			break;
 		case 'i':
 			opts.itemize++;
@@ -1740,7 +1874,7 @@ basedir:
 			opts.append++;
 			break;
 		case OP_BWLIMIT:
-			if (scan_scaled_def(optarg, &tmplong, 'k') == -1)
+			if (scan_scaled_def(value, &tmplong, 'k') == -1)
 				err(1, "bad bwlimit");
 			opts.bwlimit = tmplong;
 			break;
@@ -1748,42 +1882,42 @@ basedir:
 			opts.copy_unsafe_links = 1;
 			break;
 		case OP_CHECKSUM_SEED:
-			if (*optarg != '\0') {
-				tmplong = rsync_parse_numeric_option("checksum-seed", optarg);
+			if (*value != '\0') {
+				tmplong = rsync_parse_numeric_option("checksum-seed", value);
 				if (tmplong < INT_MIN)
 					errx(1, "--checksum-seed=%s: must be no less than %d",
-					     optarg, INT_MIN);
+					     value, INT_MIN);
 				if (tmplong > INT_MAX)
 					errx(1, "--checksum-seed=%s: must be no greater than %d",
-					     optarg, INT_MAX);
+					     value, INT_MAX);
 				opts.checksum_seed = (tmplong == 0) ? (int)time(NULL) : (int)tmplong;
 			}
 			break;
 		case OP_CHMOD:
-			if (chmod_parse(optarg, NULL) != 0)
+			if (chmod_parse(value, NULL) != 0)
 				errx(ERR_SYNTAX, "--chmod=%s: invalid argument",
-				     optarg);
-			opts.chmod = optarg;
+				     value);
+			opts.chmod = value;
 			break;
 		case OP_BACKUP_DIR:
 			free(opts.backup_dir);
-			opts.backup_dir = strdup(optarg);
+			opts.backup_dir = strdup(value);
 			if (opts.backup_dir == NULL)
 				errx(ERR_NOMEM, NULL);
 			break;
 		case OP_BACKUP_SUFFIX:
-			if (strchr(optarg, '/') != NULL) {
+			if (strchr(value, '/') != NULL) {
 				errx(1, "--suffix cannot contain slashes: "
-				    "%s\n", optarg);
+				    "%s\n", value);
 			}
 			free(opts.backup_suffix);
-			opts.backup_suffix = strdup(optarg);
+			opts.backup_suffix = strdup(value);
 			if (opts.backup_suffix == NULL)
 				errx(ERR_NOMEM, NULL);
 			opts.backup_suffix_given++;
 			break;
 		case OP_PASSWORD_FILE:
-			opts.password_file = optarg;
+			opts.password_file = value;
 			break;
 		case OP_PARTIAL_DIR:
 			opts.partial = 1;
@@ -1797,35 +1931,35 @@ basedir:
 			 * sometimes part of argv.
 			 */
 			free(opts.partial_dir);
-			opts.partial_dir = strdup(optarg);
+			opts.partial_dir = strdup(value);
 			if (opts.partial_dir == NULL)
 				errx(ERR_NOMEM, NULL);
 			break;
 		case OP_BX_PROTOCOL:
-			if (strcmp(optarg, "29.5") != 0)
-				errx(ERR_SYNTAX, "unsupported bx protocol: %s", optarg);
+			if (strcmp(value, "29.5") != 0)
+				errx(ERR_SYNTAX, "unsupported bx protocol: %s", value);
 			opts.bx_protocol = 1;
 			break;
 		case OP_PROTOCOL:
-			protocol_set = strcmp(optarg, "29.5") == 0 ? 2 : 1;
-			if (strcmp(optarg, "29.5") == 0) {
+			protocol_set = strcmp(value, "29.5") == 0 ? 2 : 1;
+			if (strcmp(value, "29.5") == 0) {
 				opts.protocol = RSYNC_PROTOCOL;
 				opts.bx_protocol = 1;
 				break;
 			}
-			if (*optarg != '\0') {
-				tmplong = rsync_parse_numeric_option("protocol", optarg);
+			if (*value != '\0') {
+				tmplong = rsync_parse_numeric_option("protocol", value);
 				if (tmplong < RSYNC_PROTOCOL_MIN ||
 				    tmplong > RSYNC_PROTOCOL_MAX) {
 					errx(1, "--protocol=%s: out of range, "
-					    "min: %d, max: %d", optarg,
+					    "min: %d, max: %d", value,
 					    RSYNC_PROTOCOL_MIN,
 					    RSYNC_PROTOCOL_MAX);
 				}
 				if (tmplong > RSYNC_PROTOCOL) {
 					WARNX("--protocol=%s: is not supported "
 					    "by this version of openrsync. "
-					    "min: %d, max: %d", optarg,
+					    "min: %d, max: %d", value,
 					    RSYNC_PROTOCOL_MIN,
 					    RSYNC_PROTOCOL_MAX);
 				}
@@ -1836,20 +1970,20 @@ basedir:
 			opts.stats++;
 			break;
 		case OP_SOCKOPTS:
-			opts.sockopts = optarg;
+			opts.sockopts = value;
 			break;
 		case OP_FORCE:
 			opts.force_delete++;
 			break;
 		case OP_COMPLEVEL:
-			if (*optarg != '\0') {
-				tmplong = rsync_parse_numeric_option("compress-level", optarg);
+			if (*value != '\0') {
+				tmplong = rsync_parse_numeric_option("compress-level", value);
 				if (tmplong < Z_DEFAULT_COMPRESSION)
 					errx(1, "--compress-level=%s: must be no less than %d",
-					     optarg, Z_DEFAULT_COMPRESSION);
+					     value, Z_DEFAULT_COMPRESSION);
 				if (tmplong > Z_BEST_COMPRESSION)
 					errx(1, "--compress-level=%s: must be no greater than %d",
-					     optarg, Z_BEST_COMPRESSION);
+					     value, Z_BEST_COMPRESSION);
 
 				opts.compression_level = (int)tmplong;
 				if (opts.compression_level == Z_NO_COMPRESSION)
@@ -1876,14 +2010,14 @@ basedir:
 			opts.list_only = 1;
 			break;
 		case OP_MAX_DELETE:
-			if (*optarg != '\0') {
-				tmplong = rsync_parse_numeric_option("max-delete", optarg);
+			if (*value != '\0') {
+				tmplong = rsync_parse_numeric_option("max-delete", value);
 				if (tmplong < INT_MIN)
 					errx(1, "--max-delete=%s: must be no less than %d",
-					     optarg, INT_MIN);
+					     value, INT_MIN);
 				if (tmplong > INT_MAX)
 					errx(1, "--max-delete=%s: must be no greater than %d",
-					     optarg, INT_MAX);
+					     value, INT_MAX);
 
 				opts.max_delete = (int)tmplong;
 			}
@@ -1902,8 +2036,6 @@ basedir:
 		default:
 			usage(ERR_SYNTAX);
 		}
-
-		lidx = -1;
 	}
 
 	if (opts.del >= DMODE_UNSPECIFIED) {
@@ -2156,12 +2288,12 @@ bx_rsync_main(int argc, char *argv[])
 	setlocale(LC_CTYPE, "");
 	setlocale(LC_NUMERIC, "");
 
-	if (rsync_getopt(argc, argv, NULL, NULL) == NULL) {
+	char **operands = calloc((size_t)argc, sizeof(*operands));
+	if (operands == NULL)
+		err(ERR_NOMEM, NULL);
+	if (rsync_parse_options(argc, argv, operands, &argc, NULL, NULL) == NULL)
 		usage(ERR_SYNTAX);
-	}
-
-	argc -= optind;
-	argv += optind;
+	argv = operands;
 
 	/* One argument means we're doing an implied --list-only. */
 	if (argc < 1)
@@ -2211,6 +2343,7 @@ bx_rsync_main(int argc, char *argv[])
 	 */
 
 	fargs = fargs_parse(argc, argv, &opts);
+	free(operands);
 	assert(fargs != NULL);
 
 	cleanup_set_args(cleanup_ctx, fargs);

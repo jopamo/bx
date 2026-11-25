@@ -12,7 +12,8 @@ Local changes to Apple's files:
 - Shared bx text buffers for sbuf storage and unit labels for human-readable
   formatting outside FreeBSD.
 - Shared bx permission formatting, retaining rsync's trailing space.
-- Portable getopt reset, socket lengths, FTS and queue handling.
+- BX option scanning for client, daemon startup and daemon peer arguments.
+- Portable socket lengths, FTS and queue handling.
 - Confined opens use the shared bx resolution primitive on Linux and FreeBSD;
   platforms without a suitable primitive return ENOTSUP.
 - The bx applet re-executes its own verified executable descriptor for

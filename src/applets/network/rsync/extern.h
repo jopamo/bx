@@ -19,10 +19,10 @@
 #define EXTERN_H
 
 #include "config.h"
+#include "lib/option_scan.h"
 
 #include <assert.h>
 #include <dirent.h>
-#include <getopt.h>
 #include <limits.h>
 #include <setjmp.h>
 #include <stdlib.h>
@@ -799,8 +799,8 @@ struct	upload;
 
 struct hardlinks;
 
-extern const char rsync_shopts[];
-extern const struct option rsync_lopts[];
+extern const struct bx_option_spec rsync_options[];
+extern const size_t rsync_options_count;
 extern int quiet;
 extern int verbose;
 
@@ -1124,14 +1124,15 @@ typedef int (rsync_client_handler)(struct sess *, int,
 	    struct sockaddr_storage *, socklen_t);
 
 /*
- * The option filter should return 1 to allow an option to be processed, 0 to
- * stop processing, or -1 to simply skip it.
+ * The optional filter must authorize the matched option before it is applied.
+ * With a filter, scan a peer option prefix and return its operand index.
+ * Without one, fill the caller's argc-slot array with positional arguments
+ * and a null terminator, and return the operand count.
  */
-struct option;
-typedef int (rsync_option_filter)(struct sess *, int, const struct option *);
+typedef int (rsync_option_filter)(struct sess *, const struct bx_option_spec *);
 
-struct opts	*rsync_getopt(int, char *[], rsync_option_filter *,
-		    struct sess *);
+struct opts	*rsync_parse_options(int, char *[], char **, int *,
+		    rsync_option_filter *, struct sess *);
 
 int	send_iflags(struct sess *, void **, size_t *, size_t *,
 	    size_t *, struct flist *, int32_t);

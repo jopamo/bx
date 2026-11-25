@@ -1346,7 +1346,7 @@ daemon_add_short_refuse(struct sess *sess, char **shopts,
 
 	/* Allocate on demand. */
 	if (chkopts == NULL) {
-		*shoptsz = strlen(rsync_shopts);
+		*shoptsz = UCHAR_MAX;
 		chkopts = calloc(1, *shoptsz + 1);
 		if (chkopts == NULL) {
 			daemon_client_error(sess, "out of memory");
@@ -1368,10 +1368,10 @@ daemon_add_short_refuse(struct sess *sess, char **shopts,
 #define	REFUSE_LONG_ALLOC_BATCH		(8)
 
 static int
-daemon_add_long_refuse(struct sess *sess, const struct option ***lopts,
-    size_t *optlen, size_t *optsz, const struct option *opt)
+daemon_add_long_refuse(struct sess *sess, const struct bx_option_spec ***lopts,
+    size_t *optlen, size_t *optsz, const struct bx_option_spec *opt)
 {
-	const struct option **chkopts = *lopts;
+	const struct bx_option_spec **chkopts = *lopts;
 
 	if (*optlen == *optsz) {
 		*optsz += REFUSE_LONG_ALLOC_BATCH;
@@ -1396,13 +1396,14 @@ daemon_add_long_refuse(struct sess *sess, const struct option ***lopts,
 }
 
 static int
-daemon_add_long_refuse_name(struct sess *sess, const struct option ***lopts,
+daemon_add_long_refuse_name(struct sess *sess, const struct bx_option_spec ***lopts,
     size_t *optlen, size_t *optsz, const char *name)
 {
-	const struct option *chkopt;
-
-	for (chkopt = &rsync_lopts[0]; chkopt->name != NULL; chkopt++) {
-		if (strcmp(chkopt->name, name) != 0)
+	for (size_t i = 0; i < rsync_options_count; i++) {
+		const struct bx_option_spec *chkopt = &rsync_options[i];
+		if (chkopt->long_name == NULL)
+			continue;
+		if (strcmp(chkopt->long_name, name) != 0)
 			continue;
 
 		return (daemon_add_long_refuse(sess, lopts, optlen, optsz,
@@ -1446,8 +1447,8 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 {
 	struct daemon_role *role;
 	const char *refuse_cfg;
-	const struct option *chkopt, **lopts;
-	char *refused, *shopts, *token;
+	const struct bx_option_spec **lopts;
+	char *refused, *cursor, *shopts, *token;
 	size_t loptlen, loptsz, shoptlen, shoptsz;
 	int rc;
 	bool explicit_archive = false;
@@ -1469,7 +1470,8 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 	shoptlen = shoptsz = 0;
 	lopts = NULL;
 	shopts = NULL;
-	while ((token = strsep(&refused, " ")) != NULL) {
+	cursor = refused;
+	while ((token = strsep(&cursor, " ")) != NULL) {
 		char shopt = 0;
 		bool wildcard;
 
@@ -1477,7 +1479,7 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 		if (token[0] == '\0')
 			continue;
 
-#define	SHORT_OPTION(token)	(isprint(token[0]) && \
+#define	SHORT_OPTION(token)	(isprint((unsigned char)token[0]) && \
     (token[1] == '\0' || (token[1] == '*' && token[2] == '\0')))
 
 		if (SHORT_OPTION(token) && (token[1] != '*' ||
@@ -1486,11 +1488,7 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 
 			if (!daemon_add_short_refuse(sess, &shopts, &shoptlen,
 			    &shoptsz, shopt)) {
-				free(refused);
-				free(shopts);
-				free(lopts);
-
-				return 0;
+				goto fail;
 			}
 
 			if (shopt == 'a' && token[1] == '\0')
@@ -1508,43 +1506,37 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 		wildcard = strchr(token, '*') != NULL;
 
 		/* Check for explicit matches first */
-		for (chkopt = &rsync_lopts[0]; chkopt->name != NULL;
-		    chkopt++) {
-			if (rmatch(token, chkopt->name, 0) != 0)
+		for (size_t i = 0; i < rsync_options_count; i++) {
+			const struct bx_option_spec *chkopt = &rsync_options[i];
+			if (chkopt->long_name == NULL)
+				continue;
+			if (rmatch(token, chkopt->long_name, 0) != 0)
 				continue;
 
 			/*
 			 * See if we can avoid consuming a lopt spot.
 			 */
-			if (chkopt->flag == NULL && isprint(chkopt->val)) {
+			if (chkopt->id <= UCHAR_MAX) {
 				if (wildcard &&
 				    !daemon_can_refuse_short_wildcard(
-				    chkopt->val))
+				    chkopt->id))
 					continue;
-				if (chkopt->val == 'a' &&
+				if (chkopt->id == 'a' &&
 				    strcmp(token, "archive") == 0)
 					explicit_archive = true;
 				if (!daemon_add_short_refuse(sess, &shopts,
-				    &shoptlen, &shoptsz, chkopt->val)) {
-					free(refused);
-					free(shopts);
-					free(lopts);
-
-					return 0;
+				    &shoptlen, &shoptsz, chkopt->id)) {
+					goto fail;
 				}
 
 				continue;
 			} else if (wildcard &&
-			    !daemon_can_refuse_long_wildcard(chkopt->name))
+			    !daemon_can_refuse_long_wildcard(chkopt->long_name))
 				continue;
 
 			if (!daemon_add_long_refuse(sess, &lopts, &loptlen,
 			    &loptsz, chkopt)) {
-				free(refused);
-				free(shopts);
-				free(lopts);
-
-				return 0;
+				goto fail;
 			}
 		}
 
@@ -1553,11 +1545,7 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 			    &loptsz, "remove-sent-files") ||
 			    !daemon_add_long_refuse_name(sess, &lopts, &loptlen,
 			    &loptsz, "remove-source-files")) {
-				free(refused);
-				free(shopts);
-				free(lopts);
-
-				return 0;
+				goto fail;
 			}
 		}
 	}
@@ -1599,7 +1587,7 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 			    &loptsz, "devices") ||
 			    !daemon_add_long_refuse_name(sess, &lopts, &loptlen,
 			    &loptsz, "specials")) {
-				return 0;
+				goto fail;
 			}
 		}
 
@@ -1608,15 +1596,21 @@ daemon_parse_refuse(struct sess *sess, const char *module)
 			    &loptsz, "partial") ||
 			    !daemon_add_long_refuse_name(sess, &lopts, &loptlen,
 			    &loptsz, "progress")) {
-				return 0;
+				goto fail;
 			}
 		}
 	}
 
+	free(refused);
 	role->refused.refused_shopts = shopts;
 	role->refused.refused_lopts = lopts;
 	role->refused.refused_loptsz = loptlen;
 	return 1;
+fail:
+	free(refused);
+	free(shopts);
+	free(lopts);
+	return 0;
 }
 
 static int

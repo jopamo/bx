@@ -211,13 +211,14 @@
 #define rsync_err bx_rsync_vendor_rsync_err
 #define rsync_errx bx_rsync_vendor_rsync_errx
 #define rsync_errx1 bx_rsync_vendor_rsync_errx1
-#define rsync_getopt bx_rsync_vendor_rsync_getopt
 #define rsync_humanize bx_rsync_vendor_rsync_humanize
 #define rsync_is_socket bx_rsync_vendor_rsync_is_socket
 #define rsync_listen bx_rsync_vendor_rsync_listen
 #define rsync_log bx_rsync_vendor_rsync_log
 #define rsync_log_tag bx_rsync_vendor_rsync_log_tag
-#define rsync_lopts bx_rsync_vendor_rsync_lopts
+#define rsync_options bx_rsync_vendor_rsync_options
+#define rsync_options_count bx_rsync_vendor_rsync_options_count
+#define rsync_parse_options bx_rsync_vendor_rsync_parse_options
 #define rsync_password_hash bx_rsync_vendor_rsync_password_hash
 #define rsync_progress bx_rsync_vendor_rsync_progress
 #define rsync_receiver bx_rsync_vendor_rsync_receiver
@@ -228,7 +229,6 @@
 #define rsync_set_metadata bx_rsync_vendor_rsync_set_metadata
 #define rsync_set_metadata_at bx_rsync_vendor_rsync_set_metadata_at
 #define rsync_setsockopts bx_rsync_vendor_rsync_setsockopts
-#define rsync_shopts bx_rsync_vendor_rsync_shopts
 #define rsync_socket bx_rsync_vendor_rsync_socket
 #define rsync_uploader bx_rsync_vendor_rsync_uploader
 #define rsync_uploader_tail bx_rsync_vendor_rsync_uploader_tail

@@ -21,7 +21,6 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-#include <getopt.h>
 #include <netdb.h>
 #include <stdbool.h>
 
@@ -37,7 +36,7 @@
  */
 
 struct daemon_refused {
-	const struct option	* const *refused_lopts;	/* (f) */
+	const struct bx_option_spec **refused_lopts;	/* (f) */
 	char			 *refused_shopts;	/* (f) */
 	size_t			 refused_loptsz;
 };
