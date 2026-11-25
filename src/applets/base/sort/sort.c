@@ -1094,9 +1094,10 @@ static sort_stream_status_t sort_read_stream(FILE* stream, const char* source_la
     }
 
     free(line);
-    if (ferror(stream)) {
+    if (ferror(stream) || !feof(stream)) {
+        int error = errno;
         sort_report_errno(progname, source_label);
-        return SORT_STREAM_ERROR;
+        return error == ENOMEM ? SORT_STREAM_NOMEM : SORT_STREAM_ERROR;
     }
     return SORT_STREAM_OK;
 }
@@ -1161,7 +1162,7 @@ sort_check_stream(FILE* stream,
     }
 
     free(line);
-    if (ferror(stream)) {
+    if (ferror(stream) || !feof(stream)) {
         sort_report_errno(progname, source_label);
         return SORT_STREAM_ERROR;
     }
@@ -1439,14 +1440,18 @@ int bx_sort_main(int argc, char** argv) {
         }
     }
 
-    if (!fatal_read_error && lines.len > 1) {
+    /* Partial results may go to stdout, but never replace a named file. */
+    if (fatal_read_error || (had_error && opts.output_path))
+        goto free_lines;
+
+    if (lines.len > 1) {
         qsort_r(lines.items, lines.len, sizeof(lines.items[0]), sort_qsort_compare, &opts);
     }
 
     FILE* out = stdout;
     const char* output_label = "standard output";
     bool output_opened = false;
-    if (!fatal_read_error && opts.output_path) {
+    if (opts.output_path) {
         out = fopen(opts.output_path, "w");
         if (!out) {
             sort_report_errno(progname, opts.output_path);
@@ -1458,7 +1463,7 @@ int bx_sort_main(int argc, char** argv) {
         }
     }
 
-    if (!fatal_read_error && out) {
+    if (out) {
         char output_buffer[8192];
         struct bx_line_writer writer;
         int out_fd = fileno(out);
@@ -1508,6 +1513,7 @@ int bx_sort_main(int argc, char** argv) {
         }
     }
 
+free_lines:
     sort_line_vec_free(&lines, sort_cached_key_count(&opts));
 done:
     free(inputs);
