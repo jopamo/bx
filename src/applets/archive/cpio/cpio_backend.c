@@ -1928,12 +1928,14 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
             const char* text = options->operands[i].text;
             if (!strstr(text, "[^"))
                 continue;
-            char* pattern = strdup(text);
+            size_t length = strlen(text);
+            char* pattern = malloc(length + 2u);
             if (!pattern) {
                 bx_diag(diag, "memory exhausted");
                 return false;
             }
-            bx_glob_normalize_caret(pattern);
+            memcpy(pattern, text, length + 1u);
+            bx_glob_normalize_caret_with_spare(pattern, 1);
             options->operands[i].pattern = pattern;
         }
     }
