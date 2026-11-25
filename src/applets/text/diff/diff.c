@@ -16,6 +16,7 @@
 #include "bx/diag.h"
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/glob_syntax.h"
 #include "lib/option_scan.h"
 #include "lib/output_quote.h"
 #include "lib/path_ops.h"
@@ -31,6 +32,7 @@ enum {
     DIFF_TREE_BYTES_MAX = 256 * 1024 * 1024,
     DIFF_MINIMAL_WORK_MAX = 128 * 1024 * 1024,
     DIFF_EXCLUDES_MAX = 32,
+    DIFF_EXCLUDE_BYTES_MAX = 256,
 };
 
 struct diff_state {
@@ -38,7 +40,7 @@ struct diff_state {
     size_t context;
     bool minimal;
     bool recursive;
-    const char* excludes[DIFF_EXCLUDES_MAX];
+    char excludes[DIFF_EXCLUDES_MAX][DIFF_EXCLUDE_BYTES_MAX + 1];
     size_t exclude_count;
     size_t entries_left;
     size_t bytes_left;
@@ -439,13 +441,19 @@ int bx_diff_main(int argc, char** argv) {
             case 'r':
                 state.recursive = true;
                 break;
-            case 'x':
-                if (state.exclude_count == DIFF_EXCLUDES_MAX || strlen(option.value) > 256) {
-                    bx_diag(diag, "limit is %d exclusion patterns of up to 256 bytes", DIFF_EXCLUDES_MAX);
+            case 'x': {
+                size_t length = strlen(option.value);
+                if (state.exclude_count == DIFF_EXCLUDES_MAX || length > DIFF_EXCLUDE_BYTES_MAX) {
+                    bx_diag(diag, "limit is %d exclusion patterns of up to %d bytes",
+                            DIFF_EXCLUDES_MAX, DIFF_EXCLUDE_BYTES_MAX);
                     return 2;
                 }
-                state.excludes[state.exclude_count++] = option.value;
+                char* pattern = state.excludes[state.exclude_count++];
+                memcpy(pattern, option.value, length + 1);
+                if (strstr(pattern, "[^"))
+                    bx_glob_normalize_caret(pattern);
                 break;
+            }
             case 'U':
                 if (!bx_args_parse_size_range(option.value, 0, DIFF_LINES_MAX, &state.context)) {
                     bx_diag(diag, "invalid context size: '%s'", option.value);
