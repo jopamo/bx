@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <mntent.h>
 #include <stdbool.h>
@@ -14,8 +13,8 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
 enum bx_df_size_mode {
@@ -41,7 +40,6 @@ enum bx_df_output_field {
 };
 
 struct bx_df_options {
-    const char* progname;
     bool show_help;
     bool show_version;
     bool posix_format;
@@ -272,32 +270,47 @@ static void bx_df_free_options(struct bx_df_options* options) {
     options->exclude_type_count = 0;
 }
 
-static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, BX_DF_OPT_HELP},
-        {"version", no_argument, NULL, BX_DF_OPT_VERSION},
-        {"output", optional_argument, NULL, BX_DF_OPT_OUTPUT},
-        {"type", required_argument, NULL, 't'},
-        {"exclude-type", required_argument, NULL, 'x'},
-        {"total", no_argument, NULL, BX_DF_OPT_TOTAL},
-        {NULL, 0, NULL, 0},
+static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* options,
+                                const char** operands, size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'h', 'h', NULL, BX_OPTION_NO_VALUE},
+        {'H', 'H', NULL, BX_OPTION_NO_VALUE},
+        {'k', 'k', NULL, BX_OPTION_NO_VALUE},
+        {'P', 'P', NULL, BX_OPTION_NO_VALUE},
+        {'T', 'T', NULL, BX_OPTION_NO_VALUE},
+        {'t', 't', "type", BX_OPTION_REQUIRED_VALUE},
+        {'x', 'x', "exclude-type", BX_OPTION_REQUIRED_VALUE},
+        {BX_DF_OPT_OUTPUT, 0, "output", BX_OPTION_OPTIONAL_VALUE},
+        {BX_DF_OPT_TOTAL, 0, "total", BX_OPTION_NO_VALUE},
+        {BX_DF_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_DF_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "df");
     options->size_mode = BX_DF_SIZE_1K;
-    diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-hHkPTt:x:", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            operands[(*count)++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case 'h':
                 options->size_mode = BX_DF_SIZE_HUMAN_1024;
                 break;
@@ -314,21 +327,21 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
                 options->print_type = true;
                 break;
             case 't':
-                if (!bx_df_append_type(&options->include_types, &options->include_type_count, optarg, diag)) {
+                if (!bx_df_append_type(&options->include_types, &options->include_type_count, option.value, diag)) {
                     return false;
                 }
                 break;
             case 'x':
-                if (!bx_df_append_type(&options->exclude_types, &options->exclude_type_count, optarg, diag)) {
+                if (!bx_df_append_type(&options->exclude_types, &options->exclude_type_count, option.value, diag)) {
                     return false;
                 }
                 break;
             case BX_DF_OPT_OUTPUT:
                 options->use_output = true;
-                if (optarg == NULL) {
+                if (option.value == NULL) {
                     bx_df_set_default_output_fields(options);
                 }
-                else if (!bx_df_append_output_fields(optarg, options, diag)) {
+                else if (!bx_df_append_output_fields(option.value, options, diag)) {
                     return false;
                 }
                 break;
@@ -341,14 +354,6 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
             case BX_DF_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
         }
     }
 
@@ -368,7 +373,6 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
         return false;
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -984,29 +988,26 @@ int bx_df_main(int argc, char** argv) {
     struct bx_df_column_set columns;
     struct bx_df_totals totals = {0};
     struct bx_diag_ctx diag = {
-        .progname = "df",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "df"),
     };
-    int first_operand = 0;
-    int rc = 0;
-
-    if (!bx_df_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        bx_df_free_options(&options);
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+    const char** operands = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*operands)) : NULL;
+    if (argc > 1 && operands == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
     }
+    size_t operand_count = 0;
+
+    if (!bx_df_parse_options(argc, argv, &options, operands, &operand_count, &diag))
+        goto out_options;
 
     if (options.show_help) {
-        bx_df_print_help(stdout, options.progname);
-        bx_df_free_options(&options);
-        return 0;
+        bx_df_print_help(stdout, diag.progname);
+        goto out_options;
     }
 
     if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        bx_df_free_options(&options);
-        return 0;
+        bx_cli_print_version(diag.progname);
+        goto out_options;
     }
 
     bx_df_load_mount_table(&mount_table);
@@ -1017,21 +1018,17 @@ int bx_df_main(int argc, char** argv) {
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
     if (!bx_df_emit_header(&writer, &columns, &options, &diag)) {
-        rc = diag.exit_status;
         goto out;
     }
 
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
+    if (operand_count == 0) {
         if (!bx_df_process_operand(".", &options, &mount_table, &columns, &totals, &writer, &diag)) {
-            rc = diag.exit_status;
             goto out;
         }
     }
     else {
-        for (int i = first_operand; i < argc; i++) {
-            if (!bx_df_process_operand(argv[i], &options, &mount_table, &columns, &totals, &writer, &diag)) {
-                rc = diag.exit_status;
+        for (size_t i = 0; i < operand_count; i++) {
+            if (!bx_df_process_operand(operands[i], &options, &mount_table, &columns, &totals, &writer, &diag)) {
                 goto out;
             }
         }
@@ -1045,7 +1042,6 @@ int bx_df_main(int argc, char** argv) {
         struct bx_df_row total_row;
         bx_df_totals_to_row(&totals, &total_row);
         if (!bx_df_emit_row(&writer, &total_row, &columns, &options, &diag)) {
-            rc = diag.exit_status;
             goto out;
         }
     }
@@ -1053,10 +1049,10 @@ int bx_df_main(int argc, char** argv) {
     if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
         bx_df_write_error(&diag);
     }
-    rc = diag.exit_status;
-
 out:
     bx_df_free_mount_table(&mount_table);
+out_options:
     bx_df_free_options(&options);
-    return rc;
+    free(operands);
+    return diag.exit_status;
 }
