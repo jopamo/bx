@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -9,9 +8,9 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "lib/args_common.h"
 #include "lib/base64.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
 enum {
@@ -123,30 +122,44 @@ static bool base64_parse_wrap_cols(const char* text, size_t* out_cols) {
 }
 
 static bool base64_parse_options(int argc, char** argv, struct base64_options* options) {
-    static const struct option long_options[] = {
-        {"decode", no_argument, NULL, 'd'},
-        {"ignore-garbage", no_argument, NULL, 'i'},
-        {"wrap", required_argument, NULL, 'w'},
-        {"help", no_argument, NULL, BASE64_OPT_HELP},
-        {"version", no_argument, NULL, BASE64_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "decode", BX_OPTION_NO_VALUE},
+        {'i', 'i', "ignore-garbage", BX_OPTION_NO_VALUE},
+        {'w', 'w', "wrap", BX_OPTION_REQUIRED_VALUE},
+        {BASE64_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BASE64_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = base64_progname(argv[0]);
+    options->progname = base64_progname(argc > 0 ? argv[0] : NULL);
     options->wrap_cols = 76;
     options->input_path = "-";
 
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-:diw:", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    const char* input = NULL;
+    const char* extra = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (input == NULL)
+                input = option.token;
+            else if (extra == NULL)
+                extra = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                fprintf(stderr, "%s: option requires an argument -- '%c'\n", options->progname, option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                fprintf(stderr, "%s: option '%s' requires an argument\n", options->progname, option.token);
+            else
+                fprintf(stderr, "%s: unrecognized option '%s'\n", options->progname, option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case 'd':
                 options->decode = true;
                 break;
@@ -154,8 +167,8 @@ static bool base64_parse_options(int argc, char** argv, struct base64_options* o
                 options->ignore_garbage = true;
                 break;
             case 'w':
-                if (!base64_parse_wrap_cols(optarg, &options->wrap_cols)) {
-                    fprintf(stderr, "%s: invalid wrap size: '%s'\n", options->progname, optarg ? optarg : "");
+                if (!base64_parse_wrap_cols(option.value, &options->wrap_cols)) {
+                    fprintf(stderr, "%s: invalid wrap size: '%s'\n", options->progname, option.value);
                     return false;
                 }
                 break;
@@ -165,30 +178,15 @@ static bool base64_parse_options(int argc, char** argv, struct base64_options* o
             case BASE64_OPT_VERSION:
                 options->show_version = true;
                 break;
-            case ':':
-                fprintf(stderr, "%s: option requires an argument -- '%c'\n", options->progname, optopt);
-                return false;
-            case '?':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    fprintf(stderr, "%s: unrecognized option '%s'\n", options->progname, argv[optind - 1]);
-                }
-                else {
-                    fprintf(stderr, "%s: unrecognized option\n", options->progname);
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
-    if (optind < argc) {
-        options->input_path = argv[optind++];
-    }
-
-    if (optind < argc) {
-        fprintf(stderr, "%s: extra operand '%s'\n", options->progname, argv[optind]);
+    if (extra != NULL) {
+        fprintf(stderr, "%s: extra operand '%s'\n", options->progname, extra);
         return false;
     }
+    if (input != NULL)
+        options->input_path = input;
 
     return true;
 }
@@ -423,7 +421,7 @@ static int base64_run_file(const struct base64_options* options, struct bx_line_
 int bx_base64_main(int argc, char** argv) {
     struct base64_options options;
     if (!base64_parse_options(argc, argv, &options)) {
-        base64_print_help(stderr, base64_progname(argv[0]));
+        base64_print_help(stderr, options.progname);
         return BASE64_EXIT_USAGE;
     }
 
