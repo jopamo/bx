@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,9 +9,9 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
 #include "lib/child_runner.h"
 #include "lib/cli_common.h"
+#include "lib/option_scan.h"
 #include "lib/preload_ops.h"
 #include "lib/size_parse.h"
 
@@ -228,62 +227,62 @@ static bool bx_stdbuf_parse_options(
     struct bx_stdbuf_options *options,
     struct bx_diag_ctx *diag
 ) {
-    static const struct option long_options[] = {
-        {"input", required_argument, NULL, 'i'},
-        {"output", required_argument, NULL, 'o'},
-        {"error", required_argument, NULL, 'e'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    enum { OPT_HELP = 256, OPT_VERSION };
+    static const struct bx_option_spec specs[] = {
+        {'i', 'i', "input", BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', "output", BX_OPTION_REQUIRED_VALUE},
+        {'e', 'e', "error", BX_OPTION_REQUIRED_VALUE},
+        {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "stdbuf");
     diag->progname = options->progname;
-    bx_args_getopt_reset();
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
 
     while (true) {
-        int option_char = bx_args_getopt_long(argc, argv, "+i:o:e:", long_options, NULL);
-        if (option_char == -1) {
-            break;
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            options->first_operand = (int)result.index;
+            return true;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", result.token);
+            }
+            else if (result.short_name) {
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            }
+            else {
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            }
+            return false;
         }
 
-        switch (option_char) {
+        switch (result.spec->id) {
             case 'i':
             case 'o':
             case 'e':
-                if (!bx_stdbuf_set_mode(options, option_char, optarg, diag)) {
+                if (!bx_stdbuf_set_mode(options, result.spec->id, result.value, diag)) {
                     return false;
                 }
                 break;
-            case 1:
+            case OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt == 'i' || optopt == 'o' || optopt == 'e') {
-                    const char *option_text =
-                        (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
-                    if (option_text != NULL && option_text[0] == '-' && option_text[1] == '-') {
-                        bx_diag(diag, "option '%s' requires an argument", option_text);
-                    }
-                    else {
-                        bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                    }
-                }
-                else {
-                    bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                }
-                return false;
             default:
                 return false;
         }
     }
-
-    options->first_operand = optind;
-    return true;
 }
 
 static bool bx_stdbuf_set_stream_environment(
