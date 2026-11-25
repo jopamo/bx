@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -14,6 +13,7 @@
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/child_runner.h"
+#include "lib/option_scan.h"
 
 struct bx_nice_options {
     const char* progname;
@@ -53,11 +53,11 @@ static bool bx_nice_parse_legacy_adjustment(const char* arg, int* adjustment_out
 }
 
 static bool bx_nice_parse_options(int argc, char** argv, struct bx_nice_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"adjustment", required_argument, NULL, 'n'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    enum { HELP = 256, VERSION };
+    static const struct bx_option_spec specs[] = {
+        {'n', 'n', "adjustment", BX_OPTION_REQUIRED_VALUE},
+        {HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -65,7 +65,7 @@ static bool bx_nice_parse_options(int argc, char** argv, struct bx_nice_options*
     options->adjustment = 10;
     diag->progname = options->progname;
 
-    int option_start = 1;
+    size_t option_start = 1;
     if (argc > 1) {
         int legacy_adjustment = 0;
         if (bx_nice_parse_legacy_adjustment(argv[1], &legacy_adjustment)) {
@@ -75,52 +75,45 @@ static bool bx_nice_parse_options(int argc, char** argv, struct bx_nice_options*
         }
     }
 
-    bx_args_getopt_reset_at(option_start);
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+n:", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, option_start, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            options->first_operand = (int)result.index;
+            return true;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- 'n'");
+            else if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'n': {
                 int adjustment = 0;
-                if (!bx_nice_parse_int(optarg, &adjustment)) {
-                    bx_diag(diag, "invalid adjustment '%s'", optarg);
+                if (!bx_nice_parse_int(result.value, &adjustment)) {
+                    bx_diag(diag, "invalid adjustment '%s'", result.value);
                     return false;
                 }
                 options->adjustment_specified = true;
                 options->adjustment = adjustment;
                 break;
             }
-            case 1:
+            case HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt == 'n') {
-                    bx_diag(diag, "option requires an argument -- 'n'");
-                }
-                else if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
-    options->first_operand = optind;
-    return true;
 }
 
 static bool bx_nice_print_current_niceness(struct bx_diag_ctx* diag) {
