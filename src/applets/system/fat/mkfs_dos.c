@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 #include "dos.h"
 #include "lib/fat/format/mkfs_msdos.h"
+#include "lib/option_scan.h"
 
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,64 +51,97 @@ static void help(void)
 int bx_fat_mkfs_dos(int argc, char **argv)
 {
     enum { OFFSET = 256, INVARIANT, VARIANT, CODEPAGE, MBR, HELP };
-    static const struct option longs[] = {
-        {"offset", required_argument, NULL, OFFSET},
-        {"invariant", no_argument, NULL, INVARIANT},
-        {"variant", required_argument, NULL, VARIANT},
-        {"codepage", required_argument, NULL, CODEPAGE},
-        {"mbr", optional_argument, NULL, MBR},
-        {"help", no_argument, NULL, HELP},
-        {NULL, 0, NULL, 0}
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', NULL, BX_OPTION_NO_VALUE},
+        {'C', 'C', NULL, BX_OPTION_NO_VALUE},
+        {'b', 'b', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'D', 'D', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'F', 'F', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'f', 'f', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'g', 'g', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'h', 'h', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'n', 'n', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'R', 'R', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'M', 'M', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'S', 'S', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', NULL, BX_OPTION_NO_VALUE},
+        {OFFSET, 0, "offset", BX_OPTION_REQUIRED_VALUE},
+        {INVARIANT, 0, "invariant", BX_OPTION_NO_VALUE},
+        {VARIANT, 0, "variant", BX_OPTION_REQUIRED_VALUE},
+        {CODEPAGE, 0, "codepage", BX_OPTION_REQUIRED_VALUE},
+        {MBR, 0, "mbr", BX_OPTION_OPTIONAL_VALUE},
+        {HELP, 0, "help", BX_OPTION_NO_VALUE},
     };
     struct msdos_options o = {0};
     bool create = false, invariant = false;
-    int ch;
+    const char *operands[2] = {0};
+    size_t count = 0;
     o.dos_compat = true;
     o.align = true;
     o.media_descriptor = 0xf8;
     o.media_descriptor_set = 1;
     o.drive_number = 0x80;
-    while ((ch = getopt_long(argc, argv, "aAb:cCD:f:F:g:h:i:Il:m:M:n:r:R:s:S:v",
-                             longs, NULL)) != -1) {
-        switch (ch) {
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (count < sizeof(operands) / sizeof(operands[0]))
+                operands[count] = result.token;
+            count++;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            warnx("unsupported option; target not opened (use --help)");
+            return 1;
+        }
+        const char *value = result.value;
+        switch (result.spec->id) {
         case 'a': o.align = false; break;
         case 'C': create = true; break;
         case 'F':
-            o.fat_type = number(optarg, 10, 12, 32);
+            o.fat_type = number(value, 10, 12, 32);
             if (o.fat_type != 12 && o.fat_type != 16 && o.fat_type != 32)
                 errx(1, "FAT type must be 12, 16 or 32");
             break;
-        case 'n': o.volume_label = optarg; break;
+        case 'n': o.volume_label = value; break;
         case 'i':
-            o.volume_id = number(optarg, 16, 0, UINT32_MAX);
+            o.volume_id = number(value, 16, 0, UINT32_MAX);
             o.volume_id_set = 1;
             break;
         case 's':
-            o.sectors_per_cluster = number(optarg, 10, 1, 128);
+            o.sectors_per_cluster = number(value, 10, 1, 128);
             if (!powerof2(o.sectors_per_cluster))
                 errx(1, "sectors per cluster must be a power of two");
             break;
         case 'S':
-            o.bytes_per_sector = number(optarg, 10, 512, 4096);
+            o.bytes_per_sector = number(value, 10, 512, 4096);
             if (!powerof2(o.bytes_per_sector))
                 errx(1, "sector size must be a power of two");
             break;
-        case 'f': o.num_FAT = number(optarg, 10, 1, 16); break;
-        case 'R': o.reserved_sectors = number(optarg, 10, 1, UINT16_MAX); break;
-        case 'r': o.directory_entries = number(optarg, 10, 1, UINT16_MAX); break;
+        case 'f': o.num_FAT = number(value, 10, 1, 16); break;
+        case 'R': o.reserved_sectors = number(value, 10, 1, UINT16_MAX); break;
+        case 'r': o.directory_entries = number(value, 10, 1, UINT16_MAX); break;
         case 'b':
-            o.backup_sector = number(optarg, 10, 0, UINT16_MAX - 1);
+            o.backup_sector = number(value, 10, 0, UINT16_MAX - 1);
             if (!o.backup_sector)
                 o.backup_sector = UINT16_MAX;
             break;
         case 'h':
-            o.hidden_sectors = number(optarg, 10, 0, UINT32_MAX);
+            o.hidden_sectors = number(value, 10, 0, UINT32_MAX);
             o.hidden_sectors_set = 1;
             break;
-        case 'D': o.drive_number = number(optarg, 0, 0, UINT8_MAX); break;
-        case 'M': o.media_descriptor = number(optarg, 0, 0xf0, 0xff); break;
+        case 'D': o.drive_number = number(value, 0, 0, UINT8_MAX); break;
+        case 'M': o.media_descriptor = number(value, 0, 0xf0, 0xff); break;
         case 'g': {
-            char *geometry = strdup(optarg);
+            char *geometry = strdup(value);
             if (!geometry)
                 err(1, "geometry");
             char *slash = strchr(geometry, '/');
@@ -121,18 +154,18 @@ int bx_fat_mkfs_dos(int argc, char **argv)
             break;
         }
         case 'v': break; /* The formatter already prints its geometry. */
-        case OFFSET: o.offset_sectors = number(optarg, 10, 0, INT64_MAX / 512); break;
+        case OFFSET: o.offset_sectors = number(value, 10, 0, INT64_MAX / 512); break;
         case INVARIANT: invariant = true; break;
         case VARIANT:
-            if (strcasecmp(optarg, "standard"))
+            if (strcasecmp(value, "standard"))
                 errx(1, "only the standard FAT variant is supported");
             break;
         case CODEPAGE:
-            if (strcmp(optarg, "850"))
+            if (strcmp(value, "850"))
                 errx(1, "only ASCII labels with codepage 850 are supported");
             break;
         case MBR:
-            if (!optarg || strcmp(optarg, "n"))
+            if (!value || strcmp(value, "n"))
                 errx(1, "partition-table generation is not supported");
             break;
         case HELP: help(); return 0;
@@ -141,7 +174,7 @@ int bx_fat_mkfs_dos(int argc, char **argv)
             return 1;
         }
     }
-    if (argc - optind < 1 || argc - optind > 2 || (create && argc - optind != 2)) {
+    if (count == 0 || count > 2 || (create && count != 2)) {
         help();
         return 1;
     }
@@ -155,8 +188,8 @@ int bx_fat_mkfs_dos(int argc, char **argv)
                 errx(1, "volume label must contain valid ASCII characters");
         }
     }
-    if (argc - optind == 2)
-        o.size_bytes = number(argv[optind + 1], 10, 1, INT64_MAX / 1024) * 1024;
+    if (count == 2)
+        o.size_bytes = number(operands[1], 10, 1, INT64_MAX / 1024) * 1024;
     if (create) {
         uint64_t sector = o.bytes_per_sector ? o.bytes_per_sector : 512;
         if (o.offset_sectors > (INT64_MAX - o.size_bytes) / sector)
@@ -171,5 +204,5 @@ int bx_fat_mkfs_dos(int argc, char **argv)
         o.timestamp = 315532800; /* FAT epoch: 1980-01-01 UTC. */
         o.timestamp_set = 1;
     }
-    return mkfs_msdos(argv[optind], NULL, &o) != 0;
+    return mkfs_msdos(operands[0], NULL, &o) != 0;
 }
