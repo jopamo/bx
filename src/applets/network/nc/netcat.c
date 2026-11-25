@@ -41,7 +41,6 @@
 #include <sched.h>
 #include <fcntl.h>
 #include <strings.h>
-#include <sys/stat.h>
 #include "lib/option_scan.h"
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
@@ -106,7 +105,6 @@ int recvcount, recvlimit;
 int timeout = -1;
 int family = AF_UNSPEC;
 char* portlist[PORT_MAX + 1];
-char* unix_dg_tmp_socket;
 int ttl = -1;
 int minttl = -1;
 
@@ -202,7 +200,6 @@ int main(int argc, char* argv[]) {
     char *proxy = NULL, *proxy_alloc = NULL, *proxyport = NULL;
     const char* errstr;
     struct addrinfo proxyhints;
-    char unix_dg_tmp_socket_buf[UNIX_DG_TMP_SOCKET_SIZE];
     int pcap_path_explicit = 0;
     int pcap_path_default = 0;
     const char* vsock_address = NULL;
@@ -786,22 +783,6 @@ int main(int argc, char* argv[]) {
             err(EXIT_RUNTIME, "setvbuf stderr");
     }
 
-    /* Get name of temporary socket for unix datagram client */
-    if ((family == AF_UNIX) && uflag && !lflag) {
-        if (sflag) {
-            unix_dg_tmp_socket = sflag;
-        }
-        else {
-            int tmpfd;
-
-            nc_strlcpy(unix_dg_tmp_socket_buf, "/tmp/nc.XXXXXXXXXX", UNIX_DG_TMP_SOCKET_SIZE);
-            if ((tmpfd = mkstemp(unix_dg_tmp_socket_buf)) == -1)
-                err(EXIT_USAGE, "mkstemp");
-            close(tmpfd);
-            unlink(unix_dg_tmp_socket_buf);
-            unix_dg_tmp_socket = unix_dg_tmp_socket_buf;
-        }
-    }
     if (lflag) {
         ret = 0;
 
@@ -897,9 +878,21 @@ int main(int argc, char* argv[]) {
         }
     }
     else if (family == AF_UNIX) {
-        ret = 0;
+        char tempdir[] = "/tmp/nc.XXXXXX";
+        char address[sizeof(tempdir) + sizeof("/socket") - 1];
+        char* source = uflag ? sflag : NULL;
+        bool temporary = uflag && !source;
+        bool source_bound;
 
-        if ((s = unix_connect(host)) >= 0) {
+        if (temporary) {
+            if (!mkdtemp(tempdir))
+                err(EXIT_RUNTIME, "mkdtemp %s", tempdir);
+            snprintf(address, sizeof(address), "%s/socket", tempdir);
+            source = address;
+        }
+
+        ret = 0;
+        if ((s = unix_connect(host, source, &source_bound)) >= 0) {
             if (!zflag && readwrite(s) == -1)
                 ret = EXIT_RUNTIME;
             close(s);
@@ -909,8 +902,14 @@ int main(int argc, char* argv[]) {
             ret = 1;
         }
 
-        if (uflag)
-            unlink(unix_dg_tmp_socket);
+        if (source_bound && source[0] != '@' && unlink(source) == -1 && errno != ENOENT) {
+            warn("unlink %s", source);
+            ret = EXIT_RUNTIME;
+        }
+        if (temporary && rmdir(tempdir) == -1) {
+            warn("rmdir %s", tempdir);
+            ret = EXIT_RUNTIME;
+        }
         free(proxy_alloc);
         return ret;
     }

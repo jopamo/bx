@@ -20,6 +20,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -32,7 +33,6 @@
 #endif
 
 #define PORT_MAX 65535
-#define UNIX_DG_TMP_SOCKET_SIZE 19
 
 #define POLL_STDIN 0
 #define POLL_NETOUT 1
@@ -99,7 +99,6 @@ extern int recvcount, recvlimit;
 extern int timeout;
 extern int family;
 extern char* portlist[PORT_MAX + 1];
-extern char* unix_dg_tmp_socket;
 extern int ttl;
 extern int minttl;
 
@@ -147,7 +146,7 @@ int socks_connect(const char*,
 int udptest(int);
 void connection_info(int, const char*, const char*, const char*, const char*);
 int unix_bind(char*, int);
-int unix_connect(char*);
+int unix_connect(const char* path, char* source, bool* source_bound);
 int unix_listen(char*);
 int vsock_listen(unsigned int, unsigned int);
 int vsock_connect(unsigned int, unsigned int);

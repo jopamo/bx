@@ -155,29 +155,21 @@ int unix_bind(char* path, int flags) {
 
 /*
  * unix_connect()
- * Returns a socket connected to a local unix socket. Returns -1 on failure.
+ * Returns a connected socket or -1. The caller owns a successfully bound
+ * source address even if the following connect fails.
  */
-int unix_connect(char* path) {
+int unix_connect(const char* path, char* source, bool* source_bound) {
     struct sockaddr_un s_un;
-    int s, save_errno;
+    int s;
     socklen_t len;
 
-    if (uflag) {
-        if ((s = unix_bind(unix_dg_tmp_socket, SOCK_CLOEXEC)) == -1)
-            return -1;
-    }
-    else {
-        if ((s = bx_fd_socket_cloexec(AF_UNIX, SOCK_STREAM, 0)) == -1)
-            return -1;
-    }
-
+    *source_bound = false;
     memset(&s_un, 0, sizeof(struct sockaddr_un));
     s_un.sun_family = AF_UNIX;
 
     if (path[0] == '@') {
         s_un.sun_path[0] = '\0';
         if (nc_strlcpy(&s_un.sun_path[1], &path[1], sizeof(s_un.sun_path) - 1) >= sizeof(s_un.sun_path) - 1) {
-            close(s);
             errno = ENAMETOOLONG;
             return -1;
         }
@@ -185,17 +177,22 @@ int unix_connect(char* path) {
     }
     else {
         if (nc_strlcpy(s_un.sun_path, path, sizeof(s_un.sun_path)) >= sizeof(s_un.sun_path)) {
-            close(s);
             errno = ENAMETOOLONG;
             return -1;
         }
         len = sizeof(s_un);
     }
 
+    if (source) {
+        if ((s = unix_bind(source, SOCK_CLOEXEC)) == -1)
+            return -1;
+        *source_bound = true;
+    }
+    else if ((s = bx_fd_socket_cloexec(AF_UNIX, SOCK_STREAM, 0)) == -1)
+        return -1;
+
     if (connect(s, (struct sockaddr*)&s_un, len) == -1) {
-        save_errno = errno;
-        close(s);
-        errno = save_errno;
+        close_failed_socket(s);
         return -1;
     }
     return s;
