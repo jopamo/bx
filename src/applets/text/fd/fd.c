@@ -31,6 +31,7 @@ int bx_fd_main(int argc, char **argv) {
 
     struct fd_opts *opts = &args.opts;
     const char *progname = args.progname;
+    bool using_implicit_root = args.search_paths == NULL;
 
     bool stop = false;
     struct bx_walk_opts wopts = {
@@ -78,13 +79,13 @@ int bx_fd_main(int argc, char **argv) {
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer,
                         sizeof(output_buffer));
-    if (!fd_state_init(&state, progname, opts, &stop,
-                       args.using_implicit_root, &writer))
+    if (!fd_state_init(&state, progname, opts, &stop, using_implicit_root, &writer))
         goto fail;
 
     int walk_rc = 0;
     for (int i = 0; i < args.search_path_count && !stop; i++) {
-        if (bx_search_walk(args.search_paths[i], &walk_config, &state) != 0)
+        const char* path = using_implicit_root ? "." : args.search_paths[i];
+        if (bx_search_walk(path, &walk_config, &state) != 0)
             walk_rc = -1;
     }
     int exec_rc = 0;

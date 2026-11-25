@@ -8,7 +8,6 @@
 struct fd_main_args {
     struct fd_opts opts;
     const char *progname;
-    bool using_implicit_root;
     char **search_paths;
     int search_path_count;
     const char **exec_argv_storage;

@@ -1,5 +1,4 @@
 #define _GNU_SOURCE
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +10,7 @@
 #include "fd_parse.h"
 #include "search/metadata.h"
 #include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/output_policy.h"
 
 static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
@@ -41,51 +41,6 @@ static bool fd_parse_strip_cwd_prefix(const char *progname, const char *text,
     fprintf(stderr, "%s: invalid argument for --strip-cwd-prefix: %s\n",
             progname, text);
     return false;
-}
-
-static int fd_find_exec_option(int argc, char **argv, enum fd_exec_mode *mode,
-                               int *command_start,
-                               const char **inline_command) {
-    bool end_of_options = false;
-
-    *mode = FD_EXEC_NONE;
-    *command_start = argc;
-    *inline_command = NULL;
-
-    for (int i = 1; i < argc; i++) {
-        const char *arg = argv[i];
-        if (!end_of_options && strcmp(arg, "--") == 0) {
-            end_of_options = true;
-            continue;
-        }
-        if (end_of_options)
-            continue;
-
-        if (strcmp(arg, "-x") == 0 || strcmp(arg, "--exec") == 0) {
-            *mode = FD_EXEC_EACH;
-            *command_start = i + 1;
-            return i;
-        }
-        if (strcmp(arg, "-X") == 0 || strcmp(arg, "--exec-batch") == 0) {
-            *mode = FD_EXEC_BATCH;
-            *command_start = i + 1;
-            return i;
-        }
-        if (strncmp(arg, "--exec=", 7) == 0) {
-            *mode = FD_EXEC_EACH;
-            *command_start = i + 1;
-            *inline_command = arg + 7;
-            return i;
-        }
-        if (strncmp(arg, "--exec-batch=", 13) == 0) {
-            *mode = FD_EXEC_BATCH;
-            *command_start = i + 1;
-            *inline_command = arg + 13;
-            return i;
-        }
-    }
-
-    return argc;
 }
 
 static bool fd_parse_type_filter(const char *progname, const char *text,
@@ -175,60 +130,46 @@ static void fd_print_help(const char *progname) {
     puts("      --version        output version information and exit");
 }
 
-static bool fd_prepare_exec_argv(const char *progname, int argc, char **argv,
-                                 struct fd_main_args *out,
-                                 int *parse_argc_out) {
-    const char *inline_exec_command = NULL;
-    int exec_command_start = argc;
-    int parse_argc = fd_find_exec_option(argc, argv, &out->opts.exec_mode,
-                                         &exec_command_start,
-                                         &inline_exec_command);
-
-    if (out->opts.exec_mode == FD_EXEC_NONE) {
-        *parse_argc_out = parse_argc;
-        return true;
-    }
-
-    int exec_argc =
-        argc - exec_command_start + (inline_exec_command ? 1 : 0);
-    if (exec_argc <= 0 ||
-        (inline_exec_command && inline_exec_command[0] == '\0')) {
-        fprintf(stderr, "%s: %s requires a command\n", progname,
-                out->opts.exec_mode == FD_EXEC_BATCH ? "--exec-batch"
-                                                     : "--exec");
+static bool fd_prepare_exec_argv(struct fd_main_args* out, int argc, char** argv, int command_start, const char* inline_command) {
+    int tail_count = argc - command_start;
+    const char* command = inline_command ? inline_command : tail_count > 0 ? argv[command_start] : NULL;
+    if (!command || !*command) {
+        fprintf(stderr, "%s: %s requires a command\n", out->progname, out->opts.exec_mode == FD_EXEC_BATCH ? "--exec-batch" : "--exec");
         out->exit_code = 2;
         return false;
     }
 
+    int exec_argc = tail_count + (inline_command != NULL);
     out->exec_argv_storage =
         calloc((size_t)exec_argc + 1, sizeof(*out->exec_argv_storage));
     if (!out->exec_argv_storage) {
-        fprintf(stderr, "%s: out of memory\n", progname);
+        fprintf(stderr, "%s: out of memory\n", out->progname);
         out->exit_code = 1;
         return false;
     }
-
-    if (inline_exec_command) {
-        out->exec_argv_storage[0] = inline_exec_command;
-        for (int i = 1; i < exec_argc; i++)
-            out->exec_argv_storage[i] = argv[exec_command_start + i - 1];
-    } else {
-        for (int i = 0; i < exec_argc; i++)
-            out->exec_argv_storage[i] = argv[exec_command_start + i];
-    }
-
+    int offset = 0;
+    if (inline_command)
+        out->exec_argv_storage[offset++] = inline_command;
+    for (int i = 0; i < tail_count; i++)
+        out->exec_argv_storage[offset + i] = argv[command_start + i];
     out->opts.exec_argv = out->exec_argv_storage;
     out->opts.exec_argc = exec_argc;
-    *parse_argc_out = parse_argc;
     return true;
+}
+
+/* Exec transitions to the child tail only on the exact standalone spellings. */
+static bool fd_exact_exec_option(const struct bx_option_result* option) {
+    if (option->short_name)
+        return option->token[1] == option->short_name && !option->token[2];
+    size_t len = strcspn(option->token + 2, "=");
+    return len == strlen(option->spec->long_name);
 }
 
 static bool fd_validate_main_args(struct fd_main_args *out) {
     const char *progname = out->progname;
     struct fd_opts *opts = &out->opts;
 
-    if (opts->strip_cwd_prefix != FD_STRIP_CWD_PREFIX_UNSET &&
-        !out->using_implicit_root) {
+    if (opts->strip_cwd_prefix != FD_STRIP_CWD_PREFIX_UNSET && out->search_paths) {
         fprintf(stderr,
                 "%s: --strip-cwd-prefix cannot be used with explicit search paths\n",
                 progname);
@@ -322,215 +263,229 @@ static bool fd_validate_main_args(struct fd_main_args *out) {
 }
 
 bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
-    static struct option long_opts[] = {
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {"hidden", no_argument, NULL, 'H'},
-        {"no-ignore", no_argument, NULL, 'I'},
-        {"no-ignore-parent", no_argument, NULL, 210},
-        {"no-ignore-vcs", no_argument, NULL, 211},
-        {"no-require-git", no_argument, NULL, 212},
-        {"absolute-path", no_argument, NULL, 'a'},
-        {"relative-path", no_argument, NULL, 205},
-        {"follow", no_argument, NULL, 'L'},
-        {"full-path", no_argument, NULL, 'p'},
-        {"ignore-case", no_argument, NULL, 'i'},
-        {"case-sensitive", no_argument, NULL, 's'},
-        {"fixed-strings", no_argument, NULL, 'F'},
-        {"glob", no_argument, NULL, 'g'},
-        {"exclude", required_argument, NULL, 'E'},
-        {"regex", no_argument, NULL, 204},
-        {"max-depth", required_argument, NULL, 'd'},
-        {"min-depth", required_argument, NULL, 201},
-        {"exact-depth", required_argument, NULL, 202},
-        {"type", required_argument, NULL, 't'},
-        {"extension", required_argument, NULL, 'e'},
-        {"max-results", required_argument, NULL, 200},
-        {"and", required_argument, NULL, 203},
-        {"path-separator", required_argument, NULL, 207},
-        {"batch-size", required_argument, NULL, 206},
-        {"show-errors", no_argument, NULL, 209},
-        {"strip-cwd-prefix", optional_argument, NULL, 208},
-        {"format", required_argument, NULL, 213},
-        {"list-details", no_argument, NULL, 'l'},
-        {"exec", required_argument, NULL, 'x'},
-        {"exec-batch", required_argument, NULL, 'X'},
-        {"print0", no_argument, NULL, '0'},
-        {"quiet", no_argument, NULL, 'q'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
+        {'H', 'H', "hidden", BX_OPTION_NO_VALUE},
+        {'I', 'I', "no-ignore", BX_OPTION_NO_VALUE},
+        {210, 0, "no-ignore-parent", BX_OPTION_NO_VALUE},
+        {211, 0, "no-ignore-vcs", BX_OPTION_NO_VALUE},
+        {212, 0, "no-require-git", BX_OPTION_NO_VALUE},
+        {'a', 'a', "absolute-path", BX_OPTION_NO_VALUE},
+        {205, 0, "relative-path", BX_OPTION_NO_VALUE},
+        {'L', 'L', "follow", BX_OPTION_NO_VALUE},
+        {'p', 'p', "full-path", BX_OPTION_NO_VALUE},
+        {'i', 'i', "ignore-case", BX_OPTION_NO_VALUE},
+        {'s', 's', "case-sensitive", BX_OPTION_NO_VALUE},
+        {'F', 'F', "fixed-strings", BX_OPTION_NO_VALUE},
+        {'g', 'g', "glob", BX_OPTION_NO_VALUE},
+        {'E', 'E', "exclude", BX_OPTION_REQUIRED_VALUE},
+        {204, 0, "regex", BX_OPTION_NO_VALUE},
+        {'d', 'd', "max-depth", BX_OPTION_REQUIRED_VALUE},
+        {201, 0, "min-depth", BX_OPTION_REQUIRED_VALUE},
+        {202, 0, "exact-depth", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "type", BX_OPTION_REQUIRED_VALUE},
+        {'e', 'e', "extension", BX_OPTION_REQUIRED_VALUE},
+        {200, 0, "max-results", BX_OPTION_REQUIRED_VALUE},
+        {203, 0, "and", BX_OPTION_REQUIRED_VALUE},
+        {207, 0, "path-separator", BX_OPTION_REQUIRED_VALUE},
+        {206, 0, "batch-size", BX_OPTION_REQUIRED_VALUE},
+        {209, 0, "show-errors", BX_OPTION_NO_VALUE},
+        {208, 0, "strip-cwd-prefix", BX_OPTION_OPTIONAL_VALUE},
+        {213, 0, "format", BX_OPTION_REQUIRED_VALUE},
+        {'l', 'l', "list-details", BX_OPTION_NO_VALUE},
+        {'x', 'x', "exec", BX_OPTION_OPTIONAL_VALUE},
+        {'X', 'X', "exec-batch", BX_OPTION_OPTIONAL_VALUE},
+        {'0', '0', "print0", BX_OPTION_NO_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'u', 'u', NULL, BX_OPTION_NO_VALUE},
+        {'1', '1', NULL, BX_OPTION_NO_VALUE},
     };
 
     memset(out, 0, sizeof(*out));
-    out->progname = argv[0] ? argv[0] : "fd";
+    out->progname = argc > 0 && argv[0] ? argv[0] : "fd";
     out->opts.max_depth = -1;
     out->opts.exact_depth = -1;
     out->opts.smart_case = true;
-    out->using_implicit_root = true;
-    out->search_path_count = 1;
-
-    int parse_argc = argc;
-    if (!fd_prepare_exec_argv(out->progname, argc, argv, out, &parse_argc))
-        return false;
-
     bool show_help = false;
-    int opt;
-
-    bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long(parse_argc, argv,
-                              "hVHIuaplisFgE:d:t:e:x:X:0qL1", long_opts,
-                              NULL)) != -1) {
-        switch (opt) {
-        case 'h':
-            show_help = true;
-            break;
-        case 'V':
-            printf("fd (bx) %s\n", BX_VERSION);
-            out->exit_code = 0;
-            return false;
-        case 'H':
-            out->opts.hidden = true;
-            break;
-        case 'I':
-            out->opts.no_ignore = true;
-            break;
-        case 'u':
-            if (out->opts.unrestrict_level < 3)
-                out->opts.unrestrict_level++;
-            break;
-        case 210:
-            out->opts.no_ignore_parent = true;
-            break;
-        case 211:
-            out->opts.no_ignore_vcs = true;
-            break;
-        case 212:
-            out->opts.no_require_git = true;
-            break;
-        case 'a':
-            out->opts.absolute_path = true;
-            break;
-        case 205:
-            out->opts.absolute_path = false;
-            break;
-        case 'l':
-            out->opts.list_details = true;
-            break;
-        case 'p':
-            out->opts.full_path = true;
-            break;
-        case 'i':
-            out->opts.ignore_case = true;
-            out->opts.smart_case = false;
-            break;
-        case 's':
-            out->opts.case_sensitive = true;
-            out->opts.smart_case = false;
-            break;
-        case 'F':
-            out->opts.fixed_strings = true;
-            break;
-        case 'g':
-            out->opts.glob_match = true;
-            break;
-        case 'E':
-            if (out->opts.num_exclude_patterns < FD_MAX_EXCLUDE_PATTERNS)
-                out->opts.exclude_patterns[out->opts.num_exclude_patterns++] =
-                    optarg;
-            break;
-        case 204:
-            out->opts.fixed_strings = false;
-            out->opts.glob_match = false;
-            break;
-        case 'd':
-            if (!fd_parse_nonnegative_int(out->progname, "--max-depth", optarg,
-                                          &out->opts.max_depth)) {
-                out->exit_code = 2;
-                return false;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!out->opts.pattern) {
+                out->opts.pattern = option.token;
+                continue;
             }
-            break;
-        case 201:
-            if (!fd_parse_nonnegative_int(out->progname, "--min-depth", optarg,
-                                          &out->opts.min_depth)) {
-                out->exit_code = 2;
-                return false;
+            if (!out->search_paths) {
+                out->search_paths = calloc((size_t)argc - option.index, sizeof(*out->search_paths));
+                if (!out->search_paths) {
+                    fprintf(stderr, "%s: out of memory\n", out->progname);
+                    out->exit_code = 1;
+                    return false;
+                }
             }
-            break;
-        case 202:
-            if (!fd_parse_nonnegative_int(out->progname, "--exact-depth",
-                                          optarg, &out->opts.exact_depth)) {
-                out->exit_code = 2;
-                return false;
-            }
-            out->opts.max_depth = out->opts.exact_depth;
-            break;
-        case 't':
-            if (!fd_parse_type_filter(out->progname, optarg,
-                                      &out->opts.type_filter)) {
-                out->exit_code = 2;
-                return false;
-            }
-            break;
-        case 'e':
-            out->opts.extension = optarg;
-            break;
-        case '0':
-            out->opts.print0 = true;
-            break;
-        case 'q':
-            out->opts.quiet = true;
-            break;
-        case 'L':
-            out->opts.follow_symlinks = true;
-            break;
-        case '1':
-            out->opts.max_results = 1;
-            break;
-        case 'x':
-        case 'X':
-            break;
-        case 206:
-            if (!fd_parse_nonnegative_int(out->progname, "--batch-size", optarg,
-                                          &out->opts.batch_size)) {
-                out->exit_code = 2;
-                return false;
-            }
-            out->opts.batch_size_set = true;
-            break;
-        case 207:
-            out->opts.path_separator = optarg;
-            break;
-        case 209:
-            out->opts.show_errors = true;
-            break;
-        case 208:
-            if (!fd_parse_strip_cwd_prefix(out->progname, optarg,
-                                           &out->opts.strip_cwd_prefix)) {
-                out->exit_code = 2;
-                return false;
-            }
-            break;
-        case 213:
-            out->opts.output_format = optarg;
-            break;
-        case 203:
-            if (out->opts.num_and_patterns < FD_MAX_AND_PATTERNS)
-                out->opts.and_patterns[out->opts.num_and_patterns++] = optarg;
-            break;
-        case 200:
-            if (!fd_parse_nonnegative_int(out->progname, "--max-results",
-                                          optarg, &out->opts.max_results)) {
-                out->exit_code = 2;
-                return false;
-            }
-            break;
-        case '?':
-            if (optind > 0 && optind <= argc)
-                fprintf(stderr, "%s: unrecognized option '%s'\n",
-                        out->progname, argv[optind - 1]);
-            else
-                fprintf(stderr, "%s: unrecognized option\n", out->progname);
+            out->search_paths[out->search_path_count++] = argv[option.index];
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            fprintf(stderr, "%s: %s '%s'\n", out->progname, option.event == BX_OPTION_MISSING_VALUE ? "option requires a value:" : "unrecognized option", option.token);
             out->exit_code = 2;
             return false;
+        }
+        int id = option.spec->id;
+        if (id == 'x' || id == 'X') {
+            if (!fd_exact_exec_option(&option)) {
+                fprintf(stderr, "%s: use -x, -X, --exec or --exec-batch as a standalone option\n", out->progname);
+                out->exit_code = 2;
+                return false;
+            }
+            out->opts.exec_mode = id == 'x' ? FD_EXEC_EACH : FD_EXEC_BATCH;
+            if (!fd_prepare_exec_argv(out, argc, argv, (int)cursor.index, option.value))
+                return false;
+            break; /* Every remaining argument belongs to the child. */
+        }
+        switch (id) {
+            case 'h':
+                show_help = true;
+                break;
+            case 'V':
+                printf("fd (bx) %s\n", BX_VERSION);
+                out->exit_code = 0;
+                return false;
+            case 'H':
+                out->opts.hidden = true;
+                break;
+            case 'I':
+                out->opts.no_ignore = true;
+                break;
+            case 'u':
+                if (out->opts.unrestrict_level < 3)
+                    out->opts.unrestrict_level++;
+                break;
+            case 210:
+                out->opts.no_ignore_parent = true;
+                break;
+            case 211:
+                out->opts.no_ignore_vcs = true;
+                break;
+            case 212:
+                out->opts.no_require_git = true;
+                break;
+            case 'a':
+                out->opts.absolute_path = true;
+                break;
+            case 205:
+                out->opts.absolute_path = false;
+                break;
+            case 'l':
+                out->opts.list_details = true;
+                break;
+            case 'p':
+                out->opts.full_path = true;
+                break;
+            case 'i':
+                out->opts.ignore_case = true;
+                out->opts.smart_case = false;
+                break;
+            case 's':
+                out->opts.case_sensitive = true;
+                out->opts.smart_case = false;
+                break;
+            case 'F':
+                out->opts.fixed_strings = true;
+                break;
+            case 'g':
+                out->opts.glob_match = true;
+                break;
+            case 'E':
+                if (out->opts.num_exclude_patterns == FD_MAX_EXCLUDE_PATTERNS) {
+                    fprintf(stderr, "%s: too many --exclude patterns (limit %d)\n", out->progname, FD_MAX_EXCLUDE_PATTERNS);
+                    out->exit_code = 2;
+                    return false;
+                }
+                out->opts.exclude_patterns[out->opts.num_exclude_patterns++] = option.value;
+                break;
+            case 204:
+                out->opts.fixed_strings = false;
+                out->opts.glob_match = false;
+                break;
+            case 'd':
+                if (!fd_parse_nonnegative_int(out->progname, "--max-depth", option.value, &out->opts.max_depth)) {
+                    out->exit_code = 2;
+                    return false;
+                }
+                break;
+            case 201:
+                if (!fd_parse_nonnegative_int(out->progname, "--min-depth", option.value, &out->opts.min_depth)) {
+                    out->exit_code = 2;
+                    return false;
+                }
+                break;
+            case 202:
+                if (!fd_parse_nonnegative_int(out->progname, "--exact-depth", option.value, &out->opts.exact_depth)) {
+                    out->exit_code = 2;
+                    return false;
+                }
+                out->opts.max_depth = out->opts.exact_depth;
+                break;
+            case 't':
+                if (!fd_parse_type_filter(out->progname, option.value, &out->opts.type_filter)) {
+                    out->exit_code = 2;
+                    return false;
+                }
+                break;
+            case 'e':
+                out->opts.extension = option.value;
+                break;
+            case '0':
+                out->opts.print0 = true;
+                break;
+            case 'q':
+                out->opts.quiet = true;
+                break;
+            case 'L':
+                out->opts.follow_symlinks = true;
+                break;
+            case '1':
+                out->opts.max_results = 1;
+                break;
+            case 206:
+                if (!fd_parse_nonnegative_int(out->progname, "--batch-size", option.value, &out->opts.batch_size)) {
+                    out->exit_code = 2;
+                    return false;
+                }
+                out->opts.batch_size_set = true;
+                break;
+            case 207:
+                out->opts.path_separator = option.value;
+                break;
+            case 209:
+                out->opts.show_errors = true;
+                break;
+            case 208:
+                if (!fd_parse_strip_cwd_prefix(out->progname, option.value, &out->opts.strip_cwd_prefix)) {
+                    out->exit_code = 2;
+                    return false;
+                }
+                break;
+            case 213:
+                out->opts.output_format = option.value;
+                break;
+            case 203:
+                if (out->opts.num_and_patterns == FD_MAX_AND_PATTERNS) {
+                    fprintf(stderr, "%s: too many --and patterns (limit %d)\n", out->progname, FD_MAX_AND_PATTERNS);
+                    out->exit_code = 2;
+                    return false;
+                }
+                out->opts.and_patterns[out->opts.num_and_patterns++] = option.value;
+                break;
+            case 200:
+                if (!fd_parse_nonnegative_int(out->progname, "--max-results", option.value, &out->opts.max_results)) {
+                    out->exit_code = 2;
+                    return false;
+                }
+                break;
         }
     }
 
@@ -540,18 +495,8 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
         return false;
     }
 
-    out->opts.pattern = NULL;
-    static char *default_paths[] = {"."};
-    out->search_paths = default_paths;
-    int positional = parse_argc - optind;
-    if (positional == 1) {
-        out->opts.pattern = argv[optind++];
-    } else if (positional > 1) {
-        out->opts.pattern = argv[optind++];
-        out->search_paths = &argv[optind];
-        out->search_path_count = parse_argc - optind;
-        out->using_implicit_root = false;
-    }
+    if (!out->search_path_count)
+        out->search_path_count = 1;
 
     if (out->opts.unrestrict_level >= 1) {
         out->opts.no_ignore = true;
@@ -585,7 +530,9 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
 void fd_free_main_args(struct fd_main_args *args) {
     if (!args)
         return;
-    free((void *)args->exec_argv_storage);
+    free(args->search_paths);
+    args->search_paths = NULL;
+    free(args->exec_argv_storage);
     args->exec_argv_storage = NULL;
     args->opts.exec_argv = NULL;
     args->opts.exec_argc = 0;
