@@ -6,16 +6,14 @@
 
 #ifdef __linux__
 #include <dirent.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <linux/loop.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 
 #include "lib/fd_ops.h"
-#include "lib/args_common.h"
-#include "lib/cli_common.h"
 #include "lib/loop_device.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
 struct loop_options {
@@ -216,44 +214,67 @@ out:
     bx_fd_cleanup(&control);
     return status;
 }
-#endif
 
-int bx_losetup_main(int argc, char** argv) {
-#ifdef __linux__
-    static const struct option long_options[] = {
-        {"find", no_argument, NULL, 'f'}, {"show", no_argument, NULL, 256},
-        {"detach", no_argument, NULL, 'd'}, {"read-only", no_argument, NULL, 'r'},
-        {"offset", required_argument, NULL, 'o'}, {"sizelimit", required_argument, NULL, 257},
-        {"partscan", no_argument, NULL, 'P'}, {"sector-size", required_argument, NULL, 258},
-        {"list", no_argument, NULL, 'a'}, {"all", no_argument, NULL, 'a'},
-        {"help", no_argument, NULL, 'h'}, {NULL, 0, NULL, 0},
+static int loop_command(int argc, char** argv, const char** operands, struct bx_diag_ctx* diag) {
+    enum { SHOW = 256, SIZELIMIT, SECTOR_SIZE };
+    static const struct bx_option_spec options[] = {
+        {'f', 'f', "find", BX_OPTION_NO_VALUE},
+        {SHOW, 0, "show", BX_OPTION_NO_VALUE},
+        {'d', 'd', "detach", BX_OPTION_NO_VALUE},
+        {'r', 'r', "read-only", BX_OPTION_NO_VALUE},
+        {'o', 'o', "offset", BX_OPTION_REQUIRED_VALUE},
+        {SIZELIMIT, 0, "sizelimit", BX_OPTION_REQUIRED_VALUE},
+        {'P', 'P', "partscan", BX_OPTION_NO_VALUE},
+        {SECTOR_SIZE, 0, "sector-size", BX_OPTION_REQUIRED_VALUE},
+        {'a', 'a', "list", BX_OPTION_NO_VALUE},
+        {'a', 0, "all", BX_OPTION_NO_VALUE},
+        {'h', 0, "help", BX_OPTION_NO_VALUE},
     };
-    struct bx_diag_ctx diag = {.progname = "losetup"};
     struct loop_options opts = {0};
     bool settings = false;
-    int ch, next_operand = 1;
-    bx_args_getopt_reset();
-    while ((ch = bx_args_getopt_long_interspersed(argc, argv, "-:adfo:Pr",
-                                                  long_options, &next_operand)) != -1) {
+    size_t n = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            operands[n++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE && result.spec->short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%s'", result.token);
+            else if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return 1;
+        }
         uintmax_t number;
+        int ch = result.spec->id;
         switch (ch) {
             case 'f': opts.find = true; break;
             case 'd': opts.detach = true; break;
             case 'a': opts.list = true; break;
-            case 256: opts.show = true; break;
+            case SHOW: opts.show = true; break;
             case 'r': opts.info.lo_flags |= LO_FLAGS_READ_ONLY; settings = true; break;
             case 'P': opts.info.lo_flags |= LO_FLAGS_PARTSCAN; settings = true; break;
             case 'o':
-            case 257:
-            case 258:
-                if (!bx_size_parse_scaled_uint(optarg, &number) || number > INT64_MAX ||
-                    (ch == 258 && (number < 512 || number > 4096 || (number & (number - 1)) != 0))) {
-                    bx_diag(&diag, "invalid size: '%s'", optarg);
+            case SIZELIMIT:
+            case SECTOR_SIZE:
+                if (!bx_size_parse_scaled_uint(result.value, &number) || number > INT64_MAX ||
+                    (ch == SECTOR_SIZE && (number < 512 || number > 4096 || (number & (number - 1)) != 0))) {
+                    bx_diag(diag, "invalid size: '%s'", result.value);
                     return 1;
                 }
                 if (ch == 'o')
                     opts.info.lo_offset = number;
-                else if (ch == 257)
+                else if (ch == SIZELIMIT)
                     opts.info.lo_sizelimit = number;
                 else
                     opts.sector_size = (unsigned)number;
@@ -265,51 +286,65 @@ int bx_losetup_main(int argc, char** argv) {
                      "       losetup [-rP] [-o OFFSET] [--sizelimit SIZE] [--sector-size BYTES] LOOPDEV FILE\n"
                      "Whole loop devices are verified through /sys.");
                 return 0;
-            case ':':
-                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-                return 1;
-            case '?':
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                return 1;
-            default:
-                return 1;
         }
     }
 #if !defined(LOOP_SET_BLOCK_SIZE) && !defined(LOOP_CONFIGURE)
     if (opts.sector_size != 0) {
-        bx_diag(&diag, "logical sector size is unsupported by the build headers");
+        bx_diag(diag, "logical sector size is unsupported by the build headers");
         return 1;
     }
 #endif
-    int n = argc - optind;
     if ((opts.find + opts.detach + opts.list > 1) ||
         ((settings || opts.show) && (opts.detach || opts.list)) ||
         (opts.show && (!opts.find || n != 1)) ||
         (opts.list && n != 0) || (opts.find && (n > 1 || (settings && n == 0))) ||
         (opts.detach && n == 0) || (!opts.find && !opts.detach && n > 2) ||
         (settings && !opts.find && n != 2)) {
-        bx_diag(&diag, "invalid operation or operand count");
+        bx_diag(diag, "invalid operation or operand count");
         return 1;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!*operands[i]) {
+            bx_diag(diag, "empty path operand");
+            return 1;
+        }
     }
     if (opts.detach) {
         int status = 0;
-        for (; optind < argc; optind++)
-            status |= detach_loop(argv[optind], &diag);
+        for (size_t i = 0; i < n; i++)
+            status |= detach_loop(operands[i], diag);
         return status;
     }
     if (opts.find)
-        return attach_loop(NULL, n == 1 ? argv[optind] : NULL, &opts, &diag);
+        return attach_loop(NULL, n == 1 ? operands[0] : NULL, &opts, diag);
     if (n == 0)
-        return list_loops(&diag);
+        return list_loops(diag);
     if (n == 1) {
-        int status = report_loop(argv[optind], &diag, false);
+        int status = report_loop(operands[0], diag, false);
         if (fflush(stdout) == EOF) {
-            bx_perror_path(&diag, "standard output");
+            bx_perror_path(diag, "standard output");
             status = 1;
         }
         return status;
     }
-    return attach_loop(argv[optind], argv[optind + 1], &opts, &diag);
+    return attach_loop(operands[0], operands[1], &opts, diag);
+}
+#endif
+
+int bx_losetup_main(int argc, char** argv) {
+#ifdef __linux__
+    struct bx_diag_ctx diag = {.progname = "losetup"};
+    const char** operands = NULL;
+    if (argc > 1) {
+        operands = calloc((size_t)argc - 1, sizeof(*operands));
+        if (!operands) {
+            bx_perror_path(&diag, "path operands");
+            return 1;
+        }
+    }
+    int status = loop_command(argc, argv, operands, &diag);
+    free(operands);
+    return status;
 #else
     (void)argc;
     (void)argv;
