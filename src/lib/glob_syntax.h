@@ -53,8 +53,13 @@ static inline void bx_glob_normalize_caret(char* pattern) {
         } else if (*p == '[' && p + 1 < end) {
             const char* after = bx_glob_bracket_end(p, end);
             if (!after) {
-                if (end - p >= 3 && p[1] == '^' && p[2] == ']' &&
-                    !strpbrk(p + 3, "[]")) {
+                if (end - p >= 3 && p[1] == '^' && p[2] == ']') {
+                    for (const char* tail = p + 3; tail < end; tail++) {
+                        if (*tail == '\\' && tail + 1 < end)
+                            tail++;
+                        else if (*tail == '[' || *tail == ']')
+                            return;
+                    }
                     const char* hyphen = strchr(p + 3, '-');
                     if (hyphen && strchr(p + 3, '\\'))
                         break;
