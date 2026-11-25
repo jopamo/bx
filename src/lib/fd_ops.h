@@ -46,6 +46,10 @@ int bx_fd_open_write(const char* path, int flags, mode_t mode, struct bx_diag_ct
  * sets *p_fd to -1. useful for fail blocks. */
 void bx_fd_cleanup(int* p_fd);
 
+/* Pin a positive process ID and signal that identity without a numeric fallback. */
+int bx_fd_pidfd_open(pid_t pid);
+int bx_fd_pidfd_send_signal(int fd, int signal_number, siginfo_t* info);
+
 /* CLOEXEC-enforcing constructors. These are the shared authority point for
  * creating process-local descriptors that must not leak across exec. */
 int bx_fd_open_cloexec(const char* path, int flags, mode_t mode);

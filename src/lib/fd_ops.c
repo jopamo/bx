@@ -21,6 +21,37 @@
 #include "lib/fd_ops.h"
 #include "bx/diag.h"
 
+#if defined(__x86_64__) || defined(__aarch64__)
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+#ifndef SYS_pidfd_send_signal
+#define SYS_pidfd_send_signal 424
+#endif
+#endif
+
+int bx_fd_pidfd_open(pid_t pid) {
+#ifdef SYS_pidfd_open
+    return (int)syscall(SYS_pidfd_open, pid, 0);
+#else
+    (void)pid;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+int bx_fd_pidfd_send_signal(int fd, int signal_number, siginfo_t* info) {
+#ifdef SYS_pidfd_send_signal
+    return (int)syscall(SYS_pidfd_send_signal, fd, signal_number, info, 0);
+#else
+    (void)fd;
+    (void)signal_number;
+    (void)info;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
 int bx_fd_input_init(struct bx_fd_input* input, int fd, enum bx_fd_input_ownership ownership) {
     struct stat st;
     if (input->fd >= 0 || (ownership != BX_FD_INPUT_BORROWED && ownership != BX_FD_INPUT_DUPLICATE_BORROWED && ownership != BX_FD_INPUT_OWNED)) {

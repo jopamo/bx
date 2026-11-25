@@ -81,6 +81,8 @@ bool bx_proc_read_ns_pid(pid_t pid, pid_t* ns_pid_out, bool* vanished_out);
 bool bx_proc_read_ns_pgid(pid_t pid, pid_t* ns_pgid_out, bool* vanished_out);
 /* Recheck a process snapshot immediately before delivery; pgrp=0 ignores PGID. */
 bool bx_proc_signal_target_matches(pid_t pid, unsigned long long starttime_ticks, pid_t pgrp);
+/* Caller owns the returned pidfd. Refuse delivery if the snapshot changed. */
+int bx_proc_pin_signal_target(pid_t pid, unsigned long long starttime_ticks);
 bool bx_proc_read_info(pid_t pid, unsigned flags, struct bx_proc_info* info_out, bool* vanished_out);
 bool bx_proc_list_read(struct bx_proc_list* list, unsigned flags);
 bool bx_proc_read_fds(pid_t pid, struct bx_proc_fd_list* list, bool* vanished_out);

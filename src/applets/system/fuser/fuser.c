@@ -15,6 +15,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
@@ -408,14 +409,18 @@ static int bx_fuser_kill_hits(const struct bx_fuser_options* options,
         if (!bx_proc_read_ns_pid(hits->items[i].pid, &signal_pid, &vanished)) {
             continue;
         }
-        if (!bx_proc_signal_target_matches(signal_pid, hits->items[i].starttime_ticks, 0)) {
+        int fd = bx_proc_pin_signal_target(signal_pid, hits->items[i].starttime_ticks);
+        if (fd < 0) {
             if (!options->silent)
-                bx_diag(diag, "process %ld changed or exited before signaling", (long)signal_pid);
+                bx_diag(diag, "cannot pin process %ld before signaling: %s",
+                        (long)signal_pid, strerror(errno));
             continue;
         }
-        if (kill(signal_pid, options->signal_number) == 0) {
+        if (bx_fd_pidfd_send_signal(fd, options->signal_number, NULL) == 0) {
             rc = 0;
-        }
+        } else if (!options->silent)
+            bx_diag(diag, "cannot signal process %ld: %s", (long)signal_pid, strerror(errno));
+        bx_fd_cleanup(&fd);
     }
     return rc;
 }

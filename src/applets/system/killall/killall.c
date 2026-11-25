@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <poll.h>
 #include <regex.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -16,6 +17,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/option_scan.h"
 #include "lib/path_ops.h"
@@ -436,33 +438,53 @@ static bool bx_killall_age_matches(const struct bx_killall_options* options,
     return true;
 }
 
-static bool bx_killall_id_seen(const pid_t* ids, size_t len, pid_t id) {
+struct bx_killall_target {
+    pid_t id;
+    int fd;
+};
+
+static bool bx_killall_id_seen(const struct bx_killall_target* ids, size_t len, pid_t id) {
     size_t i;
     for (i = 0u; i < len; i++) {
-        if (ids[i] == id) {
+        if (ids[i].id == id) {
             return true;
         }
     }
     return false;
 }
 
-static int bx_killall_signal(pid_t id, bool process_group, int signal_number) {
+static int bx_killall_signal_group(pid_t id, int signal_number) {
     /* kill(-1, ...) broadcasts instead of addressing process group 1. */
-    if (id <= 0 || (process_group && id == 1)) {
+    if (id <= 1) {
         errno = EINVAL;
         return -1;
     }
-    return kill(process_group ? -id : id, signal_number);
+    return kill(-id, signal_number);
 }
 
-static bool bx_killall_wait_for_ids(const pid_t* ids, size_t len, bool process_group) {
+static bool bx_killall_wait_for_ids(const struct bx_killall_target* ids, size_t len, bool process_group) {
+    if (!process_group) {
+        for (size_t i = 0; i < len; i++) {
+            struct pollfd process = {.fd = ids[i].fd, .events = POLLIN};
+            int rc;
+            do {
+                rc = poll(&process, 1, -1);
+            } while (rc < 0 && errno == EINTR);
+            if (rc < 0)
+                return false;
+            if (!(process.revents & (POLLIN | POLLHUP))) {
+                errno = EIO;
+                return false;
+            }
+        }
+        return true;
+    }
     size_t remaining = len;
     while (remaining > 0u) {
         size_t i;
         remaining = 0u;
         for (i = 0u; i < len; i++) {
-            pid_t id = ids[i];
-            int rc = bx_killall_signal(id, process_group, 0);
+            int rc = bx_killall_signal_group(ids[i].id, 0);
             if (rc == 0 || (rc < 0 && errno == EPERM)) {
                 remaining++;
             }
@@ -496,7 +518,7 @@ int bx_killall_main(int argc, char** argv) {
     struct bx_killall_options options;
     struct bx_proc_list procs = {0};
     regex_t* regexes = NULL;
-    pid_t* signaled_ids = NULL;
+    struct bx_killall_target* signaled_ids = NULL;
     size_t signaled_len = 0u;
     double uptime_seconds = 0.0;
     long ticks_per_second;
@@ -624,14 +646,26 @@ int bx_killall_main(int argc, char** argv) {
             }
         }
 
-        if ((options.process_group && signal_id != info->pgrp) ||
-            !bx_proc_signal_target_matches(info->pid, info->starttime_ticks,
-                                            options.process_group ? signal_id : 0)) {
+        int signal_fd = -1;
+        if (options.process_group &&
+            (signal_id != info->pgrp ||
+             !bx_proc_signal_target_matches(info->pid, info->starttime_ticks, signal_id))) {
             if (!options.quiet)
                 bx_diag(&diag, "process %ld changed or exited before signaling", (long)info->pid);
             continue;
         }
-        if (bx_killall_signal(signal_id, options.process_group, options.signal_number) != 0) {
+        if (!options.process_group) {
+            signal_fd = bx_proc_pin_signal_target(signal_id, info->starttime_ticks);
+            if (signal_fd < 0) {
+                if (!options.quiet)
+                    bx_diag(&diag, "cannot pin process %ld before signaling: %s",
+                            (long)signal_id, strerror(errno));
+                continue;
+            }
+        }
+        int sent = options.process_group ? bx_killall_signal_group(signal_id, options.signal_number)
+                 : bx_fd_pidfd_send_signal(signal_fd, options.signal_number, NULL);
+        if (sent != 0) {
             if (!options.quiet) {
                 fprintf(stderr,
                         "%s(%s%ld): %s\n",
@@ -640,11 +674,14 @@ int bx_killall_main(int argc, char** argv) {
                         (long)display_id,
                         strerror(errno));
             }
+            bx_fd_cleanup(&signal_fd);
             continue;
         }
 
+        if (!options.wait)
+            bx_fd_cleanup(&signal_fd);
         signaled_ids = xrealloc(signaled_ids, (signaled_len + 1u) * sizeof(*signaled_ids));
-        signaled_ids[signaled_len++] = signal_id;
+        signaled_ids[signaled_len++] = (struct bx_killall_target){signal_id, signal_fd};
         rc = 0;
         if (options.verbose) {
             printf("Killed %s(%s%ld) with signal %d\n",
@@ -656,7 +693,10 @@ int bx_killall_main(int argc, char** argv) {
     }
 
     if (options.wait && signaled_len > 0u) {
-        bx_killall_wait_for_ids(signaled_ids, signaled_len, options.process_group);
+        if (!bx_killall_wait_for_ids(signaled_ids, signaled_len, options.process_group)) {
+            bx_diag(&diag, "cannot wait for selected process: %s", strerror(errno));
+            rc = 1;
+        }
     }
     if (rc != 0 && !options.quiet) {
         bx_diag(&diag, "no process found");
@@ -669,6 +709,8 @@ int bx_killall_main(int argc, char** argv) {
         }
     }
     free(regexes);
+    for (size_t n = 0; n < signaled_len; n++)
+        bx_fd_cleanup(&signaled_ids[n].fd);
     free(signaled_ids);
     bx_proc_list_free(&procs);
     bx_killall_options_cleanup(&options);

@@ -708,6 +708,17 @@ bool bx_proc_signal_target_matches(pid_t pid, unsigned long long starttime_ticks
     return matches;
 }
 
+int bx_proc_pin_signal_target(pid_t pid, unsigned long long starttime_ticks) {
+    int fd = bx_fd_pidfd_open(pid);
+    if (fd >= 0 && !bx_proc_signal_target_matches(pid, starttime_ticks, 0)) {
+        int error = errno;
+        close(fd);
+        errno = error;
+        return -1;
+    }
+    return fd;
+}
+
 bool bx_proc_read_info(pid_t pid, unsigned flags, struct bx_proc_info* info_out, bool* vanished_out) {
     struct bx_proc_stat stat_info;
     uid_t uid = (uid_t)-1;

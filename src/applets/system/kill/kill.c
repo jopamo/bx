@@ -16,7 +16,6 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -30,22 +29,6 @@
 
 #ifndef PID_FS_MAGIC
 #define PID_FS_MAGIC 0x50494446
-#endif
-
-#ifndef SYS_pidfd_open
-#if defined(__x86_64__)
-#define SYS_pidfd_open 434
-#elif defined(__aarch64__)
-#define SYS_pidfd_open 434
-#endif
-#endif
-
-#ifndef SYS_pidfd_send_signal
-#if defined(__x86_64__)
-#define SYS_pidfd_send_signal 424
-#elif defined(__aarch64__)
-#define SYS_pidfd_send_signal 424
-#endif
 #endif
 
 enum bx_kill_action {
@@ -821,27 +804,6 @@ static bool bx_kill_print_show_process_state(const char* pid_text, struct bx_dia
     return ok;
 }
 
-static int bx_kill_pidfd_open(pid_t pid) {
-#ifdef SYS_pidfd_open
-    return (int)syscall(SYS_pidfd_open, pid, 0);
-#else
-    errno = ENOSYS;
-    return -1;
-#endif
-}
-
-static int bx_kill_pidfd_send_signal(int pidfd, int signal_number, siginfo_t* info) {
-#ifdef SYS_pidfd_send_signal
-    return (int)syscall(SYS_pidfd_send_signal, pidfd, signal_number, info, 0);
-#else
-    (void)pidfd;
-    (void)signal_number;
-    (void)info;
-    errno = ENOSYS;
-    return -1;
-#endif
-}
-
 static bool bx_kill_target_has_handler(pid_t pid, int signal_number, bool* has_handler_out) {
     if (signal_number <= 0 || signal_number > 64 || signal_number == SIGKILL || signal_number == SIGSTOP) {
         *has_handler_out = false;
@@ -882,14 +844,14 @@ static bool bx_kill_send_once(const struct bx_kill_options* options, pid_t pid, 
             info.si_signo = signal_number;
             info.si_code = SI_QUEUE;
             info.si_value = value;
-            return bx_kill_pidfd_send_signal(pidfd, signal_number, &info) == 0;
+            return bx_fd_pidfd_send_signal(pidfd, signal_number, &info) == 0;
         }
 
         return sigqueue(pid, signal_number, value) == 0;
     }
 
     if (pidfd >= 0) {
-        return bx_kill_pidfd_send_signal(pidfd, signal_number, NULL) == 0;
+        return bx_fd_pidfd_send_signal(pidfd, signal_number, NULL) == 0;
     }
 
     return kill(pid, signal_number) == 0;
@@ -951,7 +913,7 @@ static bool bx_kill_pidfd_inode(int fd, uintmax_t* inode) {
 }
 
 static bool bx_kill_prepare_pidfd(pid_t pid, uintmax_t expected_inode, int* pidfd_out, struct bx_diag_ctx* diag) {
-    int pidfd = bx_kill_pidfd_open(pid);
+    int pidfd = bx_fd_pidfd_open(pid);
     if (pidfd < 0) {
         bx_diag(diag, "failed to open pidfd for %ld: %s", (long)pid, strerror(errno));
         return false;
@@ -1583,7 +1545,7 @@ int bx_kill_main(int argc, char** argv) {
             rc = 1;
         }
         else {
-            int fd = bx_kill_pidfd_open(pid);
+            int fd = bx_fd_pidfd_open(pid);
             uintmax_t inode;
             if (fd < 0 || !bx_kill_pidfd_inode(fd, &inode)) {
                 bx_diag(&diag, "cannot identify process %ld: %s", (long)pid, strerror(errno));
