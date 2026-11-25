@@ -30,7 +30,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <glob.h>
 #include <grp.h>
 #include <limits.h>
@@ -52,6 +51,7 @@
 #include "extern.h"
 #include "metadata.h"
 #include "daemon.h"
+#include "lib/option_scan.h"
 
 #ifdef __APPLE__
 #include <TargetConditionals.h>
@@ -99,21 +99,20 @@ enum {
 	OP_SOCKOPTS,
 };
 
-static const struct option	daemon_lopts[] = {
-	{ "address",	required_argument,	NULL,		OP_ADDRESS },
-	{ "bwlimit",	required_argument,	NULL,		OP_BWLIMIT },
-	{ "config",	required_argument,	NULL,		OP_CONFIG },
-	{ "daemon",	no_argument,	NULL,			OP_DAEMON },
-	{ "no-detach",	no_argument,	NULL,			OP_NO_DETACH },
-	{ "ipv4",	no_argument,	NULL,			'4' },
-	{ "ipv6",	no_argument,	NULL,			'6' },
-	{ "help",	no_argument,	NULL,			'h' },
-	{ "log-file",	required_argument,	NULL,		OP_LOG_FILE },
-	{ "log-file-format",	required_argument,	NULL,	OP_LOG_FILE_FORMAT },
-	{ "port",	required_argument,	NULL,		OP_PORT },
-	{ "sockopts",	required_argument,	NULL,		OP_SOCKOPTS },
-	{ "verbose",	no_argument,		NULL,		'v' },
-	{ NULL,		0,		NULL,			0 },
+static const struct bx_option_spec daemon_options[] = {
+	{ OP_ADDRESS, 0, "address", BX_OPTION_REQUIRED_VALUE },
+	{ OP_BWLIMIT, 0, "bwlimit", BX_OPTION_REQUIRED_VALUE },
+	{ OP_CONFIG, 0, "config", BX_OPTION_REQUIRED_VALUE },
+	{ OP_DAEMON, 0, "daemon", BX_OPTION_NO_VALUE },
+	{ OP_NO_DETACH, 0, "no-detach", BX_OPTION_NO_VALUE },
+	{ '4', '4', "ipv4", BX_OPTION_NO_VALUE },
+	{ '6', '6', "ipv6", BX_OPTION_NO_VALUE },
+	{ 'h', 'h', "help", BX_OPTION_NO_VALUE },
+	{ OP_LOG_FILE, 0, "log-file", BX_OPTION_REQUIRED_VALUE },
+	{ OP_LOG_FILE_FORMAT, 0, "log-file-format", BX_OPTION_REQUIRED_VALUE },
+	{ OP_PORT, 0, "port", BX_OPTION_REQUIRED_VALUE },
+	{ OP_SOCKOPTS, 0, "sockopts", BX_OPTION_REQUIRED_VALUE },
+	{ 'v', 'v', "verbose", BX_OPTION_NO_VALUE },
 };
 
 static void
@@ -1442,8 +1441,8 @@ rsync_daemon(int argc, char *argv[], struct opts *daemon_opts)
 	struct sess sess;
 	struct daemon_role role;
 	long long tmpint;
-	const char *cfg_motd, *logfile;
-	int c, opt_daemon = 0, detach = 1, rc;
+	const char *cfg_motd, *logfile, *logformat = NULL;
+	int opt_daemon = 0, detach = 1, rc;
 
 	/* Start with a fresh session / opts */
 	memset(&role, 0, sizeof(role));
@@ -1459,24 +1458,35 @@ rsync_daemon(int argc, char *argv[], struct opts *daemon_opts)
 	/* Log to syslog by default. */
 	logfile = NULL;
 
-	/*
-	 * optind starting at 1, because we're parsing the original program args
-	 * and should skip argv[0].
-	 */
-	daemon_reset_getopt();
-	while ((c = getopt_long(argc, argv, "46hv", daemon_lopts,
-	    NULL)) != -1) {
-		switch (c) {
+	struct bx_option_cursor cursor;
+	bx_option_cursor_init(&cursor, argv, 1, (size_t)argc,
+	    BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, daemon_options,
+	    sizeof(daemon_options) / sizeof(daemon_options[0]));
+	struct bx_option_result option;
+	while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+		/* Like rsync, ignore stray non-option startup arguments. */
+		if (option.event == BX_OPTION_OPERAND)
+			continue;
+		if (option.event != BX_OPTION_MATCH) {
+			const char *reason =
+			    option.event == BX_OPTION_AMBIGUOUS ? "ambiguous option" :
+			    option.event == BX_OPTION_MISSING_VALUE ? "option requires an argument" :
+			    option.event == BX_OPTION_UNEXPECTED_VALUE ? "option does not take an argument" :
+			    "unrecognized option";
+			fprintf(stderr, "rsync: %s: %s\n", option.token, reason);
+			daemon_usage(ERR_SYNTAX);
+		}
+		switch (option.spec->id) {
 		case OP_ADDRESS:
-			daemon_opts->address = optarg;
+			daemon_opts->address = option.value;
 			break;
 		case OP_BWLIMIT:
-			if (scan_scaled_def(optarg, &tmpint, 'k') == -1)
+			if (scan_scaled_def(option.value, &tmpint, 'k') == -1)
 				err(1, "bad bwlimit");
 			daemon_opts->bwlimit = tmpint;
 			break;
 		case OP_CONFIG:
-			role.cfg_file = optarg;
+			role.cfg_file = option.value;
 			break;
 		case OP_DAEMON:
 			if (++opt_daemon > 1) {
@@ -1488,18 +1498,16 @@ rsync_daemon(int argc, char *argv[], struct opts *daemon_opts)
 			detach = 0;
 			break;
 		case OP_LOG_FILE:
-			logfile = optarg;
+			logfile = option.value;
 			break;
 		case OP_LOG_FILE_FORMAT:
-			daemon_opts->logformat = strdup(optarg);
-			if (daemon_opts->logformat == NULL)
-				err(ERR_IPC, "strdup");
+			logformat = option.value;
 			break;
 		case OP_PORT:
-			daemon_opts->port = optarg;
+			daemon_opts->port = option.value;
 			break;
 		case OP_SOCKOPTS:
-			daemon_opts->sockopts = optarg;
+			daemon_opts->sockopts = option.value;
 			break;
 		case '4':
 			daemon_opts->ipf = 4;
@@ -1518,8 +1526,11 @@ rsync_daemon(int argc, char *argv[], struct opts *daemon_opts)
 		}
 	}
 
-	argc -= optind;
-	argv += optind;
+	if (logformat != NULL) {
+		daemon_opts->logformat = strdup(logformat);
+		if (daemon_opts->logformat == NULL)
+			err(ERR_IPC, "strdup");
+	}
 
 	/*
 	 * We'll act on this after we pick up the initial config.
@@ -1528,11 +1539,6 @@ rsync_daemon(int argc, char *argv[], struct opts *daemon_opts)
 
 	if (!daemon_open_logfile(&sess, logfile, true))
 		return ERR_IPC;
-
-	/*
-	 * The reference rsync doesn't seem to complain about extra non-option
-	 * arguments, though they aren't documented to do anything.
-	 */
 
 	poll_timeout = -1;
 
