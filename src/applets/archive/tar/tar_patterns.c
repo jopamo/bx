@@ -7,6 +7,7 @@
 
 #include "applets/archive/tar/tar_patterns.h"
 #include "bx/libbx.h"
+#include "lib/glob_syntax.h"
 
 static bool bx_tar_match_char_equal(unsigned char left,
                                     unsigned char right,
@@ -80,33 +81,17 @@ static char* bx_tar_match_dup_folded_range(const char* text,
     return out;
 }
 
-static bool bx_tar_match_wildcard_text(const char* pattern,
-                                       const char* folded_pattern,
-                                       const struct bx_tar_match_policy* policy,
-                                       const char* text,
-                                       size_t text_len) {
-    int flags = policy->wildcards_match_slash ? 0 : FNM_PATHNAME;
-    bool text_is_full = text[text_len] == '\0';
-
-    if (!policy->ignore_case) {
-        if (text_is_full) {
-            return fnmatch(pattern, text, flags) == 0;
-        }
-        else {
-            char* text_cmp = bx_tar_match_dup_folded_range(text, text_len, false);
-            bool matched = fnmatch(pattern, text_cmp, flags) == 0;
-
-            free(text_cmp);
-            return matched;
-        }
+static bool bx_tar_match_wildcard_text(const struct bx_tar_match_pattern* pattern,
+                                       const char* text, size_t text_len) {
+    int flags = pattern->policy.wildcards_match_slash ? 0 : FNM_PATHNAME;
+    const char* wildcard = pattern->wildcard_text ? pattern->wildcard_text : pattern->text;
+    if (!pattern->policy.ignore_case && text[text_len] == '\0') {
+        return fnmatch(wildcard, text, flags) == 0;
     }
-    else {
-        char* text_cmp = bx_tar_match_dup_folded_range(text, text_len, true);
-        bool matched = fnmatch(folded_pattern != NULL ? folded_pattern : pattern, text_cmp, flags) == 0;
-
-        free(text_cmp);
-        return matched;
-    }
+    char* text_cmp = bx_tar_match_dup_folded_range(text, text_len, pattern->policy.ignore_case);
+    bool matched = fnmatch(wildcard, text_cmp, flags) == 0;
+    free(text_cmp);
+    return matched;
 }
 
 static bool bx_tar_match_literal_text_len(const char* pattern,
@@ -138,11 +123,7 @@ static bool bx_tar_match_pattern_text(const struct bx_tar_match_pattern* pattern
                                       const char* text,
                                       size_t text_len) {
     if (pattern->policy.wildcards && pattern->wildcard_magic) {
-        if (bx_tar_match_wildcard_text(pattern->text,
-                                       pattern->folded_text,
-                                       &pattern->policy,
-                                       text,
-                                       text_len)) {
+        if (bx_tar_match_wildcard_text(pattern, text, text_len)) {
             return true;
         }
         if (!recurse) {
@@ -151,11 +132,7 @@ static bool bx_tar_match_pattern_text(const struct bx_tar_match_pattern* pattern
         while (text_len > 0u) {
             text_len--;
             if (text[text_len] == '/'
-                && bx_tar_match_wildcard_text(pattern->text,
-                                              pattern->folded_text,
-                                              &pattern->policy,
-                                              text,
-                                              text_len)) {
+                && bx_tar_match_wildcard_text(pattern, text, text_len)) {
                 return true;
             }
         }
@@ -165,47 +142,6 @@ static bool bx_tar_match_pattern_text(const struct bx_tar_match_pattern* pattern
     return bx_tar_match_literal_text_len(pattern->text,
                                          pattern->trimmed_len,
                                          &pattern->policy,
-                                         recurse,
-                                         text,
-                                         text_len);
-}
-
-static bool bx_tar_match_policy_text_raw(const char* pattern,
-                                         const struct bx_tar_match_policy* policy,
-                                         bool recurse,
-                                         const char* text,
-                                         size_t text_len) {
-    bool wildcard_magic = bx_tar_match_pattern_has_wildcard_magic(pattern);
-
-    if (policy->wildcards && wildcard_magic) {
-        char* folded_pattern = NULL;
-
-        if (policy->ignore_case) {
-            folded_pattern = bx_tar_match_dup_folded_range(pattern, strlen(pattern), true);
-        }
-        if (bx_tar_match_wildcard_text(pattern, folded_pattern, policy, text, text_len)) {
-            free(folded_pattern);
-            return true;
-        }
-        if (!recurse) {
-            free(folded_pattern);
-            return false;
-        }
-        while (text_len > 0u) {
-            text_len--;
-            if (text[text_len] == '/'
-                && bx_tar_match_wildcard_text(pattern, folded_pattern, policy, text, text_len)) {
-                free(folded_pattern);
-                return true;
-            }
-        }
-        free(folded_pattern);
-        return false;
-    }
-
-    return bx_tar_match_literal_text_len(pattern,
-                                         bx_tar_match_trimmed_len(pattern),
-                                         policy,
                                          recurse,
                                          text,
                                          text_len);
@@ -267,38 +203,6 @@ static bool bx_tar_match_scan_name_pattern(const struct bx_tar_match_pattern* pa
     return false;
 }
 
-static bool bx_tar_match_scan_name_raw(const char* pattern,
-                                       const struct bx_tar_match_policy* policy,
-                                       bool recurse,
-                                       const char* name,
-                                       bool trim_name) {
-    size_t name_len = trim_name ? bx_tar_match_trimmed_len(name) : strlen(name);
-    const char* name_end = name + name_len;
-    const char* cursor = name;
-
-    if (bx_tar_match_policy_text_raw(pattern, policy, recurse, cursor, name_len)) {
-        return true;
-    }
-
-    if (policy->anchored) {
-        return false;
-    }
-
-    while (cursor < name_end) {
-        if (*cursor == '/'
-            && bx_tar_match_policy_text_raw(pattern,
-                                            policy,
-                                            recurse,
-                                            cursor + 1,
-                                            name_len - (size_t)((cursor + 1) - name))) {
-            return true;
-        }
-        cursor++;
-    }
-
-    return false;
-}
-
 void bx_tar_match_policy_init_member_default(struct bx_tar_match_policy* policy) {
     policy->anchored = true;
     policy->ignore_case = false;
@@ -345,12 +249,33 @@ bool bx_tar_match_policy_set_wildcards_match_slash(struct bx_tar_match_policy* m
     return true;
 }
 
+void bx_tar_match_pattern_init(struct bx_tar_match_pattern* pattern, const char* text,
+                              const struct bx_tar_match_policy* policy) {
+    *pattern = (struct bx_tar_match_pattern){
+        .text = xstrdup(text),
+        .trimmed_len = bx_tar_match_trimmed_len(text),
+        .wildcard_magic = bx_tar_match_pattern_has_wildcard_magic(text),
+        .has_slash = bx_tar_match_pattern_has_slash(text),
+        .policy = *policy,
+    };
+    bool normalize = policy->wildcards && strstr(text, "[^") != NULL;
+    if (policy->wildcards && pattern->wildcard_magic && (normalize || policy->ignore_case)) {
+        pattern->wildcard_text = bx_tar_match_dup_folded_range(text, strlen(text), policy->ignore_case);
+        if (normalize)
+            bx_glob_normalize_caret(pattern->wildcard_text);
+    }
+}
+
+void bx_tar_match_pattern_free(struct bx_tar_match_pattern* pattern) {
+    free(pattern->text);
+    free(pattern->wildcard_text);
+}
+
 void bx_tar_match_pattern_list_free(struct bx_tar_match_pattern_list* list) {
     size_t i;
 
     for (i = 0u; i < list->len; i++) {
-        free(list->items[i].text);
-        free(list->items[i].folded_text);
+        bx_tar_match_pattern_free(&list->items[i]);
     }
     free(list->items);
     list->items = NULL;
@@ -370,28 +295,13 @@ bool bx_tar_match_pattern_list_append(struct bx_tar_match_pattern_list* list,
     }
 
     slot = &list->items[list->len++];
-    slot->text = xstrdup(text);
-    slot->folded_text = policy->ignore_case
-        ? bx_tar_match_dup_folded_range(text, strlen(text), true)
-        : NULL;
-    slot->trimmed_len = bx_tar_match_trimmed_len(text);
-    slot->wildcard_magic = bx_tar_match_pattern_has_wildcard_magic(text);
-    slot->has_slash = bx_tar_match_pattern_has_slash(text);
-    slot->policy = *policy;
+    bx_tar_match_pattern_init(slot, text, policy);
     return true;
 }
 
-bool bx_tar_match_member_name(const char* pattern,
-                              const struct bx_tar_match_policy* policy,
-                              bool recurse,
-                              const char* name) {
-    return bx_tar_match_scan_name_raw(pattern, policy, recurse, name, true);
-}
-
-bool bx_tar_match_exclude_pattern(const char* pattern,
-                                  const struct bx_tar_match_policy* policy,
-                                  const char* archive_path) {
-    return bx_tar_match_scan_name_raw(pattern, policy, true, archive_path, false);
+bool bx_tar_match_member_name(const struct bx_tar_match_pattern* pattern,
+                              bool recurse, const char* name) {
+    return bx_tar_match_scan_name_pattern(pattern, recurse, name, true);
 }
 
 bool bx_tar_path_excluded(const struct bx_tar_match_pattern_list* patterns,

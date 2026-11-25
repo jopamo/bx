@@ -37,9 +37,8 @@ static bool bx_tar_select_plan_append_member(struct bx_tar_select_plan* plan,
     }
 
     slot = &plan->members[plan->len++];
-    slot->name = xstrdup(name);
+    bx_tar_match_pattern_init(&slot->pattern, name, policy);
     slot->extract_dir = extract_dir ? xstrdup(extract_dir) : NULL;
-    slot->policy = *policy;
     slot->recurse = recurse;
     return true;
 }
@@ -374,7 +373,7 @@ void bx_tar_select_plan_cleanup(struct bx_tar_select_plan* plan) {
     size_t i;
 
     for (i = 0u; i < plan->len; i++) {
-        free(plan->members[i].name);
+        bx_tar_match_pattern_free(&plan->members[i].pattern);
         free(plan->members[i].extract_dir);
     }
     free(plan->members);
@@ -525,17 +524,14 @@ fail:
 
 bool bx_tar_select_member_matches_name(const struct bx_tar_select_member* member,
                                        const char* name) {
-    return bx_tar_match_member_name(member->name, &member->policy, member->recurse, name);
+    return bx_tar_match_member_name(&member->pattern, member->recurse, name);
 }
 
 static bool bx_tar_select_member_occurrence_is_descendant(const struct bx_tar_select_member* member,
                                                           const char* name) {
-    size_t member_len = strlen(member->name);
+    size_t member_len = member->pattern.trimmed_len;
     size_t name_len = strlen(name);
 
-    while (member_len > 0u && member->name[member_len - 1u] == '/') {
-        member_len--;
-    }
     return member->recurse
         && name_len > member_len
         && name[member_len] == '/';
@@ -642,7 +638,7 @@ bool bx_tar_select_plan_report_unmatched_occurrence(const struct bx_tar_select_p
         fprintf(stderr,
                 "%s: %s: %s\n",
                 diag->progname,
-                plan->members[i].name,
+                plan->members[i].pattern.text,
                 occurrence > 0u && occurrence_counts != NULL && occurrence_counts[i] > 0u
                     ? "Required occurrence not found in archive"
                     : "Not found in archive");

@@ -15,7 +15,7 @@ struct bx_tar_match_policy {
 
 struct bx_tar_match_pattern {
     char* text;
-    char* folded_text;
+    char* wildcard_text;
     size_t trimmed_len;
     bool wildcard_magic;
     bool has_slash;
@@ -45,18 +45,15 @@ bool bx_tar_match_policy_set_wildcards_match_slash(struct bx_tar_match_policy* m
                                                    bool enabled);
 
 void bx_tar_match_pattern_list_free(struct bx_tar_match_pattern_list* list);
+void bx_tar_match_pattern_init(struct bx_tar_match_pattern* pattern, const char* text,
+                              const struct bx_tar_match_policy* policy);
+void bx_tar_match_pattern_free(struct bx_tar_match_pattern* pattern);
 bool bx_tar_match_pattern_list_append(struct bx_tar_match_pattern_list* list,
                                       const char* text,
                                       const struct bx_tar_match_policy* policy);
 
-bool bx_tar_match_member_name(const char* pattern,
-                              const struct bx_tar_match_policy* policy,
-                              bool recurse,
-                              const char* name);
-
-bool bx_tar_match_exclude_pattern(const char* pattern,
-                                  const struct bx_tar_match_policy* policy,
-                                  const char* archive_path);
+bool bx_tar_match_member_name(const struct bx_tar_match_pattern* pattern,
+                              bool recurse, const char* name);
 
 bool bx_tar_path_excluded(const struct bx_tar_match_pattern_list* patterns,
                           const char* archive_path);

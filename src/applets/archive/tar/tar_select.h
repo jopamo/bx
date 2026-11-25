@@ -10,9 +10,8 @@
 #include "applets/archive/tar/tar_patterns.h"
 
 struct bx_tar_select_member {
-    char* name;
+    struct bx_tar_match_pattern pattern;
     char* extract_dir;
-    struct bx_tar_match_policy policy;
     bool recurse;
 };
 
