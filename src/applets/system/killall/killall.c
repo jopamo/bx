@@ -483,7 +483,7 @@ static bool bx_killall_signal_id_for_proc(const struct bx_killall_options* optio
                                           pid_t* signal_id_out,
                                           bool* vanished_out) {
     if (options->process_group) {
-        return bx_proc_read_ns_pgid(info->pid, info->pgrp, signal_id_out, vanished_out);
+        return bx_proc_read_ns_pgid(info->pid, signal_id_out, vanished_out);
     }
     return bx_proc_read_ns_pid(info->pid, signal_id_out, vanished_out);
 }
@@ -523,6 +523,11 @@ int bx_killall_main(int argc, char** argv) {
         list_signals();
         bx_killall_options_cleanup(&options);
         return 0;
+    }
+    if (!bx_proc_signal_namespace_matches()) {
+        bx_diag(&diag, "cannot verify process IDs in the caller's PID namespace: %s", strerror(errno));
+        bx_killall_options_cleanup(&options);
+        return 1;
     }
 
     if (options.regexp) {

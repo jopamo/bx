@@ -4,11 +4,13 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <linux/magic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/vfs.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -604,17 +606,14 @@ bool bx_proc_read_exe(pid_t pid, char** exe_out, bool* vanished_out) {
     return bx_proc_readlink_leaf(pid, "exe", exe_out, vanished_out);
 }
 
-static bool bx_proc_read_last_status_pid_field(pid_t pid,
-                                               const char* key,
-                                               pid_t fallback,
-                                               pid_t* value_out,
-                                               bool* vanished_out) {
+static bool bx_proc_read_status_pid_field(pid_t pid, const char* key,
+                                         bool require_single, pid_t* value_out,
+                                         bool* vanished_out) {
     char* text = NULL;
     char* line;
     size_t key_len;
     bool found = false;
 
-    *value_out = fallback;
     if (!bx_proc_read_text_file(pid, "status", &text, vanished_out)) {
         return false;
     }
@@ -624,31 +623,14 @@ static bool bx_proc_read_last_status_pid_field(pid_t pid,
     while (line != NULL) {
         if (strncmp(line, key, key_len) == 0) {
             const char* cursor = line + key_len;
-            pid_t last_value = fallback;
-
-            while (*cursor != '\0') {
-                const char* end = NULL;
-                pid_t value;
-
-                while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
-                    cursor++;
-                }
-                if (*cursor == '\0') {
-                    break;
-                }
-
-                if (!bx_proc_parse_pid_number(cursor, &end, false, &value)) {
-                    free(text);
-                    errno = EINVAL;
-                    return false;
-                }
-                last_value = value;
-                cursor = end;
-                found = true;
-            }
-
-            if (found) {
-                *value_out = last_value;
+            const char* end;
+            while (isspace((unsigned char)*cursor))
+                cursor++;
+            if (bx_proc_parse_pid_number(cursor, &end, false, value_out) &&
+                (*end == '\0' || isspace((unsigned char)*end))) {
+                while (isspace((unsigned char)*end))
+                    end++;
+                found = !require_single || *end == '\0';
             }
             break;
         }
@@ -656,15 +638,61 @@ static bool bx_proc_read_last_status_pid_field(pid_t pid,
     }
 
     free(text);
+    if (!found)
+        errno = EINVAL;
+    return found;
+}
+
+bool bx_proc_signal_namespace_matches(void) {
+    struct statfs fs;
+    if (statfs("/proc", &fs) != 0)
+        return false;
+    if (fs.f_type != PROC_SUPER_MAGIC) {
+        errno = EINVAL;
+        return false;
+    }
+    /*
+     * The first status column is relative to the procfs mount. The last
+     * column of our own row is relative to our current PID namespace.
+     * Refuse signaling when there is more than one column, even if the
+     * numbers happen to coincide in different namespaces.
+     */
+    char path[64];
+    ssize_t len = readlink("/proc/self", path, sizeof(path) - 1);
+    if (len < 0)
+        return false;
+    if (len == 0 || (size_t)len == sizeof(path) - 1) {
+        errno = EINVAL;
+        return false;
+    }
+    path[len] = '\0';
+    pid_t pid = getpid(), visible, mapped;
+    if (!bx_proc_parse_pid_number(path, NULL, true, &visible) || visible != pid) {
+        errno = EINVAL;
+        return false;
+    }
+    bool vanished;
+    if (!bx_proc_read_status_pid_field(visible, "NSpid:", true, &mapped, &vanished))
+        return false;
+    if (mapped != pid) {
+        errno = EINVAL;
+        return false;
+    }
     return true;
 }
 
 bool bx_proc_read_ns_pid(pid_t pid, pid_t* ns_pid_out, bool* vanished_out) {
-    return bx_proc_read_last_status_pid_field(pid, "NSpid:", pid, ns_pid_out, vanished_out);
+    if (!bx_proc_read_status_pid_field(pid, "NSpid:", false, ns_pid_out, vanished_out))
+        return false;
+    if (*ns_pid_out != pid) {
+        errno = EINVAL;
+        return false;
+    }
+    return true;
 }
 
-bool bx_proc_read_ns_pgid(pid_t pid, pid_t host_pgid, pid_t* ns_pgid_out, bool* vanished_out) {
-    return bx_proc_read_last_status_pid_field(pid, "NSpgid:", host_pgid, ns_pgid_out, vanished_out);
+bool bx_proc_read_ns_pgid(pid_t pid, pid_t* ns_pgid_out, bool* vanished_out) {
+    return bx_proc_read_status_pid_field(pid, "NSpgid:", false, ns_pgid_out, vanished_out);
 }
 
 bool bx_proc_read_info(pid_t pid, unsigned flags, struct bx_proc_info* info_out, bool* vanished_out) {

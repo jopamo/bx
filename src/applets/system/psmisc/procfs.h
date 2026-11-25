@@ -74,8 +74,11 @@ bool bx_proc_read_uid(pid_t pid, uid_t* uid_out, bool* vanished_out);
 bool bx_proc_read_gid(pid_t pid, gid_t* gid_out, bool* vanished_out);
 bool bx_proc_read_cmdline(pid_t pid, char** cmdline_out, bool* vanished_out);
 bool bx_proc_read_exe(pid_t pid, char** exe_out, bool* vanished_out);
+/* Verify the procfs IDs are in the caller's signaling namespace. */
+bool bx_proc_signal_namespace_matches(void);
+/* Use only after verifying the namespace above. */
 bool bx_proc_read_ns_pid(pid_t pid, pid_t* ns_pid_out, bool* vanished_out);
-bool bx_proc_read_ns_pgid(pid_t pid, pid_t host_pgid, pid_t* ns_pgid_out, bool* vanished_out);
+bool bx_proc_read_ns_pgid(pid_t pid, pid_t* ns_pgid_out, bool* vanished_out);
 bool bx_proc_read_info(pid_t pid, unsigned flags, struct bx_proc_info* info_out, bool* vanished_out);
 bool bx_proc_list_read(struct bx_proc_list* list, unsigned flags);
 bool bx_proc_read_fds(pid_t pid, struct bx_proc_fd_list* list, bool* vanished_out);

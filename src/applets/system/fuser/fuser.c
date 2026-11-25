@@ -437,6 +437,10 @@ int bx_fuser_main(int argc, char** argv) {
         list_signals();
         return 0;
     }
+    if (options.kill && !bx_proc_signal_namespace_matches()) {
+        bx_diag(&diag, "cannot verify process IDs in the caller's PID namespace: %s", strerror(errno));
+        return 1;
+    }
 
     targets = xmalloc((size_t)(argc - options.first_name_index) * sizeof(*targets));
     for (i = options.first_name_index; i < argc; i++) {
