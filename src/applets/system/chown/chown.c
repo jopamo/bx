@@ -36,7 +36,7 @@ enum bx_chown_symlink_traversal {
 };
 
 enum {
-    BX_CHOWN_OPT_HELP = 1,
+    BX_CHOWN_OPT_HELP = 256,
     BX_CHOWN_OPT_VERSION,
     BX_CHOWN_OPT_REFERENCE,
     BX_CHOWN_OPT_FROM,
@@ -111,11 +111,12 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "chown");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
+    char short_options[] = "-:RcfhHLPv";
+    int next_operand = 1;
+    bx_args_getopt_reset_file_options(short_options);
 
     while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+:RcfhHLPv", long_options, &option_index);
+        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
         if (c == -1) {
             break;
         }
@@ -702,7 +703,7 @@ static bool bx_chown_apply_one(const char* path, uid_t owner, gid_t group, const
     return bx_chown_apply_path_recursive(path, true, owner, group, options, diag, NULL);
 }
 
-int bx_chown_run(int argc, char** argv) {
+int bx_chown_run(int argc, char** argv, bool group_only, bx_cli_help_fn print_help) {
     struct bx_chown_options options;
     struct bx_diag_ctx diag = {
         .progname = "chown",
@@ -717,7 +718,7 @@ int bx_chown_run(int argc, char** argv) {
     }
 
     if (options.show_help) {
-        bx_chown_print_help(stdout, options.progname);
+        print_help(stdout, options.progname);
         return 0;
     }
 
@@ -731,7 +732,7 @@ int bx_chown_run(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    struct bx_id_owner_group owner_group;
+    struct bx_id_owner_group owner_group = {0};
     int operand_count = argc - first_operand;
     int file_start = first_operand;
 
@@ -755,27 +756,22 @@ int bx_chown_run(int argc, char** argv) {
             return diag.exit_status;
         }
 
-        if (!bx_id_parse_owner_group(argv[first_operand], &owner_group, &diag)) {
+        if (group_only) {
+            if (argv[first_operand][0] != '\0') {
+                if (!bx_id_parse_group(argv[first_operand], &owner_group.group, &diag)) {
+                    return diag.exit_status;
+                }
+                owner_group.group_set = true;
+            }
+        }
+        else if (!bx_id_parse_owner_group(argv[first_operand], &owner_group, &diag)) {
             return diag.exit_status;
         }
 
         file_start = first_operand + 1;
     }
 
-    if (file_start < argc && strcmp(argv[file_start], "--") == 0) {
-        file_start++;
-    }
-    if (file_start >= argc) {
-        if (options.reference_path != NULL) {
-            bx_diag(&diag, "missing operand");
-        }
-        else {
-            bx_diag(&diag, "missing operand after '%s'", argv[first_operand]);
-        }
-        return diag.exit_status;
-    }
-
-    uid_t owner = owner_group.owner_set ? owner_group.owner : (uid_t)-1;
+    uid_t owner = !group_only && owner_group.owner_set ? owner_group.owner : (uid_t)-1;
     gid_t group = owner_group.group_set ? owner_group.group : (gid_t)-1;
 
     for (int i = file_start; i < argc; i++) {
@@ -790,5 +786,5 @@ int bx_chown_run(int argc, char** argv) {
 }
 
 int bx_chown_main(int argc, char** argv) {
-    return bx_chown_run(argc, argv);
+    return bx_chown_run(argc, argv, false, bx_chown_print_help);
 }
