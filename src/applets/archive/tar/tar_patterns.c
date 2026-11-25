@@ -69,8 +69,9 @@ static bool bx_tar_match_pattern_has_slash(const char* text) {
 
 static char* bx_tar_match_dup_folded_range(const char* text,
                                            size_t len,
-                                           bool ignore_case) {
-    char* out = xmalloc(len + 1u);
+                                           bool ignore_case,
+                                           size_t spare) {
+    char* out = xmalloc(len + 1u + spare);
     size_t i;
 
     for (i = 0u; i < len; i++) {
@@ -88,7 +89,7 @@ static bool bx_tar_match_wildcard_text(const struct bx_tar_match_pattern* patter
     if (!pattern->policy.ignore_case && text[text_len] == '\0') {
         return fnmatch(wildcard, text, flags) == 0;
     }
-    char* text_cmp = bx_tar_match_dup_folded_range(text, text_len, pattern->policy.ignore_case);
+    char* text_cmp = bx_tar_match_dup_folded_range(text, text_len, pattern->policy.ignore_case, 0);
     bool matched = fnmatch(wildcard, text_cmp, flags) == 0;
     free(text_cmp);
     return matched;
@@ -260,9 +261,9 @@ void bx_tar_match_pattern_init(struct bx_tar_match_pattern* pattern, const char*
     };
     bool normalize = policy->wildcards && strstr(text, "[^") != NULL;
     if (policy->wildcards && pattern->wildcard_magic && (normalize || policy->ignore_case)) {
-        pattern->wildcard_text = bx_tar_match_dup_folded_range(text, strlen(text), policy->ignore_case);
+        pattern->wildcard_text = bx_tar_match_dup_folded_range(text, strlen(text), policy->ignore_case, normalize);
         if (normalize)
-            bx_glob_normalize_caret(pattern->wildcard_text);
+            bx_glob_normalize_caret_with_spare(pattern->wildcard_text, 1);
     }
 }
 
