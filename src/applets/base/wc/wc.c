@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <wchar.h>
 #include <wctype.h>
 #include <locale.h>
@@ -12,10 +11,10 @@
 #include <sys/stat.h>
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/args_common.h"
 #include "lib/byte_count.h"
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 typedef struct {
     unsigned long long lines;
@@ -187,14 +186,14 @@ static bool wc_write_counts(
     return true;
 }
 
-static int compute_number_width(int num_files, char** files, int first_file_index) {
+static int compute_number_width(size_t num_files, const char* const* files) {
     int width = 1;
     int minimum_width = 1;
     unsigned long long regular_total = 0;
     bool any_non_regular = false;
 
-    for (int i = 0; i < num_files; i++) {
-        const char* name = files[first_file_index + i];
+    for (size_t i = 0; i < num_files; i++) {
+        const char* name = files[i];
         if (strcmp(name, "-") == 0) {
             any_non_regular = true;
             continue;
@@ -226,17 +225,42 @@ static int compute_number_width(int num_files, char** files, int first_file_inde
 }
 
 int bx_wc_main(int argc, char** argv) {
-    static const struct option long_options[] = {{"bytes", no_argument, NULL, 'c'},           {"chars", no_argument, NULL, 'm'}, {"lines", no_argument, NULL, 'l'},   {"words", no_argument, NULL, 'w'},
-                                                  {"max-line-length", no_argument, NULL, 'L'}, {"help", no_argument, NULL, 'h'},  {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "bytes", BX_OPTION_NO_VALUE},
+        {'m', 'm', "chars", BX_OPTION_NO_VALUE},
+        {'l', 'l', "lines", BX_OPTION_NO_VALUE},
+        {'w', 'w', "words", BX_OPTION_NO_VALUE},
+        {'L', 'L', "max-line-length", BX_OPTION_NO_VALUE},
+        {'h', 0, "help", BX_OPTION_NO_VALUE},
+        {'v', 0, "version", BX_OPTION_NO_VALUE},
+    };
 
     const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "wc");
     struct bx_diag_ctx diag = {.progname = progname, .exit_status = 0};
     bool opt_c = false, opt_m = false, opt_l = false, opt_w = false, opt_L = false;
-    int c;
-    bx_args_getopt_reset();
-    int next_operand = 1;
-    while ((c = bx_args_getopt_long_interspersed(argc, argv, "-cmwlL", long_options, &next_operand)) != -1) {
-        switch (c) {
+    const char** paths = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*paths)) : NULL;
+    if (argc > 1 && paths == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
+    }
+    size_t num_files = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            paths[num_files++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+        switch (option.spec->id) {
             case 'c':
                 opt_c = true;
                 break;
@@ -265,13 +289,10 @@ int bx_wc_main(int argc, char** argv) {
                 printf("  -w, --words            print the word counts\n");
                 printf("      --help          display this help and exit\n");
                 printf("      --version       output version information and exit\n");
-                return 0;
+                goto done;
             case 'v':
                 bx_cli_print_version(progname);
-                return 0;
-            default:
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                return 1;
+                goto done;
         }
     }
 
@@ -279,7 +300,6 @@ int bx_wc_main(int argc, char** argv) {
         opt_l = opt_w = opt_c = true;
     }
 
-    int num_files = argc - optind;
     int field_count = (opt_l ? 1 : 0) + (opt_w ? 1 : 0) + (opt_c ? 1 : 0) + (opt_m ? 1 : 0) + (opt_L ? 1 : 0);
     const struct wc_count_options count_options = {
         .lines = opt_l,
@@ -301,22 +321,21 @@ int bx_wc_main(int argc, char** argv) {
         if (!wc_write_counts(&writer, &res, width, field_count > 1, opt_l, opt_w, opt_c, opt_m, opt_L)
             || !bx_line_writer_putc(&writer, '\n')
             || !bx_line_writer_flush(&writer)) {
-            return 1;
+            diag.exit_status = 1;
         }
-        return 0;
+        goto done;
     }
 
-    wc_counts_t* counts = malloc((size_t)num_files * sizeof(wc_counts_t));
-    bool* file_ok = malloc((size_t)num_files * sizeof(bool));
+    wc_counts_t* counts = calloc(num_files, sizeof(*counts));
+    bool* file_ok = calloc(num_files, sizeof(*file_ok));
     if (!counts || !file_ok) {
-        free(counts);
-        free(file_ok);
-        return 1;
+        bx_diag(&diag, "memory exhausted");
+        goto free_counts;
     }
 
-    int ncounts = 0;
-    for (int i = 0; i < num_files; i++) {
-        const char* name = argv[optind + i];
+    size_t ncounts = 0;
+    for (size_t i = 0; i < num_files; i++) {
+        const char* name = paths[i];
         FILE* f;
         if (strcmp(name, "-") == 0) {
             f = stdin;
@@ -325,7 +344,6 @@ int bx_wc_main(int argc, char** argv) {
             f = fopen(name, "r");
             if (!f) {
                 bx_perror_path(&diag, name);
-                file_ok[i] = false;
                 continue;
             }
         }
@@ -337,7 +355,7 @@ int bx_wc_main(int argc, char** argv) {
     }
 
     wc_counts_t total = {0};
-    for (int i = 0; i < ncounts; i++) {
+    for (size_t i = 0; i < ncounts; i++) {
         total.lines += counts[i].lines;
         total.words += counts[i].words;
         total.chars += counts[i].chars;
@@ -347,42 +365,41 @@ int bx_wc_main(int argc, char** argv) {
     }
 
     bool show_total = num_files > 1;
-    int width = compute_number_width(num_files, argv, optind);
+    int width = compute_number_width(num_files, paths);
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    int out_idx = 0;
-    for (int i = 0; i < num_files; i++) {
+    size_t out_idx = 0;
+    for (size_t i = 0; i < num_files; i++) {
         if (!file_ok[i])
             continue;
         wc_counts_t* r = &counts[out_idx++];
 
         if (!wc_write_counts(&writer, r, width, true, opt_l, opt_w, opt_c, opt_m, opt_L)
             || !bx_line_writer_putc(&writer, ' ')
-            || !bx_line_writer_put_line(&writer, argv[optind + i])) {
-            free(counts);
-            free(file_ok);
-            return 1;
+            || !bx_line_writer_put_line(&writer, paths[i])) {
+            diag.exit_status = 1;
+            goto free_counts;
         }
     }
 
     if (show_total) {
         if (!wc_write_counts(&writer, &total, width, true, opt_l, opt_w, opt_c, opt_m, opt_L)
             || !bx_line_writer_puts(&writer, " total\n")) {
-            free(counts);
-            free(file_ok);
-            return 1;
+            diag.exit_status = 1;
+            goto free_counts;
         }
     }
 
     if (!bx_line_writer_flush(&writer)) {
-        free(counts);
-        free(file_ok);
-        return 1;
+        diag.exit_status = 1;
     }
 
+free_counts:
     free(counts);
     free(file_ok);
+done:
+    free(paths);
     return diag.exit_status;
 }
