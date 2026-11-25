@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
-#include <getopt.h>
 #include <linux/capability.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -15,7 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 struct bx_reboot_options {
     const char* progname;
@@ -114,11 +113,10 @@ static int bx_reboot_perform(const struct bx_reboot_options* options) {
 }
 
 static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"force", no_argument, NULL, 'f'},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -126,15 +124,26 @@ static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_opti
     bx_reboot_set_action(options);
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+fhV", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            if (result.index >= (size_t)argc)
+                return true;
+            bx_cli_diag_extra_operand(diag, argv[result.index]);
+            return false;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.short_name)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'f':
                 options->force = true;
                 break;
@@ -144,20 +153,8 @@ static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_opti
             case 'V':
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
         }
     }
-
-    if (optind < argc) {
-        bx_cli_diag_extra_operand(diag, argv[optind]);
-        return false;
-    }
-
-    return true;
 }
 
 int bx_reboot_main(int argc, char** argv) {
