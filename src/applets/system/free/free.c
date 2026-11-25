@@ -2,7 +2,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -12,8 +11,8 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/args_common.h"
 #include "lib/cli_common.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
 enum bx_free_unit {
@@ -80,16 +79,9 @@ static bool bx_free_parse_options(int argc, char** argv, struct bx_free_options*
         OPT_HELP = 1000,
         OPT_VERSION,
     };
-    static const struct option long_options[] = {
-        {"bytes", no_argument, NULL, 'b'},
-        {"kibi", no_argument, NULL, 'k'},
-        {"mebi", no_argument, NULL, 'm'},
-        {"gibi", no_argument, NULL, 'g'},
-        {"human", no_argument, NULL, 'h'},
-        {"total", no_argument, NULL, 't'},
-        {"help", no_argument, NULL, OPT_HELP},
-        {"version", no_argument, NULL, OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', "bytes", BX_OPTION_NO_VALUE}, {'k', 'k', "kibi", BX_OPTION_NO_VALUE},  {'m', 'm', "mebi", BX_OPTION_NO_VALUE},    {'g', 'g', "gibi", BX_OPTION_NO_VALUE},
+        {'h', 'h', "human", BX_OPTION_NO_VALUE}, {'t', 't', "total", BX_OPTION_NO_VALUE}, {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE}, {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -97,13 +89,18 @@ static bool bx_free_parse_options(int argc, char** argv, struct bx_free_options*
     options->unit = BX_FREE_UNIT_KIB;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+bkmght", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
-        switch (c) {
+        switch (option.spec->id) {
             case 'b':
                 options->unit = BX_FREE_UNIT_BYTES;
                 break;
@@ -128,16 +125,13 @@ static bool bx_free_parse_options(int argc, char** argv, struct bx_free_options*
             case OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    if (optind < argc) {
-        bx_diag(diag, "unexpected operand '%s'", argv[optind]);
+    if (option.index < (size_t)argc) {
+        bx_diag(diag, "unexpected operand '%s'", argv[option.index]);
         return false;
     }
     return true;
