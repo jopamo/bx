@@ -116,6 +116,10 @@ int main(int argc, char *argv[]) {
    argc0 = argc;	/* save for later use */
    arg1 = argv+1;  --argc;
    while (arg1[0] && (arg1[0][0] == '-')) {
+      if (strcmp(*arg1, "--") == 0) {
+	 ++arg1; --argc;
+	 break;			/* the remaining arguments belong to the addresses */
+      }
       switch (arg1[0][1]) {
       case 'V':  if (arg1[0][2])  { socat_usage(stderr); Exit(1); }
 	 socat_version(stdout); Exit(0);
