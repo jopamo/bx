@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,9 +11,11 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/fopen_dash.h"
 #include "lib/line_writer.h"
 #include "lib/option_scan.h"
+#include "lib/same_file.h"
 
 enum {
     BX_UNIQ_OPT_HELP = 256,
@@ -373,6 +376,37 @@ static bool do_uniq(FILE* in, struct bx_line_writer* writer, const uniq_opts_t* 
     return ok;
 }
 
+static int bx_uniq_open_output(const char* path, int input_fd, struct bx_diag_ctx* diag) {
+    /* The descriptor we inspect must also be the one we truncate and write. */
+    int fd = bx_fd_open_cloexec(path, O_WRONLY | O_CREAT, 0666);
+    if (fd < 0) {
+        bx_perror_path(diag, path);
+        return -1;
+    }
+
+    struct stat output_stat;
+    if (fstat(fd, &output_stat) != 0)
+        goto error;
+    if (S_ISREG(output_stat.st_mode)) {
+        struct stat input_stat;
+        if (fstat(input_fd, &input_stat) != 0)
+            goto error;
+        if (bx_same_file(&input_stat, &output_stat)) {
+            bx_diag(diag, "%s: input and output are the same file", path);
+            bx_fd_cleanup(&fd);
+            return -1;
+        }
+        if (bx_fd_ftruncate(fd, 0) != 0)
+            goto error;
+    }
+    return fd;
+
+error:
+    bx_perror_path(diag, path);
+    bx_fd_cleanup(&fd);
+    return -1;
+}
+
 int bx_uniq_main(int argc, char** argv) {
     uniq_opts_t opts;
     struct bx_diag_ctx diag = {
@@ -384,9 +418,9 @@ int bx_uniq_main(int argc, char** argv) {
     const char* operands[2];
     size_t count;
     FILE* in = stdin;
-    FILE* out = stdout;
+    int output_fd = STDOUT_FILENO;
     bool in_is_stdio = true;
-    bool out_is_stdio = true;
+    bool named_output = false;
 
     if (!bx_uniq_parse_options(argc, argv, &opts, operands, &count, &diag)) {
         return diag.exit_status == 0 ? 1 : diag.exit_status;
@@ -413,30 +447,25 @@ int bx_uniq_main(int argc, char** argv) {
             return diag.exit_status;
         }
     }
-    if (count == 2) {
-        out = bx_fopen_dash(operands[1], "w", &out_is_stdio);
-        if (!out) {
-            bx_perror_path(&diag, operands[1]);
+    if (count == 2 && strcmp(operands[1], "-") != 0) {
+        output_fd = bx_uniq_open_output(operands[1], fileno(in), &diag);
+        if (output_fd < 0) {
             bx_fclose_nonstdio(in, in_is_stdio);
             return diag.exit_status;
         }
+        named_output = true;
     }
 
     char output_buffer[8192];
     struct bx_line_writer writer;
-    bx_line_writer_init(&writer, fileno(out), output_buffer, sizeof(output_buffer));
+    bx_line_writer_init(&writer, output_fd, output_buffer, sizeof(output_buffer));
 
-    if (!do_uniq(in, &writer, &opts, &diag)) {
-        bx_fclose_nonstdio(in, in_is_stdio);
-        bx_fclose_nonstdio(out, out_is_stdio);
-        return diag.exit_status == 0 ? 1 : diag.exit_status;
-    }
-
-    if (!bx_line_writer_flush(&writer)) {
+    if (do_uniq(in, &writer, &opts, &diag) && !bx_line_writer_flush(&writer)) {
         bx_uniq_write_error(&diag);
     }
     bx_fclose_nonstdio(in, in_is_stdio);
-    bx_fclose_nonstdio(out, out_is_stdio);
+    if (named_output)
+        bx_fd_close(&output_fd, operands[1], &diag);
 
     return diag.exit_status;
 }
