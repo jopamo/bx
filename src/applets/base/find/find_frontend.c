@@ -79,7 +79,6 @@ void find_print_version(const char *progname) {
 
 bool find_parse_command_line(const char *progname, int argc, char **argv,
                              struct find_opts *opts,
-                             struct find_root_list *root_list,
                              char ***roots_out, int *root_count_out,
                              char ***expr_argv_out, int *expr_argc_out) {
     int argi = 1;
@@ -115,28 +114,12 @@ bool find_parse_command_line(const char *progname, int argc, char **argv,
 
     *roots_out = explicit_roots;
     *root_count_out = explicit_root_count;
-    if (opts->files0_from) {
-        if (explicit_root_count > 0) {
-            fprintf(stderr, "%s: extra operand `%s'\n", progname,
-                    explicit_roots[0]);
-            fprintf(stderr,
-                    "%s: file operands cannot be combined with -files0-from\n",
-                    progname);
-            free(*expr_argv_out);
-            *expr_argv_out = NULL;
-            *expr_argc_out = 0;
-            return false;
-        }
-        if (!find_load_files0_roots(progname, opts->files0_from, root_list)) {
-            free(*expr_argv_out);
-            *expr_argv_out = NULL;
-            *expr_argc_out = 0;
-            find_root_list_free(root_list);
-            return false;
-        }
-        *roots_out = root_list->v;
-        *root_count_out = root_list->count;
-    } else if (*root_count_out == 0) {
+    if (opts->files0_from && explicit_root_count > 0) {
+        fprintf(stderr, "%s: extra operand `%s'\n", progname, explicit_roots[0]);
+        fprintf(stderr, "%s: file operands cannot be combined with -files0-from\n", progname);
+        return false;
+    }
+    if (!opts->files0_from && explicit_root_count == 0) {
         static char *default_root[] = {"."};
         *roots_out = default_root;
         *root_count_out = 1;

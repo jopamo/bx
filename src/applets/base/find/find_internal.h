@@ -151,7 +151,6 @@ bool find_eval_expr(struct find_expr *expr, struct bx_walk_entry *entry,
 bool find_token_starts_expression(const char *arg);
 bool find_parse_command_line(const char *progname, int argc, char **argv,
                              struct find_opts *opts,
-                             struct find_root_list *root_list,
                              char ***roots_out, int *root_count_out,
                              char ***expr_argv_out, int *expr_argc_out);
 bool find_collect_expression_argv(const char *progname, int argc, char **argv,
