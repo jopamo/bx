@@ -96,30 +96,6 @@ void bx_cli_print_try_help(const char* progname) {
     fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
-void bx_cli_diag_option_requires_arg(struct bx_diag_ctx* diag, int optopt, int optind, int argc, char* const argv[]) {
-    if (optopt != 0) {
-        bx_diag(diag, "option requires an argument -- '%c'", optopt);
-    }
-    else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-        bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-    }
-    else {
-        bx_diag(diag, "option requires an argument");
-    }
-}
-
-void bx_cli_diag_unrecognized_option(struct bx_diag_ctx* diag, int optopt, int optind, int argc, char* const argv[]) {
-    if (optopt != 0) {
-        bx_diag(diag, "invalid option -- '%c'", optopt);
-    }
-    else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-        bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-    }
-    else {
-        bx_diag(diag, "unrecognized option");
-    }
-}
-
 void bx_cli_diag_missing_operand(struct bx_diag_ctx* diag) {
     bx_diag(diag, "missing operand");
 }

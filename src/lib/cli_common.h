@@ -31,20 +31,6 @@ int bx_cli_maybe_handle_help_or_version(
 );
 
 /* These cover only shared mechanical wordings. Applet-specific diagnostics stay local. */
-void bx_cli_diag_option_requires_arg(
-    struct bx_diag_ctx* diag,
-    int optopt,
-    int optind,
-    int argc,
-    char* const argv[]
-);
-void bx_cli_diag_unrecognized_option(
-    struct bx_diag_ctx* diag,
-    int optopt,
-    int optind,
-    int argc,
-    char* const argv[]
-);
 void bx_cli_diag_missing_operand(struct bx_diag_ctx* diag);
 void bx_cli_diag_missing_operand_after(struct bx_diag_ctx* diag, const char* operand);
 void bx_cli_diag_extra_operand(struct bx_diag_ctx* diag, const char* operand);
