@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <limits.h>
@@ -12,38 +11,39 @@
 #include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
-static void next_suffix(char* suffix, int length, bool numeric, bool hex) {
+static bool next_suffix(char* suffix, int length, bool numeric, bool hex) {
     for (int i = length - 1; i >= 0; i--) {
         if (numeric) {
             if (suffix[i] < '9') {
                 suffix[i]++;
-                return;
+                return true;
             }
             suffix[i] = '0';
         }
         else if (hex) {
             if (suffix[i] < '9') {
                 suffix[i]++;
-                return;
+                return true;
             }
             if (suffix[i] == '9') {
                 suffix[i] = 'a';
-                return;
+                return true;
             }
             if (suffix[i] < 'f') {
                 suffix[i]++;
-                return;
+                return true;
             }
             suffix[i] = '0';
         }
         else {
             if (suffix[i] < 'z') {
                 suffix[i]++;
-                return;
+                return true;
             }
             suffix[i] = 'a';
         }
     }
+    return false;
 }
 
 static void bx_split_print_help(FILE* stream, const char* progname) {
@@ -179,71 +179,63 @@ int bx_split_main(int argc, char** argv) {
         }
     }
 
-    char* suffix = malloc((size_t)suffix_length + 1);
-    char* out_name = malloc(strlen(prefix) + (size_t)suffix_length + 1);
-    if (suffix == NULL || out_name == NULL) {
+    size_t prefix_length = strlen(prefix);
+    char* out_name = malloc(prefix_length + (size_t)suffix_length + 1);
+    if (out_name == NULL) {
         bx_diag(&diag, "memory exhausted");
-        free(suffix);
-        free(out_name);
         if (in != stdin)
             fclose(in);
         return 1;
     }
+    memcpy(out_name, prefix, prefix_length);
+    char* suffix = out_name + prefix_length;
     memset(suffix, numeric || hex ? '0' : 'a', (size_t)suffix_length);
     suffix[suffix_length] = '\0';
 
-    bool eof = false;
-    while (!eof) {
-        sprintf(out_name, "%s%s", prefix, suffix);
+    int ch = getc(in);
+    bool first_piece = true;
+    while (ch != EOF) {
+        if (!first_piece && !next_suffix(suffix, suffix_length, numeric, hex)) {
+            bx_diag(&diag, "output suffixes exhausted");
+            break;
+        }
+        first_piece = false;
         FILE* out = fopen(out_name, "w");
         if (!out) {
             bx_perror_path(&diag, out_name);
             break;
         }
 
-        bool wrote_anything = false;
-
-        if (split_by_lines) {
-            for (long long i = 0; i < lines_per_file; i++) {
-                int ch;
-                while ((ch = getc(in)) != EOF) {
-                    wrote_anything = true;
-                    putc(ch, out);
-                    if (ch == '\n')
-                        break;
-                }
-                if (ch == EOF) {
-                    eof = true;
-                    break;
-                }
+        long long remaining = split_by_lines ? lines_per_file : split_size;
+        int write_error = 0;
+        do {
+            if (putc(ch, out) == EOF) {
+                write_error = errno != 0 ? errno : EIO;
+                break;
             }
-        }
-        else {
-            for (long long i = 0; i < split_size; i++) {
-                int ch = getc(in);
-                if (ch == EOF) {
-                    eof = true;
-                    break;
-                }
-                wrote_anything = true;
-                putc(ch, out);
-            }
-        }
-        fclose(out);
+            if ((!split_by_lines || ch == '\n') && --remaining == 0)
+                break;
+            ch = getc(in);
+        } while (ch != EOF);
 
-        if (!wrote_anything) {
-            unlink(out_name);
+        if (ch == EOF && ferror(in))
+            bx_perror_path(&diag, in == stdin ? "standard input" : operands[0]);
+        if (fclose(out) == EOF && write_error == 0)
+            write_error = errno != 0 ? errno : EIO;
+        if (write_error != 0) {
+            errno = write_error;
+            bx_perror_path(&diag, out_name);
         }
-
-        if (eof)
+        if (ch == EOF || write_error != 0)
             break;
-        next_suffix(suffix, suffix_length, numeric, hex);
+        ch = getc(in);
     }
+    if (ch == EOF && ferror(in) && diag.exit_status == 0)
+        bx_perror_path(&diag, in == stdin ? "standard input" : operands[0]);
 
-    free(suffix);
     free(out_name);
-    if (in != stdin)
-        fclose(in);
+    if (in != stdin && fclose(in) == EOF && diag.exit_status == 0)
+        bx_perror_path(&diag, operands[0]);
 
-    return 0;
+    return diag.exit_status;
 }
