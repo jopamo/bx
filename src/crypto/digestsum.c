@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,8 +9,8 @@
 #include <unistd.h>
 
 #include "crypto/digestsum.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 enum {
     BX_DIGESTSUM_EXIT_OK = 0,
@@ -43,7 +42,8 @@ struct bx_digestsum_options {
     bool zero;
     bool show_help;
     bool show_version;
-    int first_operand;
+    const char** paths;
+    size_t path_count;
 };
 
 static const char* bx_digestsum_progname(const struct bx_digestsum_impl* impl, const char* argv0) {
@@ -563,38 +563,52 @@ static int bx_digestsum_print_hash_result(const struct bx_digestsum_impl* impl,
 
 static bool bx_digestsum_parse_options(int argc,
                                        char** argv,
-                                       const struct bx_digestsum_impl* impl,
                                        struct bx_digestsum_options* options) {
-    static const struct option long_options[] = {
-        {"binary", no_argument, NULL, 'b'},
-        {"check", no_argument, NULL, 'c'},
-        {"text", no_argument, NULL, 't'},
-        {"warn", no_argument, NULL, 'w'},
-        {"zero", no_argument, NULL, 'z'},
-        {"ignore-missing", no_argument, NULL, BX_DIGESTSUM_OPT_IGNORE_MISSING},
-        {"quiet", no_argument, NULL, BX_DIGESTSUM_OPT_QUIET},
-        {"status", no_argument, NULL, BX_DIGESTSUM_OPT_STATUS},
-        {"strict", no_argument, NULL, BX_DIGESTSUM_OPT_STRICT},
-        {"tag", no_argument, NULL, BX_DIGESTSUM_OPT_TAG},
-        {"help", no_argument, NULL, BX_DIGESTSUM_OPT_HELP},
-        {"version", no_argument, NULL, BX_DIGESTSUM_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', "binary", BX_OPTION_NO_VALUE},
+        {'c', 'c', "check", BX_OPTION_NO_VALUE},
+        {'t', 't', "text", BX_OPTION_NO_VALUE},
+        {'w', 'w', "warn", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero", BX_OPTION_NO_VALUE},
+        {BX_DIGESTSUM_OPT_IGNORE_MISSING, 0, "ignore-missing", BX_OPTION_NO_VALUE},
+        {BX_DIGESTSUM_OPT_QUIET, 0, "quiet", BX_OPTION_NO_VALUE},
+        {BX_DIGESTSUM_OPT_STATUS, 0, "status", BX_OPTION_NO_VALUE},
+        {BX_DIGESTSUM_OPT_STRICT, 0, "strict", BX_OPTION_NO_VALUE},
+        {BX_DIGESTSUM_OPT_TAG, 0, "tag", BX_OPTION_NO_VALUE},
+        {BX_DIGESTSUM_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_DIGESTSUM_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_digestsum_progname(impl, argv[0]);
-
-    char short_options[] = "-bctwz";
-    int next_operand = 1;
-    bx_args_getopt_reset_file_options(short_options);
-
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
     while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1) {
-            break;
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->paths == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->paths) ||
+                    (options->paths = malloc(capacity * sizeof(*options->paths))) == NULL) {
+                    fprintf(stderr, "%s: memory exhausted\n", options->progname);
+                    return false;
+                }
+            }
+            options->paths[options->path_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (isprint(result.short_name))
+                fprintf(stderr, "%s: invalid option -- '%c'\n", options->progname, result.short_name);
+            else
+                fprintf(stderr, "%s: unrecognized option '%s'\n", options->progname, result.token);
+            bx_digestsum_print_try_help(options->progname);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'b':
                 options->binary_mode = true;
                 options->binary_option_seen = true;
@@ -633,31 +647,10 @@ static bool bx_digestsum_parse_options(int argc,
             case BX_DIGESTSUM_OPT_VERSION:
                 options->show_version = true;
                 break;
-            case '?': {
-                const char* bad = NULL;
-                if (optind > 0 && optind <= argc) {
-                    bad = argv[optind - 1];
-                }
-
-                if (optopt != 0 && isprint((unsigned char)optopt)) {
-                    fprintf(stderr, "%s: invalid option -- '%c'\n", options->progname, optopt);
-                }
-                else if (bad != NULL) {
-                    fprintf(stderr, "%s: unrecognized option '%s'\n", options->progname, bad);
-                }
-                else {
-                    fprintf(stderr, "%s: unrecognized option\n", options->progname);
-                }
-                bx_digestsum_print_try_help(options->progname);
-                return false;
-            }
             default:
                 return false;
         }
     }
-
-    options->first_operand = optind;
-    return true;
 }
 
 static bool bx_digestsum_validate_options(const struct bx_digestsum_options* options) {
@@ -701,73 +694,45 @@ static bool bx_digestsum_validate_options(const struct bx_digestsum_options* opt
     return true;
 }
 
-int bx_digestsum_main(int argc, char** argv, const struct bx_digestsum_impl* impl) {
-    struct bx_digestsum_options options;
-    if (!bx_digestsum_parse_options(argc, argv, impl, &options)) {
-        return BX_DIGESTSUM_EXIT_FAIL;
-    }
-
-    if (options.show_help) {
-        bx_digestsum_print_help(stdout, impl, options.progname);
+static int bx_digestsum_run(const struct bx_digestsum_impl* impl,
+                            const struct bx_digestsum_options* options) {
+    if (options->show_help) {
+        bx_digestsum_print_help(stdout, impl, options->progname);
         return BX_DIGESTSUM_EXIT_OK;
     }
-
-    if (options.show_version) {
-        bx_digestsum_print_version(options.progname);
+    if (options->show_version) {
+        bx_digestsum_print_version(options->progname);
         return BX_DIGESTSUM_EXIT_OK;
     }
-
-    if (!bx_digestsum_validate_options(&options)) {
+    if (!bx_digestsum_validate_options(options))
         return BX_DIGESTSUM_EXIT_FAIL;
-    }
 
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    if (options.check_mode) {
-        int rc = BX_DIGESTSUM_EXIT_OK;
-
-        if (options.first_operand >= argc) {
-            rc = bx_digestsum_check_file(impl, &options, "-", &writer);
-        }
-        else {
-            for (int i = options.first_operand; i < argc; i++) {
-                if (bx_digestsum_check_file(impl, &options, argv[i], &writer) != BX_DIGESTSUM_EXIT_OK) {
-                    rc = BX_DIGESTSUM_EXIT_FAIL;
-                    if (bx_line_writer_error(&writer) != 0) {
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!bx_line_writer_flush(&writer)) {
-            return BX_DIGESTSUM_EXIT_FAIL;
-        }
-        return rc;
-    }
-
-    if (options.first_operand >= argc) {
-        int rc = bx_digestsum_print_hash_result(impl, &options, "-", &writer);
-        if (!bx_line_writer_flush(&writer)) {
-            return BX_DIGESTSUM_EXIT_FAIL;
-        }
-        return rc;
-    }
-
+    int (*process)(const struct bx_digestsum_impl*, const struct bx_digestsum_options*,
+                   const char*, struct bx_line_writer*) = options->check_mode ?
+        bx_digestsum_check_file : bx_digestsum_print_hash_result;
     int rc = BX_DIGESTSUM_EXIT_OK;
-    for (int i = options.first_operand; i < argc; i++) {
-        if (bx_digestsum_print_hash_result(impl, &options, argv[i], &writer) != BX_DIGESTSUM_EXIT_OK) {
+    if (options->path_count == 0)
+        rc = process(impl, options, "-", &writer);
+    for (size_t i = 0; i < options->path_count; i++) {
+        if (process(impl, options, options->paths[i], &writer) != BX_DIGESTSUM_EXIT_OK) {
             rc = BX_DIGESTSUM_EXIT_FAIL;
-            if (bx_line_writer_error(&writer) != 0) {
+            if (bx_line_writer_error(&writer) != 0)
                 break;
-            }
         }
     }
+    return bx_line_writer_flush(&writer) ? rc : BX_DIGESTSUM_EXIT_FAIL;
+}
 
-    if (!bx_line_writer_flush(&writer)) {
-        return BX_DIGESTSUM_EXIT_FAIL;
-    }
+int bx_digestsum_main(int argc, char** argv, const struct bx_digestsum_impl* impl) {
+    struct bx_digestsum_options options = {
+        .progname = bx_digestsum_progname(impl, argc > 0 ? argv[0] : NULL),
+    };
+    int rc = bx_digestsum_parse_options(argc, argv, &options) ?
+        bx_digestsum_run(impl, &options) : BX_DIGESTSUM_EXIT_FAIL;
+    free(options.paths);
     return rc;
 }
