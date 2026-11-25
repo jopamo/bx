@@ -55,11 +55,13 @@ static bool find_prepare_glob(struct find_expr *expr, const char *pattern) {
     if (strstr(pattern, "[^") == NULL)
         return true;
 
-    char *copy = strdup(pattern);
+    size_t length = strlen(pattern);
+    char *copy = malloc(length + 2u);
     if (!copy)
         return false;
 
-    bx_glob_normalize_caret(copy);
+    memcpy(copy, pattern, length + 1u);
+    bx_glob_normalize_caret_with_spare(copy, 1);
     expr->pattern_storage = copy;
     expr->text = copy;
     return true;
