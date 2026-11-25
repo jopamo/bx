@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,10 +8,9 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/args_common.h"
-#include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/fs_probe.h"
+#include "lib/option_scan.h"
 #include "scan.h"
 
 enum output { FULL, EXPORT, VALUE, DEVICE };
@@ -197,25 +195,42 @@ static bool parse_match(struct probe_run *run, const char *token)
     return true;
 }
 
-int bx_blkid_main(int argc, char **argv)
+static int blkid_command(int argc, char **argv, const char **paths)
 {
-    static const struct option options[] = {
-        {"help", no_argument, NULL, 'h'},
-        {"probe", no_argument, NULL, 'p'},
-        {"usages", required_argument, NULL, 'u'},
-        {"output", required_argument, NULL, 'o'},
-        {"match-tag", required_argument, NULL, 's'},
-        {"match-token", required_argument, NULL, 't'},
-        {"list-one", no_argument, NULL, 'l'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec options[] = {
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'p', 'p', "probe", BX_OPTION_NO_VALUE},
+        {'u', 'u', "usages", BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', "output", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "match-tag", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "match-token", BX_OPTION_REQUIRED_VALUE},
+        {'l', 'l', "list-one", BX_OPTION_NO_VALUE},
     };
     struct probe_run run = {.diag = {.progname = "blkid"}, .format = FULL};
     bool filtered = false;
-    int opt, next_operand = 1;
-    bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:hlpu:o:s:t:",
-                                                   options, &next_operand)) != -1) {
-        switch (opt) {
+    size_t count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            paths[count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&run.diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(&run.diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(&run.diag, "unrecognized option '%s'", result.token);
+            usage(stderr);
+            return 4;
+        }
+        switch (result.spec->id) {
         case 'h':
             usage(stdout);
             return 0;
@@ -226,19 +241,19 @@ int bx_blkid_main(int argc, char **argv)
             run.list_one = true;
             break;
         case 't':
-            if (!parse_match(&run, optarg))
+            if (!parse_match(&run, result.value))
                 return 4;
             break;
         case 'u': {
             unsigned selected;
-            if (strcmp(optarg, "filesystem") == 0)
+            if (strcmp(result.value, "filesystem") == 0)
                 selected = BX_PROBE_FILESYSTEM;
-            else if (strcmp(optarg, "other") == 0)
+            else if (strcmp(result.value, "other") == 0)
                 selected = BX_PROBE_OTHER;
-            else if (strcmp(optarg, "crypto") == 0)
+            else if (strcmp(result.value, "crypto") == 0)
                 selected = BX_PROBE_CRYPTO;
             else {
-                bx_diag(&run.diag, "unsupported usage: '%s'", optarg);
+                bx_diag(&run.diag, "unsupported usage: '%s'", result.value);
                 return 4;
             }
             if (run.usages && run.usages != selected) {
@@ -249,39 +264,28 @@ int bx_blkid_main(int argc, char **argv)
             break;
         }
         case 'o':
-            if (strcmp(optarg, "full") == 0)
+            if (strcmp(result.value, "full") == 0)
                 run.format = FULL;
-            else if (strcmp(optarg, "export") == 0)
+            else if (strcmp(result.value, "export") == 0)
                 run.format = EXPORT;
-            else if (strcmp(optarg, "value") == 0)
+            else if (strcmp(result.value, "value") == 0)
                 run.format = VALUE;
-            else if (strcmp(optarg, "device") == 0)
+            else if (strcmp(result.value, "device") == 0)
                 run.format = DEVICE;
             else {
-                bx_diag(&run.diag, "unsupported output format: '%s'", optarg);
+                bx_diag(&run.diag, "unsupported output format: '%s'", result.value);
                 return 4;
             }
             break;
         case 's':
             filtered = true;
             for (unsigned i = 0; i < TAG_COUNT; i++)
-                if (strcmp(optarg, tag_names[i]) == 0)
+                if (strcmp(result.value, tag_names[i]) == 0)
                     run.tags |= 1u << i;
             break;
-        case ':':
-            bx_cli_diag_option_requires_arg(&run.diag, optopt, optind, argc, argv);
-            usage(stderr);
-            return 4;
-        case '?':
-            bx_cli_diag_unrecognized_option(&run.diag, optopt, optind, argc, argv);
-            usage(stderr);
-            return 4;
-        default:
-            usage(stderr);
-            return 4;
         }
     }
-    run.scanning = optind == argc;
+    run.scanning = count == 0;
     if ((run.lowlevel && (run.scanning || run.match_value)) ||
         (run.list_one && !run.match_value)) {
         usage(stderr);
@@ -296,8 +300,8 @@ int bx_blkid_main(int argc, char **argv)
         bx_perror_path(&run.diag, "scan block devices");
         run.failed = true;
     }
-    for (int i = optind; i < argc; i++) {
-        const char *path = argv[i];
+    for (size_t i = 0; i < count; i++) {
+        const char *path = paths[i];
         int fd = bx_fd_open_cloexec(path, O_RDONLY | O_NONBLOCK | O_NOCTTY, 0);
         if (fd < 0) {
             bx_perror_path(&run.diag, path);
@@ -321,4 +325,20 @@ int bx_blkid_main(int argc, char **argv)
         return 4;
     }
     return run.failed ? 4 : run.ambiguous ? 8 : run.found ? 0 : 2;
+}
+
+int bx_blkid_main(int argc, char **argv)
+{
+    const char **paths = NULL;
+    if (argc > 1) {
+        paths = calloc((size_t)argc - 1, sizeof(*paths));
+        if (!paths) {
+            struct bx_diag_ctx diag = {.progname = "blkid"};
+            bx_perror_path(&diag, "device operands");
+            return 4;
+        }
+    }
+    int status = blkid_command(argc, argv, paths);
+    free(paths);
+    return status;
 }
