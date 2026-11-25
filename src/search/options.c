@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/glob_syntax.h"
 #include "lib/option_scan.h"
 #include "lib/output_policy.h"
 #include "lib/size_parse.h"
@@ -1156,6 +1157,18 @@ static int bx_search_missing_pattern(const char* progname, enum bx_search_person
     else
         fprintf(stderr, "%s: ripgrep requires at least one pattern to execute a search\n", progname);
     return -1;
+}
+
+static void bx_search_normalize_globs(struct search_opts *opts) {
+    const struct bx_search_pattern_vec *const vectors[] = {
+        &opts->include_patterns, &opts->exclude_patterns, &opts->exclude_dir_patterns,
+    };
+    for (size_t i = 0; i < sizeof(vectors) / sizeof(vectors[0]); i++) {
+        for (size_t j = 0; j < vectors[i]->len; j++)
+            bx_glob_normalize_caret(vectors[i]->items[j]);
+    }
+    for (int i = 0; i < opts->num_pre_globs; i++)
+        bx_glob_normalize_caret(opts->pre_globs[i]);
 }
 
 static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum bx_search_personality personality, struct bx_search_operands* operands, struct bx_search_list_args* lists) {
@@ -2363,6 +2376,7 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
     }
     operands->files = opts->operand_storage ? opts->operand_storage + first_file : NULL;
     operands->num_files = operand_count - first_file;
+    bx_search_normalize_globs(opts);
     return 0;
 }
 
