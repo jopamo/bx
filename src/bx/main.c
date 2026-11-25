@@ -853,6 +853,8 @@ usage:
     printf("       bx [--profile PROFILE] SUBCOMMAND [options] ...\n");
     printf("       bx --install [-s|--symlink|--relative] [DIR]\n");
     printf("\n");
+    printf("Put global options before SUBCOMMAND. After it, the applet owns every argument.\n");
+    printf("When invoked by an applet shortcut, all arguments belong to that applet.\n");
     printf("Global profile selection also honors BX_PROFILE when dispatching applets.\n");
     printf("Recognized global options: --help, --version, --json, --color, --no-color,\n");
     printf("--trace, --sandbox, --profile, --config, and --no-config.\n");
