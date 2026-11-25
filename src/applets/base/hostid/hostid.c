@@ -2,7 +2,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <string.h>
 #include <fcntl.h>
@@ -10,11 +9,9 @@
 #include <netinet/in.h>
 
 #include "applets.h"
-#include "bx/diag.h"
-#include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 
 static bool bx_hostid_try_file(uint32_t* id_out) {
     int fd = bx_fd_open_cloexec("/etc/hostid", O_RDONLY, 0);
@@ -88,28 +85,31 @@ static void bx_hostid_print_help(FILE* stream, const char* progname) {
 }
 
 int bx_hostid_main(int argc, char** argv) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {1, 0, "help", BX_OPTION_NO_VALUE},
+        {2, 0, "version", BX_OPTION_NO_VALUE},
     };
-
-    int c;
-    while ((c = bx_args_getopt_long(argc, argv, "", long_options, NULL)) != -1) {
-        switch (c) {
-            case 1:
-                bx_hostid_print_help(stdout, "hostid");
-                return 0;
-            case 2:
-                bx_cli_print_version("hostid");
-                return 0;
-            default:
-                return 1;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    const char* extra = NULL;
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!extra)
+                extra = option.token;
+            continue;
         }
+        if (option.event != BX_OPTION_MATCH)
+            return 1;
+        if (option.spec->id == 1)
+            bx_hostid_print_help(stdout, "hostid");
+        else
+            bx_cli_print_version("hostid");
+        return 0;
     }
 
-    if (optind < argc) {
-        fprintf(stderr, "hostid: extra operand '%s'\n", argv[optind]);
+    if (extra) {
+        fprintf(stderr, "hostid: extra operand '%s'\n", extra);
         return 1;
     }
 
