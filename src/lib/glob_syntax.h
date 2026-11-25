@@ -94,6 +94,26 @@ static inline bool bx_glob_terminal_hyphen_is_member(const char* atom, const cha
     return matched;
 }
 
+#ifdef __GLIBC__
+/* When a simple [:name:] has a malformed name, glibc reads the opening
+ * '[' as a member. Its ']' can therefore close the outer bracket. */
+static inline const char* bx_glob_malformed_class_end(const char* text, const char* end) {
+    if (end - text < 7 || text[1] != '^' || text[2] != '[' || text[3] != ':')
+        return NULL;
+    bool malformed = false;
+    for (const char* p = text + 4; p < end; p++) {
+        if (*p == ':' && p + 1 < end && p[1] == ']')
+            return malformed ? p + 2 : NULL;
+        if (*p == '[' || *p == ']' || *p == '\\' || *p == '-' ||
+            (unsigned char)*p >= 0x80u)
+            return NULL;
+        if (*p < 'a' || *p > 'z')
+            malformed = true;
+    }
+    return NULL;
+}
+#endif
+
 /* Requires one writable byte after the terminator. Quote the opening bracket
  * of a simple incomplete [^] expression, but leave ambiguous tails alone. */
 static inline void bx_glob_normalize_caret(char* pattern) {
@@ -103,6 +123,10 @@ static inline void bx_glob_normalize_caret(char* pattern) {
             p++;
         } else if (*p == '[' && p + 1 < end) {
             const char* after = bx_glob_bracket_end(p, end);
+#ifdef __GLIBC__
+            if (!after)
+                after = bx_glob_malformed_class_end(p, end);
+#endif
             if (!after) {
                 if (end - p >= 3 && p[1] == '^' && p[2] == ']') {
                     for (const char* tail = p + 3; tail < end; tail++) {
