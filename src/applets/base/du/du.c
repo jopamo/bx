@@ -1,7 +1,6 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,7 +16,7 @@
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/dir_cycle.h"
 #include "lib/path_ops.h"
 
@@ -54,7 +53,6 @@ struct bx_du_options {
 enum {
     BX_DU_OPT_HELP = 256,
     BX_DU_OPT_VERSION,
-    BX_DU_OPT_MAX_DEPTH,
     BX_DU_OPT_APPARENT_SIZE,
     BX_DU_OPT_SI,
 };
@@ -139,26 +137,28 @@ static bool bx_du_parse_block_size(const char* text, uintmax_t* size_out, struct
     return true;
 }
 
-static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"null", no_argument, NULL, '0'},
-        {"all", no_argument, NULL, 'a'},
-        {"bytes", no_argument, NULL, 'b'},
-        {"summarize", no_argument, NULL, 's'},
-        {"total", no_argument, NULL, 'c'},
-        {"human-readable", no_argument, NULL, 'h'},
-        {"si", no_argument, NULL, BX_DU_OPT_SI},
-        {"count-links", no_argument, NULL, 'l'},
-        {"one-file-system", no_argument, NULL, 'x'},
-        {"block-size", required_argument, NULL, 'B'},
-        {"apparent-size", no_argument, NULL, BX_DU_OPT_APPARENT_SIZE},
-        {"dereference-args", no_argument, NULL, 'D'},
-        {"dereference", no_argument, NULL, 'L'},
-        {"no-dereference", no_argument, NULL, 'P'},
-        {"max-depth", required_argument, NULL, BX_DU_OPT_MAX_DEPTH},
-        {"help", no_argument, NULL, BX_DU_OPT_HELP},
-        {"version", no_argument, NULL, BX_DU_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* options,
+                                const char** operands, size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'0', '0', "null", BX_OPTION_NO_VALUE},
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'b', 'b', "bytes", BX_OPTION_NO_VALUE},
+        {'s', 's', "summarize", BX_OPTION_NO_VALUE},
+        {'c', 'c', "total", BX_OPTION_NO_VALUE},
+        {'h', 'h', "human-readable", BX_OPTION_NO_VALUE},
+        {'k', 'k', NULL, BX_OPTION_NO_VALUE},
+        {'l', 'l', "count-links", BX_OPTION_NO_VALUE},
+        {'x', 'x', "one-file-system", BX_OPTION_NO_VALUE},
+        {'B', 'B', "block-size", BX_OPTION_REQUIRED_VALUE},
+        {'d', 'd', "max-depth", BX_OPTION_REQUIRED_VALUE},
+        {'D', 'D', "dereference-args", BX_OPTION_NO_VALUE},
+        {'D', 'H', NULL, BX_OPTION_NO_VALUE},
+        {'L', 'L', "dereference", BX_OPTION_NO_VALUE},
+        {'P', 'P', "no-dereference", BX_OPTION_NO_VALUE},
+        {BX_DU_OPT_APPARENT_SIZE, 0, "apparent-size", BX_OPTION_NO_VALUE},
+        {BX_DU_OPT_SI, 0, "si", BX_OPTION_NO_VALUE},
+        {BX_DU_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_DU_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -168,16 +168,28 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
     options->symlink_mode = BX_DU_SYMLINK_NEVER;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-0abclhksxd:B:DHLP", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            operands[(*count)++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case '0':
                 options->null_terminate = true;
                 break;
@@ -206,7 +218,7 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
                 options->one_file_system = true;
                 break;
             case 'B':
-                if (!bx_du_parse_block_size(optarg, &options->output_block_size, diag)) {
+                if (!bx_du_parse_block_size(option.value, &options->output_block_size, diag)) {
                     return false;
                 }
                 options->output_mode = BX_DU_OUTPUT_BLOCKS;
@@ -218,7 +230,6 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
                 options->output_mode = BX_DU_OUTPUT_HUMAN_1000;
                 break;
             case 'D':
-            case 'H':
                 options->symlink_mode = BX_DU_SYMLINK_COMMAND_LINE;
                 break;
             case 'L':
@@ -231,9 +242,8 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
                 options->summarize = true;
                 break;
             case 'd':
-            case BX_DU_OPT_MAX_DEPTH:
                 options->limit_depth = true;
-                if (!bx_du_parse_max_depth(optarg, &options->max_depth, diag)) {
+                if (!bx_du_parse_max_depth(option.value, &options->max_depth, diag)) {
                     return false;
                 }
                 break;
@@ -243,19 +253,6 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
             case BX_DU_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
@@ -275,7 +272,6 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
         }
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -581,20 +577,24 @@ int bx_du_main(int argc, char** argv) {
         .verbose = false,
         .debug = false,
     };
-    int first_operand = 0;
-
-    if (!bx_du_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+    const char** operands = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*operands)) : NULL;
+    if (argc > 1 && operands == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
     }
+    size_t operand_count = 0;
+
+    if (!bx_du_parse_options(argc, argv, &options, operands, &operand_count, &diag))
+        goto done;
 
     if (options.show_help) {
         bx_du_print_help(stdout, options.progname);
-        return 0;
+        goto done;
     }
 
     if (options.show_version) {
         bx_cli_print_version(options.progname);
-        return 0;
+        goto done;
     }
 
     struct bx_du_context ctx = {
@@ -609,28 +609,26 @@ int bx_du_main(int argc, char** argv) {
 
     uintmax_t grand_total_bytes = 0u;
 
-    if (first_operand >= argc) {
+    if (operand_count == 0) {
         bool operand_ok = true;
         uintmax_t total_bytes = bx_du_walk_path(&ctx, ".", true, 0u, 0, false, NULL, &operand_ok);
         grand_total_bytes = bx_du_saturating_add(grand_total_bytes, total_bytes);
     }
     else {
-        for (int i = first_operand; i < argc; i++) {
+        for (size_t i = 0; i < operand_count; i++) {
             bool operand_ok = true;
-            uintmax_t total_bytes = bx_du_walk_path(&ctx, argv[i], true, 0u, 0, false, NULL, &operand_ok);
+            uintmax_t total_bytes = bx_du_walk_path(&ctx, operands[i], true, 0u, 0, false, NULL, &operand_ok);
             grand_total_bytes = bx_du_saturating_add(grand_total_bytes, total_bytes);
         }
     }
 
-    if (options.total && !bx_du_emit_line(grand_total_bytes, "total", &options, &diag, &writer)) {
-        bx_du_inode_set_free(&ctx.seen);
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (!bx_line_writer_flush(&writer)) {
+    if ((!options.total || bx_du_emit_line(grand_total_bytes, "total", &options, &diag, &writer)) &&
+        !bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 
     bx_du_inode_set_free(&ctx.seen);
+done:
+    free(operands);
     return diag.exit_status;
 }
