@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -14,9 +13,9 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 #include "lib/child_runner.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 
 struct bx_nohup_options {
     const char* progname;
@@ -44,41 +43,35 @@ static void bx_nohup_notice(const char* progname, const char* fmt, ...) {
 }
 
 static bool bx_nohup_parse_options(int argc, char** argv, struct bx_nohup_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    enum { HELP = 256, VERSION };
+    static const struct bx_option_spec specs[] = {
+        {HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "nohup");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+", long_options, NULL);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 1:
-                options->show_help = true;
-                return true;
-            case 2:
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result result = bx_option_next(&cursor);
+    if (result.event == BX_OPTION_END) {
+        options->first_operand = (int)result.index;
+        return true;
+    }
+    if (result.event == BX_OPTION_MATCH) {
+        options->show_help = result.spec->id == HELP;
+        options->show_version = result.spec->id == VERSION;
+        return true;
     }
 
-    options->first_operand = optind;
-    return true;
+    if (result.short_name)
+        bx_diag(diag, "invalid option -- '%c'", result.short_name);
+    else
+        bx_diag(diag, "unrecognized option '%s'", result.token);
+    return false;
 }
 
 static char* bx_nohup_home_output_path(const char* home) {
