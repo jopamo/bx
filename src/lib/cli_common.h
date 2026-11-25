@@ -13,6 +13,12 @@ void bx_cli_print_try_help(const char* progname);
 
 typedef void (*bx_cli_help_fn)(FILE* stream, const char* progname);
 
+/* For applets whose only options are --help and --version. Returns -1
+ * with the first operand index, or an exit status if handled or invalid. */
+int bx_cli_scan_help_version_prefix(
+    int argc, char** argv, int* first_operand, struct bx_diag_ctx* diag,
+    bx_cli_help_fn print_help);
+
 /* Fast-paths only mechanical help/version dispatch to an applet-owned printer. */
 /* They do not assign canonical failure statuses; applets keep that policy. */
 int bx_cli_maybe_handle_help_or_version(

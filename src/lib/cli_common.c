@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "lib/cli_common.h"
+#include "option_scan.h"
 #include "path_ops.h"
 
 const char* bx_cli_progname(const char* argv0, const char* fallback) {
@@ -20,6 +21,39 @@ const char* bx_cli_progname(const char* argv0, const char* fallback) {
 
 void bx_cli_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+int bx_cli_scan_help_version_prefix(
+    int argc, char** argv, int* first_operand, struct bx_diag_ctx* diag,
+    bx_cli_help_fn print_help
+) {
+    enum { OPT_HELP, OPT_VERSION };
+    static const struct bx_option_spec specs[] = {
+        {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+    };
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option = bx_option_next(&cursor);
+    if (option.event == BX_OPTION_END) {
+        *first_operand = (int)option.index;
+        return -1;
+    }
+    if (option.event == BX_OPTION_MATCH) {
+        if (option.spec->id == OPT_HELP)
+            print_help(stdout, diag->progname);
+        else
+            bx_cli_print_version(diag->progname);
+        return 0;
+    }
+
+    if (option.short_name)
+        bx_diag(diag, "invalid option -- '%c'", option.short_name);
+    else
+        bx_diag(diag, "unrecognized option '%s'", option.token);
+    bx_cli_print_try_help(diag->progname);
+    return diag->exit_status;
 }
 
 int bx_cli_maybe_handle_help_or_version(
