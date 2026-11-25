@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include "applets.h"
@@ -12,8 +11,8 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
-#include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 enum {
     BX_UNIQ_OPT_HELP = 256,
@@ -105,41 +104,52 @@ static bool bx_uniq_parse_count_option(const char* text, size_t* out, const char
     return true;
 }
 
-static void bx_uniq_diag_option_requires_arg(struct bx_diag_ctx* diag, int missing_optopt, int missing_optind, int argc, char* const argv[]) {
-    if (missing_optind > 0 && missing_optind <= argc && argv[missing_optind - 1] != NULL && strncmp(argv[missing_optind - 1], "--", 2) == 0) {
-        bx_diag(diag, "option '%s' requires an argument", argv[missing_optind - 1]);
-        return;
-    }
-
-    bx_cli_diag_option_requires_arg(diag, missing_optopt, missing_optind, argc, argv);
-}
-
-static bool bx_uniq_parse_options(int argc, char** argv, uniq_opts_t* opts, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {{"count", no_argument, NULL, 'c'},
-                                                 {"repeated", no_argument, NULL, 'd'},
-                                                 {"unique", no_argument, NULL, 'u'},
-                                                 {"ignore-case", no_argument, NULL, 'i'},
-                                                 {"skip-fields", required_argument, NULL, 'f'},
-                                                 {"skip-chars", required_argument, NULL, 's'},
-                                                 {"check-chars", required_argument, NULL, 'w'},
-                                                 {"zero-terminated", no_argument, NULL, 'z'},
-                                                 {"help", no_argument, NULL, BX_UNIQ_OPT_HELP},
-                                                 {"version", no_argument, NULL, BX_UNIQ_OPT_VERSION},
-                                                 {NULL, 0, NULL, 0}};
+static bool bx_uniq_parse_options(int argc, char** argv, uniq_opts_t* opts,
+                                  const char* operands[2], size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'c', 'c', "count", BX_OPTION_NO_VALUE},
+        {'d', 'd', "repeated", BX_OPTION_NO_VALUE},
+        {'u', 'u', "unique", BX_OPTION_NO_VALUE},
+        {'i', 'i', "ignore-case", BX_OPTION_NO_VALUE},
+        {'f', 'f', "skip-fields", BX_OPTION_REQUIRED_VALUE},
+        {'s', 's', "skip-chars", BX_OPTION_REQUIRED_VALUE},
+        {'w', 'w', "check-chars", BX_OPTION_REQUIRED_VALUE},
+        {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE},
+        {BX_UNIQ_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_UNIQ_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+    };
 
     memset(opts, 0, sizeof(*opts));
     opts->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "uniq");
     diag->progname = opts->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, ":cduif:s:w:z", long_options, NULL);
-        if (c == -1) {
-            break;
+    *count = 0;
+    const char* extra = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (*count < 2)
+                operands[(*count)++] = option.token;
+            else if (extra == NULL)
+                extra = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(opts->progname);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'c':
                 opts->count = true;
                 break;
@@ -153,17 +163,17 @@ static bool bx_uniq_parse_options(int argc, char** argv, uniq_opts_t* opts, int*
                 opts->ignore_case = true;
                 break;
             case 'f':
-                if (!bx_uniq_parse_count_option(optarg, &opts->skip_fields, "fields to skip", diag)) {
+                if (!bx_uniq_parse_count_option(option.value, &opts->skip_fields, "fields to skip", diag)) {
                     return false;
                 }
                 break;
             case 's':
-                if (!bx_uniq_parse_count_option(optarg, &opts->skip_chars, "bytes to skip", diag)) {
+                if (!bx_uniq_parse_count_option(option.value, &opts->skip_chars, "bytes to skip", diag)) {
                     return false;
                 }
                 break;
             case 'w':
-                if (!bx_uniq_parse_count_option(optarg, &opts->check_chars, "bytes to compare", diag)) {
+                if (!bx_uniq_parse_count_option(option.value, &opts->check_chars, "bytes to compare", diag)) {
                     return false;
                 }
                 opts->check_chars_set = true;
@@ -177,20 +187,16 @@ static bool bx_uniq_parse_options(int argc, char** argv, uniq_opts_t* opts, int*
             case BX_UNIQ_OPT_VERSION:
                 opts->show_version = true;
                 return true;
-            case ':':
-                bx_uniq_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(opts->progname);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(opts->progname);
-                return false;
             default:
                 return false;
         }
     }
 
-    *first_operand = optind;
+    if (extra != NULL) {
+        bx_cli_diag_extra_operand(diag, extra);
+        bx_cli_print_try_help(opts->progname);
+        return false;
+    }
     return true;
 }
 
@@ -375,13 +381,14 @@ int bx_uniq_main(int argc, char** argv) {
         .verbose = false,
         .debug = false,
     };
-    int first_operand = 0;
+    const char* operands[2];
+    size_t count;
     FILE* in = stdin;
     FILE* out = stdout;
     bool in_is_stdio = true;
     bool out_is_stdio = true;
 
-    if (!bx_uniq_parse_options(argc, argv, &opts, &first_operand, &diag)) {
+    if (!bx_uniq_parse_options(argc, argv, &opts, operands, &count, &diag)) {
         return diag.exit_status == 0 ? 1 : diag.exit_status;
     }
     if (opts.show_help) {
@@ -393,24 +400,23 @@ int bx_uniq_main(int argc, char** argv) {
         return 0;
     }
 
-    if (argc - first_operand > 2) {
-        bx_cli_diag_extra_operand(&diag, argv[first_operand + 2]);
-        bx_cli_print_try_help(opts.progname);
-        return diag.exit_status;
-    }
-
-    if (first_operand < argc) {
-        in = bx_fopen_dash(argv[first_operand], "r", &in_is_stdio);
-        if (!in) {
-            bx_perror_path(&diag, argv[first_operand]);
+    for (size_t i = 0; i < count; i++) {
+        if (operands[i][0] == '\0') {
+            bx_diag(&diag, "empty file operand");
             return diag.exit_status;
         }
-        first_operand++;
     }
-    if (first_operand < argc) {
-        out = bx_fopen_dash(argv[first_operand], "w", &out_is_stdio);
+    if (count != 0) {
+        in = bx_fopen_dash(operands[0], "r", &in_is_stdio);
+        if (!in) {
+            bx_perror_path(&diag, operands[0]);
+            return diag.exit_status;
+        }
+    }
+    if (count == 2) {
+        out = bx_fopen_dash(operands[1], "w", &out_is_stdio);
         if (!out) {
-            bx_perror_path(&diag, argv[first_operand]);
+            bx_perror_path(&diag, operands[1]);
             bx_fclose_nonstdio(in, in_is_stdio);
             return diag.exit_status;
         }
