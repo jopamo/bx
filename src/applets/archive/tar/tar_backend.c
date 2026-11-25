@@ -2900,7 +2900,7 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
                 return false;
             if (strstr(value, "[^")) {
                 char** mask = &masks->items[masks->len - 1];
-                *mask = xrealloc(*mask, strlen(*mask) + 2u);
+                *mask = xrealloc(*mask, strlen(*mask) + 1u + BX_GLOB_CARET_SPARE);
                 bx_glob_normalize_caret(*mask);
             }
             return true;

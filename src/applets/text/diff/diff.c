@@ -40,7 +40,7 @@ struct diff_state {
     size_t context;
     bool minimal;
     bool recursive;
-    char excludes[DIFF_EXCLUDES_MAX][DIFF_EXCLUDE_BYTES_MAX + 2];
+    char excludes[DIFF_EXCLUDES_MAX][DIFF_EXCLUDE_BYTES_MAX + 1 + BX_GLOB_CARET_SPARE];
     size_t exclude_count;
     size_t entries_left;
     size_t bytes_left;

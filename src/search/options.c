@@ -1163,12 +1163,12 @@ static int bx_search_normalize_glob(char **slot) {
     if (!strstr(*slot, "[^"))
         return 0;
     size_t length = strlen(*slot);
-    char *pattern = realloc(*slot, length + 2u);
+    char *pattern = realloc(*slot, length + 1u + BX_GLOB_CARET_SPARE);
     if (!pattern)
         return -1;
     *slot = pattern;
     bx_glob_normalize_caret(pattern);
-    return pattern[length] != '\0';
+    return (int)(strlen(pattern) - length);
 }
 
 static bool bx_search_normalize_globs(struct search_opts *opts) {

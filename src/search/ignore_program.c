@@ -250,7 +250,7 @@ static int bx_ignore_rule_compile(struct bx_ignore_rule *rule,
         return 0;
 
     rule->uses_relative_path = memchr(pattern, '/', pattern_len) != NULL;
-    rule->pattern = malloc(pattern_len + 2u);
+    rule->pattern = malloc(pattern_len + 1u + BX_GLOB_CARET_SPARE);
     if (!rule->pattern)
         return -1;
     memcpy(rule->pattern, pattern, pattern_len);

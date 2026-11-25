@@ -1929,7 +1929,7 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
             if (!strstr(text, "[^"))
                 continue;
             size_t length = strlen(text);
-            char* pattern = malloc(length + 2u);
+            char* pattern = malloc(length + 1u + BX_GLOB_CARET_SPARE);
             if (!pattern) {
                 bx_diag(diag, "memory exhausted");
                 return false;

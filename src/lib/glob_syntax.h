@@ -115,8 +115,10 @@ static inline bool bx_glob_terminal_hyphen_allows_literal(const char* atom, cons
     return matched;
 }
 
-/* Requires one writable byte after the terminator. Quote the opening bracket
- * of a simple incomplete [^] expression, but leave ambiguous tails alone. */
+enum { BX_GLOB_CARET_SPARE = 2 };
+
+/* Requires BX_GLOB_CARET_SPARE writable bytes after the terminator.
+ * Quote simple incomplete caret expressions; leave ambiguous tails alone. */
 static inline void bx_glob_normalize_caret(char* pattern) {
     char* end = pattern + strlen(pattern);
     for (char* p = pattern; p < end; p++) {
@@ -149,20 +151,29 @@ static inline void bx_glob_normalize_caret(char* pattern) {
 #endif
                 }
                 if (end - p >= 3 && p[1] == '^' && p[2] == ']') {
+                    char* nested = NULL;
                     for (const char* tail = p + 3; tail < end; tail++) {
-                        if (*tail == '\\' && tail + 1 < end)
+                        if (*tail == '\\' && tail + 1 < end) {
                             tail++;
-                        else if (*tail == ']' ||
-                                 (*tail == '[' && tail + 1 < end &&
-                                  (strchr(".=", tail[1]) ||
-                                   (tail[1] == ':' && end - tail >= CHARCLASS_NAME_MAX) ||
-                                   (tail[1] == '^' && end[-1] == '-'))))
+                        } else if (end - tail == 3 && memcmp(tail, "[^-", 3) == 0) {
+                            nested = end - 3;
+                        } else if (*tail == ']' ||
+                                   (*tail == '[' && tail + 1 < end &&
+                                    (strchr(".=", tail[1]) ||
+                                     (tail[1] == ':' && end - tail >= CHARCLASS_NAME_MAX) ||
+                                     (tail[1] == '^' && end[-1] == '-')))) {
                             return;
+                        }
                     }
                     const char* hyphen = strchr(p + 3, '-');
                     if (end[-1] != '-' ||
                         (end - p >= 5 && hyphen == end - 2 && !strchr(p + 3, '\\')) ||
                         bx_glob_terminal_hyphen_allows_literal(p + 2, end)) {
+                        if (nested) {
+                            memmove(nested + 1, nested, 4);
+                            *nested = '\\';
+                            end++;
+                        }
                         memmove(p + 1, p, (size_t)(end - p) + 1);
                         *p = '\\';
                     }

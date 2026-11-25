@@ -406,7 +406,7 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
                     return false;
                 }
                 size_t length = strlen(option.value);
-                char *pattern = malloc(length + 2u);
+                char *pattern = malloc(length + 1u + BX_GLOB_CARET_SPARE);
                 if (!pattern) {
                     fprintf(stderr, "%s: out of memory\n", out->progname);
                     out->exit_code = 2;

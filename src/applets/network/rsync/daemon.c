@@ -381,8 +381,9 @@ daemon_add_glob(struct sess *sess, const char *module, size_t *oargc,
 
 	/* glob() matches path components separately. Keep buf for literal fallback. */
 	if (strstr(buf, "[^") != NULL) {
-		/* The protocol line is bounded; each component can grow by one. */
-		copy = malloc(2 * strlen(buf) + 1);
+		/* The bounded protocol line already uses at least two bytes
+		 * per component that can grow by two. */
+		copy = malloc(2 * strlen(buf) + 1 + BX_GLOB_CARET_SPARE);
 		if (copy == NULL) {
 			daemon_client_error(sess, "daemon out of memory");
 			return false;

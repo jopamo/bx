@@ -117,7 +117,7 @@ static bool bx_tree_pattern_matches(const char *pattern,
     while (true) {
         const char *pipe = strchr(segment, '|');
         size_t len = pipe ? (size_t)(pipe - segment) : strlen(segment);
-        char *one = malloc(len + 2u);
+        char *one = malloc(len + 1u + BX_GLOB_CARET_SPARE);
         if (!one)
             return false;
         memcpy(one, segment, len);

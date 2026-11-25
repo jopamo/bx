@@ -10,7 +10,7 @@ int zu_strlist_normalize_globs(ZU_StrList* list) {
         char* pattern = list->items[i];
         if (!strstr(pattern, "[^"))
             continue;
-        pattern = realloc(pattern, strlen(pattern) + 2u);
+        pattern = realloc(pattern, strlen(pattern) + 1u + BX_GLOB_CARET_SPARE);
         if (!pattern)
             return -1;
         list->items[i] = pattern;

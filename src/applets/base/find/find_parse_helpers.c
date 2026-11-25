@@ -56,7 +56,7 @@ static bool find_prepare_glob(struct find_expr *expr, const char *pattern) {
         return true;
 
     size_t length = strlen(pattern);
-    char *copy = malloc(length + 2u);
+    char *copy = malloc(length + 1u + BX_GLOB_CARET_SPARE);
     if (!copy)
         return false;
 

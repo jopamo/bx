@@ -1293,7 +1293,7 @@ static void bx_ls_pattern_list_append(struct bx_ls_pattern_list* list, const cha
     }
 
     size_t length = strlen(pattern);
-    char* copy = xmalloc(length + 2u);
+    char* copy = xmalloc(length + 1u + BX_GLOB_CARET_SPARE);
     memcpy(copy, pattern, length + 1u);
     if (strstr(copy, "[^"))
         bx_glob_normalize_caret(copy);
