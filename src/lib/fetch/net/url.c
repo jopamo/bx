@@ -197,14 +197,6 @@ static bool ascii_is_hex(unsigned char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
-static unsigned char ascii_hex_value(unsigned char c) {
-    if (c >= '0' && c <= '9')
-        return (unsigned char)(c - '0');
-    if (c >= 'a' && c <= 'f')
-        return (unsigned char)(10 + c - 'a');
-    return (unsigned char)(10 + c - 'A');
-}
-
 static char ascii_hex_digit(unsigned char value) {
     return value < 10 ? (char)('0' + value) : (char)('A' + value - 10);
 }
@@ -309,10 +301,8 @@ static char* canonicalize_uri_component(const char* value, URLComponentKind kind
                 return NULL;
             }
 
-            unsigned char decoded = (unsigned char)((ascii_hex_value((unsigned char)value[i + 1]) << 4U) | ascii_hex_value((unsigned char)value[i + 2]));
-            canonical[out++] = '%';
-            canonical[out++] = ascii_hex_digit((unsigned char)(decoded >> 4U));
-            canonical[out++] = ascii_hex_digit((unsigned char)(decoded & 0x0FU));
+            memcpy(canonical + out, value + i, 3);
+            out += 3;
             i += 2;
         }
         else if (c < 0x80U && uri_component_allows(kind, c)) {
@@ -565,6 +555,26 @@ char* bx_fetch_url_resolve_canonical(const char* base_url, const char* relative_
     return canonical;
 }
 
+/* CURLU may lowercase escapes while assembling parts. Pin their spelling
+ * after serialization without decoding any bytes or changing delimiters. */
+static char* serialize_url(CURLU* handle) {
+    char* url = NULL;
+    if (curl_url_get(handle, CURLUPART_URL, &url, CURLU_GET_EMPTY) != CURLUE_OK)
+        return NULL;
+    for (char* p = url; (p = strchr(p, '%')) != NULL; ++p) {
+        if (ascii_is_hex((unsigned char)p[1]) && ascii_is_hex((unsigned char)p[2])) {
+            for (int i = 1; i <= 2; ++i) {
+                if (p[i] >= 'a' && p[i] <= 'f')
+                    p[i] -= 'a' - 'A';
+            }
+            p += 2;
+        }
+    }
+    char* result = strdup(url);
+    curl_free(url);
+    return result;
+}
+
 char* bx_fetch_url_to_string(BxFetchUrl* mu) {
     CURLU* h = curl_url();
     if (!h)
@@ -590,16 +600,9 @@ char* bx_fetch_url_to_string(BxFetchUrl* mu) {
     if (mu->fragment)
         curl_url_set(h, CURLUPART_FRAGMENT, mu->fragment, 0);
 
-    char* url = NULL;
-    if (curl_url_get(h, CURLUPART_URL, &url, CURLU_GET_EMPTY) == CURLUE_OK) {
-        char* ret = strdup(url);
-        curl_free(url);
-        curl_url_cleanup(h);
-        return ret;
-    }
-
+    char* result = serialize_url(h);
     curl_url_cleanup(h);
-    return NULL;
+    return result;
 }
 
 static char* canonicalize_url(const char* url, bool include_userinfo) {
@@ -706,13 +709,7 @@ static char* canonicalize_url(const char* url, bool include_userinfo) {
         }
     }
 
-    char* out = NULL;
-    if (curl_url_get(dst, CURLUPART_URL, &out, CURLU_GET_EMPTY) != CURLUE_OK || !out) {
-        goto cleanup;
-    }
-
-    ret = strdup(out);
-    curl_free(out);
+    ret = serialize_url(dst);
 
 cleanup:
     if (scheme)
