@@ -1,5 +1,5 @@
 #include <errno.h>
-#include <getopt.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,7 +14,7 @@
 #include "lib/remove_ops.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 enum bx_rm_interactive_mode {
     BX_RM_INTERACTIVE_NEVER = 0,
@@ -26,7 +26,8 @@ enum {
     BX_RM_OPT_INTERACTIVE = 256,
     BX_RM_OPT_NO_PRESERVE_ROOT,
     BX_RM_OPT_PRESERVE_ROOT,
-    BX_RM_OPT_ONE_FILE_SYSTEM,
+    BX_RM_OPT_HELP,
+    BX_RM_OPT_VERSION,
 };
 
 struct bx_rm_options {
@@ -41,6 +42,8 @@ struct bx_rm_options {
     enum bx_rm_interactive_mode interactive_mode;
     bool show_help;
     bool show_version;
+    const char** paths;
+    int path_count;
 };
 
 static void bx_rm_print_help(FILE* stream, const char* progname) {
@@ -79,37 +82,52 @@ static bool bx_rm_parse_interactive_mode(const char* value, enum bx_rm_interacti
     return false;
 }
 
-static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"dir", no_argument, NULL, 'd'},
-        {"force", no_argument, NULL, 'f'},
-        {"interactive", optional_argument, NULL, BX_RM_OPT_INTERACTIVE},
-        {"no-preserve-root", no_argument, NULL, BX_RM_OPT_NO_PRESERVE_ROOT},
-        {"one-file-system", no_argument, NULL, 'x'},
-        {"preserve-root", optional_argument, NULL, BX_RM_OPT_PRESERVE_ROOT},
-        {"recursive", no_argument, NULL, 'r'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},
-        {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'d', 'd', "dir", BX_OPTION_NO_VALUE},
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'i', 'i', NULL, BX_OPTION_NO_VALUE},
+        {'I', 'I', NULL, BX_OPTION_NO_VALUE},
+        {'R', 'R', NULL, BX_OPTION_NO_VALUE},
+        {'r', 'r', "recursive", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'x', 'x', "one-file-system", BX_OPTION_NO_VALUE},
+        {BX_RM_OPT_INTERACTIVE, 0, "interactive", BX_OPTION_OPTIONAL_VALUE},
+        {BX_RM_OPT_NO_PRESERVE_ROOT, 0, "no-preserve-root", BX_OPTION_NO_VALUE},
+        {BX_RM_OPT_PRESERVE_ROOT, 0, "preserve-root", BX_OPTION_OPTIONAL_VALUE},
+        {BX_RM_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_RM_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "rm");
-    options->preserve_root = true;
-    diag->progname = options->progname;
-
-    char short_options[] = "-dfiIRrvx";
-    int next_operand = 1;
-    bx_args_getopt_reset_file_options(short_options);
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->paths == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->paths) ||
+                    (options->paths = malloc(capacity * sizeof(*options->paths))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->paths[options->path_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'd':
                 options->remove_empty_dirs = true;
                 break;
@@ -136,8 +154,8 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
                 options->one_file_system = true;
                 break;
             case BX_RM_OPT_INTERACTIVE:
-                if (!bx_rm_parse_interactive_mode(optarg, &options->interactive_mode)) {
-                    bx_diag(diag, "invalid argument '%s' for '--interactive'", optarg);
+                if (!bx_rm_parse_interactive_mode(result.value, &options->interactive_mode)) {
+                    bx_diag(diag, "invalid argument '%s' for '--interactive'", result.value);
                     return false;
                 }
                 if (options->interactive_mode != BX_RM_INTERACTIVE_NEVER) {
@@ -149,40 +167,26 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
                 break;
             case BX_RM_OPT_PRESERVE_ROOT:
                 options->preserve_root = true;
-                if (optarg != NULL) {
-                    if (strcmp(optarg, "all") == 0) {
+                if (result.value != NULL) {
+                    if (strcmp(result.value, "all") == 0) {
                         options->preserve_root_all = true;
                     }
                     else {
-                        bx_diag(diag, "invalid argument '%s' for '--preserve-root'", optarg);
+                        bx_diag(diag, "invalid argument '%s' for '--preserve-root'", result.value);
                         return false;
                     }
                 }
                 break;
-            case BX_ARGS_OPT_HELP:
+            case BX_RM_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case BX_ARGS_OPT_VERSION:
+            case BX_RM_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
     }
-
-    *first_operand = optind;
-    return true;
 }
 
 static bool bx_rm_operand_is_dot_or_dotdot(const char* path) {
@@ -375,46 +379,48 @@ static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* o
     return false;
 }
 
-int bx_rm_main(int argc, char** argv) {
-    struct bx_rm_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "rm",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
-    };
-    int first_operand = 0;
-
-    if (!bx_rm_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_rm_print_help(stdout, options.progname);
+static int bx_rm_run(const struct bx_rm_options* options, struct bx_diag_ctx* diag) {
+    if (options->show_help) {
+        bx_rm_print_help(stdout, options->progname);
         return 0;
     }
 
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
 
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        if (options.force) {
+    if (options->path_count == 0) {
+        if (options->force) {
             return 0;
         }
-        bx_diag(&diag, "missing operand");
-        return diag.exit_status;
+        bx_diag(diag, "missing operand");
+        return diag->exit_status;
     }
 
-    if (bx_rm_should_prompt_once(&options, operand_count) && !bx_rm_prompt_once(&options, operand_count)) {
-        return diag.exit_status;
+    if (bx_rm_should_prompt_once(options, options->path_count) &&
+        !bx_rm_prompt_once(options, options->path_count)) {
+        return diag->exit_status;
     }
 
-    for (int i = first_operand; i < argc; i++) {
-        (void)bx_rm_remove_operand(argv[i], &options, &diag);
+    for (int i = 0; i < options->path_count; i++) {
+        (void)bx_rm_remove_operand(options->paths[i], options, diag);
     }
 
-    return diag.exit_status;
+    return diag->exit_status;
+}
+
+int bx_rm_main(int argc, char** argv) {
+    struct bx_rm_options options = {
+        .progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "rm"),
+        .preserve_root = true,
+    };
+    struct bx_diag_ctx diag = {.progname = options.progname};
+    int status;
+    if (bx_rm_parse_options(argc, argv, &options, &diag))
+        status = bx_rm_run(&options, &diag);
+    else
+        status = diag.exit_status != 0 ? diag.exit_status : 1;
+    free(options.paths);
+    return status;
 }
