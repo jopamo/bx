@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -12,17 +11,17 @@
 #include "applets/system/psmisc/psmisc_wrapper.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 struct bx_peekfd_options {
-    bool eight_bit_clean;
-    bool follow;
     bool duplicates_removed;
     bool no_headers;
-    bool tgid;
     bool show_help;
     bool show_version;
-    int pid_index;
+    const char* pid_arg;
+    const char* bad_fd_arg;
+    int* selected_fds;
+    size_t selected_count;
 };
 
 static void bx_peekfd_print_help(FILE* stream, const char* progname) {
@@ -36,73 +35,6 @@ static void bx_peekfd_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -t, --tgid                 accepted for compatibility\n");
     fprintf(stream, "  -h, --help                 display this help and exit\n");
     fprintf(stream, "  -V, --version              output version information and exit\n");
-}
-
-static bool bx_peekfd_parse_options(struct bx_peekfd_options* options,
-                                    int argc,
-                                    char** argv,
-                                    struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"eight-bit-clean", no_argument, NULL, '8'},
-        {"no-headers", no_argument, NULL, 'n'},
-        {"follow", no_argument, NULL, 'c'},
-        {"duplicates-removed", no_argument, NULL, 'd'},
-        {"tgid", no_argument, NULL, 't'},
-        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},
-        {NULL, 0, NULL, 0},
-    };
-    int c;
-
-    memset(options, 0, sizeof(*options));
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while ((c = bx_args_getopt_long_interspersed(argc, argv, "-8ncdthV", long_options, &next_operand)) != -1) {
-        switch (c) {
-            case '8':
-                options->eight_bit_clean = true;
-                break;
-            case 'n':
-                options->no_headers = true;
-                break;
-            case 'c':
-                options->follow = true;
-                break;
-            case 'd':
-                options->duplicates_removed = true;
-                break;
-            case 't':
-                options->tgid = true;
-                break;
-            case 'h':
-                options->show_help = true;
-                return true;
-            case 'V':
-                options->show_version = true;
-                return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            default:
-                return false;
-        }
-    }
-
-    options->pid_index = optind;
-    if (options->pid_index >= argc) {
-        bx_diag(diag, "missing process id");
-        return false;
-    }
-    return true;
 }
 
 static bool bx_peekfd_parse_fd_operand(const char* text, int* fd_out) {
@@ -121,16 +53,87 @@ static bool bx_peekfd_parse_fd_operand(const char* text, int* fd_out) {
     return true;
 }
 
-static bool bx_peekfd_fd_selected(const struct bx_peekfd_options* options, int argc, char** argv, int fd) {
-    int i;
-    if (options->pid_index + 1 >= argc) {
-        return true;
-    }
-    for (i = options->pid_index + 1; i < argc; i++) {
-        int value = -1;
-        if (bx_peekfd_parse_fd_operand(argv[i], &value) && value == fd) {
-            return true;
+static bool bx_peekfd_parse_options(struct bx_peekfd_options* options,
+                                    int argc,
+                                    char** argv,
+                                    struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'8', '8', "eight-bit-clean", BX_OPTION_NO_VALUE},
+        {'n', 'n', "no-headers", BX_OPTION_NO_VALUE},
+        {'c', 'c', "follow", BX_OPTION_NO_VALUE},
+        {'d', 'd', "duplicates-removed", BX_OPTION_NO_VALUE},
+        {'t', 't', "tgid", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
+    };
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!options->pid_arg) {
+                options->pid_arg = option.token;
+                continue;
+            }
+            if (options->bad_fd_arg)
+                continue;
+            int fd;
+            if (!bx_peekfd_parse_fd_operand(option.token, &fd)) {
+                options->bad_fd_arg = option.token;
+                continue;
+            }
+            if (!options->selected_fds) {
+                options->selected_fds = calloc((size_t)argc - option.index, sizeof(*options->selected_fds));
+                if (!options->selected_fds) {
+                    bx_diag(diag, "allocate descriptor selectors: %s", strerror(errno));
+                    return false;
+                }
+            }
+            options->selected_fds[options->selected_count++] = fd;
+            continue;
         }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
+            case '8':
+            case 'c':
+            case 't':
+                break;
+            case 'n':
+                options->no_headers = true;
+                break;
+            case 'd':
+                options->duplicates_removed = true;
+                break;
+            case 'h':
+                options->show_help = true;
+                return true;
+            case 'V':
+                options->show_version = true;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    if (!options->pid_arg) {
+        bx_diag(diag, "missing process id");
+        return false;
+    }
+    return true;
+}
+
+static bool bx_peekfd_fd_selected(const struct bx_peekfd_options* options, int fd) {
+    if (options->selected_count == 0)
+        return true;
+    for (size_t i = 0; i < options->selected_count; i++) {
+        if (options->selected_fds[i] == fd)
+            return true;
     }
     return false;
 }
@@ -150,7 +153,7 @@ int bx_peekfd_main(int argc, char** argv) {
         .progname = bx_psmisc_progname((argc > 0) ? argv[0] : NULL, "peekfd"),
         .exit_status = 0,
     };
-    struct bx_peekfd_options options;
+    struct bx_peekfd_options options = {0};
     struct bx_proc_fd_list fds = {0};
     char** seen = NULL;
     size_t seen_len = 0u;
@@ -160,52 +163,53 @@ int bx_peekfd_main(int argc, char** argv) {
     int rc = 1;
 
     if (!bx_peekfd_parse_options(&options, argc, argv, &diag)) {
-        if (diag.exit_status != 0) {
+        if (diag.exit_status != 0)
             bx_cli_print_try_help(diag.progname);
-        }
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+        goto cleanup;
     }
     if (options.show_help) {
         bx_peekfd_print_help(stdout, diag.progname);
-        return 0;
+        rc = 0;
+        goto cleanup;
     }
     if (options.show_version) {
         bx_cli_print_version(diag.progname);
-        return 0;
+        rc = 0;
+        goto cleanup;
     }
-    if (!bx_proc_parse_pid_arg(argv[options.pid_index], &pid)) {
-        bx_diag(&diag, "invalid process id: %s", argv[options.pid_index]);
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+    if (!bx_proc_parse_pid_arg(options.pid_arg, &pid)) {
+        bx_diag(&diag, "invalid process id: %s", options.pid_arg);
+        goto cleanup;
     }
-    for (i = options.pid_index + 1u; i < (size_t)argc; i++) {
-        int fd = -1;
-        if (!bx_peekfd_parse_fd_operand(argv[i], &fd)) {
-            bx_diag(&diag, "invalid file descriptor: %s", argv[i]);
-            return diag.exit_status != 0 ? diag.exit_status : 1;
-        }
+    if (options.bad_fd_arg) {
+        bx_diag(&diag, "invalid file descriptor: %s", options.bad_fd_arg);
+        goto cleanup;
     }
     if (!bx_proc_read_fds(pid, &fds, &vanished)) {
-        if (vanished || errno == ENOENT) {
+        if (vanished || errno == ENOENT)
             bx_diag(&diag, "%ld: process not found", (long)pid);
-        }
-        else {
+        else
             bx_diag(&diag, "%ld: %s", (long)pid, strerror(errno));
+        goto cleanup;
+    }
+    if (options.duplicates_removed && fds.len) {
+        seen = calloc(fds.len, sizeof(*seen));
+        if (!seen) {
+            bx_diag(&diag, "allocate descriptor targets: %s", strerror(errno));
+            goto cleanup;
         }
-        return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
     for (i = 0u; i < fds.len; i++) {
         struct bx_proc_fd_entry* entry = &fds.items[i];
-        if (!bx_peekfd_fd_selected(&options, argc, argv, entry->fd)) {
+        if (!bx_peekfd_fd_selected(&options, entry->fd)) {
             continue;
         }
         if (options.duplicates_removed && bx_peekfd_seen_target(seen, seen_len, entry->target)) {
             continue;
         }
-        if (options.duplicates_removed) {
-            seen = realloc(seen, (seen_len + 1u) * sizeof(*seen));
+        if (options.duplicates_removed)
             seen[seen_len++] = entry->target;
-        }
         if (options.no_headers) {
             puts(entry->target);
         }
@@ -222,7 +226,9 @@ int bx_peekfd_main(int argc, char** argv) {
         rc = 0;
     }
 
+cleanup:
+    free(options.selected_fds);
     free(seen);
     bx_proc_fd_list_free(&fds);
-    return rc;
+    return diag.exit_status != 0 ? diag.exit_status : rc;
 }
