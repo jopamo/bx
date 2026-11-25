@@ -1,7 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,13 +13,18 @@
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/mode_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 #ifdef S_ISVTX
 #define BX_MKDIR_STICKY_BIT S_ISVTX
 #else
 #define BX_MKDIR_STICKY_BIT 01000
 #endif
+
+enum {
+    BX_MKDIR_OPT_HELP = 256,
+    BX_MKDIR_OPT_VERSION,
+};
 
 struct bx_mkdir_options {
     const char* progname;
@@ -29,6 +34,8 @@ struct bx_mkdir_options {
     bool verbose;
     bool show_help;
     bool show_version;
+    const char** paths;
+    size_t path_count;
 };
 
 static void bx_mkdir_print_help(FILE* stream, const char* progname) {
@@ -77,29 +84,52 @@ static bool bx_mkdir_parse_mode(const char* text, mode_t* mode_out, struct bx_di
     return false;
 }
 
-static bool bx_mkdir_parse_options(int argc, char** argv, struct bx_mkdir_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"mode", required_argument, NULL, 'm'}, {"parents", no_argument, NULL, 'p'}, {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, BX_ARGS_OPT_HELP},         {"version", no_argument, NULL, BX_ARGS_OPT_VERSION},   {NULL, 0, NULL, 0},
+static bool bx_mkdir_parse_options(int argc, char** argv, struct bx_mkdir_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'m', 'm', "mode", BX_OPTION_REQUIRED_VALUE},
+        {'p', 'p', "parents", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {BX_MKDIR_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_MKDIR_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mkdir");
-    diag->progname = options->progname;
-
-    char short_options[] = "-:m:pv";
-    int next_operand = 1;
-    bx_args_getopt_reset_file_options(short_options);
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, short_options, long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->paths == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->paths) ||
+                    (options->paths = malloc(capacity * sizeof(*options->paths))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->paths[options->path_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.short_name != 0)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.short_name);
+                else
+                    bx_diag(diag, "option requires an argument -- '%s'", result.token);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        switch (result.spec->id) {
             case 'm':
-                if (!bx_mkdir_parse_mode(optarg, &options->mode, diag)) {
+                if (!bx_mkdir_parse_mode(result.value, &options->mode, diag)) {
                     return false;
                 }
                 options->mode_set = true;
@@ -110,25 +140,16 @@ static bool bx_mkdir_parse_options(int argc, char** argv, struct bx_mkdir_option
             case 'v':
                 options->verbose = true;
                 break;
-            case BX_ARGS_OPT_HELP:
+            case BX_MKDIR_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case BX_ARGS_OPT_VERSION:
+            case BX_MKDIR_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
-
-    *first_operand = optind;
-    return true;
 }
 
 static bool bx_mkdir_emit_created(const char* path, struct bx_diag_ctx* diag) {
@@ -257,43 +278,38 @@ static bool bx_mkdir_one(const char* path, const struct bx_mkdir_options* option
     return true;
 }
 
+static int bx_mkdir_run(const struct bx_mkdir_options* options, struct bx_diag_ctx* diag) {
+    if (options->show_help) {
+        bx_mkdir_print_help(stdout, options->progname);
+        return 0;
+    }
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
+        return 0;
+    }
+    if (options->path_count == 0) {
+        bx_diag(diag, "missing operand");
+        return diag->exit_status;
+    }
+    for (size_t i = 0; i < options->path_count; i++) {
+        (void)bx_mkdir_one(options->paths[i], options, diag);
+    }
+    if (options->verbose && fflush(stdout) == EOF) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+    }
+    return diag->exit_status;
+}
+
 int bx_mkdir_main(int argc, char** argv) {
-    struct bx_mkdir_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "mkdir",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+    struct bx_mkdir_options options = {
+        .progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "mkdir"),
     };
-    int first_operand = 0;
-
-    if (!bx_mkdir_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_mkdir_print_help(stdout, options.progname);
-        return 0;
-    }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
-    }
-
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        return diag.exit_status;
-    }
-
-    for (int i = first_operand; i < argc; i++) {
-        (void)bx_mkdir_one(argv[i], &options, &diag);
-    }
-
-    if (options.verbose && fflush(stdout) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
-    }
-
-    return diag.exit_status;
+    struct bx_diag_ctx diag = {.progname = options.progname};
+    int status;
+    if (bx_mkdir_parse_options(argc, argv, &options, &diag))
+        status = bx_mkdir_run(&options, &diag);
+    else
+        status = diag.exit_status != 0 ? diag.exit_status : 1;
+    free(options.paths);
+    return status;
 }
