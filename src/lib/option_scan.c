@@ -61,7 +61,7 @@ struct bx_option_result bx_option_next(struct bx_option_cursor* cursor) {
     if (cursor->stopped || cursor->index == cursor->end)
         return result;
 
-    const char* token = cursor->argv[cursor->index];
+    char* token = cursor->argv[cursor->index];
     if (!cursor->literal && strcmp(token, "--") == 0) {
         result.index = ++cursor->index;
         if (cursor->mode & BX_OPTION_PREFIX) {
@@ -85,10 +85,10 @@ struct bx_option_result bx_option_next(struct bx_option_cursor* cursor) {
     }
 
     result.token = token;
-    const char* attached = NULL;
+    char* attached = NULL;
     if (cursor->short_offset == 0 && token[1] == '-') {
-        const char* name = token + 2;
-        const char* equals = strchr(name, '=');
+        char* name = token + 2;
+        char* equals = strchr(name, '=');
         size_t length = equals == NULL ? strlen(name) : (size_t)(equals - name);
         if (length != 0) {
             bool ambiguous = false;

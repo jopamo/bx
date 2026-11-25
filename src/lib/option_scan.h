@@ -38,7 +38,7 @@ struct bx_option_result {
     size_t index;
     const char* token; /* Original token; includes --NAME and any "=VALUE". */
     const struct bx_option_spec* spec; /* Matched descriptor, if any. */
-    const char* value; /* NULL if absent; "" for a supplied empty value. */
+    char* value; /* Borrowed argv bytes; NULL if absent, "" if supplied empty. */
     unsigned char short_name; /* Member of a short group, even on error. */
 };
 

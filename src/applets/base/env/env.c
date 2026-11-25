@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -14,10 +13,10 @@
 #include "applets/base/env/env_split.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
 #include "lib/child_runner.h"
 #include "lib/cli_common.h"
 #include "lib/env_ops.h"
+#include "lib/option_scan.h"
 #include "lib/output_quote.h"
 
 enum {
@@ -141,29 +140,44 @@ static bool bx_env_add_split(
 
 static bool bx_env_option_failure(
     struct bx_diag_ctx *diag,
-    int option,
-    int current_optind,
-    int argc,
-    char **argv,
-    bool missing_argument) {
-    if (missing_argument &&
-        current_optind > 0 &&
-        current_optind <= argc &&
-        argv[current_optind - 1] != NULL &&
-        strncmp(argv[current_optind - 1], "--", 2) == 0) {
-        bx_diag(
-            diag,
-            "option '%s' requires an argument",
-            argv[current_optind - 1]);
-    } else if (missing_argument) {
-        bx_cli_diag_option_requires_arg(
-            diag, option, current_optind, argc, argv);
+    const struct bx_option_result *result) {
+    unsigned char name = result->short_name;
+    if (result->event == BX_OPTION_MISSING_VALUE) {
+        if (name != 0)
+            bx_diag(diag, "option requires an argument -- '%c'", name);
+        else
+            bx_diag(diag, "option '%s' requires an argument", result->token);
+    } else if (name != 0) {
+        bx_diag(diag, "invalid option -- '%c'", name);
+        if (strchr(" \t\n\v\f\r", name) != NULL)
+            bx_diag(diag, "use -[v]S to pass options in shebang lines");
     } else {
-        bx_cli_diag_unrecognized_option(
-            diag, option, current_optind, argc, argv);
+        bx_diag(diag, "unrecognized option '%s'", result->token);
     }
     bx_cli_print_try_help(diag->progname);
     return false;
+}
+
+static void bx_env_start_scan(struct bx_option_cursor *cursor, int argc, char **argv) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "argv0", BX_OPTION_REQUIRED_VALUE},
+        {'i', 'i', "ignore-environment", BX_OPTION_NO_VALUE},
+        {'0', '0', "null", BX_OPTION_NO_VALUE},
+        {'u', 'u', "unset", BX_OPTION_REQUIRED_VALUE},
+        {'C', 'C', "chdir", BX_OPTION_REQUIRED_VALUE},
+        {BX_ENV_OPT_DEFAULT_SIGNAL, 0, "default-signal", BX_OPTION_OPTIONAL_VALUE},
+        {BX_ENV_OPT_IGNORE_SIGNAL, 0, "ignore-signal", BX_OPTION_OPTIONAL_VALUE},
+        {BX_ENV_OPT_BLOCK_SIGNAL, 0, "block-signal", BX_OPTION_OPTIONAL_VALUE},
+        {BX_ENV_OPT_LIST_SIGNAL_HANDLING, 0, "list-signal-handling", BX_OPTION_NO_VALUE},
+        {'v', 'v', "debug", BX_OPTION_NO_VALUE},
+        {'S', 'S', "split-string", BX_OPTION_REQUIRED_VALUE},
+        {BX_ENV_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_ENV_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+    };
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(cursor, argv, end != 0, end,
+                         BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                         specs, sizeof(specs) / sizeof(specs[0]));
 }
 
 static bool bx_env_parse_options(
@@ -172,24 +186,6 @@ static bool bx_env_parse_options(
     struct bx_env_options *options,
     int *first_operand,
     struct bx_diag_ctx *diag) {
-    static const struct option long_options[] = {
-        {"argv0", required_argument, NULL, 'a'},
-        {"ignore-environment", no_argument, NULL, 'i'},
-        {"null", no_argument, NULL, '0'},
-        {"unset", required_argument, NULL, 'u'},
-        {"chdir", required_argument, NULL, 'C'},
-        {"default-signal", optional_argument, NULL, BX_ENV_OPT_DEFAULT_SIGNAL},
-        {"ignore-signal", optional_argument, NULL, BX_ENV_OPT_IGNORE_SIGNAL},
-        {"block-signal", optional_argument, NULL, BX_ENV_OPT_BLOCK_SIGNAL},
-        {"list-signal-handling", no_argument, NULL,
-         BX_ENV_OPT_LIST_SIGNAL_HANDLING},
-        {"debug", no_argument, NULL, 'v'},
-        {"split-string", required_argument, NULL, 'S'},
-        {"help", no_argument, NULL, BX_ENV_OPT_HELP},
-        {"version", no_argument, NULL, BX_ENV_OPT_VERSION},
-        {NULL, 0, NULL, 0},
-    };
-
     int argc = *argc_pointer;
     char **argv = *argv_pointer;
     memset(options, 0, sizeof(*options));
@@ -197,24 +193,24 @@ static bool bx_env_parse_options(
         argc > 0 ? argv[0] : NULL, "env");
     diag->progname = options->progname;
     bx_env_signal_policy_init(&options->signals);
-    bx_args_getopt_reset();
+    struct bx_option_cursor cursor;
+    bx_env_start_scan(&cursor, argc, argv);
 
     for (;;) {
-        int option = bx_args_getopt_long(
-            argc,
-            argv,
-            "+:a:C:iS:u:v0 \t\n\v\f\r",
-            long_options,
-            NULL);
-        if (option == -1)
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            *first_operand = (int)result.index;
             break;
+        }
+        if (result.event != BX_OPTION_MATCH)
+            return bx_env_option_failure(diag, &result);
 
-        switch (option) {
+        switch (result.spec->id) {
             case 'a':
-                options->argv0 = optarg;
+                options->argv0 = result.value;
                 break;
             case 'C':
-                options->new_directory = optarg;
+                options->new_directory = result.value;
                 break;
             case 'i':
                 options->ignore_environment = true;
@@ -222,10 +218,10 @@ static bool bx_env_parse_options(
             case 'S': {
                 struct bx_env_split_result split;
                 if (!bx_env_split_parse(
-                        optarg,
+                        result.value,
                         argc,
                         argv,
-                        optind,
+                        (int)cursor.index,
                         options->debug,
                         diag,
                         &split)) {
@@ -238,11 +234,11 @@ static bool bx_env_parse_options(
                     bx_diag(diag, "memory exhausted");
                     return false;
                 }
-                bx_args_getopt_reset();
+                bx_env_start_scan(&cursor, argc, argv);
                 break;
             }
             case 'u':
-                if (!bx_env_add_unset_name(options, optarg)) {
+                if (!bx_env_add_unset_name(options, result.value)) {
                     bx_diag(diag, "memory exhausted");
                     return false;
                 }
@@ -255,21 +251,21 @@ static bool bx_env_parse_options(
                 break;
             case BX_ENV_OPT_DEFAULT_SIGNAL:
                 if (!bx_env_signal_parse_action(
-                        &options->signals, optarg, true, diag) ||
+                        &options->signals, result.value, true, diag) ||
                     !bx_env_signal_parse_block(
-                        &options->signals, optarg, false, diag)) {
+                        &options->signals, result.value, false, diag)) {
                     return false;
                 }
                 break;
             case BX_ENV_OPT_IGNORE_SIGNAL:
                 if (!bx_env_signal_parse_action(
-                        &options->signals, optarg, false, diag)) {
+                        &options->signals, result.value, false, diag)) {
                     return false;
                 }
                 break;
             case BX_ENV_OPT_BLOCK_SIGNAL:
                 if (!bx_env_signal_parse_block(
-                        &options->signals, optarg, true, diag)) {
+                        &options->signals, result.value, true, diag)) {
                     return false;
                 }
                 break;
@@ -286,30 +282,11 @@ static bool bx_env_parse_options(
                 *argc_pointer = argc;
                 *argv_pointer = argv;
                 return true;
-            case ' ':
-            case '\t':
-            case '\n':
-            case '\v':
-            case '\f':
-            case '\r': {
-                bx_diag(diag, "invalid option -- '%c'", option);
-                bx_diag(
-                    diag,
-                    "use -[v]S to pass options in shebang lines");
-                bx_cli_print_try_help(options->progname);
-                return false;
-            }
-            case ':':
-                return bx_env_option_failure(
-                    diag, optopt, optind, argc, argv, true);
-            case '?':
             default:
-                return bx_env_option_failure(
-                    diag, optopt, optind, argc, argv, false);
+                return false;
         }
     }
 
-    *first_operand = optind;
     if (*first_operand < argc &&
         strcmp(argv[*first_operand], "-") == 0) {
         options->ignore_environment = true;
