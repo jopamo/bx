@@ -1,8 +1,6 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
-#include <getopt.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/utsname.h>
@@ -11,7 +9,6 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 
 static void bx_hostname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [NAME]\n", progname);
@@ -55,51 +52,24 @@ static int bx_hostname_set_name(const char* name, struct bx_diag_ctx* diag) {
 }
 
 int bx_hostname_main(int argc, char** argv) {
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
-    };
-
     struct bx_diag_ctx diag = {
         .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "hostname"),
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+        .exit_status = 1,
     };
 
-    bx_args_getopt_reset();
+    int operand;
+    int rc = bx_cli_scan_help_version_prefix(argc, argv, &operand, &diag, bx_hostname_print_help);
+    if (rc >= 0)
+        return rc;
 
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+", long_options, NULL);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 1:
-                bx_hostname_print_help(stdout, diag.progname);
-                return 0;
-            case 2:
-                bx_cli_print_version(diag.progname);
-                return 0;
-            case '?':
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(diag.progname);
-                return diag.exit_status;
-            default:
-                return 1;
-        }
-    }
-
-    if (optind + 1 < argc) {
-        bx_cli_diag_extra_operand(&diag, argv[optind + 1]);
+    if (argc - operand > 1) {
+        bx_cli_diag_extra_operand(&diag, argv[operand + 1]);
         bx_cli_print_try_help(diag.progname);
         return diag.exit_status;
     }
 
-    if (optind < argc) {
-        return bx_hostname_set_name(argv[optind], &diag);
+    if (operand < argc) {
+        return bx_hostname_set_name(argv[operand], &diag);
     }
 
     return bx_hostname_print_current(&diag);

@@ -1133,7 +1133,9 @@
     {
       "name": "hostname",
       "main": "bx_hostname_main",
-      "capabilities": [],
+      "capabilities": [
+        "privilege-sensitive"
+      ],
       "execution_class": "exec-only"
     },
     {
