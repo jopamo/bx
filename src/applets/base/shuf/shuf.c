@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -17,7 +16,7 @@
 #include "lib/fd_ops.h"
 #include "lib/line_writer.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 enum {
     BX_SHUF_OPT_HELP = 256,
@@ -146,17 +145,16 @@ static bool bx_shuf_parse_input_range(const char* text, intmax_t* lo_out, intmax
 }
 
 static bool bx_shuf_parse_options(int argc, char** argv, struct bx_shuf_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"echo", no_argument, NULL, 'e'},
-        {"input-range", required_argument, NULL, 'i'},
-        {"head-count", required_argument, NULL, 'n'},
-        {"output", required_argument, NULL, 'o'},
-        {"random-source", required_argument, NULL, BX_SHUF_OPT_RANDOM_SOURCE},
-        {"repeat", no_argument, NULL, 'r'},
-        {"zero-terminated", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, BX_SHUF_OPT_HELP},
-        {"version", no_argument, NULL, BX_SHUF_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'e', 'e', "echo", BX_OPTION_NO_VALUE},
+        {'i', 'i', "input-range", BX_OPTION_REQUIRED_VALUE},
+        {'n', 'n', "head-count", BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', "output", BX_OPTION_REQUIRED_VALUE},
+        {'r', 'r', "repeat", BX_OPTION_NO_VALUE},
+        {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE},
+        {BX_SHUF_OPT_RANDOM_SOURCE, 0, "random-source", BX_OPTION_REQUIRED_VALUE},
+        {BX_SHUF_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_SHUF_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -164,38 +162,46 @@ static bool bx_shuf_parse_options(int argc, char** argv, struct bx_shuf_options*
     options->random_source_path = "/dev/urandom";
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "+:ei:n:o:rz", long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%s'", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case 'e':
                 options->echo_mode = true;
                 break;
             case 'i':
-                if (!bx_shuf_parse_input_range(optarg, &options->range_lo, &options->range_hi)) {
-                    bx_diag(diag, "invalid input range: '%s'", optarg ? optarg : "");
+                if (!bx_shuf_parse_input_range(option.value, &options->range_lo, &options->range_hi)) {
+                    bx_diag(diag, "invalid input range: '%s'", option.value);
                     return false;
                 }
                 options->input_range_specified = true;
                 break;
             case 'n':
-                if (!bx_shuf_parse_uintmax(optarg, &options->head_count)) {
-                    bx_diag(diag, "invalid line count: '%s'", optarg ? optarg : "");
+                if (!bx_shuf_parse_uintmax(option.value, &options->head_count)) {
+                    bx_diag(diag, "invalid line count: '%s'", option.value);
                     return false;
                 }
                 options->head_count_specified = true;
                 break;
             case 'o':
-                options->output_path = optarg;
+                options->output_path = option.value;
                 break;
             case BX_SHUF_OPT_RANDOM_SOURCE:
-                options->random_source_path = optarg;
+                options->random_source_path = option.value;
                 options->random_source_specified = true;
                 break;
             case 'r':
@@ -210,34 +216,10 @@ static bool bx_shuf_parse_options(int argc, char** argv, struct bx_shuf_options*
             case BX_SHUF_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            default:
-                return false;
         }
     }
 
-    *first_operand = optind;
+    *first_operand = (int)option.index;
     return true;
 }
 
@@ -605,6 +587,13 @@ int bx_shuf_main(int argc, char** argv) {
         if (operand_count == 1) {
             input_path = argv[first_operand];
         }
+    }
+
+    if (!input_path[0] || !options.random_source_path[0] ||
+        (options.output_path && !options.output_path[0])) {
+        bx_diag(&diag, "empty %s path", !input_path[0] ? "input" :
+                !options.random_source_path[0] ? "random source" : "output");
+        return diag.exit_status;
     }
 
     int delimiter = options.zero_terminated ? '\0' : '\n';

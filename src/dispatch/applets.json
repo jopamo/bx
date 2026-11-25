@@ -1346,7 +1346,8 @@
       "name": "shuf",
       "main": "bx_shuf_main",
       "capabilities": [
-        "filesystem-read"
+        "filesystem-read",
+        "filesystem-write"
       ],
       "execution_class": "exec-only"
     },
