@@ -26,6 +26,7 @@
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
 #include "lib/file_info_fmt.h"
+#include "lib/glob_syntax.h"
 #include "lib/id_parse.h"
 #include "lib/inode_ledger.h"
 #include "lib/mode_parse.h"
@@ -86,7 +87,10 @@ struct bx_cpio_options {
     bool group_override;
     uid_t owner;
     gid_t group;
-    const char** operands;
+    struct {
+        const char* text;
+        char* pattern;
+    } *operands;
     size_t operand_count;
 };
 
@@ -1108,7 +1112,8 @@ static bool bx_cpio_detect_archive_format(const struct bx_archive_spool* archive
 
 static bool bx_cpio_entry_selected(const struct bx_cpio_options* options, const char* name) {
     for (size_t i = 0; i < options->operand_count; i++) {
-        if (fnmatch(options->operands[i], name, 0) == 0) {
+        const char* pattern = options->operands[i].pattern;
+        if (fnmatch(pattern ? pattern : options->operands[i].text, name, 0) == 0) {
             return true;
         }
     }
@@ -1803,7 +1808,7 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                     return false;
                 }
             }
-            options->operands[options->operand_count++] = option.token;
+            options->operands[options->operand_count++].text = option.token;
             continue;
         }
         if (option.event != BX_OPTION_MATCH) {
@@ -1905,7 +1910,7 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
         return false;
     }
     if (options->mode == BX_CPIO_MODE_COPY_OUT && options->operand_count != 0) {
-        bx_cli_diag_extra_operand(diag, options->operands[0]);
+        bx_cli_diag_extra_operand(diag, options->operands[0].text);
         return false;
     }
     if (options->mode == BX_CPIO_MODE_PASS) {
@@ -1914,10 +1919,23 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
             return false;
         }
         if (options->operand_count > 1) {
-            bx_cli_diag_extra_operand(diag, options->operands[1]);
+            bx_cli_diag_extra_operand(diag, options->operands[1].text);
             return false;
         }
-        options->pass_dir = options->operands[0];
+        options->pass_dir = options->operands[0].text;
+    } else if (options->mode == BX_CPIO_MODE_COPY_IN) {
+        for (size_t i = 0; i < options->operand_count; i++) {
+            const char* text = options->operands[i].text;
+            if (!strstr(text, "[^"))
+                continue;
+            char* pattern = strdup(text);
+            if (!pattern) {
+                bx_diag(diag, "memory exhausted");
+                return false;
+            }
+            bx_glob_normalize_caret(pattern);
+            options->operands[i].pattern = pattern;
+        }
     }
     return true;
 }
@@ -2026,6 +2044,8 @@ int bx_cpio_run(int argc, char** argv) {
             rc = 2;
     }
 done:
+    for (size_t i = 0; i < options.operand_count; i++)
+        free(options.operands[i].pattern);
     free(options.operands);
     return rc;
 }

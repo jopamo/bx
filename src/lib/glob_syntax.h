@@ -2,6 +2,7 @@
 #define BX_LIB_GLOB_SYNTAX_H
 
 #include <stddef.h>
+#include <string.h>
 
 /* Return past the closing delimiter of a bracket atom such as [:alpha:]. */
 static inline const char* bx_glob_notation_end(const char* text, const char* end) {
@@ -40,6 +41,24 @@ static inline const char* bx_glob_bracket_end(const char* text, const char* end)
         }
     }
     return NULL;
+}
+
+/* Call on writable pattern storage; leave literal bytes and malformed
+ * bracket tails untouched. Both caret and bang denote complete negation. */
+static inline void bx_glob_normalize_caret(char* pattern) {
+    const char* end = pattern + strlen(pattern);
+    for (char* p = pattern; p < end; p++) {
+        if (*p == '\\' && p + 1 < end) {
+            p++;
+        } else if (*p == '[' && p + 1 < end) {
+            const char* after = bx_glob_bracket_end(p, end);
+            if (!after)
+                break;
+            if (p[1] == '^')
+                p[1] = '!';
+            p += after - p - 1;
+        }
+    }
 }
 
 #endif

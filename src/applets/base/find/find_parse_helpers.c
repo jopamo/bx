@@ -59,20 +59,7 @@ static bool find_prepare_glob(struct find_expr *expr, const char *pattern) {
     if (!copy)
         return false;
 
-    const char *end = pattern + strlen(pattern);
-    for (const char *p = pattern; p < end; p++) {
-        if (*p == '\\' && p + 1 < end) {
-            p++;
-        } else if (*p == '[' && p + 1 < end) {
-            const char *after = bx_glob_bracket_end(p, end);
-            /* Do not reinterpret a malformed bracket expression. */
-            if (!after)
-                break;
-            if (p[1] == '^')
-                copy[p - pattern + 1] = '!';
-            p = after - 1;
-        }
-    }
+    bx_glob_normalize_caret(copy);
     expr->pattern_storage = copy;
     expr->text = copy;
     return true;
