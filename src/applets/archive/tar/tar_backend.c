@@ -2898,8 +2898,11 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
                 ? &options->metadata.include : &options->metadata.exclude;
             if (!bx_archive_name_list_append(masks, value))
                 return false;
-            if (strstr(value, "[^"))
-                bx_glob_normalize_caret(masks->items[masks->len - 1]);
+            if (strstr(value, "[^")) {
+                char** mask = &masks->items[masks->len - 1];
+                *mask = xrealloc(*mask, strlen(*mask) + 2u);
+                bx_glob_normalize_caret_with_spare(*mask, 1);
+            }
             return true;
         }
     }
