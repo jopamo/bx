@@ -1148,6 +1148,10 @@ bx_xxd_main(int argc, char *argv[])
   if (argc > 3)
     exit_with_usage(1);
 
+  if (revert && hextype != HEX_NORMAL && hextype != HEX_POSTSCRIPT
+      && hextype != HEX_BITS)
+    error_exit(-1, "Sorry, cannot revert this type of hexdump");
+
   if (argc == 1 || (argv[1][0] == '-' && !argv[1][1]))
     BIN_ASSIGN(fp = stdin, !revert);
   else
@@ -1192,17 +1196,7 @@ bx_xxd_main(int argc, char *argv[])
     }
 
   if (revert)
-    switch (hextype)
-      {
-      case HEX_NORMAL:
-      case HEX_POSTSCRIPT:
-      case HEX_BITS:
-	return huntype(fp, fpo, cols, hextype,
-	  negseek ? -seekoff : seekoff);
-	break;
-      default:
-	error_exit(-1, "Sorry, cannot revert this type of hexdump");
-      }
+    return huntype(fp, fpo, cols, hextype, negseek ? -seekoff : seekoff);
 
   if (seekoff || negseek || !relseek)
     {
