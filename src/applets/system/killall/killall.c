@@ -446,6 +446,15 @@ static bool bx_killall_id_seen(const pid_t* ids, size_t len, pid_t id) {
     return false;
 }
 
+static int bx_killall_signal(pid_t id, bool process_group, int signal_number) {
+    /* kill(-1, ...) broadcasts instead of addressing process group 1. */
+    if (id <= 0 || (process_group && id == 1)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return kill(process_group ? -id : id, signal_number);
+}
+
 static bool bx_killall_wait_for_ids(const pid_t* ids, size_t len, bool process_group) {
     size_t remaining = len;
     while (remaining > 0u) {
@@ -453,7 +462,7 @@ static bool bx_killall_wait_for_ids(const pid_t* ids, size_t len, bool process_g
         remaining = 0u;
         for (i = 0u; i < len; i++) {
             pid_t id = ids[i];
-            int rc = process_group ? kill(-id, 0) : kill(id, 0);
+            int rc = bx_killall_signal(id, process_group, 0);
             if (rc == 0 || (rc < 0 && errno == EPERM)) {
                 remaining++;
             }
@@ -610,7 +619,7 @@ int bx_killall_main(int argc, char** argv) {
             }
         }
 
-        if ((options.process_group ? kill(-signal_id, options.signal_number) : kill(signal_id, options.signal_number)) != 0) {
+        if (bx_killall_signal(signal_id, options.process_group, options.signal_number) != 0) {
             if (!options.quiet) {
                 fprintf(stderr,
                         "%s(%s%ld): %s\n",
