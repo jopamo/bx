@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,27 +13,17 @@
 #include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
-static bool sum_write_bsd_result(struct bx_line_writer* writer, uint16_t checksum, uintmax_t blocks, const char* name, bool print_name) {
+static bool sum_write_result(struct bx_line_writer* writer, uint16_t checksum, uintmax_t blocks, const char* name, bool sysv) {
     char buffer[128];
-    int len = snprintf(buffer, sizeof(buffer), "%05u %5" PRIuMAX, checksum, blocks);
-    return len >= 0 && (size_t)len < sizeof(buffer)
-        && bx_line_writer_write(writer, buffer, (size_t)len)
-        && (!print_name || bx_line_writer_putc(writer, ' '))
-        && (name == NULL || bx_line_writer_puts(writer, name))
-        && bx_line_writer_putc(writer, '\n');
+    int len = sysv ? snprintf(buffer, sizeof(buffer), "%u %" PRIuMAX, checksum, blocks) : snprintf(buffer, sizeof(buffer), "%05u %5" PRIuMAX, checksum, blocks);
+    if (len < 0 || (size_t)len >= sizeof(buffer)) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    return bx_line_writer_write(writer, buffer, (size_t)len) && (!name || (bx_line_writer_putc(writer, ' ') && bx_line_writer_puts(writer, name))) && bx_line_writer_putc(writer, '\n');
 }
 
-static bool sum_write_sysv_result(struct bx_line_writer* writer, uint16_t checksum, uintmax_t blocks, const char* name, bool print_name) {
-    char buffer[128];
-    int len = snprintf(buffer, sizeof(buffer), "%u %" PRIuMAX, checksum, blocks);
-    return len >= 0 && (size_t)len < sizeof(buffer)
-        && bx_line_writer_write(writer, buffer, (size_t)len)
-        && (!print_name || bx_line_writer_putc(writer, ' '))
-        && (name == NULL || bx_line_writer_puts(writer, name))
-        && bx_line_writer_putc(writer, '\n');
-}
-
-static bool sum_bsd(FILE* f, const char* name, bool print_name, struct bx_line_writer* writer) {
+static uint16_t sum_bsd(FILE* f, uintmax_t* blocks) {
     uint16_t checksum = 0;
     uintmax_t total_bytes = 0;
     int c;
@@ -41,12 +32,11 @@ static bool sum_bsd(FILE* f, const char* name, bool print_name, struct bx_line_w
         checksum += (uint8_t)c;
         total_bytes++;
     }
-    uintmax_t blocks = 0;
-    (void)bx_size_block_count_ceil(total_bytes, 1024u, &blocks);
-    return sum_write_bsd_result(writer, checksum, blocks, name, print_name);
+    (void)bx_size_block_count_ceil(total_bytes, 1024u, blocks);
+    return checksum;
 }
 
-static bool sum_sysv(FILE* f, const char* name, bool print_name, struct bx_line_writer* writer) {
+static uint16_t sum_sysv(FILE* f, uintmax_t* blocks) {
     uint32_t s = 0;
     uintmax_t total_bytes = 0;
     int c;
@@ -55,10 +45,8 @@ static bool sum_sysv(FILE* f, const char* name, bool print_name, struct bx_line_
         total_bytes++;
     }
     uint32_t r = (s & 0xffff) + (s >> 16);
-    uint16_t checksum = (r & 0xffff) + (r >> 16);
-    uintmax_t blocks = 0;
-    (void)bx_size_block_count_ceil(total_bytes, 512u, &blocks);
-    return sum_write_sysv_result(writer, checksum, blocks, name, print_name);
+    (void)bx_size_block_count_ceil(total_bytes, 512u, blocks);
+    return (r & 0xffff) + (r >> 16);
 }
 
 int bx_sum_main(int argc, char** argv) {
@@ -70,7 +58,6 @@ int bx_sum_main(int argc, char** argv) {
     };
     struct bx_diag_ctx diag = {
         .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sum"),
-        .exit_status = 1,
     };
 
     bool sysv = false;
@@ -127,25 +114,31 @@ int bx_sum_main(int argc, char** argv) {
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    if (file_count == 0) {
-        bool ok = sysv ? sum_sysv(stdin, NULL, false, &writer) : sum_bsd(stdin, NULL, false, &writer);
-        return ok && bx_line_writer_flush(&writer) ? 0 : 1;
-    }
-
-    for (size_t i = 0; i < file_count; i++) {
-        const char* path = files[i];
-        FILE* f = fopen(path, "r");
+    for (size_t i = 0; i < (file_count ? file_count : 1); i++) {
+        const char* path = file_count ? files[i] : NULL;
+        FILE* f = path ? fopen(path, "r") : stdin;
         if (!f) {
             bx_perror_path(&diag, path);
             continue;
         }
-        bool ok = sysv ? sum_sysv(f, path, true, &writer) : sum_bsd(f, path, true, &writer);
-        fclose(f);
-        if (!ok)
+        uintmax_t blocks = 0;
+        uint16_t checksum = sysv ? sum_sysv(f, &blocks) : sum_bsd(f, &blocks);
+        int input_error = ferror(f) ? (errno ? errno : EIO) : 0;
+        if (path && fclose(f) != 0 && !input_error)
+            input_error = errno ? errno : EIO;
+        if (input_error) {
+            bx_diag(&diag, "%s: %s", path ? path : "standard input", strerror(input_error));
+            continue;
+        }
+        if (!sum_write_result(&writer, checksum, blocks, path, sysv)) {
+            bx_perror_path(&diag, "standard output");
             goto done;
+        }
     }
 
-    status = bx_line_writer_flush(&writer) ? 0 : 1;
+    if (!bx_line_writer_flush(&writer))
+        bx_perror_path(&diag, "standard output");
+    status = diag.exit_status;
 done:
     free(files);
     return status;
