@@ -76,26 +76,32 @@ static inline const char* bx_glob_skip_member(const char* atom, const char* end,
     return atom + len;
 }
 
-/* A final hyphen is literal when escaped or consumed as a range endpoint. */
-static inline bool bx_glob_members_have_endpoints(const char* atom, const char* end,
-                                                  mbstate_t* state) {
+/* For literal fallback, the relevant subject byte is '['. glibc can
+ * reach fallback through a matching '[' member before an unfinished range. */
+static inline bool bx_glob_members_allow_literal(const char* atom, const char* end,
+                                                 mbstate_t* state) {
+    bool literal_open = false;
     while (atom < end) {
+        const char* member = atom;
         atom = bx_glob_skip_member(atom, end, state);
         if (!atom)
             return false;
+        bool is_open = *member == '[' || (*member == '\\' && member[1] == '[');
         if (atom < end && *atom == '-') {
             if (++atom == end)
-                return false;
+                return literal_open || is_open;
             atom = bx_glob_skip_member(atom, end, state);
             if (!atom)
                 return false;
+        } else {
+            literal_open |= is_open;
         }
     }
     return true;
 }
 
-static inline bool bx_glob_terminal_hyphen_is_member(const char* atom, const char* end) {
-    if (!bx_glob_members_have_endpoints(atom, end, NULL))
+static inline bool bx_glob_terminal_hyphen_allows_literal(const char* atom, const char* end) {
+    if (!bx_glob_members_allow_literal(atom, end, NULL))
         return false;
     if (MB_CUR_MAX == 1)
         return true;
@@ -104,7 +110,7 @@ static inline bool bx_glob_terminal_hyphen_is_member(const char* atom, const cha
      * Rewrite only when byte and multibyte parsing agree. */
     mbstate_t state = {0};
     int saved_errno = errno;
-    bool matched = bx_glob_members_have_endpoints(atom, end, &state);
+    bool matched = bx_glob_members_allow_literal(atom, end, &state);
     errno = saved_errno;
     return matched;
 }
@@ -142,14 +148,13 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                                  (*tail == '[' && tail + 1 < end &&
                                   (strchr(".=", tail[1]) ||
                                    (tail[1] == ':' && end - tail >= CHARCLASS_NAME_MAX) ||
-                                   (strchr("!^", tail[1]) && end[-1] == '-'))))
+                                   (tail[1] == '^' && end[-1] == '-'))))
                             return;
                     }
                     const char* hyphen = strchr(p + 3, '-');
                     if (end[-1] != '-' ||
-                        (end - p == 5 && p[3] == '[') ||
                         (end - p >= 5 && hyphen == end - 2 && !strchr(p + 3, '\\')) ||
-                        bx_glob_terminal_hyphen_is_member(p + 2, end)) {
+                        bx_glob_terminal_hyphen_allows_literal(p + 2, end)) {
                         memmove(p + 1, p, (size_t)(end - p) + 1);
                         *p = '\\';
                     }
