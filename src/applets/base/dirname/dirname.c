@@ -1,22 +1,12 @@
-#include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
-#include "lib/args_common.h"
-
-struct bx_dirname_options {
-    const char* progname;
-    bool zero_terminated;
-    bool show_help;
-    bool show_version;
-};
 
 static void bx_dirname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION] NAME...\n", progname);
@@ -41,93 +31,68 @@ enum {
     BX_DIRNAME_OPT_VERSION,
 };
 
-static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, BX_DIRNAME_OPT_HELP},
-        {"version", no_argument, NULL, BX_DIRNAME_OPT_VERSION},
-        {NULL, 0, NULL, 0},
-    };
-
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "dirname");
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-z", long_options, &next_operand);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 'z':
-                options->zero_terminated = true;
-                break;
-            case BX_DIRNAME_OPT_HELP:
-                options->show_help = true;
-                return true;
-            case BX_DIRNAME_OPT_VERSION:
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
-    }
-
-    *first_operand = optind;
-    return true;
-}
-
-static bool bx_dirname_process_name(const char* name, bool zero_terminated, struct bx_diag_ctx* diag) {
-    char* value = bx_path_dirname_dup(name);
-    bool ok = bx_cli_emit_line(value, zero_terminated, diag);
-    free(value);
-    return ok;
-}
-
 int bx_dirname_main(int argc, char** argv) {
-    struct bx_dirname_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "dirname",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+    static const struct bx_option_spec specs[] = {
+        {'z', 'z', "zero", BX_OPTION_NO_VALUE},
+        {BX_DIRNAME_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_DIRNAME_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
-    int first_operand = 0;
-
-    if (!bx_dirname_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_dirname_print_help(stdout, options.progname);
-        return 0;
-    }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
-    }
-
-    int operand_count = argc - first_operand;
-    if (operand_count <= 0) {
-        bx_cli_diag_missing_operand(&diag);
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "dirname"),
+    };
+    const char** names = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*names)) : NULL;
+    if (argc > 1 && names == NULL) {
+        bx_diag(&diag, "memory exhausted");
         return diag.exit_status;
     }
-
-    for (int i = first_operand; i < argc; i++) {
-        if (!bx_dirname_process_name(argv[i], options.zero_terminated, &diag)) {
-            return diag.exit_status;
+    size_t count = 0;
+    bool zero = false;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            names[count++] = option.token;
+            continue;
         }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            goto done;
+        }
+
+        switch (option.spec->id) {
+            case 'z':
+                zero = true;
+                break;
+            case BX_DIRNAME_OPT_HELP:
+                bx_dirname_print_help(stdout, diag.progname);
+                goto done;
+            case BX_DIRNAME_OPT_VERSION:
+                bx_cli_print_version(diag.progname);
+                goto done;
+        }
+    }
+
+    if (count == 0) {
+        bx_cli_diag_missing_operand(&diag);
+        goto done;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        char* value = bx_path_dirname_dup(names[i]);
+        bool ok = bx_cli_emit_line(value, zero, &diag);
+        free(value);
+        if (!ok)
+            goto done;
     }
 
     bx_cli_flush_stdout(&diag);
 
+done:
+    free(names);
     return diag.exit_status;
 }
