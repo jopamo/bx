@@ -1,7 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,13 +18,13 @@
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
+#include "lib/option_scan.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
 #include "lib/size_parse.h"
 #include "lib/cli_common.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/args_common.h"
 
 struct bx_install_options {
     const char* progname;
@@ -48,6 +48,8 @@ struct bx_install_options {
     bool verbose;
     bool show_help;
     bool show_version;
+    const char** operands;
+    int operand_count;
 };
 
 struct bx_install_created_dir_guard {
@@ -223,50 +225,80 @@ enum {
     BX_INSTALL_OPT_BACKUP = 256,
     BX_INSTALL_OPT_DEBUG,
     BX_INSTALL_OPT_STRIP_PROGRAM,
+    BX_INSTALL_OPT_HELP,
+    BX_INSTALL_OPT_VERSION,
 };
 
-static bool bx_install_parse_options(int argc, char** argv, struct bx_install_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"backup", optional_argument, NULL, BX_INSTALL_OPT_BACKUP},
-        {"compare", no_argument, NULL, 'C'},
-        {"directory", no_argument, NULL, 'd'},
-        {"debug", no_argument, NULL, BX_INSTALL_OPT_DEBUG},
-        {"group", required_argument, NULL, 'g'},
-        {"mode", required_argument, NULL, 'm'},
-        {"owner", required_argument, NULL, 'o'},
-        {"preserve-timestamps", no_argument, NULL, 'p'},
-        {"strip", no_argument, NULL, 's'},
-        {"strip-program", required_argument, NULL, BX_INSTALL_OPT_STRIP_PROGRAM},
-        {"suffix", required_argument, NULL, 'S'},
-        {"target-directory", required_argument, NULL, 't'},
-        {"no-target-directory", no_argument, NULL, 'T'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+static bool bx_install_parse_options(int argc, char** argv, struct bx_install_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {BX_INSTALL_OPT_BACKUP, 0, "backup", BX_OPTION_OPTIONAL_VALUE},
+        {'C', 'C', "compare", BX_OPTION_NO_VALUE},
+        {'d', 'd', "directory", BX_OPTION_NO_VALUE},
+        {BX_INSTALL_OPT_DEBUG, 0, "debug", BX_OPTION_NO_VALUE},
+        {'g', 'g', "group", BX_OPTION_REQUIRED_VALUE},
+        {'m', 'm', "mode", BX_OPTION_REQUIRED_VALUE},
+        {'o', 'o', "owner", BX_OPTION_REQUIRED_VALUE},
+        {'p', 'p', "preserve-timestamps", BX_OPTION_NO_VALUE},
+        {'s', 's', "strip", BX_OPTION_NO_VALUE},
+        {BX_INSTALL_OPT_STRIP_PROGRAM, 0, "strip-program", BX_OPTION_REQUIRED_VALUE},
+        {'S', 'S', "suffix", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "target-directory", BX_OPTION_REQUIRED_VALUE},
+        {'T', 'T', "no-target-directory", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {BX_INSTALL_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_INSTALL_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+        {'b', 'b', NULL, BX_OPTION_NO_VALUE},
+        {'c', 'c', NULL, BX_OPTION_NO_VALUE},
+        {'D', 'D', NULL, BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "install");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, ":bCcDdg:m:o:psS:t:Tv", long_options, &option_index);
-        if (c == -1) {
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
             break;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->operands == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->operands) ||
+                    (options->operands = malloc(capacity * sizeof(*options->operands))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->operands[options->operand_count++] = result.token;
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE) {
+                if (result.spec->short_name != 0)
+                    bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+                else
+                    bx_diag(diag, "option '%s' requires an argument", result.token);
+            }
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
         }
 
-        switch (c) {
+        const char* value = result.value;
+        switch (result.spec->id) {
             case 'b':
                 bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case BX_INSTALL_OPT_BACKUP:
-                if (optarg != NULL) {
-                    if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
-                        bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                if (value != NULL) {
+                    if (!bx_args_parse_backup_mode(value, &options->backup_mode)) {
+                        bx_diag(diag, "invalid --backup control value '%s'", value);
                         return false;
                     }
                 }
@@ -291,19 +323,19 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
                 options->verbose = true;
                 break;
             case 'g':
-                if (!bx_id_parse_group(optarg, &options->group, diag)) {
+                if (!bx_id_parse_group(value, &options->group, diag)) {
                     return false;
                 }
                 options->group_set = true;
                 break;
             case 'm':
-                if (!bx_install_parse_mode(optarg, &options->mode, diag)) {
+                if (!bx_install_parse_mode(value, &options->mode, diag)) {
                     return false;
                 }
                 options->mode_set = true;
                 break;
             case 'o':
-                if (!bx_id_parse_owner(optarg, &options->owner, diag)) {
+                if (!bx_id_parse_owner(value, &options->owner, diag)) {
                     return false;
                 }
                 options->owner_set = true;
@@ -315,14 +347,14 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
                 options->strip = true;
                 break;
             case BX_INSTALL_OPT_STRIP_PROGRAM:
-                options->strip_program = optarg;
+                options->strip_program = value;
                 break;
             case 'S':
-                options->backup_suffix = optarg;
+                options->backup_suffix = value;
                 bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case 't':
-                options->target_directory = optarg;
+                options->target_directory = value;
                 break;
             case 'T':
                 options->no_target_directory = true;
@@ -330,31 +362,12 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
             case 'v':
                 options->verbose = true;
                 break;
-            case 1:
+            case BX_INSTALL_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_INSTALL_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
             default:
                 return false;
         }
@@ -374,8 +387,6 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
         bx_diag(diag, "options --compare (-C) and --strip are mutually exclusive");
         return false;
     }
-
-    *first_operand = optind;
     return true;
 }
 
@@ -993,79 +1004,67 @@ fail_keep:
     return false;
 }
 
-int bx_install_main(int argc, char** argv) {
-    struct bx_install_options options;
+static int bx_install_run(const struct bx_install_options* options, struct bx_diag_ctx* diag) {
     struct bx_backup_params backup_params;
-    struct bx_diag_ctx diag = {
-        .progname = "install",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
-    };
-    int first_operand = 0;
 
-    if (!bx_install_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
-    }
-
-    if (options.show_help) {
-        bx_install_print_help(stdout, options.progname);
+    if (options->show_help) {
+        bx_install_print_help(stdout, options->progname);
         return 0;
     }
 
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
 
-    int operand_count = argc - first_operand;
-    mode_t install_mode = options.mode_set ? options.mode : 0755u;
-    diag.verbose = options.verbose;
-    diag.debug = options.debug;
-    bx_backup_get_params(options.backup_mode, options.backup_suffix, &backup_params);
+    int operand_count = options->operand_count;
+    mode_t install_mode = options->mode_set ? options->mode : 0755u;
+    diag->verbose = options->verbose;
+    diag->debug = options->debug;
+    bx_backup_get_params(options->backup_mode, options->backup_suffix, &backup_params);
 
-    if (options.directory_mode) {
+    if (options->directory_mode) {
         if (operand_count <= 0) {
-            bx_diag(&diag, "missing operand");
-            return diag.exit_status;
+            bx_diag(diag, "missing operand");
+            return diag->exit_status;
         }
 
-        for (int i = first_operand; i < argc; i++) {
-            (void)bx_install_mkdir_p(argv[i], install_mode, true, true, NULL, &options, options.verbose, &diag);
+        for (int i = 0; i < operand_count; i++) {
+            (void)bx_install_mkdir_p(options->operands[i], install_mode, true, true, NULL, options, options->verbose, diag);
         }
 
-        if (options.verbose && fflush(stdout) == EOF) {
-            bx_diag(&diag, "write error: %s", strerror(errno));
+        if (options->verbose && fflush(stdout) == EOF) {
+            bx_diag(diag, "write error: %s", strerror(errno));
         }
-        return diag.exit_status;
+        return diag->exit_status;
     }
 
     if (operand_count <= 0) {
-        bx_diag(&diag, "missing file operand");
-        return diag.exit_status;
+        bx_diag(diag, "missing file operand");
+        return diag->exit_status;
     }
 
     const char* destination_root = NULL;
     int source_count = 0;
     bool destination_is_directory = false;
 
-    if (options.target_directory != NULL) {
-        destination_root = options.target_directory;
+    if (options->target_directory != NULL) {
+        destination_root = options->target_directory;
         source_count = operand_count;
         destination_is_directory = true;
     }
     else {
         if (operand_count < 2) {
-            bx_diag(&diag, "missing destination file operand after '%s'", argv[first_operand]);
-            return diag.exit_status;
+            bx_diag(diag, "missing destination file operand after '%s'", options->operands[0]);
+            return diag->exit_status;
         }
 
-        destination_root = argv[argc - 1];
+        destination_root = options->operands[operand_count - 1];
         source_count = operand_count - 1;
-        if (options.no_target_directory) {
+        if (options->no_target_directory) {
             if (source_count != 1) {
-                bx_diag(&diag, "extra operand '%s'", argv[first_operand + 1]);
-                return diag.exit_status;
+                bx_diag(diag, "extra operand '%s'", options->operands[1]);
+                return diag->exit_status;
             }
         }
         else if (source_count > 1) {
@@ -1079,33 +1078,33 @@ int bx_install_main(int argc, char** argv) {
         }
     }
 
-    if (options.make_leading_dirs && source_count != 1) {
-        bx_diag(&diag, "cannot use -D with multiple sources");
-        return diag.exit_status;
+    if (options->make_leading_dirs && source_count != 1) {
+        bx_diag(diag, "cannot use -D with multiple sources");
+        return diag->exit_status;
     }
 
     if (destination_is_directory) {
-        if (options.make_leading_dirs && options.target_directory != NULL) {
-            if (!bx_install_mkdir_p(destination_root, 0755u, false, false, NULL, &options, options.verbose, &diag)) {
-                return diag.exit_status;
+        if (options->make_leading_dirs && options->target_directory != NULL) {
+            if (!bx_install_mkdir_p(destination_root, 0755u, false, false, NULL, options, options->verbose, diag)) {
+                return diag->exit_status;
             }
         }
 
-        if (!bx_install_validate_directory_target(destination_root, &diag)) {
-            return diag.exit_status;
+        if (!bx_install_validate_directory_target(destination_root, diag)) {
+            return diag->exit_status;
         }
     }
 
     for (int i = 0; i < source_count; i++) {
-        const char* source_path = argv[first_operand + i];
+        const char* source_path = options->operands[i];
         char* dest_path = bx_path_build_dest(source_path, destination_root, destination_is_directory, false);
 
-        if (options.make_leading_dirs) {
+        if (options->make_leading_dirs) {
             char* parent_dir = bx_install_parent_dir_dup(dest_path);
             struct bx_install_created_dir_guard leading_dir_guard = {0};
             if (parent_dir != NULL) {
-                if (!bx_install_mkdir_p(parent_dir, 0755u, false, false, &leading_dir_guard, &options, options.verbose, &diag) ||
-                    !bx_install_created_dir_guard_verify(&leading_dir_guard, &diag)) {
+                if (!bx_install_mkdir_p(parent_dir, 0755u, false, false, &leading_dir_guard, options, options->verbose, diag) ||
+                    !bx_install_created_dir_guard_verify(&leading_dir_guard, diag)) {
                     bx_install_created_dir_guard_free(&leading_dir_guard);
                     free(parent_dir);
                     free(dest_path);
@@ -1116,13 +1115,25 @@ int bx_install_main(int argc, char** argv) {
             }
         }
 
-        (void)bx_install_copy_regular_file(source_path, dest_path, &options, &backup_params, &diag);
+        (void)bx_install_copy_regular_file(source_path, dest_path, options, &backup_params, diag);
         free(dest_path);
     }
 
-    if (options.verbose && fflush(stdout) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
+    if (options->verbose && fflush(stdout) == EOF) {
+        bx_diag(diag, "write error: %s", strerror(errno));
     }
 
-    return diag.exit_status;
+    return diag->exit_status;
+}
+
+int bx_install_main(int argc, char** argv) {
+    struct bx_install_options options;
+    struct bx_diag_ctx diag = {0};
+    int status;
+    if (bx_install_parse_options(argc, argv, &options, &diag))
+        status = bx_install_run(&options, &diag);
+    else
+        status = diag.exit_status != 0 ? diag.exit_status : 1;
+    free(options.operands);
+    return status;
 }
