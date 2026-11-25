@@ -142,9 +142,7 @@ manconf_free(struct manconf *conf)
 		free(conf->manpath.paths[i]);
 
 	free(conf->manpath.paths);
-	free(conf->output.outfilename);
 	free(conf->output.tag);
-	free(conf->output.tagfilename);
 }
 
 static void
@@ -212,7 +210,7 @@ manconf_output(struct manoutput *conf, const char *cp, int fromfile)
 {
 	const char *const toks[] = {
 	    /* Tokens requiring an argument. */
-	    "indent", "width", "outfilename", "tagfilename",
+	    "indent", "width",
 	    /* Token taking an optional argument. */
 	    "tag",
 	};
@@ -235,12 +233,8 @@ manconf_output(struct manoutput *conf, const char *cp, int fromfile)
 		}
 	}
 
-	if (tok < 4 && *cp == '\0') {
+	if (tok < 2 && *cp == '\0') {
 		mandoc_msg(MANDOCERR_BADVAL_MISS, 0, 0, "-O %s=?", toks[tok]);
-		return -1;
-	}
-	if (tok > 4 && tok < ntoks && *cp != '\0') {
-		mandoc_msg(MANDOCERR_BADVAL, 0, 0, "-O %s=%s", toks[tok], cp);
 		return -1;
 	}
 
@@ -268,24 +262,6 @@ manconf_output(struct manoutput *conf, const char *cp, int fromfile)
 		    "-O width=%s is %s", cp, errstr);
 		return -1;
 	case 2:
-		if (conf->outfilename != NULL) {
-			oldval = mandoc_strdup(conf->outfilename);
-			break;
-		}
-		conf->outfilename = mandoc_strdup(cp);
-		return 0;
-	case 3:
-		if (conf->tagfilename != NULL) {
-			oldval = mandoc_strdup(conf->tagfilename);
-			break;
-		}
-		conf->tagfilename = mandoc_strdup(cp);
-		return 0;
-	/*
-	 * If the index of the following token changes,
-	 * do not forget to adjust the range check above the switch.
-	 */
-	case 4:
 		if (conf->tag != NULL) {
 			oldval = mandoc_strdup(conf->tag);
 			break;

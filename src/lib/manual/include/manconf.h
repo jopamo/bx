@@ -29,9 +29,7 @@ struct	manpaths {
 /* Data from -O options and man.conf(5) output directives. */
 
 struct	manoutput {
-	char	 *outfilename;
 	char	 *tag;
-	char	 *tagfilename;
 	size_t	  indent;
 	size_t	  width;
 	int	  mdoc;

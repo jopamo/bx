@@ -181,7 +181,6 @@ manual_run(int argc, char *argv[], char *operands[],
 	char		*defpaths;	/* -M: override manpaths. */
 	char		*auxpaths;	/* -m: additional manpaths. */
 	const char	*oarg;		/* -O: output option string. */
-	char		*tagarg;	/* -O tag: default value. */
 	unsigned char	*uc;
 	size_t		 ressz;		/* Number of elements in res[]. */
 	size_t		 resnsz;	/* Number of elements in resn[]. */
@@ -251,7 +250,8 @@ manual_run(int argc, char *argv[], char *operands[],
 	memset(&outst, 0, sizeof(outst));
 	outst.tag_files = NULL;
 	outst.outtype = OUTT_LOCALE;
-	outst.use_pager = 1;
+	/* Only the man frontend has child-execution capability. */
+	outst.use_pager = strcmp(fallback_progname, "man") == 0;
 
 	outmode = OUTMODE_DEF;
 
@@ -399,16 +399,15 @@ manual_run(int argc, char *argv[], char *operands[],
 		while (next != NULL && result == 0)
 			result = manconf_output(&conf.output, strsep(&next, ","), 0);
 		free(output_args);
-		if (result == -1)
+		if (result == -1) {
+			manconf_free(&conf);
 			return mandoc_msg_getrc();
+		}
 	}
 
 	options |= MPARSE_VALIDATE;
 
-	if (outmode == OUTMODE_FLN ||
-	    (conf.output.outfilename == NULL &&
-	     conf.output.tagfilename == NULL &&
-	     isatty(STDOUT_FILENO) == 0))
+	if (outmode == OUTMODE_FLN || isatty(STDOUT_FILENO) == 0)
 		outst.use_pager = 0;
 
 	if (outst.use_pager &&
@@ -424,9 +423,6 @@ manual_run(int argc, char *argv[], char *operands[],
 #if HAVE_PLEDGE
 	if (outst.use_pager == 0)
 		c = pledge("stdio rpath", NULL);
-	else if (conf.output.outfilename != NULL ||
-	    conf.output.tagfilename != NULL)
-		c = pledge("stdio rpath wpath cpath", NULL);
 	else
 		c = pledge("stdio rpath tmppath tty proc exec", NULL);
 	if (c == -1) {
@@ -476,8 +472,8 @@ manual_run(int argc, char *argv[], char *operands[],
 	 */
 
 	if (conf.output.tag != NULL && *conf.output.tag == '\0') {
-		tagarg = argc > 0 ? *argv : NULL;
-		conf.output.tag = tagarg;
+		free(conf.output.tag);
+		conf.output.tag = argc > 0 ? mandoc_strdup(*argv) : NULL;
 	}
 
 	/* Read the configuration file. */
@@ -621,10 +617,8 @@ manual_run(int argc, char *argv[], char *operands[],
 		if (outst.wstop && mandoc_msg_getrc() != MANDOCLEVEL_OK)
 			break;
 	}
-	if (conf.output.tag != NULL && conf.output.tag_found == 0) {
+	if (conf.output.tag != NULL && conf.output.tag_found == 0)
 		mandoc_msg(MANDOCERR_TAG, 0, 0, "%s", conf.output.tag);
-		conf.output.tag = NULL;
-	}
 	if (outst.outdata != NULL) {
 		switch (outst.outtype) {
 		case OUTT_UTF8:
@@ -642,17 +636,13 @@ manual_run(int argc, char *argv[], char *operands[],
 
 out:
 	free_manpages(res, ressz);
-	if (search.argmode != ARG_FILE)
-		manconf_free(&conf);
-
 	if (outst.tag_files != NULL) {
-		if (term_tag_close() != -1 &&
-		    conf.output.outfilename == NULL &&
-		    conf.output.tagfilename == NULL)
-			run_pager(&outst, conf.output.tag);
+		if (term_tag_close() != -1)
+			run_pager(&outst, conf.output.tag_found ? conf.output.tag : NULL);
 		term_tag_unlink();
 	} else if (outst.had_output)
 		mandoc_msg_summary();
+	manconf_free(&conf);
 
 #if DEBUG_MEMORY
 	mandoc_dbg_finish();
@@ -902,17 +892,7 @@ process_onefile(struct mparse *mp, struct manpage *resp,
 
 	if (outst->use_pager) {
 		outst->use_pager = 0;
-		outst->tag_files = term_tag_init(conf->output.outfilename,
-		    "", conf->output.tagfilename);
-#if HAVE_PLEDGE
-		if ((conf->output.outfilename != NULL ||
-		     conf->output.tagfilename != NULL) &&
-		    pledge("stdio rpath cpath", NULL) == -1) {
-			mandoc_msg(MANDOCERR_PLEDGE, 0, 0,
-			    "%s", strerror(errno));
-			exit(mandoc_msg_getrc());
-		}
-#endif
+		outst->tag_files = term_tag_init();
 	}
 	if (outst->had_output && outst->outtype <= OUTT_UTF8) {
 		if (outst->outdata == NULL)

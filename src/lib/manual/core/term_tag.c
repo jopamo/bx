@@ -22,7 +22,6 @@
 #include <sys/types.h>
 
 #include <errno.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -47,8 +46,7 @@ static struct tag_files tag_files;
  * but for simplicity, create it anyway.
  */
 struct tag_files *
-term_tag_init(const char *outfilename, const char *suffix,
-    const char *tagfilename)
+term_tag_init(void)
 {
 	struct sigaction	 sa;
 	int			 ofd;	/* In /tmp/, dup(2)ed to stdout. */
@@ -57,6 +55,7 @@ term_tag_init(const char *outfilename, const char *suffix,
 	ofd = tfd = -1;
 	tag_files.tfs = NULL;
 	tag_files.tcpgid = -1;
+	*tag_files.ofn = *tag_files.tfn = '\0';
 
 	/* Clean up when dying from a signal. */
 
@@ -85,43 +84,19 @@ term_tag_init(const char *outfilename, const char *suffix,
 
 	/* Create both temporary output files. */
 
-	if (outfilename == NULL) {
-		(void)snprintf(tag_files.ofn, sizeof(tag_files.ofn),
-		    "/tmp/man.XXXXXXXXXX%s", suffix);
-		if ((ofd = mkstemps(tag_files.ofn, strlen(suffix))) == -1) {
-			mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
-			    "%s: %s", tag_files.ofn, strerror(errno));
-			goto fail;
-		}
-	} else {
-		(void)strlcpy(tag_files.ofn, outfilename,
-		   sizeof(tag_files.ofn));
-		unlink(outfilename);
-		ofd = open(outfilename, O_WRONLY | O_CREAT | O_EXCL, 0644);
-		if (ofd == -1) {
-			mandoc_msg(MANDOCERR_OPEN, 0, 0,
-			    "%s: %s", outfilename, strerror(errno));
-			goto fail;
-		}
+	(void)strlcpy(tag_files.ofn, "/tmp/man.XXXXXXXXXX", sizeof(tag_files.ofn));
+	if ((ofd = mkstemp(tag_files.ofn)) == -1) {
+		mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
+		    "%s: %s", tag_files.ofn, strerror(errno));
+		*tag_files.ofn = '\0';
+		goto fail;
 	}
-	if (tagfilename == NULL) {
-		(void)strlcpy(tag_files.tfn, "/tmp/man.XXXXXXXXXX",
-		    sizeof(tag_files.tfn));
-		if ((tfd = mkstemp(tag_files.tfn)) == -1) {
-			mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
-			    "%s: %s", tag_files.tfn, strerror(errno));
-			goto fail;
-		}
-	} else {
-		(void)strlcpy(tag_files.tfn, tagfilename,
-		    sizeof(tag_files.tfn));
-		unlink(tagfilename);
-		tfd = open(tagfilename, O_WRONLY | O_CREAT | O_EXCL, 0644);
-		if (tfd == -1) {
-			mandoc_msg(MANDOCERR_OPEN, 0, 0,
-			    "%s: %s", tagfilename, strerror(errno));
-			goto fail;
-		}
+	(void)strlcpy(tag_files.tfn, "/tmp/man.XXXXXXXXXX", sizeof(tag_files.tfn));
+	if ((tfd = mkstemp(tag_files.tfn)) == -1) {
+		mandoc_msg(MANDOCERR_MKSTEMP, 0, 0,
+		    "%s: %s", tag_files.tfn, strerror(errno));
+		*tag_files.tfn = '\0';
+		goto fail;
 	}
 	if ((tag_files.tfs = fdopen(tfd, "w")) == NULL) {
 		mandoc_msg(MANDOCERR_FDOPEN, 0, 0, "%s", strerror(errno));
