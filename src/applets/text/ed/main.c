@@ -43,7 +43,7 @@
 #include <locale.h>
 
 #include "applets.h"
-#include "carg_parser.h"
+#include "lib/option_scan.h"
 #include "ed.h"
 
 #ifndef PROGVERSION
@@ -229,65 +229,103 @@ int bx_ed_main( int argc, char ** argv )
   bool loose = false;
   int exit_status = 0;
   enum { opt_cr = 256, opt_un };
-  const ap_Option options[] =
-    {
-    { 'E', "extended-regexp",      ap_no  },
-    { 'G', "traditional",          ap_no  },
-    { 'h', "help",                 ap_no  },
-    { 'l', "loose-exit-status",    ap_no  },
-    { 'p', "prompt",               ap_yes },
-    { 'q', "quiet",                ap_no  },
-    { 'q', "silent",               ap_no  },
-    { 'r', "restricted",           ap_no  },
-    { 's', "script",               ap_no  },
-    { 'v', "verbose",              ap_no  },
-    { 'V', "version",              ap_no  },
-    { opt_cr, "strip-trailing-cr", ap_no  },
-    { opt_un, "unsafe-names",      ap_no  },
-    { 0, 0,                        ap_no  } };
-
-  Arg_parser parser = { 0 };
+  static const struct bx_option_spec options[] = {
+    { 'E', 'E', "extended-regexp", BX_OPTION_NO_VALUE },
+    { 'G', 'G', "traditional", BX_OPTION_NO_VALUE },
+    { 'h', 'h', "help", BX_OPTION_NO_VALUE },
+    { 'l', 'l', "loose-exit-status", BX_OPTION_NO_VALUE },
+    { 'p', 'p', "prompt", BX_OPTION_REQUIRED_VALUE },
+    { 'q', 'q', "quiet", BX_OPTION_NO_VALUE },
+    { 'q', 0, "silent", BX_OPTION_NO_VALUE },
+    { 'r', 'r', "restricted", BX_OPTION_NO_VALUE },
+    { 's', 's', "script", BX_OPTION_NO_VALUE },
+    { 'v', 'v', "verbose", BX_OPTION_NO_VALUE },
+    { 'V', 'V', "version", BX_OPTION_NO_VALUE },
+    { opt_cr, 0, "strip-trailing-cr", BX_OPTION_NO_VALUE },
+    { opt_un, 0, "unsafe-names", BX_OPTION_NO_VALUE },
+  };
   if( argc > 0 ) invocation_name = argv[0];
 
-  if( !ap_init( &parser, argc, (const char * const *)argv, options, 0 ) )
-    { show_error( "Memory exhausted.", 0, false ); exit_status = 1; goto out; }
-  if( ap_error( &parser ) )				/* bad option */
-    { show_error( ap_error( &parser ), 0, true ); exit_status = 1; goto out; }
-
-  int argind = 0;
-  for( ; argind < ap_arguments( &parser ); ++argind )
+  const char ** operands = NULL;
+  size_t operand_count = 0;
+  struct bx_option_cursor cursor;
+  bx_option_cursor_init( &cursor, argv, argc > 0 ? 1 : 0, (size_t)argc,
+                         BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                         options, sizeof options / sizeof options[0] );
+  struct bx_option_result option;
+  int meta = 0;
+  while( ( option = bx_option_next( &cursor ) ).event != BX_OPTION_END )
     {
-    const int code = ap_code( &parser, argind );
-    if( !code ) break;					/* no more options */
-    const char * const arg = ap_argument( &parser, argind );
-    switch( code )
+    if( option.event == BX_OPTION_OPERAND )
       {
-      case 'E': extended_regexp_ = true; break;
-      case 'G': traditional_ = true; break;	/* backward compatibility */
-      case 'h': show_help(); exit_status = 0; goto out;
-      case 'l': loose = true; break;
-      case 'p': if( set_prompt( arg ) ) break; else
-                  { exit_status = 1; goto out; }
-      case 'q': quiet = true; break;
-      case 'r': restricted_ = true; break;
-      case 's': scripted_ = true; break;
-      case 'v': set_verbose(); break;
-      case 'V': show_version(); exit_status = 0; goto out;
-      case opt_cr: strip_cr_ = true; break;
-      case opt_un: safe_names = false; break;
-      default: show_error( "internal error: uncaught option.", 0, false );
-               exit_status = 3; goto out;
+      if( !operands )
+        {
+        operands = calloc( (size_t)argc - option.index, sizeof *operands );
+        if( !operands )
+          { show_error( "Memory exhausted.", 0, false ); exit_status = 1; goto out; }
+        }
+      operands[operand_count++] = option.token;
+      continue;
       }
-    } /* end process options */
+    if( option.event == BX_OPTION_MISSING_VALUE ||
+        ( option.event == BX_OPTION_MATCH && option.spec->id == 'p' && !*option.value ) )
+      {
+      if( option.short_name )
+        fprintf( stderr, "%s: option requires an argument -- '%c'\n", program_name, option.short_name );
+      else
+        fprintf( stderr, "%s: option '--%s' requires an argument\n", program_name, option.spec->long_name );
+      }
+    else if( option.event == BX_OPTION_AMBIGUOUS )
+      fprintf( stderr, "%s: option '%s' is ambiguous\n", program_name, option.token );
+    else if( option.event == BX_OPTION_UNEXPECTED_VALUE )
+      fprintf( stderr, "%s: option '--%s' doesn't allow an argument\n", program_name, option.spec->long_name );
+    else if( option.event == BX_OPTION_UNKNOWN )
+      {
+      if( option.short_name )
+        fprintf( stderr, "%s: invalid option -- '%c'\n", program_name, option.short_name );
+      else
+        fprintf( stderr, "%s: unrecognized option '%s'\n", program_name, option.token );
+      }
+    else
+      {
+      if( meta ) continue;
+      switch( option.spec->id )
+        {
+        case 'E': extended_regexp_ = true; break;
+        case 'G': traditional_ = true; break;
+        case 'h': case 'V': meta = option.spec->id; break;
+        case 'l': loose = true; break;
+        case 'p': if( !set_prompt( option.value ) )
+                    { exit_status = 1; goto out; }
+                  break;
+        case 'q': quiet = true; break;
+        case 'r': restricted_ = true; break;
+        case 's': scripted_ = true; break;
+        case 'v': set_verbose(); break;
+        case opt_cr: strip_cr_ = true; break;
+        case opt_un: safe_names = false; break;
+        }
+      continue;
+      }
+    show_error( NULL, 0, true );
+    exit_status = 1;
+    goto out;
+    }
+  if( meta )
+    {
+    if( meta == 'h' ) show_help();
+    else show_version();
+    goto out;
+    }
 
   setlocale( LC_ALL, "" );
   if( !init_buffers() ) { exit_status = 1; goto out; }
 
   const char * start_re_arg = 0;		/* '+/RE' or '+?RE' */
   int start_addr = 0;				/* '+line' */
-  for( ; argind < ap_arguments( &parser ); ++argind )
+  for( size_t argind = 0; argind < operand_count; ++argind )
     {
-    const char * const arg = ap_argument( &parser, argind );
+    const char * const arg = operands[argind];
     /* a hyphen operand '-' is equivalent to the option '-s' */
     if( strcmp( arg, "-" ) == 0 ) { scripted_ = true; continue; }
     if( arg[0] == '+' )
@@ -340,6 +378,6 @@ int bx_ed_main( int argc, char ** argv )
   exit_status = main_loop( initial_error, loose );
 
 out:
-  ap_free( &parser );
+  free( operands );
   return exit_status;
   }

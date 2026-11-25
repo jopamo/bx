@@ -720,7 +720,6 @@ bx_shell_applet_sources = [
 bx_text_applet_sources = [
   'src/applets/text/dd/dd.c',
   'src/applets/text/ed/buffer.c',
-  'src/applets/text/ed/carg_parser.c',
   'src/applets/text/ed/global.c',
   'src/applets/text/ed/io.c',
   'src/applets/text/ed/main.c',
