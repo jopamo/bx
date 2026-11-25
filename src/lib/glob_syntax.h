@@ -2,6 +2,7 @@
 #define BX_LIB_GLOB_SYNTAX_H
 
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -139,7 +140,8 @@ static inline void bx_glob_normalize_caret(char* pattern) {
                             tail++;
                         else if (*tail == ']' ||
                                  (*tail == '[' && tail + 1 < end &&
-                                  (strchr(".=:", tail[1]) ||
+                                  (strchr(".=", tail[1]) ||
+                                   (tail[1] == ':' && end - tail >= CHARCLASS_NAME_MAX) ||
                                    (strchr("!^", tail[1]) && end[-1] == '-'))))
                             return;
                     }
