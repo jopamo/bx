@@ -20,7 +20,6 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <netdb.h>
 #include <stdbool.h>
@@ -31,6 +30,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "dispatch/applets.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
 struct knock_port {
@@ -50,41 +50,64 @@ static void usage(FILE *out) {
 }
 
 int bx_knock_main(int argc, char **argv) {
-    static const struct option options[] = {
-        {"udp", no_argument, NULL, 'u'}, {"delay", required_argument, NULL, 'd'},
-        {"ipv4", no_argument, NULL, '4'}, {"ipv6", no_argument, NULL, '6'},
-        {"verbose", no_argument, NULL, 'v'}, {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'}, {NULL, 0, NULL, 0}
+    static const struct bx_option_spec specs[] = {
+        {'u', 'u', "udp", BX_OPTION_NO_VALUE},
+        {'d', 'd', "delay", BX_OPTION_REQUIRED_VALUE},
+        {'4', '4', "ipv4", BX_OPTION_NO_VALUE},
+        {'6', '6', "ipv6", BX_OPTION_NO_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
     bool udp = false, verbose = false;
-    int family = AF_UNSPEC, opt;
+    int family = AF_UNSPEC, status = 1;
     uintmax_t delay = 0;
-    while ((opt = getopt_long(argc, argv, "ud:46vhV", options, NULL)) != -1) {
-        switch (opt) {
+    const char **operands = calloc((size_t)argc, sizeof(*operands));
+    if (!operands) { perror("knock"); return 1; }
+    size_t num_operands = 0;
+    struct knock_port *ports = NULL;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            operands[num_operands++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            fprintf(stderr, "knock: %s: %s\n", option.token,
+                    option.event == BX_OPTION_MISSING_VALUE ? "option requires an argument" :
+                    option.event == BX_OPTION_UNEXPECTED_VALUE ? "option does not take an argument" :
+                    "unrecognized option");
+            usage(stderr);
+            goto done;
+        }
+        switch (option.spec->id) {
         case 'u': udp = true; break;
         case 'v': verbose = true; break;
         case '4': family = AF_INET; break;
         case '6': family = AF_INET6; break;
         case 'd':
-            if (!bx_size_parse_uint(optarg, &delay) || delay > INT_MAX) {
+            if (!bx_size_parse_uint(option.value, &delay) || delay > INT_MAX) {
                 fputs("knock: invalid delay\n", stderr);
-                return 1;
+                goto done;
             }
             break;
-        case 'h': usage(stdout); return 0;
-        case 'V': printf("knock (bx) %s\n", BX_VERSION); return 0;
-        default: usage(stderr); return 1;
+        case 'h': usage(stdout); status = 0; goto done;
+        case 'V': printf("knock (bx) %s\n", BX_VERSION); status = 0; goto done;
+        default: usage(stderr); goto done;
         }
     }
-    if (argc - optind < 2) { usage(stderr); return 1; }
-    const char *host = argv[optind++];
-    size_t count = (size_t)(argc - optind);
-    struct knock_port *ports = calloc(count, sizeof(*ports));
-    if (!ports) { perror("knock"); return 1; }
-    int status = 1;
+    if (num_operands < 2) { usage(stderr); goto done; }
+    const char *host = operands[0];
+    if (host[0] == '\0') { fputs("knock: empty host\n", stderr); goto done; }
+    size_t count = num_operands - 1;
+    ports = calloc(count, sizeof(*ports));
+    if (!ports) { perror("knock"); goto done; }
     /* Validate the complete sequence before sending its first packet. */
     for (size_t i = 0; i < count; ++i) {
-        const char *arg = argv[optind + (int)i], *colon = strchr(arg, ':');
+        const char *arg = operands[i + 1], *colon = strchr(arg, ':');
         size_t len = colon ? (size_t)(colon - arg) : strlen(arg);
         if (!len || len >= sizeof(ports[i].service) ||
             (colon && strcmp(colon + 1, "tcp") && strcmp(colon + 1, "udp"))) {
@@ -147,5 +170,6 @@ int bx_knock_main(int argc, char **argv) {
     status = fflush(stdout) == 0 && !ferror(stdout) ? 0 : 1;
 done:
     free(ports);
+    free(operands);
     return status;
 }
