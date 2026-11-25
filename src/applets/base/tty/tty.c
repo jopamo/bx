@@ -1,21 +1,11 @@
-#include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 #include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
-
-struct bx_tty_options {
-    const char* progname;
-    bool silent;
-    bool show_help;
-    bool show_version;
-};
+#include "lib/option_scan.h"
 
 static void bx_tty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]...\n", progname);
@@ -29,47 +19,8 @@ static void bx_tty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "         output version information and exit\n");
 }
 
-static bool bx_tty_parse_options(int argc, char** argv, struct bx_tty_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"silent", no_argument, NULL, 's'}, {"quiet", no_argument, NULL, 's'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
-    };
-
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "tty");
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+s", long_options, NULL);
-        if (c == -1) {
-            break;
-        }
-
-        switch (c) {
-            case 's':
-                options->silent = true;
-                break;
-            case 1:
-                options->show_help = true;
-                return true;
-            case 2:
-                options->show_version = true;
-                return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
-        }
-    }
-
-    *first_operand = optind;
-    return true;
-}
-
-static int bx_tty_emit_state(const struct bx_tty_options* options, bool stdin_is_tty, const char* tty_name, struct bx_diag_ctx* diag) {
-    if (options->silent) {
+static int bx_tty_emit_state(bool silent, bool stdin_is_tty, const char* tty_name, struct bx_diag_ctx* diag) {
+    if (silent) {
         return stdin_is_tty ? 0 : 1;
     }
 
@@ -92,37 +43,43 @@ static int bx_tty_emit_state(const struct bx_tty_options* options, bool stdin_is
 }
 
 int bx_tty_main(int argc, char** argv) {
-    struct bx_tty_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "tty",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+    static const struct bx_option_spec specs[] = {
+        {'s', 's', "silent", BX_OPTION_NO_VALUE},
+        {'s', 0, "quiet", BX_OPTION_NO_VALUE},
+        {1, 0, "help", BX_OPTION_NO_VALUE},
+        {2, 0, "version", BX_OPTION_NO_VALUE},
     };
-    int first_operand = 0;
-
-    if (!bx_tty_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        bx_cli_print_try_help(options.progname);
-        return 2;
+    struct bx_diag_ctx diag = {.progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "tty")};
+    bool silent = false;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(diag.progname);
+            return 2;
+        }
+        if (option.spec->id == 1) {
+            bx_tty_print_help(stdout, diag.progname);
+            return 0;
+        }
+        if (option.spec->id == 2) {
+            bx_cli_print_version(diag.progname);
+            return 0;
+        }
+        silent = true;
     }
 
-    if (options.show_help) {
-        bx_tty_print_help(stdout, options.progname);
-        return 0;
-    }
-
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
-    }
-
-    if (first_operand < argc) {
-        bx_cli_diag_extra_operand(&diag, argv[first_operand]);
-        bx_cli_print_try_help(options.progname);
+    if (option.index < (size_t)argc) {
+        bx_cli_diag_extra_operand(&diag, argv[option.index]);
+        bx_cli_print_try_help(diag.progname);
         return 2;
     }
 
     const char* tty_name = ttyname(STDIN_FILENO);
-    bool stdin_is_tty = (tty_name != NULL);
-    return bx_tty_emit_state(&options, stdin_is_tty, tty_name, &diag);
+    return bx_tty_emit_state(silent, tty_name != NULL, tty_name, &diag);
 }
