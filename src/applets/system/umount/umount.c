@@ -2,9 +2,9 @@
 
 #include <unistd.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mount.h>
@@ -14,7 +14,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/mount_table.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 #ifndef MNT_FORCE
 #define MNT_FORCE 0
@@ -33,7 +33,8 @@ struct bx_umount_options {
     bool read_only;
     bool verbose;
     const char* types;
-    int operand_index;
+    const char** targets;
+    size_t target_count;
 };
 
 static void bx_umount_print_help(FILE* stream, const char* progname) {
@@ -232,20 +233,19 @@ static bool bx_umount_skip_all_entry(const struct bx_mount_entry* entry, const s
 }
 
 static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"all", no_argument, NULL, 'a'},
-        {"force", no_argument, NULL, 'f'},
-        {"lazy", no_argument, NULL, 'l'},
-        {"no-mtab", no_argument, NULL, 'n'},
-        {"quiet", no_argument, NULL, 'q'},
-        {"graceful", no_argument, NULL, 'g'},
-        {"recursive", no_argument, NULL, 'R'},
-        {"read-only", no_argument, NULL, 'r'},
-        {"types", required_argument, NULL, 't'},
-        {"verbose", no_argument, NULL, 'v'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'f', 'f', "force", BX_OPTION_NO_VALUE},
+        {'l', 'l', "lazy", BX_OPTION_NO_VALUE},
+        {'n', 'n', "no-mtab", BX_OPTION_NO_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'g', 'g', "graceful", BX_OPTION_NO_VALUE},
+        {'R', 'R', "recursive", BX_OPTION_NO_VALUE},
+        {'r', 'r', "read-only", BX_OPTION_NO_VALUE},
+        {'t', 't', "types", BX_OPTION_REQUIRED_VALUE},
+        {'v', 'v', "verbose", BX_OPTION_NO_VALUE},
+        {'h', 'h', "help", BX_OPTION_NO_VALUE},
+        {'V', 'V', "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -253,15 +253,36 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
     diag->progname = options->progname;
     diag->verbose = false;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+:aflnt:qgRrvhV", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    size_t end = argc > 0 ? (size_t)argc : 0;
+    bx_option_cursor_init(&cursor, argv, end != 0, end, BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            return true;
+        if (result.event == BX_OPTION_OPERAND) {
+            if (options->targets == NULL) {
+                size_t capacity = end - 1;
+                if (capacity > SIZE_MAX / sizeof(*options->targets) ||
+                    (options->targets = malloc(capacity * sizeof(*options->targets))) == NULL) {
+                    bx_diag(diag, "memory exhausted");
+                    return false;
+                }
+            }
+            options->targets[options->target_count++] = result.token;
+            continue;
         }
-
-        switch (c) {
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name != 0)
+                bx_diag(diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", result.token);
+            return false;
+        }
+        switch (result.spec->id) {
             case 'a':
                 options->all = true;
                 break;
@@ -274,7 +295,7 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
             case 'n':
                 break;
             case 't':
-                options->types = optarg;
+                options->types = result.value;
                 break;
             case 'q':
                 options->quiet = true;
@@ -293,51 +314,38 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
                 diag->verbose = true;
                 break;
             case 'h':
-            case 1:
                 options->show_help = true;
                 return true;
             case 'V':
-            case 2:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
-
-    options->operand_index = optind;
-    return true;
 }
 
-static bool bx_umount_validate_request(int argc, char** argv, struct bx_umount_options* options, struct bx_diag_ctx* diag) {
-    int remaining = argc - options->operand_index;
-
+static bool bx_umount_validate_request(const struct bx_umount_options* options, struct bx_diag_ctx* diag) {
     if (options->types != NULL && !options->all) {
         bx_diag(diag, "--types currently requires --all in bx");
         return false;
     }
 
     if (options->all) {
-        if (remaining != 0) {
-            bx_diag(diag, "unexpected operand '%s' with --all", argv[options->operand_index]);
+        if (options->target_count != 0) {
+            bx_diag(diag, "unexpected operand '%s' with --all", options->targets[0]);
             return false;
         }
         return true;
     }
 
-    if (remaining <= 0) {
+    if (options->target_count == 0) {
         bx_diag(diag, "missing target operand");
         return false;
     }
 
-    for (int i = options->operand_index; i < argc; i++) {
-        if (argv[i] == NULL || argv[i][0] == '\0') {
+    for (size_t i = 0; i < options->target_count; i++) {
+        if (options->targets[i][0] == '\0') {
             bx_diag(diag, "target may not be empty");
             return false;
         }
@@ -596,48 +604,35 @@ static int bx_umount_all(const struct bx_umount_options* options, struct bx_diag
     return 64;
 }
 
-int bx_umount_main(int argc, char** argv) {
-    struct bx_umount_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "umount",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
-    };
-
-    if (!bx_umount_parse_options(argc, argv, &options, &diag)) {
-        bx_cli_print_try_help(options.progname);
-        return 1;
-    }
-
-    if (options.show_help) {
-        bx_umount_print_help(stdout, options.progname);
+static int bx_umount_run(const struct bx_umount_options* options, struct bx_diag_ctx* diag) {
+    if (options->show_help) {
+        bx_umount_print_help(stdout, options->progname);
         return 0;
     }
 
-    if (options.show_version) {
-        bx_cli_print_version(options.progname);
+    if (options->show_version) {
+        bx_cli_print_version(options->progname);
         return 0;
     }
 
-    if (!bx_umount_validate_request(argc, argv, &options, &diag)) {
-        bx_cli_print_try_help(options.progname);
+    if (!bx_umount_validate_request(options, diag)) {
+        bx_cli_print_try_help(options->progname);
         return 1;
     }
 
-    if (options.all) {
-        return bx_umount_all(&options, &diag);
+    if (options->all) {
+        return bx_umount_all(options, diag);
     }
 
     int successes = 0;
     int failures = 0;
 
-    for (int i = options.operand_index; i < argc; i++) {
-        const char* target = argv[i];
+    for (size_t i = 0; i < options->target_count; i++) {
+        const char* target = options->targets[i];
         int rc;
 
-        if (options.recursive) {
-            rc = bx_umount_recursive(&options, target, &diag);
+        if (options->recursive) {
+            rc = bx_umount_recursive(options, target, diag);
         }
         else {
             struct bx_mount_table table;
@@ -645,17 +640,17 @@ int bx_umount_main(int argc, char** argv) {
             const char* source = NULL;
 
             if (!bx_mount_table_load(&table)) {
-                bx_diag(&diag, "failed to read /proc/self/mounts: %s", strerror(errno));
+                bx_diag(diag, "failed to read /proc/self/mounts: %s", strerror(errno));
                 return 1;
             }
             entry = bx_mount_table_find_target(&table, target);
             if (entry == NULL) {
                 bx_mount_table_free(&table);
-                rc = bx_umount_emit_missing(&options, &diag, target);
+                rc = bx_umount_emit_missing(options, diag, target);
             }
             else {
                 source = entry->source;
-                rc = bx_umount_perform_one(&options, target, source, &diag);
+                rc = bx_umount_perform_one(options, target, source, diag);
                 bx_mount_table_free(&table);
             }
         }
@@ -675,4 +670,16 @@ int bx_umount_main(int argc, char** argv) {
         return 1;
     }
     return 64;
+}
+
+int bx_umount_main(int argc, char** argv) {
+    struct bx_umount_options options;
+    struct bx_diag_ctx diag = {0};
+    int status = 1;
+    if (bx_umount_parse_options(argc, argv, &options, &diag))
+        status = bx_umount_run(&options, &diag);
+    else
+        bx_cli_print_try_help(options.progname);
+    free(options.targets);
+    return status;
 }
