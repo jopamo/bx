@@ -2660,14 +2660,6 @@ void backsub(char **pb_ptr, const char **sptr_ptr)	/* handle \\& variations */
 {						/* sptr[0] == '\\' */
 	char *pb = *pb_ptr;
 	const char *sptr = *sptr_ptr;
-	static bool first = true;
-	static bool do_posix = false;
-
-	if (first) {
-		first = false;
-		do_posix = (getenv("POSIXLY_CORRECT") != NULL);
-	}
-
 	if (sptr[1] == '\\') {
 		if (sptr[2] == '\\' && sptr[3] == '&') { /* \\\& -> \& */
 			*pb++ = '\\';
@@ -2676,9 +2668,6 @@ void backsub(char **pb_ptr, const char **sptr_ptr)	/* handle \\& variations */
 		} else if (sptr[2] == '&') {	/* \\& -> \ + matched */
 			*pb++ = '\\';
 			sptr += 2;
-		} else if (do_posix) {		/* \\x -> \x */
-			sptr++;
-			*pb++ = *sptr++;
 		} else {			/* \\x -> \\x */
 			*pb++ = *sptr++;
 			*pb++ = *sptr++;
