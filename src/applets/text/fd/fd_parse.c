@@ -10,6 +10,7 @@
 #include "fd_parse.h"
 #include "search/metadata.h"
 #include "lib/args_common.h"
+#include "lib/glob_syntax.h"
 #include "lib/option_scan.h"
 #include "lib/output_policy.h"
 
@@ -398,14 +399,22 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
             case 'g':
                 out->opts.glob_match = true;
                 break;
-            case 'E':
+            case 'E': {
                 if (out->opts.num_exclude_patterns == FD_MAX_EXCLUDE_PATTERNS) {
                     fprintf(stderr, "%s: too many --exclude patterns (limit %d)\n", out->progname, FD_MAX_EXCLUDE_PATTERNS);
                     out->exit_code = 2;
                     return false;
                 }
-                out->opts.exclude_patterns[out->opts.num_exclude_patterns++] = option.value;
+                char *pattern = strdup(option.value);
+                if (!pattern) {
+                    fprintf(stderr, "%s: out of memory\n", out->progname);
+                    out->exit_code = 2;
+                    return false;
+                }
+                bx_glob_normalize_caret(pattern);
+                out->opts.exclude_patterns[out->opts.num_exclude_patterns++] = pattern;
                 break;
+            }
             case 204:
                 out->opts.fixed_strings = false;
                 out->opts.glob_match = false;
@@ -530,6 +539,8 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
 void fd_free_main_args(struct fd_main_args *args) {
     if (!args)
         return;
+    while (args->opts.num_exclude_patterns > 0)
+        free(args->opts.exclude_patterns[--args->opts.num_exclude_patterns]);
     free(args->search_paths);
     args->search_paths = NULL;
     free(args->exec_argv_storage);
