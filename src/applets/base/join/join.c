@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -18,6 +17,7 @@
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 struct bx_join_options {
     const char* progname;
@@ -30,10 +30,9 @@ struct bx_join_options {
     bool ignore_case;
     char separator;
     bool zero_terminated;
-    bool check_order;
-    bool no_check_order;
-    bool header;
-    const char* format_str;
+    const char* paths[2];
+    const char* extra;
+    size_t path_count;
     bool show_help;
     bool show_version;
 };
@@ -51,25 +50,20 @@ static void bx_join_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -e EMPTY          replace missing input fields with EMPTY\n");
     fprintf(stream, "  -i, --ignore-case  ignore differences in case when comparing fields\n");
     fprintf(stream, "  -j FIELD          equivalent to '-1 FIELD -2 FIELD'\n");
-    fprintf(stream, "  -o FORMAT         obey FORMAT while constructing output line\n");
     fprintf(stream, "  -t CHAR           use CHAR as input and output field separator\n");
     fprintf(stream, "  -v FILENUM        like -a FILENUM, but suppress joined output lines\n");
     fprintf(stream, "  -1 FIELD          join on this FIELD of file 1\n");
     fprintf(stream, "  -2 FIELD          join on this FIELD of file 2\n");
-    fprintf(stream, "  --check-order     check that the input is correctly sorted, even\n");
-    fprintf(stream, "                      if all input lines are paired\n");
-    fprintf(stream, "  --nocheck-order   do not check that the input is correctly sorted\n");
-    fprintf(stream, "  --header          treat the first line in each file as field headers,\n");
-    fprintf(stream, "                      print them without trying to pair them\n");
     fprintf(stream, "  -z, --zero-terminated  line delimiter is NUL, not newline\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
 }
 
-static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"ignore-case", no_argument, NULL, 'i'},     {"check-order", no_argument, NULL, 1}, {"nocheck-order", no_argument, NULL, 2}, {"header", no_argument, NULL, 3},
-        {"zero-terminated", no_argument, NULL, 'z'}, {"help", no_argument, NULL, 4},        {"version", no_argument, NULL, 5},       {NULL, 0, NULL, 0},
+static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', NULL, BX_OPTION_REQUIRED_VALUE},        {'e', 'e', NULL, BX_OPTION_REQUIRED_VALUE}, {'i', 'i', "ignore-case", BX_OPTION_NO_VALUE}, {'j', 'j', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', NULL, BX_OPTION_REQUIRED_VALUE},        {'v', 'v', NULL, BX_OPTION_REQUIRED_VALUE}, {'1', '1', NULL, BX_OPTION_REQUIRED_VALUE},    {'2', '2', NULL, BX_OPTION_REQUIRED_VALUE},
+        {'z', 'z', "zero-terminated", BX_OPTION_NO_VALUE}, {4, 0, "help", BX_OPTION_NO_VALUE},         {5, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -79,83 +73,82 @@ static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options*
     options->separator = 0;  // whitespace
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int option_index = 0;
-        int c = bx_args_getopt_long(argc, argv, "a:e:ij:o:t:v:1:2:z", long_options, &option_index);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (options->path_count < 2)
+                options->paths[options->path_count++] = option.token;
+            else if (!options->extra)
+                options->extra = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'a':
-                if (strcmp(optarg, "1") == 0)
+                if (strcmp(option.value, "1") == 0)
                     options->print_unpairable1 = true;
-                else if (strcmp(optarg, "2") == 0)
+                else if (strcmp(option.value, "2") == 0)
                     options->print_unpairable2 = true;
                 else {
-                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                    bx_diag(diag, "invalid field number: '%s'", option.value);
                     return false;
                 }
                 break;
             case 'e':
-                options->empty_fill = optarg;
+                options->empty_fill = option.value;
                 break;
             case 'i':
                 options->ignore_case = true;
                 break;
             case 'j':
-                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_field1)) {
-                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                if (!bx_args_parse_int_range(option.value, 1, INT_MAX, &options->join_field1)) {
+                    bx_diag(diag, "invalid field number: '%s'", option.value);
                     return false;
                 }
                 options->join_field2 = options->join_field1;
                 break;
-            case 'o':
-                options->format_str = optarg;
-                break;
             case 't':
-                if (strlen(optarg) != 1) {
+                if (strlen(option.value) != 1) {
                     bx_diag(diag, "the delimiter must be a single character");
                     return false;
                 }
-                options->separator = optarg[0];
+                options->separator = option.value[0];
                 break;
             case 'v':
                 options->suppress_joined = true;
-                if (strcmp(optarg, "1") == 0)
+                if (strcmp(option.value, "1") == 0)
                     options->print_unpairable1 = true;
-                else if (strcmp(optarg, "2") == 0)
+                else if (strcmp(option.value, "2") == 0)
                     options->print_unpairable2 = true;
                 else {
-                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                    bx_diag(diag, "invalid field number: '%s'", option.value);
                     return false;
                 }
                 break;
             case '1':
-                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_field1)) {
-                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                if (!bx_args_parse_int_range(option.value, 1, INT_MAX, &options->join_field1)) {
+                    bx_diag(diag, "invalid field number: '%s'", option.value);
                     return false;
                 }
                 break;
             case '2':
-                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_field2)) {
-                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                if (!bx_args_parse_int_range(option.value, 1, INT_MAX, &options->join_field2)) {
+                    bx_diag(diag, "invalid field number: '%s'", option.value);
                     return false;
                 }
                 break;
             case 'z':
                 options->zero_terminated = true;
-                break;
-            case 1:
-                options->check_order = true;
-                break;
-            case 2:
-                options->no_check_order = true;
-                break;
-            case 3:
-                options->header = true;
                 break;
             case 4:
                 options->show_help = true;
@@ -163,15 +156,11 @@ static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options*
             case 5:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
-                return false;
             default:
                 return false;
         }
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -339,9 +328,8 @@ static bool print_unpairable(
 int bx_join_main(int argc, char** argv) {
     struct bx_join_options options;
     struct bx_diag_ctx diag = {.progname = "join", .exit_status = 0};
-    int first_operand = 0;
 
-    if (!bx_join_parse_options(argc, argv, &options, &first_operand, &diag))
+    if (!bx_join_parse_options(argc, argv, &options, &diag))
         return 1;
     if (options.show_help) {
         bx_join_print_help(stdout, options.progname);
@@ -352,21 +340,34 @@ int bx_join_main(int argc, char** argv) {
         return 0;
     }
 
-    if (argc - first_operand != 2) {
+    if (options.path_count != 2) {
         bx_diag(&diag, "missing operand");
         return 1;
     }
 
+    if (options.extra) {
+        bx_cli_diag_extra_operand(&diag, options.extra);
+        return 1;
+    }
+    if (!*options.paths[0] || !*options.paths[1]) {
+        bx_diag(&diag, "empty file operand");
+        return 1;
+    }
+    if (strcmp(options.paths[0], "-") == 0 && strcmp(options.paths[1], "-") == 0) {
+        bx_diag(&diag, "only one input may be standard input");
+        return 1;
+    }
+
     bool f1_is_stdio = false;
-    FILE* f1 = bx_fopen_dash(argv[first_operand], "r", &f1_is_stdio);
+    FILE* f1 = bx_fopen_dash(options.paths[0], "r", &f1_is_stdio);
     if (!f1) {
-        bx_diag(&diag, "%s: %s", argv[first_operand], strerror(errno));
+        bx_diag(&diag, "%s: %s", options.paths[0], strerror(errno));
         return 1;
     }
     bool f2_is_stdio = false;
-    FILE* f2 = bx_fopen_dash(argv[first_operand + 1], "r", &f2_is_stdio);
+    FILE* f2 = bx_fopen_dash(options.paths[1], "r", &f2_is_stdio);
     if (!f2) {
-        bx_diag(&diag, "%s: %s", argv[first_operand + 1], strerror(errno));
+        bx_diag(&diag, "%s: %s", options.paths[1], strerror(errno));
         bx_fclose_nonstdio(f1, f1_is_stdio);
         return 1;
     }
