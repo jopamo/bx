@@ -38,11 +38,12 @@ __RCSID("$NetBSD: main.c,v 1.10 1997/10/01 02:18:14 enami Exp $");
 #include <unistd.h>
 #include <errno.h>
 #include <stdarg.h>
-#include <getopt.h>
+#include <stdint.h>
 #include <strings.h>
 
 #include "lib/fat/repair/fsutil.h"
 #include "lib/fat/repair/ext.h"
+#include "lib/option_scan.h"
 #include "applets.h"
 
 int alwaysno;		/* assume "no" for all questions */
@@ -77,17 +78,37 @@ static int
 dos_check(int argc, char **argv)
 {
 	enum { HELP = 256, VARIANT };
-	static const struct option options[] = {
-		{"help", no_argument, NULL, HELP},
-		{"variant", required_argument, NULL, VARIANT},
-		{NULL, 0, NULL, 0}
+	static const struct bx_option_spec specs[] = {
+		{'a', 'a', NULL, BX_OPTION_NO_VALUE},
+		{'b', 'b', NULL, BX_OPTION_NO_VALUE},
+		{'n', 'n', NULL, BX_OPTION_NO_VALUE},
+		{'p', 'p', NULL, BX_OPTION_NO_VALUE},
+		{'r', 'r', NULL, BX_OPTION_NO_VALUE},
+		{'v', 'v', NULL, BX_OPTION_NO_VALUE},
+		{'y', 'y', NULL, BX_OPTION_NO_VALUE},
+		{'V', 'V', NULL, BX_OPTION_NO_VALUE},
+		{HELP, 0, "help", BX_OPTION_NO_VALUE},
+		{VARIANT, 0, "variant", BX_OPTION_REQUIRED_VALUE},
 	};
-	int ch, mode = 0;
+	int mode = 0;
 	bool verify = false;
+	const char *target = NULL;
+	size_t count = 0;
+	struct bx_option_cursor cursor;
 
-	while ((ch = getopt_long(argc, argv, "abnprvyV", options, NULL)) != -1) {
+	bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ABBREVIATE,
+	    specs, sizeof(specs) / sizeof(specs[0]));
+	for (;;) {
+		struct bx_option_result result = bx_option_next(&cursor);
+		if (result.event == BX_OPTION_END)
+			break;
+		if (result.event == BX_OPTION_OPERAND) {
+			if (count++ == 0)
+				target = result.token;
+			continue;
+		}
 		int next = 0;
-		switch (ch) {
+		switch (result.event == BX_OPTION_MATCH ? result.spec->id : 0) {
 		case 'n': next = 1; break;
 		case 'b': next = 1; boot_only = 1; break;
 		case 'a': case 'p': case 'y': next = 2; break;
@@ -96,7 +117,7 @@ dos_check(int argc, char **argv)
 		case 'V': verify = true; break;
 		case HELP: dos_help(); return 0;
 		case VARIANT:
-			if (!strcasecmp(optarg, "standard"))
+			if (!strcasecmp(result.value, "standard"))
 				break;
 			/* fall through */
 		default:
@@ -111,7 +132,7 @@ dos_check(int argc, char **argv)
 			mode = next;
 		}
 	}
-	if (argc - optind != 1) {
+	if (count != 1) {
 		dos_help();
 		return 2;
 	}
@@ -119,12 +140,12 @@ dos_check(int argc, char **argv)
 	automatic = mode == 2;
 	require_free_hint = 0;
 	skipclean = 0;
-	setcdevname(argv[optind], 0);
-	int result = checkfilesys(argv[optind], true);
+	setcdevname(target, 0);
+	int result = checkfilesys(target, true);
 	if (verify && result == 0) {
 		alwaysno = 1;
 		automatic = false;
-		result = checkfilesys(argv[optind], true);
+		result = checkfilesys(target, true);
 	}
 	return result != 0 || detected ? 1 : 0;
 }
@@ -144,8 +165,20 @@ usage(void)
 int
 bx_fsck_fat_main(int argc, char **argv)
 {
-	int ret = 0, erg;
-	int ch;
+	static const struct bx_option_spec specs[] = {
+		{'B', 'B', NULL, BX_OPTION_NO_VALUE},
+		{'C', 'C', NULL, BX_OPTION_NO_VALUE},
+		{'f', 'f', NULL, BX_OPTION_NO_VALUE},
+		{'F', 'F', NULL, BX_OPTION_NO_VALUE},
+		{'n', 'n', NULL, BX_OPTION_NO_VALUE},
+		{'p', 'p', NULL, BX_OPTION_NO_VALUE},
+		{'y', 'y', NULL, BX_OPTION_NO_VALUE},
+		{'M', 'M', NULL, BX_OPTION_NO_VALUE},
+	};
+	int ret = 0;
+	const char **targets = NULL;
+	size_t count = 0;
+	struct bx_option_cursor cursor;
 
 	skipclean = 1;
 	allow_mmap = 1;
@@ -155,8 +188,26 @@ bx_fsck_fat_main(int argc, char **argv)
 	dos_mode = strcmp(name, "fsck_msdosfs") != 0;
 	if (dos_mode)
 		return dos_check(argc, argv);
-	while ((ch = getopt(argc, argv, "BCfFnpyM")) != -1) {
-		switch (ch) {
+
+	bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ORDERED,
+	    specs, sizeof(specs) / sizeof(specs[0]));
+	for (;;) {
+		struct bx_option_result result = bx_option_next(&cursor);
+		if (result.event == BX_OPTION_END)
+			break;
+		if (result.event == BX_OPTION_OPERAND) {
+			if (targets == NULL) {
+				size_t capacity = (size_t)argc - 1;
+				if (capacity > SIZE_MAX / sizeof(*targets) ||
+				    (targets = malloc(capacity * sizeof(*targets))) == NULL) {
+					fprintf(stderr, "fsck_msdosfs: memory exhausted\n");
+					return 1;
+				}
+			}
+			targets[count++] = result.token;
+			continue;
+		}
+		switch (result.event == BX_OPTION_MATCH ? result.spec->id : 0) {
 		case 'B': /* for fsck_ffs compatibility */
 		case 'C':
 			break;
@@ -172,7 +223,8 @@ bx_fsck_fat_main(int argc, char **argv)
 			 * in case someone tries -F directly.  The -F flag
 			 * is intentionally left out of the usage message.
 			 */
-			exit(5);
+			free(targets);
+			return 5;
 		case 'n':
 			alwaysno = 1;
 			alwaysyes = 0;
@@ -191,23 +243,20 @@ bx_fsck_fat_main(int argc, char **argv)
 			break;
 
 		default:
+			free(targets);
 			usage();
-			break;
 		}
 	}
-	argc -= optind;
-	argv += optind;
-
-	if (!argc)
+	if (count == 0)
 		usage();
 
-	while (--argc >= 0) {
-		setcdevname(*argv, preen);
-		erg = checkfilesys(*argv++, false);
+	for (size_t i = 0; i < count; i++) {
+		setcdevname(targets[i], preen);
+		int erg = checkfilesys(targets[i], false);
 		if (erg > ret)
 			ret = erg;
 	}
-
+	free(targets);
 	return ret;
 }
 
