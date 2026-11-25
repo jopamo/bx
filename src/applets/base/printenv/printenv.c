@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +9,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 
 extern char** environ;
 
@@ -32,44 +31,46 @@ static void bx_printenv_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_printenv_parse_options(int argc, char** argv, struct bx_printenv_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"null", no_argument, NULL, '0'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+    enum { OPT_HELP = 256, OPT_VERSION };
+    static const struct bx_option_spec specs[] = {
+        {'0', '0', "null", BX_OPTION_NO_VALUE},
+        {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "printenv");
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+0", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case '0':
                 options->zero_terminated = true;
                 break;
-            case 1:
+            case OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
             default:
                 return false;
         }
     }
 
-    *first_operand = optind;
+    *first_operand = (int)option.index;
     return true;
 }
 
