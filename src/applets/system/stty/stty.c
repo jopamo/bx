@@ -147,6 +147,7 @@ struct bx_stty_plan {
     enum bx_stty_special_mode special_mode;
     enum bx_stty_mode mode;
     bool mode_conflict;
+    bool empty_device_path;
     bool drain;
     const char* device_path;
     struct bx_stty_op* ops;
@@ -783,6 +784,13 @@ static void bx_stty_set_mode(struct bx_stty_plan* plan, enum bx_stty_mode mode) 
     }
 }
 
+static void bx_stty_select_device(struct bx_stty_plan* plan, const char* path) {
+    if (*path == '\0') {
+        plan->empty_device_path = true;
+    }
+    plan->device_path = path;
+}
+
 static bool bx_stty_parse_short_argument(int argc, char** argv, int* index, const char* arg, struct bx_stty_plan* plan, struct bx_stty_setting_tokens* settings) {
     size_t length = strlen(arg);
     for (size_t j = 1; j < length; j++) {
@@ -800,13 +808,13 @@ static bool bx_stty_parse_short_argument(int argc, char** argv, int* index, cons
 
         if (c == 'F') {
             if (j + 1 < length) {
-                plan->device_path = arg + j + 1;
+                bx_stty_select_device(plan, arg + j + 1);
                 return true;
             }
 
             if (*index + 1 < argc) {
                 *index += 1;
-                plan->device_path = argv[*index];
+                bx_stty_select_device(plan, argv[*index]);
                 return true;
             }
 
@@ -867,7 +875,7 @@ static bool bx_stty_collect_arguments(int argc, char** argv, struct bx_stty_plan
         if (strcmp(arg, "--file") == 0) {
             if (i + 1 < argc) {
                 i++;
-                plan->device_path = argv[i];
+                bx_stty_select_device(plan, argv[i]);
             }
             else if (!bx_stty_tokens_add(settings, "--file")) {
                 return false;
@@ -876,7 +884,7 @@ static bool bx_stty_collect_arguments(int argc, char** argv, struct bx_stty_plan
         }
 
         if (strncmp(arg, "--file=", 7) == 0) {
-            plan->device_path = arg + 7;
+            bx_stty_select_device(plan, arg + 7);
             continue;
         }
 
@@ -1211,6 +1219,12 @@ static bool bx_stty_parse_plan(int argc, char** argv, struct bx_stty_plan* plan,
     if (plan->special_mode != BX_STTY_SPECIAL_NONE) {
         bx_stty_tokens_free(&settings);
         return true;
+    }
+
+    if (plan->empty_device_path) {
+        bx_diag(diag, "empty device path");
+        bx_stty_tokens_free(&settings);
+        return false;
     }
 
     for (size_t i = 0; i < settings.count; i++) {
