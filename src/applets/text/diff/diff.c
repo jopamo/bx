@@ -3,7 +3,6 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <fnmatch.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,8 +15,8 @@
 #include "applets/text/edit/vim/src/xdiff/xdiff.h"
 #include "bx/diag.h"
 #include "lib/args_common.h"
-#include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/output_quote.h"
 #include "lib/path_ops.h"
 #include "lib/text_buffer.h"
@@ -398,58 +397,72 @@ int bx_diff_main(int argc, char** argv) {
         .minimal_work_left = DIFF_MINIMAL_WORK_MAX,
     };
     struct bx_diag_ctx* diag = &state.diag;
-    static const struct option options[] = {
-        {"exclude", required_argument, NULL, 'x'},
-        {"help", no_argument, NULL, 'h'},
-        {"minimal", no_argument, NULL, 'd'},
-        {"recursive", no_argument, NULL, 'r'},
-        {"unified", required_argument, NULL, 'U'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'x', 'x', "exclude", BX_OPTION_REQUIRED_VALUE}, {'h', 'h', "help", BX_OPTION_NO_VALUE},          {'d', 'd', "minimal", BX_OPTION_NO_VALUE},
+        {'r', 'r', "recursive", BX_OPTION_NO_VALUE},     {'U', 'U', "unified", BX_OPTION_REQUIRED_VALUE}, {'u', 'u', NULL, BX_OPTION_NO_VALUE},
     };
-    int opt, operand = 1;
-    bx_args_getopt_reset();
-    while ((opt = bx_args_getopt_long_interspersed(argc, argv, "-:dhruU:x:", options, &operand)) != -1) {
-        switch (opt) {
-        case 'd':
-            state.minimal = true;
-            break;
-        case 'h':
-            usage(stdout);
-            return 0;
-        case 'u':
-            state.context = 3;
-            break;
-        case 'r':
-            state.recursive = true;
-            break;
-        case 'x':
-            if (state.exclude_count == DIFF_EXCLUDES_MAX || strlen(optarg) > 256) {
-                bx_diag(diag, "limit is %d exclusion patterns of up to 256 bytes", DIFF_EXCLUDES_MAX);
-                return 2;
-            }
-            state.excludes[state.exclude_count++] = optarg;
-            break;
-        case 'U':
-            if (!bx_args_parse_size_range(optarg, 0, DIFF_LINES_MAX, &state.context)) {
-                bx_diag(diag, "invalid context size: '%s'", optarg);
-                return 2;
-            }
-            break;
-        case ':':
-            bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-            return 2;
-        default:
-            bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
+    const char* paths[2];
+    size_t count = 0;
+    bool extra = false;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (count < 2)
+                paths[count++] = option.token;
+            else
+                extra = true;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option requires an argument -- '%s'", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
             return 2;
         }
+        switch (option.spec->id) {
+            case 'd':
+                state.minimal = true;
+                break;
+            case 'h':
+                usage(stdout);
+                return 0;
+            case 'u':
+                state.context = 3;
+                break;
+            case 'r':
+                state.recursive = true;
+                break;
+            case 'x':
+                if (state.exclude_count == DIFF_EXCLUDES_MAX || strlen(option.value) > 256) {
+                    bx_diag(diag, "limit is %d exclusion patterns of up to 256 bytes", DIFF_EXCLUDES_MAX);
+                    return 2;
+                }
+                state.excludes[state.exclude_count++] = option.value;
+                break;
+            case 'U':
+                if (!bx_args_parse_size_range(option.value, 0, DIFF_LINES_MAX, &state.context)) {
+                    bx_diag(diag, "invalid context size: '%s'", option.value);
+                    return 2;
+                }
+                break;
+        }
     }
-    if (argc - optind != 2 ||
-        (strcmp(argv[optind], "-") == 0 && strcmp(argv[optind + 1], "-") == 0)) {
+    if (extra || count != 2 || (strcmp(paths[0], "-") == 0 && strcmp(paths[1], "-") == 0)) {
         usage(stderr);
         return 2;
     }
+    if (!*paths[0] || !*paths[1]) {
+        bx_diag(diag, "empty file operand");
+        return 2;
+    }
 
-    const char* paths[] = {argv[optind], argv[optind + 1]};
     if (state.exclude_count && !state.recursive) {
         bx_diag(diag, "--exclude requires -r");
         return 2;
