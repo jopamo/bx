@@ -24,13 +24,12 @@ static void usage(FILE* out, const char* name) {
 
 #ifdef __linux__
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "module_alias.h"
 #include "module_load.h"
 #include "module_plan.h"
@@ -185,27 +184,21 @@ static int remove_plan(const struct bx_module_plan* plan, struct bx_diag_ctx* di
     }
     return 0;
 }
-#endif
 
-int bx_modprobe_main(int argc, char** argv) {
-    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "modprobe", "-h", "-V", usage);
-    if (handled >= 0)
-        return handled;
+static int modprobe_command(int argc, char** argv, char** operands) {
     struct bx_diag_ctx diag = {.progname = "modprobe"};
-#ifdef __linux__
-    static const struct option opts[] = {
-        {"show-depends", no_argument, NULL, 'D'},
-        {"resolve-alias", no_argument, NULL, 'R'},
-        {"remove", no_argument, NULL, 'r'},
-        {"dry-run", no_argument, NULL, 'n'},
-        {"show", no_argument, NULL, 'n'},
-        {"all", no_argument, NULL, 'a'},
-        {"use-blacklist", no_argument, NULL, 'b'},
-        {"quiet", no_argument, NULL, 'q'},
-        {"dirname", required_argument, NULL, 'd'},
-        {"set-version", required_argument, NULL, 'S'},
-        {"config", required_argument, NULL, 'C'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec options[] = {
+        {'D', 'D', "show-depends", BX_OPTION_NO_VALUE},
+        {'R', 'R', "resolve-alias", BX_OPTION_NO_VALUE},
+        {'r', 'r', "remove", BX_OPTION_NO_VALUE},
+        {'n', 'n', "dry-run", BX_OPTION_NO_VALUE},
+        {'n', 0, "show", BX_OPTION_NO_VALUE},
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {'b', 'b', "use-blacklist", BX_OPTION_NO_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'d', 'd', "dirname", BX_OPTION_REQUIRED_VALUE},
+        {'S', 'S', "set-version", BX_OPTION_REQUIRED_VALUE},
+        {'C', 'C', "config", BX_OPTION_REQUIRED_VALUE},
     };
     const char* base = "/";
     const char* release = NULL;
@@ -218,9 +211,28 @@ int bx_modprobe_main(int argc, char** argv) {
     bool use_blacklist = false;
     bool quiet = false;
     bool alternate_root = false;
-    bx_args_getopt_reset();
-    for (int opt; (opt = bx_args_getopt_long(argc, argv, ":DRrnabqd:S:C:", opts, NULL)) != -1;) {
-        switch (opt) {
+    int count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END)
+            break;
+        if (result.event == BX_OPTION_OPERAND) {
+            operands[count++] = argv[result.index];
+            continue;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(&diag, "option requires an argument -- '%c'", result.spec->short_name);
+            else if (result.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", result.token);
+            return 1;
+        }
+        switch (result.spec->id) {
         case 'D':
             show = true;
             break;
@@ -243,33 +255,27 @@ int bx_modprobe_main(int argc, char** argv) {
             quiet = true;
             break;
         case 'd':
-            if (*optarg == '\0' || strpbrk(optarg, "\r\n") != NULL) {
+            if (*result.value == '\0' || strpbrk(result.value, "\r\n") != NULL) {
                 bx_diag(&diag, "invalid module root directory");
                 return 1;
             }
-            base = optarg;
+            base = result.value;
             alternate_root = true;
             break;
         case 'S':
-            if (!bx_module_release_valid(optarg)) {
-                bx_diag(&diag, "invalid kernel release '%s'", optarg);
+            if (!bx_module_release_valid(result.value)) {
+                bx_diag(&diag, "invalid kernel release '%s'", result.value);
                 return 1;
             }
-            release = optarg;
+            release = result.value;
             break;
         case 'C':
-            if (*optarg == '\0' || config != NULL) {
+            if (*result.value == '\0' || config != NULL) {
                 bx_diag(&diag, "specify one non-empty policy filename");
                 return 1;
             }
-            config = optarg;
+            config = result.value;
             break;
-        default:
-            if (opt == ':')
-                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
-            else
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
         }
     }
     bool load = !show && !alias && !remove;
@@ -280,18 +286,18 @@ int bx_modprobe_main(int argc, char** argv) {
     }
     if ((show && alias) || (remove && (show || alias)) ||
         (!load && (config != NULL || dry_run || all || use_blacklist)) ||
-        optind == argc || (!load && argc - optind != 1)) {
+        count == 0 || (!load && count != 1)) {
         usage(stderr, diag.progname);
         return 1;
     }
-    const char* name = argv[optind];
-    int queries = all ? argc - optind : 1;
+    const char* name = operands[0];
+    int queries = all ? count : 1;
     if (queries > 256) {
         bx_diag(&diag, "too many module requests");
         return 1;
     }
     for (int i = 0; i < queries; i++) {
-        if (!bx_module_alias_query_valid(argv[optind + i])) {
+        if (!bx_module_alias_query_valid(operands[i])) {
             bx_diag(&diag, "invalid module or alias operand");
             return 1;
         }
@@ -316,7 +322,7 @@ int bx_modprobe_main(int argc, char** argv) {
     struct bx_module_plan plan;
     const char* failed = NULL;
     int planned = remove ? bx_module_tree_remove_plan(&tree, name, &plan)
-                         : bx_module_tree_plan(&tree, queries, argv + optind, &plan, &failed);
+                         : bx_module_tree_plan(&tree, queries, operands, &plan, &failed);
     if (planned < 0) {
         if (!quiet || planned != BX_MODULE_PLAN_NOTFOUND) {
             const char* reason = planned == BX_MODULE_PLAN_CYCLE ? "dependency cycle" : strerror(errno);
@@ -333,7 +339,7 @@ int bx_modprobe_main(int argc, char** argv) {
         goto out;
     }
     if (load) {
-        char* parameters = bx_module_parameters(all ? 0 : argc - optind - 1, argv + optind + 1);
+        char* parameters = bx_module_parameters(all ? 0 : count - 1, operands + 1);
         if (parameters == NULL)
             bx_perror_path(&diag, "module parameters");
         else
@@ -358,7 +364,28 @@ out:
     bx_module_policy_close(&policy);
     bx_module_tree_close(&tree);
     return status;
+}
+#endif
+
+int bx_modprobe_main(int argc, char** argv) {
+    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "modprobe", "-h", "-V", usage);
+    if (handled >= 0)
+        return handled;
+#ifdef __linux__
+    char** operands = NULL;
+    if (argc > 1) {
+        operands = calloc((size_t)argc - 1, sizeof(*operands));
+        if (!operands) {
+            struct bx_diag_ctx diag = {.progname = "modprobe"};
+            bx_perror_path(&diag, "module operands");
+            return 1;
+        }
+    }
+    int status = modprobe_command(argc, argv, operands);
+    free(operands);
+    return status;
 #else
+    struct bx_diag_ctx diag = {.progname = "modprobe"};
     bx_diag(&diag, "Linux module dependency queries are not supported on this platform");
     return 1;
 #endif
