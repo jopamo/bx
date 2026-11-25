@@ -1,8 +1,8 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "applets.h"
@@ -10,7 +10,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/size_parse.h"
-#include "lib/args_common.h"
+#include "lib/option_scan.h"
 #include "lib/line_writer.h"
 
 enum {
@@ -27,6 +27,8 @@ struct bx_unexpand_options {
     bool tabs_specified;
     bool show_help;
     bool show_version;
+    const char** files;
+    size_t file_count;
 };
 
 static void bx_unexpand_print_help(FILE* stream, const char* progname) {
@@ -67,23 +69,13 @@ static bool bx_unexpand_parse_tab_size(const char* text, struct bx_unexpand_opti
     return true;
 }
 
-static void bx_unexpand_diag_option_requires_arg(struct bx_diag_ctx* diag, int missing_optopt, int missing_optind, int argc, char* const argv[]) {
-    if (missing_optind > 0 && missing_optind <= argc && argv[missing_optind - 1] != NULL && strncmp(argv[missing_optind - 1], "--", 2) == 0) {
-        bx_diag(diag, "option '%s' requires an argument", argv[missing_optind - 1]);
-        return;
-    }
-
-    bx_cli_diag_option_requires_arg(diag, missing_optopt, missing_optind, argc, argv);
-}
-
-static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"all", no_argument, NULL, 'a'},
-        {"first-only", no_argument, NULL, BX_UNEXPAND_OPT_FIRST_ONLY},
-        {"tabs", required_argument, NULL, 't'},
-        {"help", no_argument, NULL, BX_UNEXPAND_OPT_HELP},
-        {"version", no_argument, NULL, BX_UNEXPAND_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_options* options, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'a', 'a', "all", BX_OPTION_NO_VALUE},
+        {BX_UNEXPAND_OPT_FIRST_ONLY, 0, "first-only", BX_OPTION_NO_VALUE},
+        {'t', 't', "tabs", BX_OPTION_REQUIRED_VALUE},
+        {BX_UNEXPAND_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_UNEXPAND_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
@@ -91,15 +83,34 @@ static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_
     options->tab_size = 8;
     diag->progname = options->progname;
 
-    bx_args_getopt_reset();
-
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, ":at:", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!options->files) {
+                options->files = calloc((size_t)argc - option.index, sizeof(*options->files));
+                if (!options->files) {
+                    bx_perror_path(diag, "allocate input operands");
+                    return false;
+                }
+            }
+            options->files[options->file_count++] = option.token;
+            continue;
         }
-
-        switch (c) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            bx_cli_print_try_help(options->progname);
+            return false;
+        }
+        switch (option.spec->id) {
             case 'a':
                 options->all = true;
                 break;
@@ -108,7 +119,7 @@ static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_
                 break;
             case 't':
                 options->tabs_specified = true;
-                if (!bx_unexpand_parse_tab_size(optarg, options, diag)) {
+                if (!bx_unexpand_parse_tab_size(option.value, options, diag)) {
                     return false;
                 }
                 break;
@@ -118,14 +129,6 @@ static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_
             case BX_UNEXPAND_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case ':':
-                bx_unexpand_diag_option_requires_arg(diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(options->progname);
-                return false;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(options->progname);
-                return false;
             default:
                 return false;
         }
@@ -138,7 +141,6 @@ static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_
         options->all = true;
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -277,18 +279,19 @@ int bx_unexpand_main(int argc, char** argv) {
         .verbose = false,
         .debug = false,
     };
-    int first_operand = 0;
 
-    if (!bx_unexpand_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        return diag.exit_status == 0 ? 1 : diag.exit_status;
+    if (!bx_unexpand_parse_options(argc, argv, &options, &diag)) {
+        if (diag.exit_status == 0)
+            diag.exit_status = 1;
+        goto done;
     }
     if (options.show_help) {
         bx_unexpand_print_help(stdout, options.progname);
-        return 0;
+        goto done;
     }
     if (options.show_version) {
         bx_cli_print_version(options.progname);
-        return 0;
+        goto done;
     }
 
     bool ok = true;
@@ -296,15 +299,15 @@ int bx_unexpand_main(int argc, char** argv) {
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    if (first_operand == argc) {
+    if (!options.file_count) {
         ok = unexpand_file(stdin, &options, &writer, &diag);
     }
     else {
-        for (int i = first_operand; ok && i < argc; i++) {
+        for (size_t i = 0; ok && i < options.file_count; i++) {
             bool is_stdio = false;
-            FILE* f = bx_fopen_dash(argv[i], "r", &is_stdio);
+            FILE* f = bx_fopen_dash(options.files[i], "r", &is_stdio);
             if (!f) {
-                bx_perror_path(&diag, argv[i]);
+                bx_perror_path(&diag, options.files[i]);
                 continue;
             }
             ok = unexpand_file(f, &options, &writer, &diag);
@@ -316,5 +319,7 @@ int bx_unexpand_main(int argc, char** argv) {
         bx_unexpand_write_error(&diag);
     }
 
+done:
+    free(options.files);
     return diag.exit_status;
 }
