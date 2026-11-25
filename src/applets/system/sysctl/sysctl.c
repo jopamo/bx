@@ -13,7 +13,6 @@ static void usage(FILE* out, const char* name) {
 }
 
 #ifdef __linux__
-#include <getopt.h>
 #include <limits.h>
 #include <linux/magic.h>
 #include <linux/openat2.h>
@@ -22,9 +21,9 @@ static void usage(FILE* out, const char* name) {
 #include <sys/uio.h>
 #include <sys/vfs.h>
 
-#include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/open_resolve.h"
+#include "lib/option_scan.h"
 #include "lib/xreadwrite.h"
 
 struct sysctl_request {
@@ -153,29 +152,42 @@ int bx_sysctl_main(int argc, char** argv) {
         return handled;
     struct bx_diag_ctx diag = {.progname = "sysctl"};
 #ifdef __linux__
-    static const struct option opts[] = {
-        {"values", no_argument, NULL, 'n'}, {"names", no_argument, NULL, 'N'},
-        {"quiet", no_argument, NULL, 'q'}, {"write", no_argument, NULL, 'w'},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec options[] = {
+        {'n', 'n', "values", BX_OPTION_NO_VALUE},
+        {'N', 'N', "names", BX_OPTION_NO_VALUE},
+        {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+        {'w', 'w', "write", BX_OPTION_NO_VALUE},
     };
     bool writing = false, quiet = false, values = false, names = false;
-    bx_args_getopt_reset();
-    for (int opt; (opt = bx_args_getopt_long(argc, argv, "+nNqw", opts, NULL)) != -1;) {
-        switch (opt) {
+    struct bx_option_cursor cursor;
+    size_t first;
+    bx_option_cursor_init(&cursor, argv, 1, (size_t)argc, BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE,
+                          options, sizeof(options) / sizeof(options[0]));
+    for (;;) {
+        struct bx_option_result result = bx_option_next(&cursor);
+        if (result.event == BX_OPTION_END) {
+            first = result.index;
+            break;
+        }
+        if (result.event != BX_OPTION_MATCH) {
+            if (result.short_name)
+                bx_diag(&diag, "invalid option -- '%c'", result.short_name);
+            else
+                bx_diag(&diag, "unrecognized option '%s'", result.token);
+            return 1;
+        }
+        switch (result.spec->id) {
         case 'n': values = true; break;
         case 'N': names = true; break;
         case 'q': quiet = true; break;
         case 'w': writing = true; break;
-        default:
-            bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-            return 1;
         }
     }
-    if (optind == argc || (names && (values || writing)) || (!writing && quiet) || (quiet && values)) {
+    size_t count = (size_t)argc - first;
+    if (!count || (names && (values || writing)) || (!writing && quiet) || (quiet && values)) {
         usage(stderr, diag.progname);
         return 1;
     }
-    size_t count = (size_t)(argc - optind);
     struct sysctl_request* requests = calloc(count, sizeof(*requests));
     if (requests == NULL) {
         bx_perror_path(&diag, "settings");
@@ -184,8 +196,8 @@ int bx_sysctl_main(int argc, char** argv) {
 
     int root = -1, status = 1;
     for (size_t i = 0; i < count; i++) {
-        const char* arg = argv[(size_t)optind + i];
-        const char* eq = strchr(arg, '=');
+        char* arg = argv[first + i];
+        char* eq = strchr(arg, '=');
         if (writing != (eq != NULL)) {
             bx_diag(&diag, writing ? "expected KEY=VALUE" : "use -w to write settings");
             goto done;
@@ -205,7 +217,7 @@ int bx_sysctl_main(int argc, char** argv) {
             goto done;
         }
         if (eq)
-            requests[i].value = argv[(size_t)optind + i] + len + 1;
+            requests[i].value = eq + 1;
     }
 
     root = bx_fd_open_cloexec("/proc/sys", O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
