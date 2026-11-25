@@ -2,7 +2,6 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,9 +14,9 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/option_scan.h"
 #include "lib/size_parse.h"
 
 #define BX_LOGGER_MAX_MESSAGE 8192u
@@ -26,7 +25,6 @@
 #define BX_LOGGER_FALLBACK_SOCKET "/run/systemd/journal/dev-log"
 
 struct bx_logger_options {
-    const char* progname;
     const char* socket_path;
     char tag[BX_LOGGER_MAX_TAG];
     int priority;
@@ -149,49 +147,56 @@ static void bx_logger_set_tag(struct bx_logger_options* options, const char* tag
 }
 
 static bool bx_logger_parse_options(int argc, char** argv, struct bx_logger_options* options,
-                                    struct bx_diag_ctx* diag) {
+                                    size_t* first_message, struct bx_diag_ctx* diag) {
     enum {
         OPT_HELP = 1000,
         OPT_VERSION,
     };
-    static const struct option long_options[] = {
-        {"priority", required_argument, NULL, 'p'},
-        {"tag", required_argument, NULL, 't'},
-        {"socket", required_argument, NULL, 'u'},
-        {"help", no_argument, NULL, OPT_HELP},
-        {"version", no_argument, NULL, OPT_VERSION},
-        {NULL, 0, NULL, 0},
+    static const struct bx_option_spec specs[] = {
+        {'p', 'p', "priority", BX_OPTION_REQUIRED_VALUE},
+        {'t', 't', "tag", BX_OPTION_REQUIRED_VALUE},
+        {'u', 'u', "socket", BX_OPTION_REQUIRED_VALUE},
+        {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "logger");
     options->socket_path = BX_LOGGER_DEFAULT_SOCKET;
     options->priority = 1 * 8 + 5;
-    bx_logger_set_tag(options, options->progname);
-    diag->progname = options->progname;
+    bx_logger_set_tag(options, diag->progname);
 
-    bx_args_getopt_reset();
-    while (true) {
-        int c = bx_args_getopt_long(argc, argv, "+p:t:u:", long_options, NULL);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_PREFIX | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
-        switch (c) {
+        switch (option.spec->id) {
             case 'p':
-                if (!bx_logger_parse_priority(optarg, &options->priority)) {
-                    bx_diag(diag, "invalid priority '%s'", optarg);
+                if (!bx_logger_parse_priority(option.value, &options->priority)) {
+                    bx_diag(diag, "invalid priority '%s'", option.value);
                     return false;
                 }
                 break;
             case 't':
-                bx_logger_set_tag(options, optarg);
+                bx_logger_set_tag(options, option.value);
                 break;
             case 'u':
-                if (optarg[0] == '\0') {
+                if (option.value[0] == '\0') {
                     bx_diag(diag, "empty socket path");
                     return false;
                 }
-                options->socket_path = optarg;
+                options->socket_path = option.value;
                 options->socket_explicit = true;
                 break;
             case OPT_HELP:
@@ -200,14 +205,10 @@ static bool bx_logger_parse_options(int argc, char** argv, struct bx_logger_opti
             case OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
-                return false;
-            default:
-                return false;
         }
     }
 
+    *first_message = option.index;
     return true;
 }
 
@@ -289,17 +290,17 @@ static bool bx_logger_send(int fd, const char* path, int priority, const char* t
 }
 
 static bool bx_logger_append(char* buffer, size_t* length, const char* text) {
-    size_t text_length = strlen(text);
     if (*length > 0u && *length + 1u < BX_LOGGER_MAX_MESSAGE) {
         buffer[(*length)++] = ' ';
     }
-    if (text_length > BX_LOGGER_MAX_MESSAGE - 1u - *length) {
-        text_length = BX_LOGGER_MAX_MESSAGE - 1u - *length;
-    }
+    size_t room = BX_LOGGER_MAX_MESSAGE - *length;
+    size_t text_length = strnlen(text, room);
+    if (text_length == room)
+        return false;
     memcpy(buffer + *length, text, text_length);
     *length += text_length;
     buffer[*length] = '\0';
-    return text_length == strlen(text);
+    return true;
 }
 
 static bool bx_logger_read_line(FILE* stream, char* buffer, size_t buffer_size, bool* eof_out) {
@@ -323,23 +324,34 @@ static bool bx_logger_read_line(FILE* stream, char* buffer, size_t buffer_size, 
 int bx_logger_main(int argc, char** argv) {
     struct bx_logger_options options;
     struct bx_diag_ctx diag = {
-        .progname = "logger",
-        .exit_status = 0,
-        .verbose = false,
-        .debug = false,
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "logger"),
     };
+    size_t first_message = (size_t)argc;
 
-    if (!bx_logger_parse_options(argc, argv, &options, &diag)) {
-        bx_cli_print_try_help(options.progname);
-        return (diag.exit_status != 0) ? diag.exit_status : 1;
+    if (!bx_logger_parse_options(argc, argv, &options, &first_message, &diag)) {
+        bx_cli_print_try_help(diag.progname);
+        return diag.exit_status;
     }
     if (options.show_help) {
-        bx_logger_print_help(stdout, options.progname);
+        bx_logger_print_help(stdout, diag.progname);
         return 0;
     }
     if (options.show_version) {
-        bx_cli_print_version(options.progname);
+        bx_cli_print_version(diag.progname);
         return 0;
+    }
+
+    bool has_message = first_message < (size_t)argc;
+    char message[BX_LOGGER_MAX_MESSAGE];
+    if (has_message) {
+        size_t length = 0;
+        message[0] = '\0';
+        for (size_t i = first_message; i < (size_t)argc; i++) {
+            if (!bx_logger_append(message, &length, argv[i])) {
+                bx_diag(&diag, "message is too long");
+                return diag.exit_status;
+            }
+        }
     }
 
     const char* path = NULL;
@@ -349,20 +361,8 @@ int bx_logger_main(int argc, char** argv) {
     }
 
     bool ok = true;
-    if (optind < argc) {
-        char message[BX_LOGGER_MAX_MESSAGE];
-        size_t length = 0u;
-        message[0] = '\0';
-        for (int i = optind; i < argc; i++) {
-            if (!bx_logger_append(message, &length, argv[i])) {
-                bx_diag(&diag, "message is too long");
-                ok = false;
-                break;
-            }
-        }
-        if (ok) {
-            ok = bx_logger_send(fd, path, options.priority, options.tag, message, &diag);
-        }
+    if (has_message) {
+        ok = bx_logger_send(fd, path, options.priority, options.tag, message, &diag);
     }
     else {
         char line[BX_LOGGER_MAX_MESSAGE];
