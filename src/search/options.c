@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <errno.h>
-#include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,6 +9,7 @@
 #include <unistd.h>
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/option_scan.h"
 #include "lib/output_policy.h"
 #include "lib/size_parse.h"
 #include "lib/thread_count.h"
@@ -203,16 +203,11 @@ static int bx_grep_invalid_directories_mode(const char *progname, const char *va
     return 3;
 }
 
-static int bx_grep_missing_option_argument(const char *progname, int missing_opt,
-                                           int parse_optind, int argc, char **argv) {
-    if (parse_optind > 0 && parse_optind <= argc && argv[parse_optind - 1] != NULL
-        && strncmp(argv[parse_optind - 1], "--", 2) == 0) {
-        fprintf(stderr, "%s: option '%s' requires an argument\n", progname, argv[parse_optind - 1]);
-    } else if (missing_opt != 0) {
-        fprintf(stderr, "%s: option requires an argument -- '%c'\n", progname, missing_opt);
-    } else {
-        fprintf(stderr, "%s: option requires an argument\n", progname);
-    }
+static int bx_grep_missing_option_argument(const char *progname, const struct bx_option_result *option) {
+    if (option->short_name)
+        fprintf(stderr, "%s: option requires an argument -- '%c'\n", progname, option->short_name);
+    else
+        fprintf(stderr, "%s: option '%s' requires an argument\n", progname, option->token);
     bx_grep_print_usage_try_help(progname);
     return -1;
 }
@@ -256,13 +251,6 @@ static int bx_grep_unrecognized_option(const char *progname, const char *arg) {
     return -1;
 }
 
-static const char *bx_search_current_option_token(int option_index, int argc, char **argv,
-                                                  const char *fallback) {
-    if (option_index > 0 && option_index <= argc && argv[option_index - 1] != NULL)
-        return argv[option_index - 1];
-    return fallback;
-}
-
 static bool bx_search_personality_is_rg(enum bx_search_personality personality) {
     return personality == BX_SEARCH_RG;
 }
@@ -301,51 +289,23 @@ static bool bx_search_parse_sort_key(const char *text, enum bx_search_sort_key *
 
 static int bx_search_require_rg_option(const char *progname,
                                        enum bx_search_personality personality,
-                                       int option_index, int argc, char **argv,
-                                       const char *fallback) {
-    if (bx_search_personality_is_rg(personality))
-        return 0;
-    return bx_grep_unrecognized_option(
-        progname,
-        bx_search_current_option_token(option_index, argc, argv, fallback));
+                                       const char *token) {
+    return bx_search_personality_is_rg(personality) ? 0 : bx_grep_unrecognized_option(progname, token);
 }
 
 static int bx_search_unsupported_rg_option(const char *progname,
                                            enum bx_search_personality personality,
-                                           int option_index, int argc, char **argv,
-                                           const char *fallback) {
-    if (!bx_search_personality_is_rg(personality)) {
-        return bx_grep_unrecognized_option(
-            progname,
-            bx_search_current_option_token(option_index, argc, argv, fallback));
-    }
-
-    fprintf(stderr, "%s: unsupported option '%s'\n",
-            progname,
-            bx_search_current_option_token(option_index, argc, argv, fallback));
+                                           const char *token) {
+    if (!bx_search_personality_is_rg(personality))
+        return bx_grep_unrecognized_option(progname, token);
+    fprintf(stderr, "%s: unsupported option '%s'\n", progname, token);
     return -1;
 }
 
 static int bx_search_reject_rg_option(const char *progname,
                                       enum bx_search_personality personality,
-                                      int option_index, int argc, char **argv,
-                                      const char *fallback) {
-    if (!bx_search_personality_is_rg(personality))
-        return 0;
-    return bx_grep_unrecognized_option(
-        progname,
-        bx_search_current_option_token(option_index, argc, argv, fallback));
-}
-
-static bool bx_search_current_option_is_long(int option_index, int argc, char **argv,
-                                             const char *prefix) {
-    const char *token = bx_search_current_option_token(option_index, argc, argv, NULL);
-    if (!token || strncmp(token, "--", 2) != 0)
-        return false;
-    if (!prefix)
-        return true;
-    size_t prefix_len = strlen(prefix);
-    return strncmp(token, prefix, prefix_len) == 0;
+                                      const char *token) {
+    return bx_search_personality_is_rg(personality) ? bx_grep_unrecognized_option(progname, token) : 0;
 }
 
 static bool bx_search_parse_nonnegative_int(const char *progname,
@@ -765,341 +725,372 @@ void bx_search_free_options(struct search_opts *opts) {
     free(opts->hostname_bin);
     free(opts->hyperlink_format);
     free(opts->pre_command);
+    free(opts->operand_storage);
 }
 
-static struct option long_opts[] = {
-    {"help",         no_argument,       NULL, OPT_HELP},
-    {"version",      no_argument,       NULL, OPT_VERSION},
-    {"quiet",        no_argument,       NULL, 'q'},
-    {"regexp",       required_argument, NULL, 'e'},
-    {"fixed-strings", no_argument,      NULL, 'F'},
-    {"invert-match", no_argument,       NULL, 'v'},
-    {"only-matching", no_argument,      NULL, 'o'},
-    {"include",      required_argument, NULL, OPT_INCLUDE},
-    {"exclude",      required_argument, NULL, OPT_EXCLUDE},
-    {"exclude-from", required_argument, NULL, OPT_EXCLUDE_FROM},
-    {"exclude-dir",  required_argument, NULL, OPT_EXCLUDE_DIR},
-    {"files",        no_argument,       NULL, OPT_FILES},
-    {"count",        no_argument,       NULL, 'c'},
-    {"column",       no_argument,       NULL, OPT_COLUMN},
-    {"count-matches", no_argument,      NULL, OPT_COUNT_MATCHES},
-    {"passthru",     no_argument,       NULL, OPT_PASSTHRU},
-    {"passthrough",  no_argument,       NULL, OPT_PASSTHRU},
-    {"replace",      required_argument, NULL, OPT_REPLACE},
-    {"stats",        no_argument,       NULL, OPT_STATS},
-    {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
-    {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
-    {"directories", required_argument, NULL, OPT_DIRECTORIES},
-    {"follow",       no_argument,       NULL, OPT_FOLLOW},
-    {"after-context", required_argument, NULL, 'A'},
-    {"before-context", required_argument, NULL, 'B'},
-    {"context",      required_argument, NULL, 'C'},
-    {"ignore", no_argument,             NULL, OPT_IGNORE},
-    {"ignore-dot", no_argument,         NULL, OPT_IGNORE_DOT},
-    {"ignore-exclude", no_argument,     NULL, OPT_IGNORE_EXCLUDE},
-    {"ignore-file", required_argument,  NULL, OPT_IGNORE_FILE},
-    {"ignore-file-case-insensitive", no_argument, NULL, OPT_IGNORE_FILE_CASE_INSENSITIVE},
-    {"ignore-files", no_argument,       NULL, OPT_IGNORE_FILES},
-    {"ignore-global", no_argument,      NULL, OPT_IGNORE_GLOBAL},
-    {"ignore-messages", no_argument,    NULL, OPT_IGNORE_MESSAGES},
-    {"ignore-parent", no_argument,      NULL, OPT_IGNORE_PARENT},
-    {"ignore-vcs", no_argument,         NULL, OPT_IGNORE_VCS},
-    {"no-ignore", no_argument,          NULL, OPT_NO_IGNORE},
-    {"no-ignore-exclude", no_argument,  NULL, OPT_NO_IGNORE_EXCLUDE},
-    {"no-ignore-file-case-insensitive", no_argument, NULL, OPT_NO_IGNORE_FILE_CASE_INSENSITIVE},
-    {"no-ignore-files", no_argument,    NULL, OPT_NO_IGNORE_FILES},
-    {"no-ignore-global", no_argument,   NULL, OPT_NO_IGNORE_GLOBAL},
-    {"no-ignore-messages", no_argument, NULL, OPT_NO_IGNORE_MESSAGES},
-    {"no-ignore-parent", no_argument,   NULL, OPT_NO_IGNORE_PARENT},
-    {"no-ignore-vcs", no_argument,      NULL, OPT_NO_IGNORE_VCS},
-    {"no-ignore-dot", no_argument,      NULL, OPT_NO_IGNORE_DOT},
-    {"no-require-git", no_argument,     NULL, OPT_NO_REQUIRE_GIT},
-    {"require-git", no_argument,        NULL, OPT_REQUIRE_GIT},
-    {"hidden",       no_argument,       NULL, OPT_HIDDEN},
-    {"no-hidden",    no_argument,       NULL, OPT_NO_HIDDEN},
-    {"byte-offset",  no_argument,       NULL, 'b'},
-    {"no-byte-offset", no_argument,     NULL, OPT_NO_BYTE_OFFSET},
-    {"glob",         required_argument, NULL, 'g'},
-    {"iglob",        required_argument, NULL, OPT_IGLOB},
-    {"glob-case-insensitive", no_argument, NULL, OPT_GLOB_CASE_INSENSITIVE},
-    {"no-glob-case-insensitive", no_argument, NULL, OPT_NO_GLOB_CASE_INSENSITIVE},
-    {"ignore-case",  no_argument,       NULL, 'i'},
-    {"case-sensitive", no_argument,     NULL, 's'},
-    {"no-messages",  no_argument,       NULL, OPT_NO_MESSAGES},
-    {"messages",     no_argument,       NULL, OPT_MESSAGES},
-    {"smart-case",   no_argument,       NULL, 'S'},
-    {"word-regexp",  no_argument,       NULL, 'w'},
-    {"line-regexp",  no_argument,       NULL, 'x'},
-    {"pcre2",        no_argument,       NULL, 'P'},
-    {"no-pcre2",     no_argument,       NULL, OPT_NO_PCRE2},
-    {"pcre2-unicode", no_argument,      NULL, OPT_PCRE2_UNICODE},
-    {"no-pcre2-unicode", no_argument,   NULL, OPT_NO_PCRE2_UNICODE},
-    {"type",         required_argument, NULL, 't'},
-    {"type-not",     required_argument, NULL, 'T'},
-    {"type-add",     required_argument, NULL, OPT_TYPE_ADD},
-    {"type-clear",   required_argument, NULL, OPT_TYPE_CLEAR},
-    {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
-    {"file",         required_argument, NULL, 'f'},
-    {"max-count",    required_argument, NULL, 'm'},
-    {"max-depth",    required_argument, NULL, OPT_MAX_DEPTH},
-    {"maxdepth",     required_argument, NULL, OPT_MAX_DEPTH},
-    {"max-columns",  required_argument, NULL, OPT_MAX_COLUMNS},
-    {"max-columns-preview", no_argument, NULL, OPT_MAX_COLUMNS_PREVIEW},
-    {"no-max-columns-preview", no_argument, NULL, OPT_NO_MAX_COLUMNS_PREVIEW},
-    {"max-filesize", required_argument, NULL, OPT_MAX_FILESIZE},
-    {"color",        optional_argument, NULL, OPT_COLOR},
-    {"colour",       optional_argument, NULL, OPT_COLOR},
-    {"colors",       required_argument, NULL, OPT_COLORS},
-    {"with-filename", no_argument,      NULL, 'H'},
-    {"no-filename",  no_argument,       NULL, OPT_NO_FILENAME},
-    {"line-number",  no_argument,       NULL, 'n'},
-    {"no-line-number", no_argument,     NULL, OPT_NO_LINE_NUMBER},
-    {"no-column",    no_argument,       NULL, OPT_NO_COLUMN},
-    {"label",        required_argument, NULL, OPT_LABEL},
-    {"group-separator", required_argument, NULL, OPT_GROUP_SEPARATOR},
-    {"no-group-separator", no_argument, NULL, OPT_NO_GROUP_SEPARATOR},
-    {"context-separator", required_argument, NULL, OPT_CONTEXT_SEPARATOR},
-    {"no-context-separator", no_argument, NULL, OPT_NO_CONTEXT_SEPARATOR},
-    {"field-context-separator", required_argument, NULL, OPT_FIELD_CONTEXT_SEPARATOR},
-    {"field-match-separator", required_argument, NULL, OPT_FIELD_MATCH_SEPARATOR},
-    {"heading",      no_argument,       NULL, OPT_HEADING},
-    {"no-heading",   no_argument,       NULL, OPT_NO_HEADING},
-    {"null",         no_argument,       NULL, OPT_NULL},
-    {"print0",       no_argument,       NULL, OPT_PRINT0},
-    {"binary-files", required_argument, NULL, OPT_BINARY_FILES},
-    {"binary",       no_argument,       NULL, OPT_BINARY},
-    {"no-binary",    no_argument,       NULL, OPT_NO_BINARY},
-    {"text",         no_argument,       NULL, 'a'},
-    {"no-text",      no_argument,       NULL, OPT_NO_TEXT},
-    {"null-data",    no_argument,       NULL, OPT_NULL_DATA},
-    {"multiline",    no_argument,       NULL, OPT_MULTILINE},
-    {"multiline-dotall", no_argument,   NULL, OPT_MULTILINE_DOTALL},
-    {"no-multiline", no_argument,       NULL, OPT_NO_MULTILINE},
-    {"no-multiline-dotall", no_argument, NULL, OPT_NO_MULTILINE_DOTALL},
-    {"stop-on-nonmatch", no_argument,   NULL, OPT_STOP_ON_NONMATCH},
-    {"json",         no_argument,       NULL, OPT_JSON},
-    {"no-json",      no_argument,       NULL, OPT_NO_JSON},
-    {"debug",        no_argument,       NULL, OPT_DEBUG},
-    {"trace",        no_argument,       NULL, OPT_TRACE},
-    {"sort",         required_argument, NULL, OPT_SORT},
-    {"sortr",        required_argument, NULL, OPT_SORTR},
-    {"sort-files",   no_argument,       NULL, OPT_SORT_FILES},
-    {"no-sort-files", no_argument,      NULL, OPT_NO_SORT_FILES},
-    {"engine",       required_argument, NULL, OPT_ENGINE},
-    {"auto-hybrid-regex", no_argument,  NULL, OPT_AUTO_HYBRID_REGEX},
-    {"no-auto-hybrid-regex", no_argument, NULL, OPT_NO_AUTO_HYBRID_REGEX},
-    {"regex-size-limit", required_argument, NULL, OPT_REGEX_SIZE_LIMIT},
-    {"dfa-size-limit", required_argument, NULL, OPT_DFA_SIZE_LIMIT},
-    {"encoding",     required_argument, NULL, OPT_ENCODING},
-    {"no-encoding",  no_argument,       NULL, OPT_NO_ENCODING},
-    {"pcre2-version", no_argument,      NULL, OPT_PCRE2_VERSION},
-    {"threads",      required_argument, NULL, 'j'},
-    {"line-buffered", no_argument,      NULL, OPT_LINE_BUFFERED},
-    {"no-line-buffered", no_argument,   NULL, OPT_NO_LINE_BUFFERED},
-    {"block-buffered", no_argument,     NULL, OPT_BLOCK_BUFFERED},
-    {"no-block-buffered", no_argument,  NULL, OPT_NO_BLOCK_BUFFERED},
-    {"mmap",         no_argument,       NULL, OPT_MMAP},
-    {"no-mmap",      no_argument,       NULL, OPT_NO_MMAP},
-    {"include-zero", no_argument,       NULL, OPT_INCLUDE_ZERO},
-    {"no-include-zero", no_argument,    NULL, OPT_NO_INCLUDE_ZERO},
-    {"no-fixed-strings", no_argument,   NULL, OPT_NO_FIXED_STRINGS},
-    {"no-follow",    no_argument,       NULL, OPT_NO_FOLLOW},
-    {"no-invert-match", no_argument,    NULL, OPT_NO_INVERT_MATCH},
-    {"no-stats",     no_argument,       NULL, OPT_NO_STATS},
-    {"pretty",       no_argument,       NULL, OPT_PRETTY},
-    {"one-file-system", no_argument,    NULL, OPT_ONE_FILE_SYSTEM},
-    {"no-one-file-system", no_argument, NULL, OPT_NO_ONE_FILE_SYSTEM},
-    {"path-separator", required_argument, NULL, OPT_PATH_SEPARATOR},
-    {"pre",          required_argument, NULL, OPT_PRE},
-    {"no-pre",       no_argument,       NULL, OPT_NO_PRE},
-    {"pre-glob",     required_argument, NULL, OPT_PRE_GLOB},
-    {"search-zip",   no_argument,       NULL, OPT_SEARCH_ZIP},
-    {"no-search-zip", no_argument,      NULL, OPT_NO_SEARCH_ZIP},
-    {"crlf",         no_argument,       NULL, OPT_CRLF},
-    {"no-crlf",      no_argument,       NULL, OPT_NO_CRLF},
-    {"hostname-bin", required_argument, NULL, OPT_HOSTNAME_BIN},
-    {"hyperlink-format", required_argument, NULL, OPT_HYPERLINK_FORMAT},
-    {"trim",         no_argument,       NULL, OPT_TRIM},
-    {"no-trim",      no_argument,       NULL, OPT_NO_TRIM},
-    {"unicode",      no_argument,       NULL, OPT_UNICODE},
-    {"no-unicode",   no_argument,       NULL, OPT_NO_UNICODE},
-    {"vimgrep",      no_argument,       NULL, OPT_VIMGREP},
-    {"generate",     required_argument, NULL, OPT_GENERATE},
-    {"no-config",    no_argument,       NULL, OPT_NO_CONFIG},
-    {"unrestricted", no_argument,       NULL, 'u'},
-    {NULL, 0, NULL, 0},
+static const struct bx_option_spec long_opts[] = {
+    {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+    {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+    {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+    {'e', 'e', "regexp", BX_OPTION_REQUIRED_VALUE},
+    {'F', 'F', "fixed-strings", BX_OPTION_NO_VALUE},
+    {'v', 'v', "invert-match", BX_OPTION_NO_VALUE},
+    {'o', 'o', "only-matching", BX_OPTION_NO_VALUE},
+    {OPT_INCLUDE, 0, "include", BX_OPTION_REQUIRED_VALUE},
+    {OPT_EXCLUDE, 0, "exclude", BX_OPTION_REQUIRED_VALUE},
+    {OPT_EXCLUDE_FROM, 0, "exclude-from", BX_OPTION_REQUIRED_VALUE},
+    {OPT_EXCLUDE_DIR, 0, "exclude-dir", BX_OPTION_REQUIRED_VALUE},
+    {OPT_FILES, 0, "files", BX_OPTION_NO_VALUE},
+    {'c', 'c', "count", BX_OPTION_NO_VALUE},
+    {OPT_COLUMN, 0, "column", BX_OPTION_NO_VALUE},
+    {OPT_COUNT_MATCHES, 0, "count-matches", BX_OPTION_NO_VALUE},
+    {OPT_PASSTHRU, 0, "passthru", BX_OPTION_NO_VALUE},
+    {OPT_PASSTHRU, 0, "passthrough", BX_OPTION_NO_VALUE},
+    {OPT_REPLACE, 0, "replace", BX_OPTION_REQUIRED_VALUE},
+    {OPT_STATS, 0, "stats", BX_OPTION_NO_VALUE},
+    {OPT_FILES_WITH_MATCHES, 0, "files-with-matches", BX_OPTION_NO_VALUE},
+    {OPT_FILES_WITHOUT_MATCH, 0, "files-without-match", BX_OPTION_NO_VALUE},
+    {OPT_DIRECTORIES, 0, "directories", BX_OPTION_REQUIRED_VALUE},
+    {OPT_FOLLOW, 0, "follow", BX_OPTION_NO_VALUE},
+    {'A', 'A', "after-context", BX_OPTION_REQUIRED_VALUE},
+    {'B', 'B', "before-context", BX_OPTION_REQUIRED_VALUE},
+    {'C', 'C', "context", BX_OPTION_REQUIRED_VALUE},
+    {OPT_IGNORE, 0, "ignore", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_DOT, 0, "ignore-dot", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_EXCLUDE, 0, "ignore-exclude", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_FILE, 0, "ignore-file", BX_OPTION_REQUIRED_VALUE},
+    {OPT_IGNORE_FILE_CASE_INSENSITIVE, 0, "ignore-file-case-insensitive", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_FILES, 0, "ignore-files", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_GLOBAL, 0, "ignore-global", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_MESSAGES, 0, "ignore-messages", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_PARENT, 0, "ignore-parent", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_VCS, 0, "ignore-vcs", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE, 0, "no-ignore", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_EXCLUDE, 0, "no-ignore-exclude", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_FILE_CASE_INSENSITIVE, 0, "no-ignore-file-case-insensitive", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_FILES, 0, "no-ignore-files", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_GLOBAL, 0, "no-ignore-global", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_MESSAGES, 0, "no-ignore-messages", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_PARENT, 0, "no-ignore-parent", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_VCS, 0, "no-ignore-vcs", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_DOT, 0, "no-ignore-dot", BX_OPTION_NO_VALUE},
+    {OPT_NO_REQUIRE_GIT, 0, "no-require-git", BX_OPTION_NO_VALUE},
+    {OPT_REQUIRE_GIT, 0, "require-git", BX_OPTION_NO_VALUE},
+    {OPT_HIDDEN, 0, "hidden", BX_OPTION_NO_VALUE},
+    {OPT_NO_HIDDEN, 0, "no-hidden", BX_OPTION_NO_VALUE},
+    {'b', 'b', "byte-offset", BX_OPTION_NO_VALUE},
+    {OPT_NO_BYTE_OFFSET, 0, "no-byte-offset", BX_OPTION_NO_VALUE},
+    {'g', 'g', "glob", BX_OPTION_REQUIRED_VALUE},
+    {OPT_IGLOB, 0, "iglob", BX_OPTION_REQUIRED_VALUE},
+    {OPT_GLOB_CASE_INSENSITIVE, 0, "glob-case-insensitive", BX_OPTION_NO_VALUE},
+    {OPT_NO_GLOB_CASE_INSENSITIVE, 0, "no-glob-case-insensitive", BX_OPTION_NO_VALUE},
+    {'i', 'i', "ignore-case", BX_OPTION_NO_VALUE},
+    {'s', 's', "case-sensitive", BX_OPTION_NO_VALUE},
+    {OPT_NO_MESSAGES, 0, "no-messages", BX_OPTION_NO_VALUE},
+    {OPT_MESSAGES, 0, "messages", BX_OPTION_NO_VALUE},
+    {'S', 'S', "smart-case", BX_OPTION_NO_VALUE},
+    {'w', 'w', "word-regexp", BX_OPTION_NO_VALUE},
+    {'x', 'x', "line-regexp", BX_OPTION_NO_VALUE},
+    {'P', 'P', "pcre2", BX_OPTION_NO_VALUE},
+    {OPT_NO_PCRE2, 0, "no-pcre2", BX_OPTION_NO_VALUE},
+    {OPT_PCRE2_UNICODE, 0, "pcre2-unicode", BX_OPTION_NO_VALUE},
+    {OPT_NO_PCRE2_UNICODE, 0, "no-pcre2-unicode", BX_OPTION_NO_VALUE},
+    {'t', 't', "type", BX_OPTION_REQUIRED_VALUE},
+    {'T', 'T', "type-not", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TYPE_ADD, 0, "type-add", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TYPE_CLEAR, 0, "type-clear", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TYPE_LIST, 0, "type-list", BX_OPTION_NO_VALUE},
+    {'f', 'f', "file", BX_OPTION_REQUIRED_VALUE},
+    {'m', 'm', "max-count", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_DEPTH, 0, "max-depth", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_DEPTH, 0, "maxdepth", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_COLUMNS, 0, "max-columns", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_COLUMNS_PREVIEW, 0, "max-columns-preview", BX_OPTION_NO_VALUE},
+    {OPT_NO_MAX_COLUMNS_PREVIEW, 0, "no-max-columns-preview", BX_OPTION_NO_VALUE},
+    {OPT_MAX_FILESIZE, 0, "max-filesize", BX_OPTION_REQUIRED_VALUE},
+    {OPT_COLOR, 0, "color", BX_OPTION_OPTIONAL_VALUE},
+    {OPT_COLOR, 0, "colour", BX_OPTION_OPTIONAL_VALUE},
+    {OPT_COLORS, 0, "colors", BX_OPTION_REQUIRED_VALUE},
+    {'H', 'H', "with-filename", BX_OPTION_NO_VALUE},
+    {OPT_NO_FILENAME, 0, "no-filename", BX_OPTION_NO_VALUE},
+    {'n', 'n', "line-number", BX_OPTION_NO_VALUE},
+    {OPT_NO_LINE_NUMBER, 0, "no-line-number", BX_OPTION_NO_VALUE},
+    {OPT_NO_COLUMN, 0, "no-column", BX_OPTION_NO_VALUE},
+    {OPT_LABEL, 0, "label", BX_OPTION_REQUIRED_VALUE},
+    {OPT_GROUP_SEPARATOR, 0, "group-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_GROUP_SEPARATOR, 0, "no-group-separator", BX_OPTION_NO_VALUE},
+    {OPT_CONTEXT_SEPARATOR, 0, "context-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_CONTEXT_SEPARATOR, 0, "no-context-separator", BX_OPTION_NO_VALUE},
+    {OPT_FIELD_CONTEXT_SEPARATOR, 0, "field-context-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_FIELD_MATCH_SEPARATOR, 0, "field-match-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_HEADING, 0, "heading", BX_OPTION_NO_VALUE},
+    {OPT_NO_HEADING, 0, "no-heading", BX_OPTION_NO_VALUE},
+    {OPT_NULL, 0, "null", BX_OPTION_NO_VALUE},
+    {OPT_PRINT0, 0, "print0", BX_OPTION_NO_VALUE},
+    {OPT_BINARY_FILES, 0, "binary-files", BX_OPTION_REQUIRED_VALUE},
+    {OPT_BINARY, 0, "binary", BX_OPTION_NO_VALUE},
+    {OPT_NO_BINARY, 0, "no-binary", BX_OPTION_NO_VALUE},
+    {'a', 'a', "text", BX_OPTION_NO_VALUE},
+    {OPT_NO_TEXT, 0, "no-text", BX_OPTION_NO_VALUE},
+    {OPT_NULL_DATA, 0, "null-data", BX_OPTION_NO_VALUE},
+    {OPT_MULTILINE, 0, "multiline", BX_OPTION_NO_VALUE},
+    {OPT_MULTILINE_DOTALL, 0, "multiline-dotall", BX_OPTION_NO_VALUE},
+    {OPT_NO_MULTILINE, 0, "no-multiline", BX_OPTION_NO_VALUE},
+    {OPT_NO_MULTILINE_DOTALL, 0, "no-multiline-dotall", BX_OPTION_NO_VALUE},
+    {OPT_STOP_ON_NONMATCH, 0, "stop-on-nonmatch", BX_OPTION_NO_VALUE},
+    {OPT_JSON, 0, "json", BX_OPTION_NO_VALUE},
+    {OPT_NO_JSON, 0, "no-json", BX_OPTION_NO_VALUE},
+    {OPT_DEBUG, 0, "debug", BX_OPTION_NO_VALUE},
+    {OPT_TRACE, 0, "trace", BX_OPTION_NO_VALUE},
+    {OPT_SORT, 0, "sort", BX_OPTION_REQUIRED_VALUE},
+    {OPT_SORTR, 0, "sortr", BX_OPTION_REQUIRED_VALUE},
+    {OPT_SORT_FILES, 0, "sort-files", BX_OPTION_NO_VALUE},
+    {OPT_NO_SORT_FILES, 0, "no-sort-files", BX_OPTION_NO_VALUE},
+    {OPT_ENGINE, 0, "engine", BX_OPTION_REQUIRED_VALUE},
+    {OPT_AUTO_HYBRID_REGEX, 0, "auto-hybrid-regex", BX_OPTION_NO_VALUE},
+    {OPT_NO_AUTO_HYBRID_REGEX, 0, "no-auto-hybrid-regex", BX_OPTION_NO_VALUE},
+    {OPT_REGEX_SIZE_LIMIT, 0, "regex-size-limit", BX_OPTION_REQUIRED_VALUE},
+    {OPT_DFA_SIZE_LIMIT, 0, "dfa-size-limit", BX_OPTION_REQUIRED_VALUE},
+    {OPT_ENCODING, 0, "encoding", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_ENCODING, 0, "no-encoding", BX_OPTION_NO_VALUE},
+    {OPT_PCRE2_VERSION, 0, "pcre2-version", BX_OPTION_NO_VALUE},
+    {'j', 'j', "threads", BX_OPTION_REQUIRED_VALUE},
+    {OPT_LINE_BUFFERED, 0, "line-buffered", BX_OPTION_NO_VALUE},
+    {OPT_NO_LINE_BUFFERED, 0, "no-line-buffered", BX_OPTION_NO_VALUE},
+    {OPT_BLOCK_BUFFERED, 0, "block-buffered", BX_OPTION_NO_VALUE},
+    {OPT_NO_BLOCK_BUFFERED, 0, "no-block-buffered", BX_OPTION_NO_VALUE},
+    {OPT_MMAP, 0, "mmap", BX_OPTION_NO_VALUE},
+    {OPT_NO_MMAP, 0, "no-mmap", BX_OPTION_NO_VALUE},
+    {OPT_INCLUDE_ZERO, 0, "include-zero", BX_OPTION_NO_VALUE},
+    {OPT_NO_INCLUDE_ZERO, 0, "no-include-zero", BX_OPTION_NO_VALUE},
+    {OPT_NO_FIXED_STRINGS, 0, "no-fixed-strings", BX_OPTION_NO_VALUE},
+    {OPT_NO_FOLLOW, 0, "no-follow", BX_OPTION_NO_VALUE},
+    {OPT_NO_INVERT_MATCH, 0, "no-invert-match", BX_OPTION_NO_VALUE},
+    {OPT_NO_STATS, 0, "no-stats", BX_OPTION_NO_VALUE},
+    {OPT_PRETTY, 0, "pretty", BX_OPTION_NO_VALUE},
+    {OPT_ONE_FILE_SYSTEM, 0, "one-file-system", BX_OPTION_NO_VALUE},
+    {OPT_NO_ONE_FILE_SYSTEM, 0, "no-one-file-system", BX_OPTION_NO_VALUE},
+    {OPT_PATH_SEPARATOR, 0, "path-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_PRE, 0, "pre", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_PRE, 0, "no-pre", BX_OPTION_NO_VALUE},
+    {OPT_PRE_GLOB, 0, "pre-glob", BX_OPTION_REQUIRED_VALUE},
+    {OPT_SEARCH_ZIP, 0, "search-zip", BX_OPTION_NO_VALUE},
+    {OPT_NO_SEARCH_ZIP, 0, "no-search-zip", BX_OPTION_NO_VALUE},
+    {OPT_CRLF, 0, "crlf", BX_OPTION_NO_VALUE},
+    {OPT_NO_CRLF, 0, "no-crlf", BX_OPTION_NO_VALUE},
+    {OPT_HOSTNAME_BIN, 0, "hostname-bin", BX_OPTION_REQUIRED_VALUE},
+    {OPT_HYPERLINK_FORMAT, 0, "hyperlink-format", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TRIM, 0, "trim", BX_OPTION_NO_VALUE},
+    {OPT_NO_TRIM, 0, "no-trim", BX_OPTION_NO_VALUE},
+    {OPT_UNICODE, 0, "unicode", BX_OPTION_NO_VALUE},
+    {OPT_NO_UNICODE, 0, "no-unicode", BX_OPTION_NO_VALUE},
+    {OPT_VIMGREP, 0, "vimgrep", BX_OPTION_NO_VALUE},
+    {OPT_GENERATE, 0, "generate", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_CONFIG, 0, "no-config", BX_OPTION_NO_VALUE},
+    {'u', 'u', "unrestricted", BX_OPTION_NO_VALUE},
+    {'0', '0', NULL, BX_OPTION_NO_VALUE},
+    {'.', '.', NULL, BX_OPTION_NO_VALUE},
+    {'E', 'E', NULL, BX_OPTION_REQUIRED_VALUE},
+    {'h', 'h', NULL, BX_OPTION_NO_VALUE},
+    {'l', 'l', NULL, BX_OPTION_NO_VALUE},
+    {'L', 'L', NULL, BX_OPTION_NO_VALUE},
+    {'r', 'r', NULL, BX_OPTION_REQUIRED_VALUE},
+    {'R', 'R', NULL, BX_OPTION_NO_VALUE},
+    {'I', 'I', NULL, BX_OPTION_NO_VALUE},
+    {'z', 'z', NULL, BX_OPTION_NO_VALUE},
+    {'Z', 'Z', NULL, BX_OPTION_NO_VALUE},
+    {'d', 'd', NULL, BX_OPTION_REQUIRED_VALUE},
+    {'M', 'M', NULL, BX_OPTION_REQUIRED_VALUE},
+    {'U', 'U', NULL, BX_OPTION_NO_VALUE},
+    {'V', 'V', NULL, BX_OPTION_NO_VALUE},
+    {'N', 'N', NULL, BX_OPTION_NO_VALUE},
+    {'p', 'p', NULL, BX_OPTION_NO_VALUE},
 };
 
-static struct option grep_long_opts[] = {
-    {"help",         no_argument,       NULL, OPT_HELP},
-    {"version",      no_argument,       NULL, OPT_VERSION},
-    {"basic-regexp", no_argument,       NULL, 'G'},
-    {"extended-regexp", no_argument,    NULL, 'E'},
-    {"perl-regexp",  no_argument,       NULL, 'P'},
-    {"quiet",        no_argument,       NULL, 'q'},
-    {"silent",       no_argument,       NULL, 'q'},
-    {"regexp",       required_argument, NULL, 'e'},
-    {"fixed-strings", no_argument,      NULL, 'F'},
-    {"invert-match", no_argument,       NULL, 'v'},
-    {"only-matching", no_argument,      NULL, 'o'},
-    {"include",      required_argument, NULL, OPT_INCLUDE},
-    {"exclude",      required_argument, NULL, OPT_EXCLUDE},
-    {"exclude-from", required_argument, NULL, OPT_EXCLUDE_FROM},
-    {"exclude-dir",  required_argument, NULL, OPT_EXCLUDE_DIR},
-    {"files",        no_argument,       NULL, OPT_FILES},
-    {"count",        no_argument,       NULL, 'c'},
-    {"column",       no_argument,       NULL, OPT_COLUMN},
-    {"count-matches", no_argument,      NULL, OPT_COUNT_MATCHES},
-    {"passthru",     no_argument,       NULL, OPT_PASSTHRU},
-    {"passthrough",  no_argument,       NULL, OPT_PASSTHRU},
-    {"replace",      required_argument, NULL, OPT_REPLACE},
-    {"stats",        no_argument,       NULL, OPT_STATS},
-    {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
-    {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
-    {"recursive",    no_argument,       NULL, 'r'},
-    {"dereference-recursive", no_argument, NULL, 'R'},
-    {"directories", required_argument, NULL, OPT_DIRECTORIES},
-    {"devices",      required_argument, NULL, OPT_DEVICES},
-    {"follow",       no_argument,       NULL, OPT_FOLLOW},
-    {"after-context", required_argument, NULL, 'A'},
-    {"before-context", required_argument, NULL, 'B'},
-    {"context",      required_argument, NULL, 'C'},
-    {"ignore", no_argument,             NULL, OPT_IGNORE},
-    {"ignore-dot", no_argument,         NULL, OPT_IGNORE_DOT},
-    {"ignore-exclude", no_argument,     NULL, OPT_IGNORE_EXCLUDE},
-    {"ignore-file", required_argument,  NULL, OPT_IGNORE_FILE},
-    {"ignore-file-case-insensitive", no_argument, NULL, OPT_IGNORE_FILE_CASE_INSENSITIVE},
-    {"ignore-files", no_argument,       NULL, OPT_IGNORE_FILES},
-    {"ignore-global", no_argument,      NULL, OPT_IGNORE_GLOBAL},
-    {"ignore-messages", no_argument,    NULL, OPT_IGNORE_MESSAGES},
-    {"ignore-parent", no_argument,      NULL, OPT_IGNORE_PARENT},
-    {"ignore-vcs", no_argument,         NULL, OPT_IGNORE_VCS},
-    {"no-ignore", no_argument,          NULL, OPT_NO_IGNORE},
-    {"no-ignore-exclude", no_argument,  NULL, OPT_NO_IGNORE_EXCLUDE},
-    {"no-ignore-file-case-insensitive", no_argument, NULL, OPT_NO_IGNORE_FILE_CASE_INSENSITIVE},
-    {"no-ignore-files", no_argument,    NULL, OPT_NO_IGNORE_FILES},
-    {"no-ignore-global", no_argument,   NULL, OPT_NO_IGNORE_GLOBAL},
-    {"no-ignore-messages", no_argument, NULL, OPT_NO_IGNORE_MESSAGES},
-    {"no-ignore-parent", no_argument,   NULL, OPT_NO_IGNORE_PARENT},
-    {"no-ignore-vcs", no_argument,      NULL, OPT_NO_IGNORE_VCS},
-    {"no-ignore-dot", no_argument,      NULL, OPT_NO_IGNORE_DOT},
-    {"no-require-git", no_argument,     NULL, OPT_NO_REQUIRE_GIT},
-    {"require-git", no_argument,        NULL, OPT_REQUIRE_GIT},
-    {"hidden",       no_argument,       NULL, OPT_HIDDEN},
-    {"no-hidden",    no_argument,       NULL, OPT_NO_HIDDEN},
-    {"byte-offset",  no_argument,       NULL, 'b'},
-    {"no-byte-offset", no_argument,     NULL, OPT_NO_BYTE_OFFSET},
-    {"glob",         required_argument, NULL, 'g'},
-    {"iglob",        required_argument, NULL, OPT_IGLOB},
-    {"glob-case-insensitive", no_argument, NULL, OPT_GLOB_CASE_INSENSITIVE},
-    {"no-glob-case-insensitive", no_argument, NULL, OPT_NO_GLOB_CASE_INSENSITIVE},
-    {"ignore-case",  no_argument,       NULL, 'i'},
-    {"no-ignore-case", no_argument,     NULL, OPT_NO_IGNORE_CASE},
-    {"case-sensitive", no_argument,     NULL, 's'},
-    {"no-messages",  no_argument,       NULL, OPT_NO_MESSAGES},
-    {"messages",     no_argument,       NULL, OPT_MESSAGES},
-    {"smart-case",   no_argument,       NULL, 'S'},
-    {"word-regexp",  no_argument,       NULL, 'w'},
-    {"line-regexp",  no_argument,       NULL, 'x'},
-    {"pcre2",        no_argument,       NULL, 'P'},
-    {"no-pcre2",     no_argument,       NULL, OPT_NO_PCRE2},
-    {"pcre2-unicode", no_argument,      NULL, OPT_PCRE2_UNICODE},
-    {"no-pcre2-unicode", no_argument,   NULL, OPT_NO_PCRE2_UNICODE},
-    {"type",         required_argument, NULL, 't'},
-    {"type-not",     required_argument, NULL, 'T'},
-    {"type-add",     required_argument, NULL, OPT_TYPE_ADD},
-    {"type-clear",   required_argument, NULL, OPT_TYPE_CLEAR},
-    {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
-    {"file",         required_argument, NULL, 'f'},
-    {"max-count",    required_argument, NULL, 'm'},
-    {"max-depth",    required_argument, NULL, OPT_MAX_DEPTH},
-    {"maxdepth",     required_argument, NULL, OPT_MAX_DEPTH},
-    {"max-columns",  required_argument, NULL, OPT_MAX_COLUMNS},
-    {"max-columns-preview", no_argument, NULL, OPT_MAX_COLUMNS_PREVIEW},
-    {"no-max-columns-preview", no_argument, NULL, OPT_NO_MAX_COLUMNS_PREVIEW},
-    {"max-filesize", required_argument, NULL, OPT_MAX_FILESIZE},
-    {"color",        optional_argument, NULL, OPT_COLOR},
-    {"colour",       optional_argument, NULL, OPT_COLOR},
-    {"colors",       required_argument, NULL, OPT_COLORS},
-    {"with-filename", no_argument,      NULL, 'H'},
-    {"no-filename",  no_argument,       NULL, OPT_NO_FILENAME},
-    {"line-number",  no_argument,       NULL, 'n'},
-    {"no-line-number", no_argument,     NULL, OPT_NO_LINE_NUMBER},
-    {"no-column",    no_argument,       NULL, OPT_NO_COLUMN},
-    {"initial-tab",  no_argument,       NULL, 'T'},
-    {"label",        required_argument, NULL, OPT_LABEL},
-    {"group-separator", required_argument, NULL, OPT_GROUP_SEPARATOR},
-    {"no-group-separator", no_argument, NULL, OPT_NO_GROUP_SEPARATOR},
-    {"context-separator", required_argument, NULL, OPT_CONTEXT_SEPARATOR},
-    {"no-context-separator", no_argument, NULL, OPT_NO_CONTEXT_SEPARATOR},
-    {"field-context-separator", required_argument, NULL, OPT_FIELD_CONTEXT_SEPARATOR},
-    {"field-match-separator", required_argument, NULL, OPT_FIELD_MATCH_SEPARATOR},
-    {"heading",      no_argument,       NULL, OPT_HEADING},
-    {"no-heading",   no_argument,       NULL, OPT_NO_HEADING},
-    {"null",         no_argument,       NULL, OPT_NULL},
-    {"print0",       no_argument,       NULL, OPT_PRINT0},
-    {"binary-files", required_argument, NULL, OPT_BINARY_FILES},
-    {"binary",       no_argument,       NULL, OPT_BINARY},
-    {"no-binary",    no_argument,       NULL, OPT_NO_BINARY},
-    {"text",         no_argument,       NULL, 'a'},
-    {"no-text",      no_argument,       NULL, OPT_NO_TEXT},
-    {"null-data",    no_argument,       NULL, OPT_NULL_DATA},
-    {"multiline",    no_argument,       NULL, OPT_MULTILINE},
-    {"multiline-dotall", no_argument,   NULL, OPT_MULTILINE_DOTALL},
-    {"no-multiline", no_argument,       NULL, OPT_NO_MULTILINE},
-    {"no-multiline-dotall", no_argument, NULL, OPT_NO_MULTILINE_DOTALL},
-    {"stop-on-nonmatch", no_argument,   NULL, OPT_STOP_ON_NONMATCH},
-    {"json",         no_argument,       NULL, OPT_JSON},
-    {"no-json",      no_argument,       NULL, OPT_NO_JSON},
-    {"debug",        no_argument,       NULL, OPT_DEBUG},
-    {"trace",        no_argument,       NULL, OPT_TRACE},
-    {"sort",         required_argument, NULL, OPT_SORT},
-    {"sortr",        required_argument, NULL, OPT_SORTR},
-    {"sort-files",   no_argument,       NULL, OPT_SORT_FILES},
-    {"no-sort-files", no_argument,      NULL, OPT_NO_SORT_FILES},
-    {"engine",       required_argument, NULL, OPT_ENGINE},
-    {"auto-hybrid-regex", no_argument,  NULL, OPT_AUTO_HYBRID_REGEX},
-    {"no-auto-hybrid-regex", no_argument, NULL, OPT_NO_AUTO_HYBRID_REGEX},
-    {"regex-size-limit", required_argument, NULL, OPT_REGEX_SIZE_LIMIT},
-    {"dfa-size-limit", required_argument, NULL, OPT_DFA_SIZE_LIMIT},
-    {"encoding",     required_argument, NULL, OPT_ENCODING},
-    {"no-encoding",  no_argument,       NULL, OPT_NO_ENCODING},
-    {"pcre2-version", no_argument,      NULL, OPT_PCRE2_VERSION},
-    {"threads",      required_argument, NULL, 'j'},
-    {"line-buffered", no_argument,      NULL, OPT_LINE_BUFFERED},
-    {"no-line-buffered", no_argument,   NULL, OPT_NO_LINE_BUFFERED},
-    {"block-buffered", no_argument,     NULL, OPT_BLOCK_BUFFERED},
-    {"no-block-buffered", no_argument,  NULL, OPT_NO_BLOCK_BUFFERED},
-    {"mmap",         no_argument,       NULL, OPT_MMAP},
-    {"no-mmap",      no_argument,       NULL, OPT_NO_MMAP},
-    {"include-zero", no_argument,       NULL, OPT_INCLUDE_ZERO},
-    {"no-include-zero", no_argument,    NULL, OPT_NO_INCLUDE_ZERO},
-    {"no-fixed-strings", no_argument,   NULL, OPT_NO_FIXED_STRINGS},
-    {"no-follow",    no_argument,       NULL, OPT_NO_FOLLOW},
-    {"no-invert-match", no_argument,    NULL, OPT_NO_INVERT_MATCH},
-    {"no-stats",     no_argument,       NULL, OPT_NO_STATS},
-    {"pretty",       no_argument,       NULL, OPT_PRETTY},
-    {"one-file-system", no_argument,    NULL, OPT_ONE_FILE_SYSTEM},
-    {"no-one-file-system", no_argument, NULL, OPT_NO_ONE_FILE_SYSTEM},
-    {"path-separator", required_argument, NULL, OPT_PATH_SEPARATOR},
-    {"pre",          required_argument, NULL, OPT_PRE},
-    {"no-pre",       no_argument,       NULL, OPT_NO_PRE},
-    {"pre-glob",     required_argument, NULL, OPT_PRE_GLOB},
-    {"search-zip",   no_argument,       NULL, OPT_SEARCH_ZIP},
-    {"no-search-zip", no_argument,      NULL, OPT_NO_SEARCH_ZIP},
-    {"crlf",         no_argument,       NULL, OPT_CRLF},
-    {"no-crlf",      no_argument,       NULL, OPT_NO_CRLF},
-    {"hostname-bin", required_argument, NULL, OPT_HOSTNAME_BIN},
-    {"hyperlink-format", required_argument, NULL, OPT_HYPERLINK_FORMAT},
-    {"trim",         no_argument,       NULL, OPT_TRIM},
-    {"no-trim",      no_argument,       NULL, OPT_NO_TRIM},
-    {"unicode",      no_argument,       NULL, OPT_UNICODE},
-    {"no-unicode",   no_argument,       NULL, OPT_NO_UNICODE},
-    {"vimgrep",      no_argument,       NULL, OPT_VIMGREP},
-    {"generate",     required_argument, NULL, OPT_GENERATE},
-    {"no-config",    no_argument,       NULL, OPT_NO_CONFIG},
-    {"unrestricted", no_argument,       NULL, 'u'},
-    {NULL, 0, NULL, 0},
+static const struct bx_option_spec grep_long_opts[] = {
+    {OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+    {OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
+    {'G', 'G', "basic-regexp", BX_OPTION_NO_VALUE},
+    {'E', 'E', "extended-regexp", BX_OPTION_NO_VALUE},
+    {'P', 'P', "perl-regexp", BX_OPTION_NO_VALUE},
+    {'q', 'q', "quiet", BX_OPTION_NO_VALUE},
+    {'q', 0, "silent", BX_OPTION_NO_VALUE},
+    {'e', 'e', "regexp", BX_OPTION_REQUIRED_VALUE},
+    {'F', 'F', "fixed-strings", BX_OPTION_NO_VALUE},
+    {'v', 'v', "invert-match", BX_OPTION_NO_VALUE},
+    {'o', 'o', "only-matching", BX_OPTION_NO_VALUE},
+    {OPT_INCLUDE, 0, "include", BX_OPTION_REQUIRED_VALUE},
+    {OPT_EXCLUDE, 0, "exclude", BX_OPTION_REQUIRED_VALUE},
+    {OPT_EXCLUDE_FROM, 0, "exclude-from", BX_OPTION_REQUIRED_VALUE},
+    {OPT_EXCLUDE_DIR, 0, "exclude-dir", BX_OPTION_REQUIRED_VALUE},
+    {OPT_FILES, 0, "files", BX_OPTION_NO_VALUE},
+    {'c', 'c', "count", BX_OPTION_NO_VALUE},
+    {OPT_COLUMN, 0, "column", BX_OPTION_NO_VALUE},
+    {OPT_COUNT_MATCHES, 0, "count-matches", BX_OPTION_NO_VALUE},
+    {OPT_PASSTHRU, 0, "passthru", BX_OPTION_NO_VALUE},
+    {OPT_PASSTHRU, 0, "passthrough", BX_OPTION_NO_VALUE},
+    {OPT_REPLACE, 0, "replace", BX_OPTION_REQUIRED_VALUE},
+    {OPT_STATS, 0, "stats", BX_OPTION_NO_VALUE},
+    {OPT_FILES_WITH_MATCHES, 0, "files-with-matches", BX_OPTION_NO_VALUE},
+    {OPT_FILES_WITHOUT_MATCH, 0, "files-without-match", BX_OPTION_NO_VALUE},
+    {'r', 'r', "recursive", BX_OPTION_NO_VALUE},
+    {'R', 'R', "dereference-recursive", BX_OPTION_NO_VALUE},
+    {OPT_DIRECTORIES, 0, "directories", BX_OPTION_REQUIRED_VALUE},
+    {OPT_DEVICES, 0, "devices", BX_OPTION_REQUIRED_VALUE},
+    {OPT_FOLLOW, 0, "follow", BX_OPTION_NO_VALUE},
+    {'A', 'A', "after-context", BX_OPTION_REQUIRED_VALUE},
+    {'B', 'B', "before-context", BX_OPTION_REQUIRED_VALUE},
+    {'C', 'C', "context", BX_OPTION_REQUIRED_VALUE},
+    {OPT_IGNORE, 0, "ignore", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_DOT, 0, "ignore-dot", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_EXCLUDE, 0, "ignore-exclude", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_FILE, 0, "ignore-file", BX_OPTION_REQUIRED_VALUE},
+    {OPT_IGNORE_FILE_CASE_INSENSITIVE, 0, "ignore-file-case-insensitive", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_FILES, 0, "ignore-files", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_GLOBAL, 0, "ignore-global", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_MESSAGES, 0, "ignore-messages", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_PARENT, 0, "ignore-parent", BX_OPTION_NO_VALUE},
+    {OPT_IGNORE_VCS, 0, "ignore-vcs", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE, 0, "no-ignore", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_EXCLUDE, 0, "no-ignore-exclude", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_FILE_CASE_INSENSITIVE, 0, "no-ignore-file-case-insensitive", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_FILES, 0, "no-ignore-files", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_GLOBAL, 0, "no-ignore-global", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_MESSAGES, 0, "no-ignore-messages", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_PARENT, 0, "no-ignore-parent", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_VCS, 0, "no-ignore-vcs", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_DOT, 0, "no-ignore-dot", BX_OPTION_NO_VALUE},
+    {OPT_NO_REQUIRE_GIT, 0, "no-require-git", BX_OPTION_NO_VALUE},
+    {OPT_REQUIRE_GIT, 0, "require-git", BX_OPTION_NO_VALUE},
+    {OPT_HIDDEN, 0, "hidden", BX_OPTION_NO_VALUE},
+    {OPT_NO_HIDDEN, 0, "no-hidden", BX_OPTION_NO_VALUE},
+    {'b', 'b', "byte-offset", BX_OPTION_NO_VALUE},
+    {OPT_NO_BYTE_OFFSET, 0, "no-byte-offset", BX_OPTION_NO_VALUE},
+    {'g', 'g', "glob", BX_OPTION_REQUIRED_VALUE},
+    {OPT_IGLOB, 0, "iglob", BX_OPTION_REQUIRED_VALUE},
+    {OPT_GLOB_CASE_INSENSITIVE, 0, "glob-case-insensitive", BX_OPTION_NO_VALUE},
+    {OPT_NO_GLOB_CASE_INSENSITIVE, 0, "no-glob-case-insensitive", BX_OPTION_NO_VALUE},
+    {'i', 'i', "ignore-case", BX_OPTION_NO_VALUE},
+    {OPT_NO_IGNORE_CASE, 0, "no-ignore-case", BX_OPTION_NO_VALUE},
+    {'s', 's', "case-sensitive", BX_OPTION_NO_VALUE},
+    {OPT_NO_MESSAGES, 0, "no-messages", BX_OPTION_NO_VALUE},
+    {OPT_MESSAGES, 0, "messages", BX_OPTION_NO_VALUE},
+    {'S', 'S', "smart-case", BX_OPTION_NO_VALUE},
+    {'w', 'w', "word-regexp", BX_OPTION_NO_VALUE},
+    {'x', 'x', "line-regexp", BX_OPTION_NO_VALUE},
+    {'P', 0, "pcre2", BX_OPTION_NO_VALUE},
+    {OPT_NO_PCRE2, 0, "no-pcre2", BX_OPTION_NO_VALUE},
+    {OPT_PCRE2_UNICODE, 0, "pcre2-unicode", BX_OPTION_NO_VALUE},
+    {OPT_NO_PCRE2_UNICODE, 0, "no-pcre2-unicode", BX_OPTION_NO_VALUE},
+    {'t', 't', "type", BX_OPTION_REQUIRED_VALUE},
+    {'T', 0, "type-not", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TYPE_ADD, 0, "type-add", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TYPE_CLEAR, 0, "type-clear", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TYPE_LIST, 0, "type-list", BX_OPTION_NO_VALUE},
+    {'f', 'f', "file", BX_OPTION_REQUIRED_VALUE},
+    {'m', 'm', "max-count", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_DEPTH, 0, "max-depth", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_DEPTH, 0, "maxdepth", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_COLUMNS, 0, "max-columns", BX_OPTION_REQUIRED_VALUE},
+    {OPT_MAX_COLUMNS_PREVIEW, 0, "max-columns-preview", BX_OPTION_NO_VALUE},
+    {OPT_NO_MAX_COLUMNS_PREVIEW, 0, "no-max-columns-preview", BX_OPTION_NO_VALUE},
+    {OPT_MAX_FILESIZE, 0, "max-filesize", BX_OPTION_REQUIRED_VALUE},
+    {OPT_COLOR, 0, "color", BX_OPTION_OPTIONAL_VALUE},
+    {OPT_COLOR, 0, "colour", BX_OPTION_OPTIONAL_VALUE},
+    {OPT_COLORS, 0, "colors", BX_OPTION_REQUIRED_VALUE},
+    {'H', 'H', "with-filename", BX_OPTION_NO_VALUE},
+    {OPT_NO_FILENAME, 0, "no-filename", BX_OPTION_NO_VALUE},
+    {'n', 'n', "line-number", BX_OPTION_NO_VALUE},
+    {OPT_NO_LINE_NUMBER, 0, "no-line-number", BX_OPTION_NO_VALUE},
+    {OPT_NO_COLUMN, 0, "no-column", BX_OPTION_NO_VALUE},
+    {'T', 'T', "initial-tab", BX_OPTION_NO_VALUE},
+    {OPT_LABEL, 0, "label", BX_OPTION_REQUIRED_VALUE},
+    {OPT_GROUP_SEPARATOR, 0, "group-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_GROUP_SEPARATOR, 0, "no-group-separator", BX_OPTION_NO_VALUE},
+    {OPT_CONTEXT_SEPARATOR, 0, "context-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_CONTEXT_SEPARATOR, 0, "no-context-separator", BX_OPTION_NO_VALUE},
+    {OPT_FIELD_CONTEXT_SEPARATOR, 0, "field-context-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_FIELD_MATCH_SEPARATOR, 0, "field-match-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_HEADING, 0, "heading", BX_OPTION_NO_VALUE},
+    {OPT_NO_HEADING, 0, "no-heading", BX_OPTION_NO_VALUE},
+    {OPT_NULL, 0, "null", BX_OPTION_NO_VALUE},
+    {OPT_PRINT0, 0, "print0", BX_OPTION_NO_VALUE},
+    {OPT_BINARY_FILES, 0, "binary-files", BX_OPTION_REQUIRED_VALUE},
+    {OPT_BINARY, 0, "binary", BX_OPTION_NO_VALUE},
+    {OPT_NO_BINARY, 0, "no-binary", BX_OPTION_NO_VALUE},
+    {'a', 'a', "text", BX_OPTION_NO_VALUE},
+    {OPT_NO_TEXT, 0, "no-text", BX_OPTION_NO_VALUE},
+    {OPT_NULL_DATA, 0, "null-data", BX_OPTION_NO_VALUE},
+    {OPT_MULTILINE, 0, "multiline", BX_OPTION_NO_VALUE},
+    {OPT_MULTILINE_DOTALL, 0, "multiline-dotall", BX_OPTION_NO_VALUE},
+    {OPT_NO_MULTILINE, 0, "no-multiline", BX_OPTION_NO_VALUE},
+    {OPT_NO_MULTILINE_DOTALL, 0, "no-multiline-dotall", BX_OPTION_NO_VALUE},
+    {OPT_STOP_ON_NONMATCH, 0, "stop-on-nonmatch", BX_OPTION_NO_VALUE},
+    {OPT_JSON, 0, "json", BX_OPTION_NO_VALUE},
+    {OPT_NO_JSON, 0, "no-json", BX_OPTION_NO_VALUE},
+    {OPT_DEBUG, 0, "debug", BX_OPTION_NO_VALUE},
+    {OPT_TRACE, 0, "trace", BX_OPTION_NO_VALUE},
+    {OPT_SORT, 0, "sort", BX_OPTION_REQUIRED_VALUE},
+    {OPT_SORTR, 0, "sortr", BX_OPTION_REQUIRED_VALUE},
+    {OPT_SORT_FILES, 0, "sort-files", BX_OPTION_NO_VALUE},
+    {OPT_NO_SORT_FILES, 0, "no-sort-files", BX_OPTION_NO_VALUE},
+    {OPT_ENGINE, 0, "engine", BX_OPTION_REQUIRED_VALUE},
+    {OPT_AUTO_HYBRID_REGEX, 0, "auto-hybrid-regex", BX_OPTION_NO_VALUE},
+    {OPT_NO_AUTO_HYBRID_REGEX, 0, "no-auto-hybrid-regex", BX_OPTION_NO_VALUE},
+    {OPT_REGEX_SIZE_LIMIT, 0, "regex-size-limit", BX_OPTION_REQUIRED_VALUE},
+    {OPT_DFA_SIZE_LIMIT, 0, "dfa-size-limit", BX_OPTION_REQUIRED_VALUE},
+    {OPT_ENCODING, 0, "encoding", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_ENCODING, 0, "no-encoding", BX_OPTION_NO_VALUE},
+    {OPT_PCRE2_VERSION, 0, "pcre2-version", BX_OPTION_NO_VALUE},
+    {'j', 'j', "threads", BX_OPTION_REQUIRED_VALUE},
+    {OPT_LINE_BUFFERED, 0, "line-buffered", BX_OPTION_NO_VALUE},
+    {OPT_NO_LINE_BUFFERED, 0, "no-line-buffered", BX_OPTION_NO_VALUE},
+    {OPT_BLOCK_BUFFERED, 0, "block-buffered", BX_OPTION_NO_VALUE},
+    {OPT_NO_BLOCK_BUFFERED, 0, "no-block-buffered", BX_OPTION_NO_VALUE},
+    {OPT_MMAP, 0, "mmap", BX_OPTION_NO_VALUE},
+    {OPT_NO_MMAP, 0, "no-mmap", BX_OPTION_NO_VALUE},
+    {OPT_INCLUDE_ZERO, 0, "include-zero", BX_OPTION_NO_VALUE},
+    {OPT_NO_INCLUDE_ZERO, 0, "no-include-zero", BX_OPTION_NO_VALUE},
+    {OPT_NO_FIXED_STRINGS, 0, "no-fixed-strings", BX_OPTION_NO_VALUE},
+    {OPT_NO_FOLLOW, 0, "no-follow", BX_OPTION_NO_VALUE},
+    {OPT_NO_INVERT_MATCH, 0, "no-invert-match", BX_OPTION_NO_VALUE},
+    {OPT_NO_STATS, 0, "no-stats", BX_OPTION_NO_VALUE},
+    {OPT_PRETTY, 0, "pretty", BX_OPTION_NO_VALUE},
+    {OPT_ONE_FILE_SYSTEM, 0, "one-file-system", BX_OPTION_NO_VALUE},
+    {OPT_NO_ONE_FILE_SYSTEM, 0, "no-one-file-system", BX_OPTION_NO_VALUE},
+    {OPT_PATH_SEPARATOR, 0, "path-separator", BX_OPTION_REQUIRED_VALUE},
+    {OPT_PRE, 0, "pre", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_PRE, 0, "no-pre", BX_OPTION_NO_VALUE},
+    {OPT_PRE_GLOB, 0, "pre-glob", BX_OPTION_REQUIRED_VALUE},
+    {OPT_SEARCH_ZIP, 0, "search-zip", BX_OPTION_NO_VALUE},
+    {OPT_NO_SEARCH_ZIP, 0, "no-search-zip", BX_OPTION_NO_VALUE},
+    {OPT_CRLF, 0, "crlf", BX_OPTION_NO_VALUE},
+    {OPT_NO_CRLF, 0, "no-crlf", BX_OPTION_NO_VALUE},
+    {OPT_HOSTNAME_BIN, 0, "hostname-bin", BX_OPTION_REQUIRED_VALUE},
+    {OPT_HYPERLINK_FORMAT, 0, "hyperlink-format", BX_OPTION_REQUIRED_VALUE},
+    {OPT_TRIM, 0, "trim", BX_OPTION_NO_VALUE},
+    {OPT_NO_TRIM, 0, "no-trim", BX_OPTION_NO_VALUE},
+    {OPT_UNICODE, 0, "unicode", BX_OPTION_NO_VALUE},
+    {OPT_NO_UNICODE, 0, "no-unicode", BX_OPTION_NO_VALUE},
+    {OPT_VIMGREP, 0, "vimgrep", BX_OPTION_NO_VALUE},
+    {OPT_GENERATE, 0, "generate", BX_OPTION_REQUIRED_VALUE},
+    {OPT_NO_CONFIG, 0, "no-config", BX_OPTION_NO_VALUE},
+    {'u', 'u', "unrestricted", BX_OPTION_NO_VALUE},
+    {'0', '0', NULL, BX_OPTION_NO_VALUE},
+    {'.', '.', NULL, BX_OPTION_NO_VALUE},
+    {'h', 'h', NULL, BX_OPTION_NO_VALUE},
+    {'l', 'l', NULL, BX_OPTION_NO_VALUE},
+    {'L', 'L', NULL, BX_OPTION_NO_VALUE},
+    {'I', 'I', NULL, BX_OPTION_NO_VALUE},
+    {'z', 'z', NULL, BX_OPTION_NO_VALUE},
+    {'Z', 'Z', NULL, BX_OPTION_NO_VALUE},
+    {'D', 'D', NULL, BX_OPTION_REQUIRED_VALUE},
+    {'d', 'd', NULL, BX_OPTION_REQUIRED_VALUE},
+    {'M', 'M', NULL, BX_OPTION_REQUIRED_VALUE},
+    {'U', 'U', NULL, BX_OPTION_NO_VALUE},
+    {'V', 'V', NULL, BX_OPTION_NO_VALUE},
+    {'N', 'N', NULL, BX_OPTION_NO_VALUE},
+    {'p', 'p', NULL, BX_OPTION_NO_VALUE},
 };
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
@@ -1132,52 +1123,76 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         opts->locale_word_regexp = true;
     }
 
-    const struct option *selected_long_opts =
-        bx_search_personality_is_rg(personality) ? long_opts : grep_long_opts;
-
-    bx_args_getopt_reset();
-    const char *short_opts = bx_search_personality_is_rg(personality)
-                                 ? ":0.E:FHbhinovclLqr:RIszZd:M:aA:B:C:e:f:g:j:t:T:uwPxSm:UVNp"
-                                 : ":0.EFGFHbhinovclLqrRIszZD:d:M:aA:B:C:e:f:g:j:t:uwPxSm:UVNpT";
-
-    int c;
-    while ((c = bx_args_getopt_long(argc, argv, short_opts, selected_long_opts, NULL)) != -1) {
-        switch (c) {
-        case ':':
-            if (bx_search_personality_is_grep_family(personality)) {
-                if (optind > 0 && optind <= argc
-                    && bx_grep_unsupported_required_long_option(argv[optind - 1])) {
-                    return bx_grep_unrecognized_option(progname, argv[optind - 1]);
-                }
-                return bx_grep_missing_option_argument(progname, optopt, optind, argc, argv);
+    bool rg = bx_search_personality_is_rg(personality);
+    const struct bx_option_spec *specs = rg ? long_opts : grep_long_opts;
+    size_t spec_count = rg ? sizeof(long_opts) / sizeof(*long_opts) : sizeof(grep_long_opts) / sizeof(*grep_long_opts);
+    int operand_count = 0;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, spec_count);
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        const char *token = option.token;
+        if (option.event == BX_OPTION_OPERAND) {
+            if (!opts->operand_storage) {
+                opts->operand_storage = calloc((size_t)argc - option.index, sizeof(*opts->operand_storage));
+                if (!opts->operand_storage)
+                    return bx_search_parse_out_of_memory(progname);
             }
-            if (optopt != 0) {
-                fprintf(stderr, "%s: option requires an argument -- '%c'\n", progname, optopt);
-            } else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                fprintf(stderr, "%s: option requires an argument -- '%s'\n", progname, argv[optind - 1]);
-            } else {
-                fprintf(stderr, "%s: option requires an argument\n", progname);
+            opts->operand_storage[operand_count++] = argv[option.index];
+            continue;
+        }
+        if (option.event == BX_OPTION_MISSING_VALUE) {
+            if (!rg) {
+                if (option.spec->long_name && !option.short_name && bx_grep_unsupported_required_long_option(token))
+                    return bx_grep_unrecognized_option(progname, token);
+                return bx_grep_missing_option_argument(progname, &option);
             }
+            if (option.short_name)
+                fprintf(stderr, "%s: option requires an argument -- '%c'\n", progname, option.short_name);
+            else
+                fprintf(stderr, "%s: option requires an argument -- '%s'\n", progname, token);
             return -1;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            /* grep accepts a standalone legacy -NUM context count. */
+            if (!rg && option.event == BX_OPTION_UNKNOWN && token[1] >= '1' && token[1] <= '9' &&
+                token[1 + strspn(token + 1, "0123456789")] == '\0') {
+                int n;
+                if (!bx_parse_nonnegative_int(progname, token, token + 1, &n))
+                    return -1;
+                opts->after_context = n;
+                opts->before_context = n;
+                opts->context_requested = true;
+                bx_option_cursor_init(&cursor, argv, option.index + 1, (size_t)argc, BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, spec_count);
+                continue;
+            }
+            if (option.short_name)
+                fprintf(stderr, "%s: invalid option -- '%c'\n", progname, option.short_name);
+            else
+                fprintf(stderr, "%s: unrecognized option '%s'\n", progname, token);
+            if (personality == BX_SEARCH_GREP)
+                bx_grep_print_usage_try_help(progname);
+            return -1;
+        }
+        int c = option.spec->id;
+        char *value = option.value;
+        const char *long_name = option.short_name ? NULL : option.spec->long_name;
+        switch (c) {
         case '0':
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "-0") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->null_output = true;
             break;
         case '.':
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "-.") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->hidden = true;
             break;
         case 'E':
             if (bx_search_personality_is_rg(personality)) {
-                const char *token =
-                    bx_search_current_option_token(optind, argc, argv, "-E");
-                if (token && strcmp(token, "--extended-regexp") == 0)
+                if (long_name && strcmp(long_name, "extended-regexp") == 0)
                     return bx_grep_unrecognized_option(progname, token);
-                if (!bx_rg_parse_encoding_name(progname, optarg, &opts->encoding_mode,
+                if (!bx_rg_parse_encoding_name(progname, value, &opts->encoding_mode,
                                                &opts->encoding_name)) {
                     return -1;
                 }
@@ -1203,19 +1218,16 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'b': opts->show_byte_offset = true; break;
         case OPT_NO_BYTE_OFFSET:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-byte-offset") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             break;
         case OPT_COLUMN:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--column") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->show_column = true;
             break;
         case OPT_NO_COLUMN:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-column") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             break;
         case 'H':
@@ -1245,8 +1257,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'n': opts->show_line_number = true; break;
         case 'N':
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "-N") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->show_line_number = false;
             break;
@@ -1256,43 +1267,37 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'o': opts->only_matching = true; break;
         case 'v': opts->invert_match = true; break;
         case OPT_NO_INVERT_MATCH:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-invert-match") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->invert_match = false;
             break;
         case 'c': opts->count_only = true; break;
         case OPT_COUNT_MATCHES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--count-matches") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->count_matches = true;
             opts->count_only = true;
             break;
         case OPT_PASSTHRU:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--passthru") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->passthru = true;
             break;
         case OPT_REPLACE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--replace") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->replace);
-            opts->replace = strdup(optarg);
+            opts->replace = strdup(value);
             if (!opts->replace)
                 return -1;
             break;
         case OPT_STATS:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--stats") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->stats = true;
             break;
         case OPT_NO_STATS:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-stats") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->stats = false;
             break;
@@ -1307,8 +1312,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'p':
         case OPT_PRETTY:
             if (bx_search_require_rg_option(
-                    progname, personality, optind, argc, argv,
-                    c == OPT_PRETTY ? "--pretty" : "-p") != 0) {
+                    progname, personality, token) != 0) {
                 return -1;
             }
             opts->color_mode = BX_COLOR_ALWAYS;
@@ -1319,12 +1323,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'r':
             if (bx_search_personality_is_rg(personality)) {
-                const char *token =
-                    bx_search_current_option_token(optind, argc, argv, "-r");
-                if (token && strcmp(token, "--recursive") == 0)
+                if (long_name && strcmp(long_name, "recursive") == 0)
                     return bx_grep_unrecognized_option(progname, token);
                 free(opts->replace);
-                opts->replace = strdup(optarg);
+                opts->replace = strdup(value);
                 if (!opts->replace)
                     return -1;
             } else {
@@ -1334,8 +1336,6 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'R':
             if (bx_search_personality_is_rg(personality)) {
-                const char *token =
-                    bx_search_current_option_token(optind, argc, argv, "-R");
                 fprintf(stderr, "%s: unrecognized flag %s\n",
                         progname, token ? token : "-R");
                 return -1;
@@ -1347,26 +1347,26 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_DIRECTORIES:
             if (bx_search_personality_is_rg(personality)) {
                 if (c == OPT_DIRECTORIES
-                    && bx_search_current_option_is_long(optind, argc, argv, "--directories")) {
+                    && long_name && strcmp(long_name, "directories") == 0) {
                     fprintf(stderr, "%s: unrecognized flag --directories\n", progname);
                     return -1;
                 }
-                if (!bx_parse_nonnegative_int(progname, "-d", optarg, &opts->max_depth))
+                if (!bx_parse_nonnegative_int(progname, "-d", value, &opts->max_depth))
                     return -1;
             } else {
-                if (strcmp(optarg, "read") == 0) {
+                if (strcmp(value, "read") == 0) {
                     opts->directory_mode = BX_GREP_DIR_READ;
-                } else if (strcmp(optarg, "recurse") == 0) {
+                } else if (strcmp(value, "recurse") == 0) {
                     opts->directory_mode = BX_GREP_DIR_RECURSE;
                     opts->recursive = true;
                     opts->follow_symlinks = false;
-                } else if (strcmp(optarg, "skip") == 0) {
+                } else if (strcmp(value, "skip") == 0) {
                     opts->directory_mode = BX_GREP_DIR_SKIP;
                 } else {
                     if (bx_search_personality_is_grep_family(personality)) {
-                        return bx_grep_invalid_directories_mode(progname, optarg);
+                        return bx_grep_invalid_directories_mode(progname, value);
                     }
-                    fprintf(stderr, "%s: invalid argument for -d: %s\n", progname, optarg);
+                    fprintf(stderr, "%s: invalid argument for -d: %s\n", progname, value);
                     return -1;
                 }
             }
@@ -1374,21 +1374,19 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'D':
         case OPT_DEVICES:
             if (bx_search_personality_is_rg(personality)) {
-                const char *fallback = c == OPT_DEVICES ? "--devices" : "-D";
-                if (bx_search_current_option_is_long(optind, argc, argv, "--devices")) {
+                if (long_name && strcmp(long_name, "devices") == 0) {
                     fprintf(stderr, "%s: unrecognized flag --devices\n", progname);
                     return -1;
                 }
-                return bx_search_require_rg_option(progname, personality, optind, argc,
-                                                   argv, fallback);
+                return bx_search_require_rg_option(progname, personality, token);
             }
-            if (strcmp(optarg, "read") == 0) {
+            if (strcmp(value, "read") == 0) {
                 opts->device_mode = BX_GREP_DEVICE_READ;
-            } else if (strcmp(optarg, "skip") == 0) {
+            } else if (strcmp(value, "skip") == 0) {
                 opts->device_mode = BX_GREP_DEVICE_SKIP;
             } else {
                 fprintf(stderr, "%s: invalid argument '%s' for '--devices'\n",
-                        progname, optarg);
+                        progname, value);
                 fputs("Valid arguments are:\n", stderr);
                 fputs("  - 'read'\n", stderr);
                 fputs("  - 'skip'\n", stderr);
@@ -1398,22 +1396,19 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->device_mode_explicit = true;
             break;
         case OPT_MAX_COLUMNS:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--max-columns") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_parse_nonnegative_int(progname, "--max-columns", optarg, &opts->max_columns))
+            if (!bx_parse_nonnegative_int(progname, "--max-columns", value, &opts->max_columns))
                 return -1;
             break;
         case 'M':
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "-M") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_parse_nonnegative_int(progname, "-M", optarg, &opts->max_columns))
+            if (!bx_parse_nonnegative_int(progname, "-M", value, &opts->max_columns))
                 return -1;
             break;
         case OPT_MAX_COLUMNS_PREVIEW:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--max-columns-preview") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             break;
         case 'I':
@@ -1430,8 +1425,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->binary_without_match = false;
             break;
         case OPT_NO_TEXT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-text") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->binary_as_text = false;
             opts->binary_without_match = true;
@@ -1445,8 +1439,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case OPT_NO_BINARY:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-binary") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->binary_as_text = false;
             opts->binary_without_match = true;
@@ -1455,9 +1448,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'x': opts->line_regexp = true; break;
         case 'P':
             if (bx_search_personality_is_rg(personality)) {
-                const char *token =
-                    bx_search_current_option_token(optind, argc, argv, "-P");
-                if (token && strcmp(token, "--perl-regexp") == 0)
+                if (long_name && strcmp(long_name, "perl-regexp") == 0)
                     return bx_grep_unrecognized_option(progname, token);
             }
             opts->perl_regexp = true;
@@ -1465,8 +1456,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->fixed_strings = false;
             break;
         case OPT_NO_PCRE2:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-pcre2") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->perl_regexp = false;
             if (opts->rg_engine == BX_RG_ENGINE_PCRE2
@@ -1479,9 +1469,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 opts->smart_case = false;
                 opts->ignore_case = false;
             } else {
-                const char *token =
-                    bx_search_current_option_token(optind, argc, argv, "-s");
-                if (token && strncmp(token, "--case-sensitive", 16) == 0)
+                if (long_name && strcmp(long_name, "case-sensitive") == 0)
                     return bx_grep_unrecognized_option(progname, token);
                 opts->suppress_errors = true;
             }
@@ -1496,7 +1484,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case 'm':
-            if (!bx_search_parse_nonnegative_int(progname, personality, "-m", optarg, &opts->max_count))
+            if (!bx_search_parse_nonnegative_int(progname, personality, "-m", value, &opts->max_count))
                 return -1;
             break;
         case 'Z':
@@ -1517,30 +1505,29 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->null_data = true;
             break;
         case 'g':
-            if (bx_search_personality_is_rg(personality) && optarg && optarg[0] == '!') {
+            if (bx_search_personality_is_rg(personality) && value && value[0] == '!') {
                 if (!bx_search_pattern_vec_append(&opts->exclude_patterns,
-                                                  optarg + 1,
+                                                  value + 1,
                                                   opts->glob_case_insensitive,
                                                   false)) {
                     return bx_search_parse_out_of_memory(progname);
                 }
             } else if (!bx_search_pattern_vec_append(&opts->include_patterns,
-                                                     optarg,
+                                                     value,
                                                      opts->glob_case_insensitive,
                                                      false)) {
                 return bx_search_parse_out_of_memory(progname);
             }
             break;
         case OPT_IGLOB:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--iglob") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (optarg && optarg[0] == '!') {
-                fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", progname, optarg);
+            if (value && value[0] == '!') {
+                fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", progname, value);
                 return -1;
             }
             if (!bx_search_pattern_vec_append(&opts->include_patterns,
-                                              optarg, true, false))
+                                              value, true, false))
                 return bx_search_parse_out_of_memory(progname);
             break;
         case 'u':
@@ -1554,61 +1541,45 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->multiline = true;
             break;
         case OPT_NO_MULTILINE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-multiline") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->multiline = false;
             break;
         case OPT_HIDDEN:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--hidden") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->hidden = true;
             break;
         case OPT_NO_HIDDEN:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-hidden") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->hidden = false;
             break;
         case 'j':
-            if (!bx_thread_count_parse(progname, "--threads", optarg, &opts->threads))
+            if (!bx_thread_count_parse(progname, "--threads", value, &opts->threads))
                 return -1;
             break;
         case 't':
         case 'T': {
-            const char *arg = bx_search_current_option_token(optind, argc, argv, NULL);
             if (bx_search_personality_is_rg(personality) && c == 'T'
-                && arg && strcmp(arg, "--initial-tab") == 0) {
-                return bx_grep_unrecognized_option(progname, arg);
+                && long_name && strcmp(long_name, "initial-tab") == 0) {
+                return bx_grep_unrecognized_option(progname, token);
             }
             if (!bx_search_personality_is_rg(personality)) {
-                if (c == 'T' && arg
-                    && (strcmp(arg, "-T") == 0
-                        || strcmp(arg, "--initial-tab") == 0)) {
+                if (c == 'T' && (!long_name || strcmp(long_name, "initial-tab") == 0)) {
                     opts->initial_tab = true;
                     break;
                 }
-                if (arg && (strcmp(arg, "--type") == 0 || strcmp(arg, "--type-not") == 0
-                            || strncmp(arg, "--type=", 7) == 0
-                            || strncmp(arg, "--type-not=", 11) == 0)) {
-                    return bx_grep_unrecognized_option(progname, arg);
-                }
-                if (c == 't') {
-                    fprintf(stderr, "%s: invalid option -- 't'\n", progname);
-                    bx_grep_print_usage_try_help(progname);
-                    return -1;
-                }
-                if (c == 'T') {
-                    fprintf(stderr, "%s: invalid option -- 'T'\n", progname);
-                    bx_grep_print_usage_try_help(progname);
-                    return -1;
-                }
+                if (long_name)
+                    return bx_grep_unrecognized_option(progname, token);
+                fprintf(stderr, "%s: invalid option -- '%c'\n", progname, c);
+                bx_grep_print_usage_try_help(progname);
+                return -1;
             }
-            const char *globs = bx_get_type_globs(opts, optarg);
+            const char *globs = bx_get_type_globs(opts, value);
             if (!globs) {
                 if (bx_search_personality_is_rg(personality)) {
-                    fprintf(stderr, "%s: unrecognized file type: %s\n", progname, optarg);
+                    fprintf(stderr, "%s: unrecognized file type: %s\n", progname, value);
                     return -1;
                 }
                 break;
@@ -1635,26 +1606,24 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         }
         case OPT_TYPE_ADD:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--type-add") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_add_custom_type(opts, optarg)) {
-                fprintf(stderr, "%s: invalid argument for --type-add: %s\n", progname, optarg);
+            if (!bx_add_custom_type(opts, value)) {
+                fprintf(stderr, "%s: invalid argument for --type-add: %s\n", progname, value);
                 return -1;
             }
             break;
         case OPT_TYPE_CLEAR:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--type-clear") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_clear_type(opts, optarg)) {
-                fprintf(stderr, "%s: invalid argument for --type-clear: %s\n", progname, optarg);
+            if (!bx_clear_type(opts, value)) {
+                fprintf(stderr, "%s: invalid argument for --type-clear: %s\n", progname, value);
                 return -1;
             }
             break;
         case 'e':
             if (!bx_search_pattern_vec_append(&opts->extra_patterns,
-                                              optarg, false, false))
+                                              value, false, false))
                 return bx_search_parse_out_of_memory(progname);
             break;
         case 'f': {
@@ -1662,14 +1631,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bool close_pf = false;
             int read_errno = 0;
             struct bx_record_stream pattern_stream = {0};
-            if (strcmp(optarg, "-") == 0) {
+            if (strcmp(value, "-") == 0) {
                 pf = stdin;
             } else {
-                pf = fopen(optarg, "r");
+                pf = fopen(value, "r");
                 close_pf = true;
             }
             if (!pf) {
-                fprintf(stderr, "%s: %s: %s\n", progname, optarg, strerror(errno));
+                fprintf(stderr, "%s: %s: %s\n", progname, value, strerror(errno));
                 return -1;
             }
             bx_record_stream_begin(pf, &pattern_stream);
@@ -1696,24 +1665,24 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 read_errno = errno != 0 ? errno : EIO;
             bx_record_stream_dispose(&pattern_stream);
             if (read_errno != 0)
-                return bx_search_parse_path_error(progname, optarg, read_errno);
+                return bx_search_parse_path_error(progname, value, read_errno);
             break;
         }
         case 'A':
-            if (!bx_parse_nonnegative_int(progname, "-A", optarg, &opts->after_context))
+            if (!bx_parse_nonnegative_int(progname, "-A", value, &opts->after_context))
                 return -1;
             if (bx_search_personality_is_grep_family(personality))
                 opts->context_requested = true;
             break;
         case 'B':
-            if (!bx_parse_nonnegative_int(progname, "-B", optarg, &opts->before_context))
+            if (!bx_parse_nonnegative_int(progname, "-B", value, &opts->before_context))
                 return -1;
             if (bx_search_personality_is_grep_family(personality))
                 opts->context_requested = true;
             break;
         case 'C': {
             int n;
-            if (!bx_parse_nonnegative_int(progname, "-C", optarg, &n))
+            if (!bx_parse_nonnegative_int(progname, "-C", value, &n))
                 return -1;
             opts->after_context = n;
             opts->before_context = n;
@@ -1725,24 +1694,24 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--include");
             if (!bx_search_pattern_vec_append(&opts->include_patterns,
-                                              optarg, false, false))
+                                              value, false, false))
                 return bx_search_parse_out_of_memory(progname);
             break;
         case OPT_EXCLUDE:
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--exclude");
             if (!bx_search_pattern_vec_append(&opts->exclude_patterns,
-                                              optarg, false, false))
+                                              value, false, false))
                 return bx_search_parse_out_of_memory(progname);
             break;
         case OPT_EXCLUDE_FROM: {
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--exclude-from");
-            FILE *ef = fopen(optarg, "r");
+            FILE *ef = fopen(value, "r");
             int read_errno = 0;
             struct bx_record_stream exclude_stream = {0};
             if (!ef) {
-                fprintf(stderr, "%s: %s: %s\n", progname, optarg, strerror(errno));
+                fprintf(stderr, "%s: %s: %s\n", progname, value, strerror(errno));
                 return -1;
             }
             bx_record_stream_begin(ef, &exclude_stream);
@@ -1771,14 +1740,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 read_errno = errno != 0 ? errno : EIO;
             bx_record_stream_dispose(&exclude_stream);
             if (read_errno != 0)
-                return bx_search_parse_path_error(progname, optarg, read_errno);
+                return bx_search_parse_path_error(progname, value, read_errno);
             break;
         }
         case OPT_EXCLUDE_DIR:
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--exclude-dir");
             if (!bx_search_pattern_vec_append(&opts->exclude_dir_patterns,
-                                              optarg, false, false))
+                                              value, false, false))
                 return bx_search_parse_out_of_memory(progname);
             break;
         case OPT_FILES:
@@ -1791,81 +1760,68 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->files_without_match = true;
             break;
         case OPT_FOLLOW:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--follow") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->follow_symlinks = true;
             break;
         case OPT_NO_FOLLOW:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-follow") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->follow_symlinks = false;
             break;
         case OPT_IGNORE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore = false;
             break;
         case OPT_IGNORE_PARENT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-parent") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_parent = false;
             break;
         case OPT_IGNORE_VCS:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-vcs") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_vcs = false;
             break;
         case OPT_IGNORE_DOT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-dot") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_dot = false;
             break;
         case OPT_IGNORE_EXCLUDE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-exclude") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_exclude = false;
             break;
         case OPT_IGNORE_FILES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-files") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_files = false;
             break;
         case OPT_IGNORE_GLOBAL:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-global") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_global = false;
             break;
         case OPT_IGNORE_MESSAGES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-messages") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->suppress_ignore_messages = false;
             break;
         case OPT_IGNORE_FILE_CASE_INSENSITIVE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-file-case-insensitive") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->ignore_file_case_insensitive = true;
             break;
         case OPT_IGNORE_FILE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--ignore-file") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             if (!opts->no_ignore_files && opts->num_ignore_files < MAX_RG_IGNORE_FILES)
-                opts->ignore_files[opts->num_ignore_files++] = strdup(optarg);
+                opts->ignore_files[opts->num_ignore_files++] = strdup(value);
             break;
         case OPT_GLOB_CASE_INSENSITIVE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--glob-case-insensitive") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->glob_case_insensitive = true;
             break;
@@ -1877,68 +1833,57 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->no_ignore = true;
             break;
         case OPT_NO_IGNORE_PARENT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-parent") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_parent = true;
             break;
         case OPT_NO_IGNORE_VCS:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-vcs") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_vcs = true;
             break;
         case OPT_NO_IGNORE_DOT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-dot") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_dot = true;
             break;
         case OPT_NO_IGNORE_EXCLUDE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-exclude") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_exclude = true;
             break;
         case OPT_NO_IGNORE_FILES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-files") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_files = true;
             break;
         case OPT_NO_IGNORE_GLOBAL:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-global") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_ignore_global = true;
             break;
         case OPT_NO_IGNORE_MESSAGES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-messages") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->suppress_ignore_messages = true;
             break;
         case OPT_NO_IGNORE_FILE_CASE_INSENSITIVE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-ignore-file-case-insensitive") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->ignore_file_case_insensitive = false;
             break;
         case OPT_NO_GLOB_CASE_INSENSITIVE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-glob-case-insensitive") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->glob_case_insensitive = false;
             break;
         case OPT_NO_REQUIRE_GIT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-require-git") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_require_git = true;
             break;
         case OPT_REQUIRE_GIT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--require-git") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->no_require_git = false;
             break;
@@ -1946,46 +1891,41 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_search_print_type_list();
             return 1;
         case OPT_PRINT0:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--print0") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->null_output = true;
             break;
         case OPT_MAX_DEPTH:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--max-depth") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_parse_nonnegative_int(progname, "--max-depth", optarg, &opts->max_depth))
+            if (!bx_parse_nonnegative_int(progname, "--max-depth", value, &opts->max_depth))
                 return -1;
             break;
         case OPT_LABEL:
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--label");
             free(opts->label);
-            opts->label = strdup(optarg);
+            opts->label = strdup(value);
             break;
         case OPT_GROUP_SEPARATOR:
-            if (bx_search_reject_rg_option(progname, personality, optind, argc,
-                                           argv, "--group-separator") != 0) {
+            if (bx_search_reject_rg_option(progname, personality, token) != 0) {
                 return -1;
             }
             free(opts->group_separator);
-            opts->group_separator = strdup(optarg);
+            opts->group_separator = strdup(value);
             opts->suppress_group_separator = false;
             break;
         case OPT_NO_GROUP_SEPARATOR:
-            if (bx_search_reject_rg_option(progname, personality, optind, argc,
-                                           argv, "--no-group-separator") != 0) {
+            if (bx_search_reject_rg_option(progname, personality, token) != 0) {
                 return -1;
             }
             opts->suppress_group_separator = true;
             break;
         case OPT_CONTEXT_SEPARATOR:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--context-separator") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->group_separator);
-            opts->group_separator = strdup(optarg);
+            opts->group_separator = strdup(value);
             opts->suppress_group_separator = false;
             break;
         case OPT_NO_CONTEXT_SEPARATOR:
@@ -1996,29 +1936,25 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->suppress_group_separator = true;
             break;
         case OPT_FIELD_CONTEXT_SEPARATOR:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--field-context-separator") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->field_context_separator);
-            opts->field_context_separator = strdup(optarg);
+            opts->field_context_separator = strdup(value);
             break;
         case OPT_FIELD_MATCH_SEPARATOR:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--field-match-separator") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->field_match_separator);
-            opts->field_match_separator = strdup(optarg);
+            opts->field_match_separator = strdup(value);
             break;
         case OPT_HEADING:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--heading") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->heading = true;
             opts->heading_set = true;
             break;
         case OPT_NO_HEADING:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-heading") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->heading = false;
             opts->heading_set = true;
@@ -2028,11 +1964,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->null_filename = true;
             break;
         case OPT_BINARY_FILES:
-            if (bx_search_reject_rg_option(progname, personality, optind, argc,
-                                           argv, "--binary-files") != 0) {
+            if (bx_search_reject_rg_option(progname, personality, token) != 0) {
                 return -1;
             }
-            if (!bx_set_binary_files_mode(progname, personality, opts, optarg))
+            if (!bx_set_binary_files_mode(progname, personality, opts, value))
                 return -1;
             break;
         case OPT_NULL_DATA:
@@ -2042,33 +1977,28 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->suppress_errors = true;
             break;
         case OPT_MESSAGES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--messages") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->suppress_errors = false;
             break;
         case OPT_MULTILINE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--multiline") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->multiline = true;
             break;
         case OPT_MULTILINE_DOTALL:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--multiline-dotall") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->multiline = true;
             opts->multiline_dotall = true;
             break;
         case OPT_NO_MULTILINE_DOTALL:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-multiline-dotall") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->multiline_dotall = false;
             break;
         case OPT_STOP_ON_NONMATCH:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--stop-on-nonmatch") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->stop_on_nonmatch = true;
             break;
@@ -2081,36 +2011,32 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             }
             return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--json");
+                progname, personality, token);
         }
         case OPT_NO_JSON:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-json") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             break;
         case OPT_DEBUG:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--debug") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             fprintf(stderr, "%s: unsupported option '--debug'\n", progname);
             return -1;
         case OPT_TRACE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--trace") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->trace = true;
             break;
         case OPT_SORT:
         case OPT_SORTR:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, c == OPT_SORT ? "--sort" : "--sortr") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_search_parse_sort_key(optarg, &opts->sort_key)) {
+            if (!bx_search_parse_sort_key(value, &opts->sort_key)) {
                 fprintf(stderr,
                         "%s: unsupported argument for %s: %s\n",
                         progname,
                         c == OPT_SORT ? "--sort" : "--sortr",
-                        optarg);
+                        value);
                 return -1;
             }
             opts->sort_dir = c == OPT_SORTR
@@ -2118,78 +2044,70 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                                  : BX_SEARCH_SORT_ASCENDING;
             break;
         case OPT_SORT_FILES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--sort-files") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->sort_key = BX_SEARCH_SORT_PATH;
             opts->sort_dir = BX_SEARCH_SORT_ASCENDING;
             break;
         case OPT_NO_SORT_FILES:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-sort-files") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->sort_key = BX_SEARCH_SORT_NONE;
             opts->sort_dir = BX_SEARCH_SORT_ASCENDING;
             break;
         case OPT_ENGINE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--engine") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (strcmp(optarg, "default") == 0)
+            if (strcmp(value, "default") == 0)
                 opts->rg_engine = BX_RG_ENGINE_DEFAULT;
-            else if (strcmp(optarg, "pcre2") == 0)
+            else if (strcmp(value, "pcre2") == 0)
                 opts->rg_engine = BX_RG_ENGINE_PCRE2;
-            else if (strcmp(optarg, "auto") == 0)
+            else if (strcmp(value, "auto") == 0)
                 opts->rg_engine = BX_RG_ENGINE_AUTO;
             else {
                 fprintf(stderr,
                         "%s: error parsing flag --engine: unrecognized regex engine '%s'\n",
-                        progname, optarg);
+                        progname, value);
                 return -1;
             }
             break;
         case OPT_AUTO_HYBRID_REGEX:
             return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--auto-hybrid-regex");
+                progname, personality, token);
         case OPT_NO_AUTO_HYBRID_REGEX:
             return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--no-auto-hybrid-regex");
+                progname, personality, token);
         case OPT_PCRE2_VERSION:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--pcre2-version") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->pcre2_version = true;
             bx_regex_print_version();
             return 1;
         case OPT_REGEX_SIZE_LIMIT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--regex-size-limit") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_parse_rg_size_limit(progname, "--regex-size-limit", optarg,
+            if (!bx_parse_rg_size_limit(progname, "--regex-size-limit", value,
                                         &opts->regex_size_limit))
                 return -1;
             opts->regex_size_limit_set = true;
             break;
         case OPT_DFA_SIZE_LIMIT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--dfa-size-limit") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_parse_rg_size_limit(progname, "--dfa-size-limit", optarg,
+            if (!bx_parse_rg_size_limit(progname, "--dfa-size-limit", value,
                                         &opts->dfa_size_limit))
                 return -1;
             opts->dfa_size_limit_set = true;
             break;
         case OPT_ENCODING:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--encoding") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_rg_parse_encoding_name(progname, optarg, &opts->encoding_mode,
+            if (!bx_rg_parse_encoding_name(progname, value, &opts->encoding_mode,
                                            &opts->encoding_name))
                 return -1;
             break;
         case OPT_NO_ENCODING:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-encoding") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->encoding_name);
             opts->encoding_name = NULL;
@@ -2197,142 +2115,126 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case OPT_COLOR:
             if (bx_search_personality_is_rg(personality)
-                && bx_search_current_option_is_long(optind, argc, argv, "--colour")) {
+                && long_name && strcmp(long_name, "colour") == 0) {
                 fprintf(stderr, "%s: unrecognized flag --colour\n", progname);
                 return -1;
             }
-            opts->color_mode = bx_color_parse(optarg ? optarg : "auto");
+            opts->color_mode = bx_color_parse(value ? value : "auto");
             bx_color_set_mode(opts->color_mode);
             break;
         case OPT_COLORS:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--colors") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_rg_parse_colors_spec(progname, optarg, &opts->rg_colors))
+            if (!bx_rg_parse_colors_spec(progname, value, &opts->rg_colors))
                 return -1;
             break;
         case OPT_CRLF:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--crlf") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->crlf = true;
             opts->null_data = false;
             break;
         case OPT_NO_CRLF:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-crlf") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->crlf = false;
             break;
         case OPT_HOSTNAME_BIN:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--hostname-bin") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->hostname_bin);
             opts->hostname_bin = NULL;
-            if (optarg[0] != '\0') {
-                opts->hostname_bin = strdup(optarg);
+            if (value[0] != '\0') {
+                opts->hostname_bin = strdup(value);
                 if (!opts->hostname_bin)
                     return -1;
             }
             break;
         case OPT_HYPERLINK_FORMAT:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--hyperlink-format") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_rg_parse_hyperlink_format(progname, optarg,
+            if (!bx_rg_parse_hyperlink_format(progname, value,
                                               &opts->hyperlink_format)) {
                 return -1;
             }
             break;
         case OPT_NO_MAX_COLUMNS_PREVIEW:
             if (bx_search_require_rg_option(
-                    progname, personality, optind, argc, argv,
-                    bx_search_current_option_token(optind, argc, argv, NULL)) != 0) {
+                    progname, personality, token) != 0) {
                 return -1;
             }
             break;
         case OPT_NO_PCRE2_UNICODE:
             return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--no-pcre2-unicode");
+                progname, personality, token);
         case OPT_PCRE2_UNICODE:
             return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--pcre2-unicode");
+                progname, personality, token);
         case OPT_PATH_SEPARATOR:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--path-separator") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_rg_parse_path_separator(progname, optarg,
+            if (!bx_rg_parse_path_separator(progname, value,
                                             &opts->path_separator)) {
                 return -1;
             }
             break;
         case OPT_PRE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--pre") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->pre_command);
             opts->pre_command = NULL;
-            if (optarg[0] != '\0') {
-                opts->pre_command = strdup(optarg);
+            if (value[0] != '\0') {
+                opts->pre_command = strdup(value);
                 if (!opts->pre_command)
                     return -1;
                 opts->search_zip = false;
             }
             break;
         case OPT_NO_PRE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-pre") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->pre_command);
             opts->pre_command = NULL;
             break;
         case OPT_PRE_GLOB:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--pre-glob") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             if (opts->num_pre_globs < MAX_PRE_GLOBS) {
-                opts->pre_globs[opts->num_pre_globs] = strdup(optarg);
+                opts->pre_globs[opts->num_pre_globs] = strdup(value);
                 if (!opts->pre_globs[opts->num_pre_globs])
                     return -1;
                 opts->num_pre_globs++;
             }
             break;
         case OPT_SEARCH_ZIP:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--search-zip") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             free(opts->pre_command);
             opts->pre_command = NULL;
             opts->search_zip = true;
             break;
         case OPT_NO_SEARCH_ZIP:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-search-zip") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->search_zip = false;
             break;
         case OPT_TRIM:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--trim") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->trim = true;
             break;
         case OPT_NO_TRIM:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-trim") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->trim = false;
             break;
         case OPT_UNICODE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--unicode") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->unicode = true;
             break;
         case OPT_NO_UNICODE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-unicode") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->unicode = false;
             break;
@@ -2340,80 +2242,68 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->line_buffered = true;
             break;
         case OPT_NO_LINE_BUFFERED:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-line-buffered") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->line_buffered = false;
             break;
         case OPT_BLOCK_BUFFERED:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--block-buffered") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             break;
         case OPT_NO_BLOCK_BUFFERED:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-block-buffered") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             break;
         case OPT_MMAP:
         case OPT_NO_MMAP:
             if (bx_search_require_rg_option(
-                    progname, personality, optind, argc, argv,
-                    bx_search_current_option_token(optind, argc, argv, NULL)) != 0) {
+                    progname, personality, token) != 0) {
                 return -1;
             }
             break;
         case OPT_INCLUDE_ZERO:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--include-zero") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->include_zero = true;
             break;
         case OPT_NO_INCLUDE_ZERO:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-include-zero") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->include_zero = false;
             break;
         case OPT_NO_FIXED_STRINGS:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-fixed-strings") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->fixed_strings = false;
             break;
         case OPT_ONE_FILE_SYSTEM:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--one-file-system") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->stay_on_filesystem = true;
             break;
         case OPT_NO_ONE_FILE_SYSTEM:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-one-file-system") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->stay_on_filesystem = false;
             break;
         case OPT_MAX_FILESIZE:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--max-filesize") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
-            if (!bx_parse_rg_size_limit(progname, "--max-filesize", optarg,
+            if (!bx_parse_rg_size_limit(progname, "--max-filesize", value,
                                         &opts->max_filesize))
                 return -1;
             opts->max_filesize_set = true;
             break;
         case OPT_VIMGREP:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--vimgrep") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             opts->vimgrep = true;
             break;
         case OPT_GENERATE:
             return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--generate");
+                progname, personality, token);
         case OPT_NO_CONFIG:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--no-config") != 0)
+            if (bx_search_require_rg_option(progname, personality, token) != 0)
                 return -1;
             break;
         case OPT_HELP:
@@ -2423,39 +2313,6 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_VERSION:
             bx_search_print_version(progname);
             return 1;
-        case '?':
-            if (!bx_search_personality_is_rg(personality) && optind > 0 && optind <= argc) {
-                const char *arg = argv[optind - 1];
-                if (arg && arg[0] == '-' && isdigit((unsigned char)arg[1])) {
-                    bool all_digits = true;
-                    for (const char *p = arg + 1; *p; p++) {
-                        if (!isdigit((unsigned char)*p)) {
-                            all_digits = false;
-                            break;
-                        }
-                    }
-                    if (all_digits) {
-                        int n;
-                        if (!bx_parse_nonnegative_int(progname, arg, arg + 1, &n))
-                            return -1;
-                        opts->after_context = n;
-                        opts->before_context = n;
-                        opts->context_requested = true;
-                        break;
-                    }
-                }
-            }
-            if (optopt) {
-                fprintf(stderr, "%s: invalid option -- '%c'\n", progname, optopt);
-            } else if (optind > 0 && optind <= argc) {
-                fprintf(stderr, "%s: unrecognized option '%s'\n", progname, argv[optind - 1]);
-            } else {
-                fprintf(stderr, "%s: unrecognized option\n", progname);
-            }
-            if (personality == BX_SEARCH_GREP) {
-                bx_grep_print_usage_try_help(progname);
-            }
-            return -1;
         default:
             return -1;
         }
@@ -2501,13 +2358,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_color_set_mode(opts->color_mode);
     }
 
+    int first_file = 0;
     if (opts->files_only) {
         operands->pattern = "";
     } else if (opts->extra_patterns.len > 0u) {
         operands->pattern = opts->extra_patterns.items[opts->extra_patterns.len - 1u];
         bx_search_pattern_vec_drop_last(&opts->extra_patterns);
     }
-    else if (optind >= argc) {
+    else if (operand_count == 0) {
         if (personality == BX_SEARCH_GREP)
             bx_grep_print_usage_try_help(progname);
         else
@@ -2515,9 +2373,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         return -1;
     }
     else {
-        operands->pattern = argv[optind++];
+        operands->pattern = opts->operand_storage[first_file++];
     }
-    operands->files = argv + optind;
-    operands->num_files = argc - optind;
+    operands->files = opts->operand_storage ? opts->operand_storage + first_file : NULL;
+    operands->num_files = operand_count - first_file;
     return 0;
 }

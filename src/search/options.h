@@ -28,6 +28,7 @@ enum bx_search_sort_dir {
 };
 
 struct search_opts {
+    char **operand_storage; /* Borrowed argv strings, owned vector. */
     bool show_line_number;
     bool show_column;
     bool show_byte_offset;
