@@ -1,6 +1,6 @@
 #include <errno.h>
-#include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +15,7 @@
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
 #include "lib/line_writer.h"
+#include "lib/option_scan.h"
 
 enum {
     BX_FOLD_OPT_HELP = 256,
@@ -22,7 +23,6 @@ enum {
 };
 
 struct bx_fold_options {
-    const char* progname;
     size_t width;
     bool bytes;
     bool spaces;
@@ -43,31 +43,38 @@ static void bx_fold_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version  output version information and exit\n");
 }
 
-static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options* options, int* first_operand, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"bytes", no_argument, NULL, 'b'},
-        {"spaces", no_argument, NULL, 's'},
-        {"width", required_argument, NULL, 'w'},
-        {"help", no_argument, NULL, BX_FOLD_OPT_HELP},
-        {"version", no_argument, NULL, BX_FOLD_OPT_VERSION},
-        {NULL, 0, NULL, 0},
+static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options* options,
+                                  const char** paths, size_t* count, struct bx_diag_ctx* diag) {
+    static const struct bx_option_spec specs[] = {
+        {'b', 'b', "bytes", BX_OPTION_NO_VALUE},
+        {'s', 's', "spaces", BX_OPTION_NO_VALUE},
+        {'w', 'w', "width", BX_OPTION_REQUIRED_VALUE},
+        {BX_FOLD_OPT_HELP, 0, "help", BX_OPTION_NO_VALUE},
+        {BX_FOLD_OPT_VERSION, 0, "version", BX_OPTION_NO_VALUE},
     };
 
-    memset(options, 0, sizeof(*options));
-    options->progname = "fold";
-    options->width = 80;
-    diag->progname = options->progname;
-
-    bx_args_getopt_reset();
-    int next_operand = 1;
-
-    while (true) {
-        int c = bx_args_getopt_long_interspersed(argc, argv, "-bsw:", long_options, &next_operand);
-        if (c == -1) {
-            break;
+    struct bx_option_cursor cursor;
+    bx_option_cursor_init(&cursor, argv, argc > 0 ? 1u : 0u, (size_t)argc,
+                          BX_OPTION_ORDERED | BX_OPTION_ABBREVIATE, specs, sizeof(specs) / sizeof(specs[0]));
+    struct bx_option_result option;
+    while ((option = bx_option_next(&cursor)).event != BX_OPTION_END) {
+        if (option.event == BX_OPTION_OPERAND) {
+            paths[(*count)++] = option.token;
+            continue;
+        }
+        if (option.event != BX_OPTION_MATCH) {
+            if (option.event == BX_OPTION_MISSING_VALUE && option.short_name)
+                bx_diag(diag, "option requires an argument -- '%c'", option.short_name);
+            else if (option.event == BX_OPTION_MISSING_VALUE)
+                bx_diag(diag, "option '%s' requires an argument", option.token);
+            else if (option.short_name)
+                bx_diag(diag, "invalid option -- '%c'", option.short_name);
+            else
+                bx_diag(diag, "unrecognized option '%s'", option.token);
+            return false;
         }
 
-        switch (c) {
+        switch (option.spec->id) {
             case 'b':
                 options->bytes = true;
                 break;
@@ -75,8 +82,8 @@ static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options*
                 options->spaces = true;
                 break;
             case 'w':
-                if (!bx_args_parse_size_range(optarg, 1u, (size_t)-1, &options->width)) {
-                    bx_diag(diag, "invalid width: '%s'", optarg);
+                if (!bx_args_parse_size_range(option.value, 1u, SIZE_MAX, &options->width)) {
+                    bx_diag(diag, "invalid width: '%s'", option.value);
                     return false;
                 }
                 break;
@@ -86,15 +93,9 @@ static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options*
             case BX_FOLD_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
-                return false;
-            default:
-                return false;
         }
     }
 
-    *first_operand = optind;
     return true;
 }
 
@@ -251,29 +252,34 @@ static bool fold_file(
 }
 
 int bx_fold_main(int argc, char** argv) {
-    struct bx_fold_options options;
-    struct bx_diag_ctx diag = {.progname = "fold", .exit_status = 0};
-    int first_operand = 0;
+    struct bx_fold_options options = {.width = 80};
+    struct bx_diag_ctx diag = {.progname = "fold"};
+    const char** paths = argc > 1 ? calloc((size_t)(argc - 1), sizeof(*paths)) : NULL;
+    if (argc > 1 && paths == NULL) {
+        bx_diag(&diag, "memory exhausted");
+        return diag.exit_status;
+    }
+    size_t count = 0;
 
-    if (!bx_fold_parse_options(argc, argv, &options, &first_operand, &diag))
-        return 1;
+    if (!bx_fold_parse_options(argc, argv, &options, paths, &count, &diag))
+        goto done;
     if (options.show_help) {
-        bx_fold_print_help(stdout, options.progname);
-        return 0;
+        bx_fold_print_help(stdout, diag.progname);
+        goto done;
     }
     if (options.show_version) {
-        bx_cli_print_version(options.progname);
-        return 0;
+        bx_cli_print_version(diag.progname);
+        goto done;
     }
 
-    int num_files = argc - first_operand;
     bool ok = true;
     char output_buffer[8192];
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    for (int i = 0; ok && (i < num_files || (i == 0 && num_files == 0)); i++) {
-        const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
+    size_t files = count == 0 ? 1u : count;
+    for (size_t i = 0; ok && i < files; i++) {
+        const char* filename = count == 0 ? "-" : paths[i];
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
         if (!f) {
@@ -288,5 +294,7 @@ int bx_fold_main(int argc, char** argv) {
         bx_fold_write_error(&diag);
     }
 
+done:
+    free(paths);
     return diag.exit_status;
 }
