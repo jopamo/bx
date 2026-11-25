@@ -202,9 +202,8 @@ static bool ash_invocation_apply_long(
     }
     if (strcmp(candidate->progname, "bash") == 0 &&
         strcmp(argument, "--norc") == 0) {
-        candidate->startup = (struct ash_startup_request){
-            .bashrc = ASH_BASHRC_SUPPRESSED,
-        };
+        candidate->startup.bashrc = ASH_BASHRC_SUPPRESSED;
+        candidate->startup.bashrc_path = NULL;
         return true;
     }
     if (strcmp(candidate->progname, "bash") == 0 &&
@@ -233,10 +232,8 @@ static bool ash_invocation_apply_long(
         }
         *consumed_operand = true;
         if (candidate->startup.bashrc != ASH_BASHRC_SUPPRESSED) {
-            candidate->startup = (struct ash_startup_request){
-                .bashrc = ASH_BASHRC_EXPLICIT,
-                .bashrc_path = operand,
-            };
+            candidate->startup.bashrc = ASH_BASHRC_EXPLICIT;
+            candidate->startup.bashrc_path = operand;
         }
         return true;
     }
