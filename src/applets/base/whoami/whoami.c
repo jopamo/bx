@@ -1,4 +1,3 @@
-#include <getopt.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <pwd.h>
@@ -6,7 +5,6 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/args_common.h"
 
 static void bx_whoami_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]...\n", progname);
@@ -24,39 +22,17 @@ int bx_whoami_main(int argc, char** argv) {
         .verbose = false,
         .debug = false,
     };
-    static const struct option long_options[] = {
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
-    };
-    int c;
+    /* Exact help and version spellings precede surplus operands for whoami. */
+    int status = bx_cli_maybe_handle_help_or_version(argc, argv, "whoami", NULL, NULL, bx_whoami_print_help);
+    if (status >= 0)
+        return status;
 
-    c = bx_cli_maybe_handle_help_or_version(
-        argc,
-        argv,
-        "whoami",
-        NULL,
-        NULL,
-        bx_whoami_print_help
-    );
-    if (c >= 0) {
-        return c;
-    }
-
-    bx_args_getopt_reset();
-    while ((c = bx_args_getopt_long(argc, argv, "+", long_options, NULL)) != -1) {
-        switch (c) {
-            case '?':
-                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
-                bx_cli_print_try_help(diag.progname);
-                return diag.exit_status;
-            default:
-                break;
-        }
-    }
-
-    if (optind < argc) {
-        bx_cli_diag_extra_operand(&diag, argv[optind]);
+    int operand = argc;
+    status = bx_cli_scan_help_version_prefix(argc, argv, &operand, &diag, bx_whoami_print_help);
+    if (status >= 0)
+        return status;
+    if (operand < argc) {
+        bx_cli_diag_extra_operand(&diag, argv[operand]);
         bx_cli_print_try_help(diag.progname);
         return diag.exit_status;
     }
