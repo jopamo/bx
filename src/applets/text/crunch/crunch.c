@@ -123,6 +123,25 @@ static char *load_set(const char *path, const char *name) {
     if (!result) fail("charset name not found");
     return result;
 }
+
+static size_t load_words(const char *path, wchar_t **words) {
+    FILE *f = fopen(path, "r");
+    if (!f) io_fail();
+    char *line = NULL;
+    size_t cap = 0, count = 0;
+    while (getline(&line, &cap, f) >= 0) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (!*line) continue;
+        if (count == MAX_WORD) fail("too many permutation words");
+        words[count++] = wide(line);
+    }
+    if (ferror(f)) io_fail();
+    fclose(f);
+    free(line);
+    if (!count) fail("empty permutation file");
+    return count;
+}
+
 static void lzma_write(struct output *o, const void *data, size_t n, bool finish) {
     o->lzma.next_in = data;
     o->lzma.avail_in = n;
@@ -367,7 +386,10 @@ int bx_crunch_main(int argc, char **argv) {
     wchar_t *pattern = NULL, *literal = NULL, *start = NULL, *end = NULL;
     wchar_t **words = allocate(MAX_WORD, sizeof(*words));
     size_t word_count = 0, limits[4] = {0};
-    bool invert = false, resume = false;
+    struct file_arg { const char *path, *charset_name; };
+    struct file_arg *inputs = NULL;
+    size_t input_count = 0;
+    bool invert = false, resume = false, word_file = false;
     struct output out = {0};
     for (; arg < argc; arg++) {
         const char *opt = argv[arg];
@@ -388,10 +410,19 @@ int bx_crunch_main(int argc, char **argv) {
             if (strcmp(value, "gzip") && strcmp(value, "bzip2") && strcmp(value, "lzma"))
                 fail("supported output compression: gzip, bzip2, lzma (no external programs)");
             out.codec = value; break;
-        case 'f': {
-            if (++arg == argc) fail("-f requires a charset name");
-            char *text = load_set(value, argv[arg]);
-            free(sets[0].text); sets[0] = charset(text); free(text); break;
+        case 'f':
+        case 'q': {
+            const char *name = NULL;
+            if (opt[1] == 'f') {
+                if (++arg == argc) fail("-f requires a charset name");
+                name = argv[arg];
+            } else {
+                if (word_file) fail("only one permutation input is allowed");
+                word_file = true;
+            }
+            if (!inputs) inputs = allocate((size_t)argc / 2, sizeof(*inputs));
+            inputs[input_count++] = (struct file_arg){value, name};
+            break;
         }
         case 'd': {
             const char *tail;
@@ -419,7 +450,7 @@ int bx_crunch_main(int argc, char **argv) {
             out.byte_limit = count * unit; break;
         }
         case 'p':
-            if (word_count) fail("only one permutation input is allowed");
+            if (word_file) fail("only one permutation input is allowed");
             if (arg == argc - 1) {
                 struct set p = charset(value);
                 for (size_t i = 0; i < p.count; i++) {
@@ -432,22 +463,6 @@ int bx_crunch_main(int argc, char **argv) {
                 words[word_count++] = wide(argv[arg]);
             }
             arg = argc; break;
-        case 'q': {
-            if (word_count) fail("only one permutation input is allowed");
-            FILE *f = fopen(value, "r");
-            if (!f) io_fail();
-            char *line = NULL; size_t cap = 0;
-            while (getline(&line, &cap, f) >= 0) {
-                line[strcspn(line, "\r\n")] = 0;
-                if (!*line) continue;
-                if (word_count == MAX_WORD) fail("too many permutation words");
-                words[word_count++] = wide(line);
-            }
-            if (ferror(f)) io_fail();
-            fclose(f); free(line);
-            if (!word_count) fail("empty permutation file");
-            break;
-        }
         default: fail("unsupported option");
         }
     }
@@ -455,11 +470,24 @@ int bx_crunch_main(int argc, char **argv) {
     if (literal && (!pattern || wcslen(literal) != max)) fail("literal mask must match the pattern length");
     if ((out.line_limit || out.byte_limit) && !out.split) fail("splitting requires -o START");
     if (out.codec && !out.path) fail("compression requires -o");
-    if (resume && (!out.path || out.codec || start || word_count))
+    bool permutations = word_count != 0 || word_file;
+    if (resume && (!out.path || out.codec || start || permutations))
         fail("resume requires plain -o output, without -s or permutations");
-    if (word_count && (start || end)) fail("permutations cannot use start/end bounds");
-    if (word_count && (limits[0] || limits[1] || limits[2] || limits[3]))
+    if (permutations && (start || end)) fail("permutations cannot use start/end bounds");
+    if (permutations && (limits[0] || limits[1] || limits[2] || limits[3]))
         fail("repetition limits cannot be combined with permutations");
+    for (size_t i = 0; i < input_count; i++) {
+        const struct file_arg *input = &inputs[i];
+        if (input->charset_name) {
+            char *text = load_set(input->path, input->charset_name);
+            free(sets[0].text);
+            sets[0] = charset(text);
+            free(text);
+        } else {
+            word_count = load_words(input->path, words);
+        }
+    }
+    free(inputs);
     char *compressed_path = NULL;
     if (out.codec && !out.split) {
         const char *ext = !strcmp(out.codec, "gzip") ? ".gz" : !strcmp(out.codec, "bzip2") ? ".bz2" : ".lzma";
