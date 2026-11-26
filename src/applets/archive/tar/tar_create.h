@@ -56,6 +56,8 @@ struct bx_tar_create_directive_list {
 struct bx_tar_create_options {
     bool ignore_failed_read;
     bool one_file_system;
+    bool dereference;
+    struct stat destination, stream_file; /* Regular output identities to omit during the walk. */
     struct bx_tar_create_directive_list directives;
 };
 

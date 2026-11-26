@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <inttypes.h>
+#include <search.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -14,11 +15,11 @@
 
 #include "applets/archive/archive_common.h"
 #include "applets/archive/archive_temp.h"
+#include "applets/archive/tar/tar_names.h"
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
 #include "lib/fd_ops.h"
-#include "lib/dir_path.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
@@ -42,16 +43,23 @@
 static const unsigned char bx_tar_stream_zero_block[BX_TAR_STREAM_BLOCK_SIZE];
 static const unsigned char
     bx_tar_stream_zero_record[BX_TAR_STREAM_BLOCK_SIZE * BX_TAR_STREAM_RECORD_BLOCKS];
-struct bx_tar_hardlink_seen {
+struct bx_tar_link_group {
     dev_t dev;
     ino_t ino;
-    char* first_name;
+    struct bx_tar_link_alias* first;
+};
+
+struct bx_tar_link_alias {
+    struct bx_tar_mapped_name key; /* Destination after default member mapping. */
+    char* name; /* Original spelling for the link header. */
+    struct bx_tar_link_group* group;
+    struct bx_tar_link_alias* prev;
+    struct bx_tar_link_alias* next;
 };
 
 struct bx_tar_hardlink_seen_list {
-    struct bx_tar_hardlink_seen* items;
-    size_t len;
-    size_t cap;
+    void* by_inode;
+    void* by_name;
 };
 
 struct bx_tar_stream_counting_sink {
@@ -693,44 +701,97 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
     return true;
 }
 
-static const char* bx_tar_stream_find_seen_hardlink(const struct bx_tar_hardlink_seen_list* seen,
-                                                dev_t dev,
-                                                ino_t ino) {
-    size_t i;
-    for (i = 0u; i < seen->len; i++) {
-        if (seen->items[i].dev == dev && seen->items[i].ino == ino) {
-            return seen->items[i].first_name;
-        }
-    }
-    return NULL;
+static int bx_tar_compare_alias(const void* a, const void* b) {
+    const struct bx_tar_link_alias* left = a;
+    const struct bx_tar_link_alias* right = b;
+    return strcmp(left->key.text, right->key.text);
 }
 
-static bool bx_tar_stream_record_seen_hardlink(struct bx_tar_hardlink_seen_list* seen,
-                                               dev_t dev,
-                                               ino_t ino,
-                                               const char* name) {
-    struct bx_tar_hardlink_seen* slot;
-    if (seen->len == seen->cap) {
-        size_t next_cap = seen->cap ? seen->cap * 2u : 16u;
-        seen->items = xrealloc(seen->items, next_cap * sizeof(*seen->items));
-        seen->cap = next_cap;
+static int bx_tar_compare_group(const void* a, const void* b) {
+    const struct bx_tar_link_group* left = a;
+    const struct bx_tar_link_group* right = b;
+    if (left->dev != right->dev)
+        return left->dev < right->dev ? -1 : 1;
+    return (left->ino > right->ino) - (left->ino < right->ino);
+}
+
+static void bx_tar_free_alias(void* value) {
+    struct bx_tar_link_alias* alias = value;
+    free(alias->key.owned);
+    free(alias->name);
+    free(alias);
+}
+
+/* Every member rebinds its destination, including a repeated spelling of
+ * the same inode. Only another still-live name can serve as a link target. */
+static bool bx_tar_stream_bind_member(struct bx_tar_hardlink_seen_list* seen,
+                                      const struct bx_archive_fs_visit_entry* entry, const char** target) {
+    const struct stat* st = entry->st;
+    bool track = st->st_nlink > 1 && (S_ISREG(st->st_mode) || S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode));
+    *target = NULL;
+    if (!track && !seen->by_name)
+        return true;
+
+    bool absolute, dotdot;
+    struct bx_tar_mapped_name mapped = bx_tar_map_member_name(entry->archive_path, NULL, &absolute, &dotdot);
+    struct bx_tar_link_alias probe = {.key = mapped};
+    struct bx_tar_link_alias** old = tfind(&probe, &seen->by_name, bx_tar_compare_alias);
+    if (old) {
+        struct bx_tar_link_alias* alias = *old;
+        struct bx_tar_link_group* group = alias->group;
+        tdelete(alias, &seen->by_name, bx_tar_compare_alias);
+        if (alias->prev)
+            alias->prev->next = alias->next;
+        else
+            group->first = alias->next;
+        if (alias->next)
+            alias->next->prev = alias->prev;
+        bx_tar_free_alias(alias);
+        if (!group->first) {
+            tdelete(group, &seen->by_inode, bx_tar_compare_group);
+            free(group);
+        }
     }
-    slot = &seen->items[seen->len++];
-    slot->dev = dev;
-    slot->ino = ino;
-    slot->first_name = xstrdup(name);
+    if (!track || !*mapped.text) {
+        free(mapped.owned);
+        return true;
+    }
+    struct bx_tar_link_group inode = {.dev = st->st_dev, .ino = st->st_ino};
+    struct bx_tar_link_group** found = tfind(&inode, &seen->by_inode, bx_tar_compare_group);
+    struct bx_tar_link_group* group = found ? *found : NULL;
+    if (!group) {
+        group = xmalloc(sizeof(*group));
+        *group = inode;
+        if (!tsearch(group, &seen->by_inode, bx_tar_compare_group)) {
+            free(group);
+            free(mapped.owned);
+            return false;
+        }
+    }
+    struct bx_tar_link_alias* alias = xmalloc(sizeof(*alias));
+    *alias = (struct bx_tar_link_alias){.key = mapped, .name = xstrdup(entry->archive_path), .group = group};
+    if (!mapped.owned)
+        alias->key.text = alias->name + (mapped.text - entry->archive_path);
+    if (!tsearch(alias, &seen->by_name, bx_tar_compare_alias)) {
+        bx_tar_free_alias(alias);
+        return false;
+    }
+    if (group->first) {
+        *target = group->first->name;
+        alias->prev = group->first;
+        alias->next = group->first->next;
+        if (alias->next)
+            alias->next->prev = alias;
+        group->first->next = alias;
+    } else {
+        group->first = alias;
+    }
     return true;
 }
 
 static void bx_tar_stream_seen_list_free(struct bx_tar_hardlink_seen_list* seen) {
-    size_t i;
-    for (i = 0u; i < seen->len; i++) {
-        free(seen->items[i].first_name);
-    }
-    free(seen->items);
-    seen->items = NULL;
-    seen->len = 0u;
-    seen->cap = 0u;
+    tdestroy(seen->by_name, bx_tar_free_alias);
+    tdestroy(seen->by_inode, free);
 }
 
 static bool bx_tar_stream_apply_mode_text(mode_t initial_mode,
@@ -911,6 +972,11 @@ static bool bx_tar_stream_write_opened_fs_entry(struct bx_tar_stream_fs_write_st
         return false;
     }
 
+    const char* link_target;
+    if (!bx_tar_stream_bind_member(&state->seen, fs_entry, &link_target)) {
+        bx_diag(diag, "%s: cannot record archive hard link: out of memory", fs_entry->source_path);
+        return false;
+    }
     if (S_ISDIR(fs_entry->st->st_mode)) {
         enum bx_tar_stream_kind kind = BX_TAR_STREAM_KIND_DIR;
 
@@ -945,28 +1011,9 @@ static bool bx_tar_stream_write_opened_fs_entry(struct bx_tar_stream_fs_write_st
                                                 mtime,
                                                 diag);
     }
-    if ((S_ISREG(fs_entry->st->st_mode) || S_ISCHR(fs_entry->st->st_mode) || S_ISBLK(fs_entry->st->st_mode)) && fs_entry->st->st_nlink > 1) {
-        const char* first_name = bx_tar_stream_find_seen_hardlink(&state->seen, fs_entry->st->st_dev, fs_entry->st->st_ino);
-        if (first_name != NULL) {
-            return bx_tar_stream_write_fs_raw_entry(state,
-                                                    fs_entry,
-                                                    source_fd,
-                                                    BX_TAR_STREAM_KIND_HARDLINK,
-                                                    first_name,
-                                                    NULL,
-                                                    0u,
-                                                    mode,
-                                                    uid,
-                                                    gid,
-                                                    uname,
-                                                    gname,
-                                                    mtime,
-                                                    diag);
-        }
-        bx_tar_stream_record_seen_hardlink(&state->seen,
-                                           fs_entry->st->st_dev,
-                                           fs_entry->st->st_ino,
-                                           fs_entry->archive_path);
+    if (link_target) {
+        return bx_tar_stream_write_fs_raw_entry(state, fs_entry, source_fd, BX_TAR_STREAM_KIND_HARDLINK,
+                                                link_target, NULL, 0u, mode, uid, gid, uname, gname, mtime, diag);
     }
     if (S_ISFIFO(fs_entry->st->st_mode) || S_ISCHR(fs_entry->st->st_mode) || S_ISBLK(fs_entry->st->st_mode)) {
         return bx_tar_stream_write_fs_raw_entry(state,
@@ -1034,12 +1081,12 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
         fd = bx_fd_openat_regular_verified(entry->source_parent_fd, entry->source_name,
                                             entry->st, &opened);
     else {
-        int flags = S_ISDIR(entry->st->st_mode) && needs_metadata
-            ? O_RDONLY | O_DIRECTORY : O_PATH;
         if (borrowed)
             fd = entry->source_fd;
+        else if (S_ISDIR(entry->st->st_mode))
+            fd = bx_archive_fs_open_source_dir(entry->source_parent_fd, entry->source_name, needs_metadata);
         else
-            fd = bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name, flags | O_NOFOLLOW, 0);
+            fd = bx_fd_openat_cloexec(entry->source_parent_fd, entry->source_name, O_PATH | O_NOFOLLOW, 0);
         if (fd >= 0 && bx_fd_fstat_expected(fd, entry->st, &opened) != 0) {
             int error = errno;
             if (!borrowed)
@@ -1054,6 +1101,18 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
     }
     /* Regular payload/metadata share this fd. Special-object metadata uses
      * the verified parent/leaf; the locator still pins link-target capture. */
+    if (entry->source_mount.has_mount) {
+        struct bx_mount_identity actual;
+        bool same;
+        bool ok = bx_mount_identity_read(fd, &actual)
+            && bx_mount_identity_compare(&entry->source_mount, &actual, &same);
+        if (!ok || !same) {
+            bx_diag(diag, "%s: --one-file-system mount identity: %s", entry->source_path, strerror(ok ? ESTALE : errno));
+            if (!borrowed)
+                close(fd);
+            return false;
+        }
+    }
     struct bx_archive_fs_visit_entry verified = *entry;
     verified.st = &opened;
     char* target = symlink && !borrowed ? bx_path_readlinkat_dup(fd, "") : NULL;
@@ -1464,6 +1523,10 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
                                       const struct bx_tar_stream_sink* sink,
                                       size_t* bytes_written_io,
                                       struct bx_diag_ctx* diag) {
+    if (bytes_written_io == NULL) {
+        bx_diag(diag, "invalid tar stream byte counter");
+        return false;
+    }
     struct bx_tar_stream_counting_sink counting_user = {
         .inner = sink,
         .bytes_written = NULL,
@@ -1480,19 +1543,22 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
     };
     size_t i;
 
-    if (bytes_written_io == NULL) {
-        bx_diag(diag, "invalid tar stream byte counter");
-        return false;
-    }
     counting_user.bytes_written = bytes_written_io;
 
+    bool success = false;
+    size_t chdirs = 0;
+    int cwd_fd = AT_FDCWD;
     for (i = 0u; i < files->len; i++) {
         const struct bx_archive_fs_entry* saved = &files->entries[i];
         char* name = NULL;
-        /* Tar keeps cwd/root unchanged during creation. Resolve every parent
-         * component no-follow, then verify the selected parent. Keep only this
+        /* Tar keeps cwd/root unchanged during creation. Reapply the source
+         * traversal policy, then verify the selected parent. Keep only this
          * entry's descriptors, not one FD per buffered input. */
-        int parent = bx_dir_path_open_source_parent(saved->source_path, &name);
+        while (chdirs < saved->chdir_count) {
+            if (!bx_archive_fs_follow_chdir(&cwd_fd, files->chdirs.items[chdirs++], diag))
+                goto done;
+        }
+        int parent = bx_archive_fs_reopen_source(cwd_fd, saved, &name);
         struct stat expected = {
             .st_dev = saved->source_parent_dev,
             .st_ino = saved->source_parent_ino,
@@ -1510,25 +1576,25 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
             .archive_path = saved->archive_path,
             .st = &saved->st,
             .link_target = saved->link_target,
+            .source_mount = saved->source_mount,
         };
         if (ok)
             ok = bx_tar_stream_write_fs_entry(&state, &entry, diag);
         bool closed = bx_fd_close(&parent, saved->source_path, ok ? diag : NULL);
         free(name);
-        if (!ok || !closed) {
-            free(state.file_buffer);
-            bx_tar_stream_id_name_cache_cleanup(&state.name_caches.groups);
-            bx_tar_stream_id_name_cache_cleanup(&state.name_caches.users);
-            bx_tar_stream_seen_list_free(&state.seen);
-            return false;
-        }
+        if (!ok || !closed)
+            goto done;
     }
 
+    success = true;
+done:
+    if (cwd_fd >= 0)
+        close(cwd_fd);
     free(state.file_buffer);
     bx_tar_stream_id_name_cache_cleanup(&state.name_caches.groups);
     bx_tar_stream_id_name_cache_cleanup(&state.name_caches.users);
     bx_tar_stream_seen_list_free(&state.seen);
-    return true;
+    return success;
 }
 
 bool bx_tar_stream_write_fs_entries_body(bx_tar_stream_fs_entry_producer_fn producer,

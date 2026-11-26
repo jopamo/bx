@@ -176,6 +176,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_UNQUOTE_OFF,
     BX_TAR_OPT_NO_RECURSION,
     BX_TAR_OPT_RECURSION,
+    BX_TAR_OPT_DEREFERENCE,
     BX_TAR_OPT_ANCHORED_ON,
     BX_TAR_OPT_ANCHORED_OFF,
     BX_TAR_OPT_IGNORE_CASE_ON,
@@ -290,6 +291,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_UNQUOTE_ON},
     {"--verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_VERBATIM_ON},
     {"--no-recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_RECURSION},
+    {"--dereference", BX_TAR_OPTARG_NONE, BX_TAR_OPT_DEREFERENCE},
     {"--recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSION},
     {"--anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ANCHORED_ON},
     {"--ignore-case", BX_TAR_OPTARG_NONE, BX_TAR_OPT_IGNORE_CASE_ON},
@@ -366,6 +368,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'c', "-c", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
     {'t', "-t", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {'x', "-x", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
+    {'h', "-h", BX_TAR_OPTARG_NONE, BX_TAR_OPT_DEREFERENCE},
     {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_ON},
     {'S', "-S", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SPARSE},
     {'C', "-C", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
@@ -711,9 +714,22 @@ static bool bx_tar_write_create_archive_mt_direct(const struct bx_archive_fs_lis
     return ok;
 }
 
+/* A streaming walk runs after the writer opens its staging file. Its name
+ * may be encountered through -C or a followed directory, so compare inodes. */
+static bool bx_tar_open_stream_output(struct bx_archive_output_file* output,
+                                      struct bx_tar_options* options, struct bx_diag_ctx* diag) {
+    if (!bx_archive_output_file_open(output, options->archive_path, diag))
+        return false;
+    if (fstat(fileno(output->stream), &options->create_options.stream_file) == 0)
+        return true;
+    bx_diag(diag, "%s: cannot identify archive output: %s", options->archive_path, strerror(errno));
+    bx_archive_output_file_discard(output);
+    return false;
+}
+
 static bool bx_tar_write_create_archive_stream_direct(bx_tar_stream_fs_entry_producer_fn producer,
                                                       void* producer_user,
-                                                      const struct bx_tar_options* options,
+                                                      struct bx_tar_options* options,
                                                       uint64_t* total_bytes_written_out,
                                                       struct bx_diag_ctx* diag) {
     struct bx_tar_codec_stream_create_ctx create_ctx = {
@@ -733,7 +749,7 @@ static bool bx_tar_write_create_archive_stream_direct(bx_tar_stream_fs_entry_pro
 
     *total_bytes_written_out = 0u;
 
-    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+    if (!bx_tar_open_stream_output(&output, options, diag)) {
         return false;
     }
     sink.user = output.stream;
@@ -772,7 +788,7 @@ static bool bx_tar_write_create_archive_stream_direct(bx_tar_stream_fs_entry_pro
 
 static bool bx_tar_write_create_archive_stream_mt_direct(bx_tar_stream_fs_entry_producer_fn producer,
                                                          void* producer_user,
-                                                         const struct bx_tar_options* options,
+                                                         struct bx_tar_options* options,
                                                          size_t compress_threads,
                                                          uint64_t* total_bytes_written_out,
                                                          struct bx_diag_ctx* diag) {
@@ -794,7 +810,7 @@ static bool bx_tar_write_create_archive_stream_mt_direct(bx_tar_stream_fs_entry_
 
     *total_bytes_written_out = 0u;
 
-    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+    if (!bx_tar_open_stream_output(&output, options, diag)) {
         return false;
     }
     sink.user = output.stream;
@@ -2867,6 +2883,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_ONE_FILE_SYSTEM:
             options->create_options.one_file_system = true;
             return true;
+        case BX_TAR_OPT_DEREFERENCE:
+            options->create_options.dereference = true;
+            return true;
         case BX_TAR_OPT_XATTRS_OFF:
             options->metadata.xattrs = false;
             return true;
@@ -3131,6 +3150,10 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         bx_diag(diag, "--one-file-system requires creating an archive from files");
         return false;
     }
+    if (options->create_options.dereference && options->mode != BX_TAR_MODE_CREATE) {
+        bx_diag(diag, "--dereference requires creating an archive from files");
+        return false;
+    }
     if (options->archive_path == NULL) {
         bx_diag(diag, "archive file not specified; use -f");
         return false;
@@ -3224,6 +3247,18 @@ int bx_tar_run(int argc, char** argv) {
     }
 
     if (options.mode == BX_TAR_MODE_CREATE) {
+        /* The previous archive stays in place until publication. Buffered
+         * walks also need to recognize stdout redirected into the input tree. */
+        struct stat dest;
+        int status = strcmp(options.archive_path, "-") == 0 ? fstat(STDOUT_FILENO, &dest)
+                                                            : stat(options.archive_path, &dest);
+        if (status == 0)
+            options.create_options.destination = dest;
+        else if (errno != ENOENT) {
+            bx_diag(&diag, "%s: cannot identify archive output: %s", options.archive_path, strerror(errno));
+            bx_tar_options_cleanup(&options);
+            return 2;
+        }
         if (options.create_options.one_file_system) {
             struct bx_mount_identity identity;
             int fd = bx_fd_open_cloexec(".", O_PATH | O_DIRECTORY, 0);

@@ -2,6 +2,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/archive_temp.h"
 #include "bx/libbx.h"
+#include "lib/dir_cycle.h"
 #include "lib/dir_path.h"
 #include "lib/fd_ops.h"
 #include "lib/mount_identity.h"
@@ -29,6 +31,221 @@ struct bx_archive_fs_boundary {
     struct bx_mount_identity root;
 };
 
+/* O_DIRECTORY never opens a device or FIFO for I/O. Keep a readable
+ * directory when possible; recording just its header only needs O_PATH. */
+static int bx_archive_fs_select_follow_at(int start_fd, const char* path, bool directory_only) {
+    int fd = bx_fd_openat_cloexec(start_fd, path, O_RDONLY | O_DIRECTORY, 0);
+    return fd >= 0 ? fd : bx_fd_openat_cloexec(start_fd, path, O_PATH | (directory_only ? O_DIRECTORY : 0), 0);
+}
+
+int bx_archive_fs_open_source_dir(int parent, const char* name, bool readable) {
+    if (!*name) {
+        if (!readable)
+            return bx_fd_dup_cloexec(parent);
+        int flags = fcntl(parent, F_GETFL);
+        if (flags < 0)
+            return -1;
+        if (!(flags & O_PATH))
+            return bx_fd_dup_cloexec(parent);
+        name = ".";
+    }
+    return bx_fd_openat_cloexec(parent, name, (readable ? O_RDONLY : O_PATH) | O_DIRECTORY | O_NOFOLLOW, 0);
+}
+
+static int bx_archive_fs_stat_source(int parent, const char* name, struct stat* status) {
+    return *name ? fstatat(parent, name, status, AT_SYMLINK_NOFOLLOW) : fstat(parent, status);
+}
+
+static int bx_archive_fs_open_follow_parent_at(int start_fd, const char* path, char** leaf) {
+    if (!path || !leaf) {
+        errno = EINVAL;
+        return -1;
+    }
+    size_t len = strlen(path);
+    if (!len) {
+        errno = ENOENT;
+        return -1;
+    }
+    /* Splitting a single Linux lookup must not make an overlong operand
+     * valid. Do not apply this to display paths assembled across lookups. */
+    if (len >= PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (path[len - 1] == '/') {
+        int fd = bx_archive_fs_select_follow_at(start_fd, path, true);
+        if (fd >= 0)
+            *leaf = xstrdup("");
+        return fd;
+    }
+    char* directory = bx_path_dirname_dup(path);
+    int fd = bx_fd_openat_cloexec(start_fd, directory, O_PATH | O_DIRECTORY, 0);
+    int error = errno;
+    free(directory);
+    if (fd >= 0)
+        *leaf = xstrdup(bx_path_basename_ptr(path));
+    errno = error;
+    return fd;
+}
+
+/* Let the kernel follow the link: readlink text alone does not implement
+ * protected symlinks, magic links or the kernel's traversal limit. */
+static int bx_archive_fs_resolve_link(int selected, int parent, const char* name, struct stat* status, char** leaf,
+                                     bool* boundary_error) {
+    int owned_parent = -1;
+    char* owned_name = NULL;
+    if (selected < 0)
+        return -1;
+    struct stat pinned;
+    if (fstat(selected, &pinned) != 0)
+        goto fail;
+    if (S_ISDIR(pinned.st_mode)) {
+        *status = pinned;
+        *leaf = xstrdup("");
+        return selected;
+    }
+    /* Payload and special-object metadata readers require a no-follow leaf.
+     * Find a locator for the pinned inode, not an alternative to it. */
+    unsigned links = 0;
+    while (S_ISLNK(status->st_mode)) {
+        if (++links > 40u) {
+            errno = ELOOP;
+            goto fail;
+        }
+        int fd = bx_fd_openat_cloexec(parent, name, O_PATH | O_NOFOLLOW, 0);
+        if (fd < 0)
+            goto fail;
+        char* target = bx_fd_fstat_expected(fd, status, status) == 0
+            ? bx_path_readlinkat_dup(fd, "") : NULL;
+        int error = errno;
+        close(fd);
+        if (!target) {
+            errno = error;
+            goto fail;
+        }
+        char* next_name = NULL;
+        int next_parent = bx_archive_fs_open_follow_parent_at(parent, target, &next_name);
+        error = errno;
+        free(target);
+        if (next_parent < 0) {
+            errno = error;
+            goto fail;
+        }
+        if (owned_parent >= 0)
+            close(owned_parent);
+        free(owned_name);
+        parent = owned_parent = next_parent;
+        name = owned_name = next_name;
+        if (bx_archive_fs_stat_source(parent, name, status) != 0)
+            goto fail;
+    }
+    if (bx_fd_fstat_expected(selected, status, status) != 0)
+        goto fail;
+    /* Bind mounts can expose the same device/inode through different mounts. */
+    struct bx_mount_identity selected_mount, named_mount;
+    bool same;
+    if (!bx_mount_identity_read(selected, &selected_mount)
+        || !bx_mount_identity_read_at(parent, name, &named_mount)
+        || !bx_mount_identity_compare(&selected_mount, &named_mount, &same)) {
+        if (boundary_error)
+            *boundary_error = true;
+        goto fail;
+    }
+    if (!same || (boundary_error && !selected_mount.has_mount)) {
+        if (boundary_error)
+            *boundary_error = true;
+        errno = !same ? ESTALE : EOPNOTSUPP;
+        goto fail;
+    }
+    close(selected);
+    *leaf = owned_name;
+    return owned_parent;
+
+fail: {
+    int error = errno;
+    close(selected);
+    if (owned_parent >= 0)
+        close(owned_parent);
+    free(owned_name);
+    errno = error;
+    return -1;
+}
+}
+
+/* The walker resolves the explicit root in one lookup. Each child directory
+ * is a separate lookup, even if the resulting display path exceeds PATH_MAX
+ * or contains more links than one kernel pathname lookup permits. */
+static int bx_archive_fs_open_descendant_parent(int root_fd, const char* path, size_t operand_len, char** leaf) {
+    char* copy = xstrdup(path);
+    char* child = copy + operand_len;
+    char saved = *child;
+    *child = '\0';
+    int parent = bx_fd_openat_cloexec(root_fd, copy, O_PATH | O_DIRECTORY, 0);
+    *child = saved;
+    if (*child == '/')
+        child++;
+    while (parent >= 0) {
+        char* slash = strchr(child, '/');
+        if (!slash) {
+            *leaf = xstrdup(child);
+            break;
+        }
+        *slash = '\0';
+        int next = bx_fd_openat_cloexec(parent, child, O_PATH | O_DIRECTORY, 0);
+        int error = errno;
+        close(parent);
+        errno = error;
+        parent = next;
+        child = slash + 1;
+    }
+    int error = errno;
+    free(copy);
+    errno = error;
+    return parent;
+}
+
+bool bx_archive_fs_follow_chdir(int* cwd_fd, const char* path, struct bx_diag_ctx* diag) {
+    int next = bx_fd_openat_cloexec(*cwd_fd, path, O_PATH | O_DIRECTORY, 0);
+    if (next < 0 || faccessat(next, ".", X_OK, AT_EACCESS) != 0) {
+        bx_diag(diag, "%s: cannot change directory: %s", path, strerror(errno));
+        if (next >= 0)
+            close(next);
+        return false;
+    }
+    if (*cwd_fd >= 0)
+        close(*cwd_fd);
+    *cwd_fd = next;
+    return true;
+}
+
+int bx_archive_fs_reopen_source(int root_fd, const struct bx_archive_fs_entry* entry, char** leaf) {
+    if (!entry->follow_operand_len)
+        return bx_dir_path_open_source_parent(entry->source_path, leaf);
+
+    char* name = NULL;
+    const char* path = entry->source_path + entry->source_offset;
+    bool operand = entry->source_path[entry->follow_operand_len] == '\0';
+    int parent = operand ? bx_archive_fs_open_follow_parent_at(root_fd, path, &name)
+                         : bx_archive_fs_open_descendant_parent(root_fd, path, entry->follow_operand_len - entry->source_offset, &name);
+    if (parent < 0)
+        return -1;
+    struct stat status;
+    int target = -1;
+    if (bx_archive_fs_stat_source(parent, name, &status) == 0) {
+        if (!S_ISLNK(status.st_mode)) {
+            *leaf = name;
+            return parent;
+        }
+        int selected = bx_archive_fs_select_follow_at(operand ? root_fd : parent, operand ? path : name, false);
+        target = bx_archive_fs_resolve_link(selected, parent, name, &status, leaf, NULL);
+    }
+    int error = errno;
+    close(parent);
+    free(name);
+    errno = error;
+    return target;
+}
+
 static void bx_archive_fs_entry_free(struct bx_archive_fs_entry* entry) {
     free(entry->source_path);
     free(entry->archive_path);
@@ -44,6 +261,7 @@ void bx_archive_fs_list_free(struct bx_archive_fs_list* list) {
         bx_archive_fs_entry_free(&list->entries[i]);
     }
     free(list->entries);
+    bx_archive_name_list_free(&list->chdirs);
     list->entries = NULL;
     list->len = 0u;
     list->cap = 0u;
@@ -159,7 +377,13 @@ struct bx_archive_fs_visit_state {
     struct bx_archive_fs_path_buf source;
     struct bx_archive_fs_path_buf archive;
     struct bx_archive_fs_boundary boundary;
+    struct bx_dir_stack* ancestor;
+    int root_fd;
+    const char* operand;
+    size_t operand_len;
     bool sort_children;
+    bool dereference;
+    bx_archive_fs_include_name_fn include_name;
     bx_archive_fs_include_fn include_fn;
     void* include_user_data;
     bx_archive_fs_error_fn error_fn;
@@ -181,14 +405,16 @@ static bool bx_archive_fs_mount_error(struct bx_archive_fs_visit_state* state, i
     return false;
 }
 
-static bool bx_archive_fs_check_boundary(struct bx_archive_fs_visit_state* state, int parent, const char* name, bool* same) {
-    struct bx_mount_identity identity;
+static bool bx_archive_fs_check_boundary(struct bx_archive_fs_visit_state* state, int parent, const char* name,
+                                         struct bx_mount_identity* identity, bool* same) {
     bool ok;
-    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+    if (!*name)
+        ok = bx_mount_identity_read(parent, identity);
+    else if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
         int fd = bx_fd_openat_cloexec(parent, name, O_PATH | O_DIRECTORY | O_NOFOLLOW, 0);
         if (fd < 0)
             return bx_archive_fs_mount_error(state, errno);
-        ok = bx_mount_identity_read(fd, &identity);
+        ok = bx_mount_identity_read(fd, identity);
         int error = errno;
         if (close(fd) != 0 && ok) {
             ok = false;
@@ -197,18 +423,18 @@ static bool bx_archive_fs_check_boundary(struct bx_archive_fs_visit_state* state
         errno = error;
     }
     else
-        ok = bx_mount_identity_read_at(parent, name, &identity);
+        ok = bx_mount_identity_read_at(parent, name, identity);
     if (!ok)
         return bx_archive_fs_mount_error(state, errno);
-    if (!identity.has_mount)
+    if (!identity->has_mount)
         return bx_archive_fs_mount_error(state, EOPNOTSUPP);
     if (!state->boundary.initialized) {
-        state->boundary.root = identity;
+        state->boundary.root = *identity;
         state->boundary.initialized = true;
         *same = true;
         return true;
     }
-    if (!bx_mount_identity_compare(&state->boundary.root, &identity, same))
+    if (!bx_mount_identity_compare(&state->boundary.root, identity, same))
         return bx_archive_fs_mount_error(state, errno);
     return true;
 }
@@ -217,7 +443,7 @@ static bool bx_archive_fs_check_boundary(struct bx_archive_fs_visit_state* state
  * Keep the checked directory open through child lookup, including sorted walks. */
 static bool bx_archive_fs_open_dir(struct bx_archive_fs_visit_state* state, int parent_fd, const char* name, const struct stat* expected, DIR** result) {
     *result = NULL;
-    int fd = bx_fd_openat_cloexec(parent_fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
+    int fd = bx_archive_fs_open_source_dir(parent_fd, name, true);
     if (fd < 0)
         return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_OPENDIR, errno);
     struct stat opened;
@@ -304,7 +530,9 @@ static bool bx_archive_fs_visit_children(struct bx_archive_fs_visit_state* state
         }
         size_t source_len = bx_archive_fs_path_buf_push_child(&state->source, name);
         size_t archive_len = bx_archive_fs_path_buf_push_child(&state->archive, name);
-        ok = bx_archive_fs_visit_inner(state, dirfd(dir), name, true);
+        if (!state->dereference || !state->include_name ||
+            state->include_name(state->source.data, state->archive.data, state->include_user_data))
+            ok = bx_archive_fs_visit_inner(state, dirfd(dir), name, true);
         bx_archive_fs_path_buf_restore(&state->archive, archive_len);
         bx_archive_fs_path_buf_restore(&state->source, source_len);
     }
@@ -316,15 +544,14 @@ static bool bx_archive_fs_visit_children(struct bx_archive_fs_visit_state* state
     return ok;
 }
 
-static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state, int parent_fd, const char* name, bool recurse) {
-    struct stat status;
-    if (fstatat(parent_fd, name, &status, AT_SYMLINK_NOFOLLOW) != 0)
-        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, errno);
+static bool bx_archive_fs_visit_resolved(struct bx_archive_fs_visit_state* state, int parent_fd,
+                                         const char* name, struct stat status, bool recurse) {
+    struct bx_mount_identity mount = {0};
+    bool same_mount = true;
     if (state->boundary.enabled) {
-        bool same;
-        if (!bx_archive_fs_check_boundary(state, parent_fd, name, &same))
+        if (!bx_archive_fs_check_boundary(state, parent_fd, name, &mount, &same_mount))
             return false;
-        if (!same) {
+        if (!same_mount) {
             if (!S_ISDIR(status.st_mode))
                 return true;
             recurse = false;
@@ -337,9 +564,18 @@ static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state, i
         .source_path = state->source.data,
         .archive_path = state->archive.data,
         .st = &status,
+        .follow_operand_len = state->dereference ? state->operand_len : 0,
+        .source_mount = mount,
+        .mount_boundary = !same_mount,
     };
+    if (!state->dereference && state->include_name &&
+        !state->include_name(visit.source_path, visit.archive_path, state->include_user_data))
+        return true;
     if (state->include_fn && !state->include_fn(&visit, state->include_user_data))
         return true;
+    if (state->dereference && recurse && S_ISDIR(status.st_mode)
+        && bx_dir_stack_contains(state->ancestor, &status))
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_OPENDIR, ELOOP);
     char* target = NULL;
     if (S_ISLNK(status.st_mode)) {
         int fd = bx_fd_openat_cloexec(parent_fd, name, O_PATH | O_NOFOLLOW, 0);
@@ -364,16 +600,56 @@ static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state, i
     DIR* dir;
     if (!bx_archive_fs_open_dir(state, parent_fd, name, &status, &dir))
         return false;
-    return !dir || bx_archive_fs_visit_children(state, dir);
+    if (!dir)
+        return true;
+    if (!state->dereference)
+        return bx_archive_fs_visit_children(state, dir);
+    struct bx_dir_stack ancestor = {
+        .dev = status.st_dev, .ino = status.st_ino, .parent = state->ancestor,
+    };
+    state->ancestor = &ancestor;
+    ok = bx_archive_fs_visit_children(state, dir);
+    state->ancestor = ancestor.parent;
+    return ok;
 }
 
-bool bx_archive_fs_visit_at_filtered(int source_parent_fd,
-                                       const char* source_name,
+static bool bx_archive_fs_visit_inner(struct bx_archive_fs_visit_state* state, int parent_fd,
+                                      const char* name, bool recurse) {
+    struct stat status;
+    if (bx_archive_fs_stat_source(parent_fd, name, &status) != 0)
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, errno);
+    if (!state->dereference || !S_ISLNK(status.st_mode))
+        return bx_archive_fs_visit_resolved(state, parent_fd, name, status, recurse);
+
+    char* leaf = NULL;
+    struct stat resolved = status;
+    bool boundary_error = false;
+    bool operand = state->source.len == state->operand_len;
+    int selected = bx_archive_fs_select_follow_at(operand ? state->root_fd : parent_fd, operand ? state->operand : name, false);
+    int target = bx_archive_fs_resolve_link(selected, parent_fd, name, &resolved, &leaf,
+                                             state->boundary.enabled ? &boundary_error : NULL);
+    if (target < 0) {
+        int error = errno;
+        if (boundary_error)
+            return bx_archive_fs_mount_error(state, error);
+        return bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_LSTAT, error);
+    }
+    bool ok = bx_archive_fs_visit_resolved(state, target, leaf, resolved, recurse);
+    if (close(target) != 0 && ok)
+        ok = bx_archive_fs_visit_error(state, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno);
+    free(leaf);
+    return ok;
+}
+
+bool bx_archive_fs_visit_at_filtered(int source_root_fd,
+                                       const char* operand,
                                        const char* source_path,
                                        const char* archive_path,
                                        bool recurse,
                                        bool sort_children,
                                        bool one_file_system,
+                                       bool dereference,
+                                       bx_archive_fs_include_name_fn include_name,
                                        bx_archive_fs_include_fn include_fn,
                                        void* include_user_data,
                                        bx_archive_fs_error_fn error_fn,
@@ -381,9 +657,20 @@ bool bx_archive_fs_visit_at_filtered(int source_parent_fd,
                                        bx_archive_fs_visit_fn visit_fn,
                                        void* visit_user_data,
                                        struct bx_diag_ctx* diag) {
+    char* leaf = NULL;
+    if (dereference && include_name && !include_name(source_path, archive_path, include_user_data))
+        return true;
+    int parent = dereference ? bx_archive_fs_open_follow_parent_at(source_root_fd, operand, &leaf)
+                             : bx_dir_path_open_source_parent_at(source_root_fd, operand, &leaf);
+    if (parent < 0)
+        return bx_archive_fs_handle_error(source_path, BX_ARCHIVE_FS_ERROR_LSTAT, errno, error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
     struct bx_archive_fs_visit_state state = {
         .boundary = {.enabled = one_file_system},
+        .root_fd = source_root_fd,
+        .operand = operand,
         .sort_children = sort_children,
+        .dereference = dereference,
+        .include_name = include_name,
         .include_fn = include_fn,
         .include_user_data = include_user_data,
         .error_fn = error_fn,
@@ -394,7 +681,11 @@ bool bx_archive_fs_visit_at_filtered(int source_parent_fd,
     };
     bx_archive_fs_path_buf_init(&state.source, source_path);
     bx_archive_fs_path_buf_init(&state.archive, archive_path);
-    bool ok = bx_archive_fs_visit_inner(&state, source_parent_fd, source_name, recurse);
+    state.operand_len = state.source.len;
+    bool ok = bx_archive_fs_visit_inner(&state, parent, leaf, recurse);
+    if (close(parent) != 0 && ok)
+        ok = bx_archive_fs_visit_error(&state, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno);
+    free(leaf);
     bx_archive_fs_path_buf_cleanup(&state.archive);
     bx_archive_fs_path_buf_cleanup(&state.source);
     return ok;
@@ -411,16 +702,8 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                      bx_archive_fs_error_fn error_fn,
                                      void* error_user_data,
                                      struct bx_diag_ctx* diag) {
-    char* leaf = NULL;
-    int parent = bx_dir_path_open_source_parent_at(source_root_fd, source_path, &leaf);
-    if (parent < 0)
-        return bx_archive_fs_handle_error(source_path, BX_ARCHIVE_FS_ERROR_LSTAT, errno, error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-    bool ok = bx_archive_fs_visit_at_filtered(parent, leaf, source_path, archive_path, recurse, sort_children, false, include_fn, include_user_data, error_fn, error_user_data,
+    return bx_archive_fs_visit_at_filtered(source_root_fd, source_path, source_path, archive_path, recurse, sort_children, false, false, NULL, include_fn, include_user_data, error_fn, error_user_data,
                                               bx_archive_fs_collect_entry, list, diag);
-    if (close(parent) != 0 && ok)
-        ok = bx_archive_fs_handle_error(source_path, BX_ARCHIVE_FS_ERROR_CLOSEDIR, errno, error_fn, error_user_data, diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-    free(leaf);
-    return ok;
 }
 
 bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
