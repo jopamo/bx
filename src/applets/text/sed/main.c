@@ -437,7 +437,17 @@ mf_fgets(SPACE *sp, enum e_spflag spflag)
 		fname = files->fname;
 		if (inplace != NULL) {
 			int fd = open(fname, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
-			if (fd < 0 || fstat(fd, &sb) != 0)
+			if (fd < 0) {
+				int open_error = errno;
+
+				/* ELOOP can also come from resolving a parent directory. */
+				if (open_error == ELOOP && lstat(fname, &now) == 0 &&
+				    S_ISLNK(now.st_mode))
+					errx(1, "%s: refusing in-place edit of a symbolic link", fname);
+				errno = open_error;
+				err(1, "%s", fname);
+			}
+			if (fstat(fd, &sb) != 0)
 				err(1, "%s", fname);
 			if (!S_ISREG(sb.st_mode))
 				errx(1, "%s: in-place editing requires a regular file", fname);
