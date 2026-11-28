@@ -12,3 +12,7 @@ int bx_grep_main(int argc, char **argv) {
         return bx_search_main(argc, argv, BX_SEARCH_FGREP);
     return bx_search_main(argc, argv, BX_SEARCH_GREP);
 }
+
+int bx_zgrep_main(int argc, char **argv) {
+    return bx_search_main(argc, argv, BX_SEARCH_ZGREP);
+}

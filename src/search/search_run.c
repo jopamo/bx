@@ -13,6 +13,7 @@
 #include "fswalk/walk.h"
 #include "rg_parallel.h"
 #include "rg_sched.h"
+#include "search_gzip.h"
 #include "search_internal.h"
 #include "search_plan.h"
 #include "search_run.h"
@@ -161,7 +162,7 @@ static char *bx_search_run_build_search_pattern(const char *pattern,
                                                 const struct search_opts *opts) {
     if (!pattern || !opts || opts->extra_patterns.len == 0u)
         return pattern ? strdup(pattern) : NULL;
-    if (opts->fixed_strings)
+    if (opts->fixed_strings || personality == BX_SEARCH_ZGREP)
         return strdup(pattern);
 
     bool use_basic_grouping = !bx_search_run_personality_is_rg(personality) &&
@@ -296,6 +297,30 @@ static int bx_search_run_status_from_flags(const struct search_opts *opts,
     if (error_seen)
         return 2;
     return match_seen ? 0 : 1;
+}
+
+static int bx_search_run_gzip(const struct bx_search_run_args *args,
+                             struct bx_matcher *matcher,
+                             struct bx_record_stream *stream) {
+    int count = args->num_files ? args->num_files : 1;
+    bool match_seen = false;
+    bool error_seen = false;
+    for (int i = 0; i < count; i++) {
+        const char *name = args->num_files ? args->files[i] : NULL;
+        int status = bx_search_gzip_file(name, args->progname, matcher,
+                                         args->opts, stream, args->stats);
+        if (status == 2) {
+            error_seen = true;
+            if (bx_search_matcher_had_error(matcher))
+                break;
+        } else if (bx_search_status_counts_as_selected(args->personality, args->opts, status)) {
+            match_seen = true;
+        }
+        if (args->opts->line_buffered && bx_search_output_failed())
+            break;
+    }
+    /* Report errors even if a different operand matched, including with -q. */
+    return error_seen ? 2 : match_seen ? 0 : 1;
 }
 
 bool bx_search_status_counts_as_selected(enum bx_search_personality personality,
@@ -708,6 +733,11 @@ void bx_search_run(const struct bx_search_run_args *args,
     }
     if (!bx_search_run_compile_matcher(args, search_pattern, &matcher)) {
         local_result.status = 2;
+        goto done;
+    }
+    if (args->personality == BX_SEARCH_ZGREP) {
+        local_result.status = bx_search_run_gzip(args, matcher, &record_stream);
+        local_result.ran_search = true;
         goto done;
     }
     bx_search_exec_plan_build(&exec_plan, args->plan, matcher, args->opts);

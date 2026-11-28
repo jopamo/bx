@@ -176,6 +176,7 @@ int bx_cpio_main(int argc, char** argv);
 int bx_zip_main(int argc, char** argv);
 int bx_unzip_main(int argc, char** argv);
 int bx_grep_main(int argc, char** argv);
+int bx_zgrep_main(int argc, char **argv);
 int bx_rg_main(int argc, char** argv);
 int bx_fd_main(int argc, char** argv);
 int bx_find_main(int argc, char** argv);

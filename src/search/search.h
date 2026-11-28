@@ -5,6 +5,7 @@ enum bx_search_personality {
     BX_SEARCH_GREP,
     BX_SEARCH_EGREP,
     BX_SEARCH_FGREP,
+    BX_SEARCH_ZGREP,
     BX_SEARCH_RG,
 };
 

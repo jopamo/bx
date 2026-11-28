@@ -215,6 +215,8 @@ void bx_record_stream_begin(FILE *f, struct bx_record_stream *stream) {
         return;
 
     stream->errnum = 0;
+    stream->live_records = false;
+    stream->binary_prefix = false;
     bx_record_stream_reset_pending(stream);
     stream->record_limit = bx_record_stream_configure_limit(f);
 }
@@ -235,6 +237,10 @@ void bx_record_stream_prepare_file(FILE *f, struct bx_record_stream *stream) {
     }
 
     setvbuf(f, stream->io_buf, _IOFBF, stream->io_cap);
+}
+
+bool bx_record_stream_seed(struct bx_record_stream *stream, const unsigned char *data, size_t len) {
+    return bx_record_stream_append_pending(stream, data, len);
 }
 
 bool bx_record_stream_probe_binary_prefix(FILE *f,
@@ -351,12 +357,13 @@ static const unsigned char *bx_record_stream_first_boundary(
     return delimiter_hit;
 }
 
-ssize_t bx_record_stream_read_until(FILE *f,
-                                    struct bx_record_stream *stream,
-                                    char delimiter,
-                                    bool stop_enabled,
-                                    unsigned char stop_byte,
-                                    bool *stopped_out) {
+static ssize_t bx_record_stream_read_until_mode(FILE *f,
+                                                struct bx_record_stream *stream,
+                                                char delimiter,
+                                                bool stop_enabled,
+                                                unsigned char stop_byte,
+                                                bool *stopped_out,
+                                                bool live) {
     size_t len = 0u;
 
     if (!f || !stream)
@@ -391,7 +398,17 @@ ssize_t bx_record_stream_read_until(FILE *f,
 
         {
             unsigned char chunk[BX_RECORD_STREAM_READ_CHUNK_CAP];
-            size_t nread = fread(chunk, 1u, sizeof(chunk), f);
+            size_t nread = 0;
+
+            if (live) {
+                int ch = getc(f);
+                if (ch != EOF) {
+                    chunk[0] = (unsigned char)ch;
+                    nread = 1;
+                }
+            } else {
+                nread = fread(chunk, 1u, sizeof(chunk), f);
+            }
 
             bx_search_dev_counters_note_content_read(nread);
             if (nread == 0u) {
@@ -428,59 +445,22 @@ ssize_t bx_record_stream_read_until(FILE *f,
     return (ssize_t)len;
 }
 
+ssize_t bx_record_stream_read_until(FILE *f,
+                                    struct bx_record_stream *stream,
+                                    char delimiter,
+                                    bool stop_enabled,
+                                    unsigned char stop_byte,
+                                    bool *stopped_out) {
+    return bx_record_stream_read_until_mode(
+        f, stream, delimiter, stop_enabled, stop_byte, stopped_out,
+        stream && stream->live_records);
+}
+
 ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char delimiter) {
     return bx_record_stream_read_until(
         f, stream, delimiter, false, 0u, NULL);
 }
 
 ssize_t bx_record_stream_read_live(FILE *f, struct bx_record_stream *stream, char delimiter) {
-    size_t len = 0u;
-
-    if (!f || !stream)
-        return -1;
-
-    stream->errnum = 0;
-    if (!bx_record_stream_reserve_record(stream, 0u)) {
-        stream->errnum = ENOMEM;
-        return -1;
-    }
-    stream->record[0] = '\0';
-
-    for (;;) {
-        size_t available = bx_record_stream_pending_available(stream);
-        if (available > 0u) {
-            const unsigned char *pending = stream->pending + stream->pending_off;
-            const unsigned char *hit = memchr(pending, (unsigned char)delimiter, available);
-            size_t take = hit ? (size_t)(hit - pending) + 1u : available;
-
-            if (!bx_record_stream_append_record(stream, &len, pending, take))
-                return -1;
-            stream->pending_off += take;
-            if (stream->pending_off == stream->pending_len)
-                bx_record_stream_reset_pending(stream);
-            if (hit)
-                break;
-        }
-
-        int ch = getc(f);
-        if (ch == EOF) {
-            if (ferror(f)) {
-                stream->errnum = errno ? errno : EIO;
-                return -1;
-            }
-            if (len == 0u)
-                return -1;
-            break;
-        }
-
-        unsigned char byte = (unsigned char)ch;
-        bx_search_dev_counters_note_content_read(1u);
-        if (!bx_record_stream_append_record(stream, &len, &byte, 1u))
-            return -1;
-        if (byte == (unsigned char)delimiter)
-            break;
-    }
-
-    bx_search_dev_counters_note_record_materialized();
-    return (ssize_t)len;
+    return bx_record_stream_read_until_mode(f, stream, delimiter, false, 0u, NULL, true);
 }

@@ -52,7 +52,9 @@ struct search_opts {
     bool perl_regexp;
     bool word_regexp;
     bool line_regexp;
+    bool empty_pattern_list;
     bool files_only;
+    bool max_count_set;
     int  max_count;
     int  max_columns;
     int  unrestrict_level;

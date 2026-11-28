@@ -863,6 +863,7 @@ bx_search_sources = [
   'src/search/runtime_snapshot.c',
   'src/search/scanner.c',
   'src/search/search_file.c',
+  'src/search/search_gzip.c',
   'src/search/search_input.c',
   'src/search/search_path.c',
   'src/search/search_plan.c',

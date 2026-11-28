@@ -16,11 +16,14 @@ struct bx_record_stream {
     size_t pending_cap;
     size_t record_limit;
     int errnum;
+    bool live_records; /* Don't fill a bulk chunk before returning a record. */
+    bool binary_prefix;
 };
 
 void bx_record_stream_dispose(struct bx_record_stream *stream);
 void bx_record_stream_begin(FILE *f, struct bx_record_stream *stream);
 void bx_record_stream_prepare_file(FILE *f, struct bx_record_stream *stream);
+bool bx_record_stream_seed(struct bx_record_stream *stream, const unsigned char *data, size_t len);
 bool bx_record_stream_probe_binary_prefix(FILE *f,
                                           struct bx_record_stream *stream,
                                           bool *is_binary_out);

@@ -236,6 +236,12 @@ void bx_search_note_stdout_output(void) {
         current_output_ctx->emitted_stdout = true;
 }
 
+bool bx_search_output_failed(void) {
+    /* Do not create a lazy capture stream just to inspect its error bit. */
+    FILE *out = current_output_ctx ? current_output_ctx->out : stdout;
+    return out && ferror(out) != 0;
+}
+
 int bx_search_check_output_error(void) {
     FILE *out = bx_search_output_stream();
     int saved_errno = 0;

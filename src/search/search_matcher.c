@@ -19,6 +19,7 @@ enum matcher_kind {
     MATCHER_POSIX,
     MATCHER_LITERAL,
     MATCHER_LITERAL_SET,
+    MATCHER_ANY,
 };
 
 struct bx_literal_set {
@@ -33,6 +34,10 @@ struct bx_matcher {
         struct bx_regex *regex;
         struct bx_literal_matcher *literal;
         struct bx_literal_set literal_set;
+        struct {
+            struct bx_matcher **items;
+            size_t count;
+        } any;
         regex_t posix;
     };
 };
@@ -982,6 +987,25 @@ int bx_search_matcher_find_with_opts(struct bx_matcher *m,
     if (!buf)
         buf = empty;
 
+    if (m->kind == MATCHER_ANY) {
+        bool found = false;
+        for (size_t i = 0; i < m->any.count; ++i) {
+            struct bx_matcher *child = m->any.items[i];
+            struct bx_match candidate;
+            int rc = bx_search_matcher_find_with_opts(child, buf, len, start, opts, &candidate);
+            if (rc < 0) {
+                m->runtime_errnum = child->runtime_errnum;
+                return -1;
+            }
+            if (rc == 0 && (!found || candidate.start < out->start ||
+                (candidate.start == out->start && candidate.end > out->end))) {
+                *out = candidate;
+                found = true;
+            }
+        }
+        return found ? 0 : 1;
+    }
+
     bx_search_dev_counters_note_matcher_invocation();
     if (opts->line_regexp &&
         (m->kind == MATCHER_LITERAL || m->kind == MATCHER_LITERAL_SET)) {
@@ -1084,6 +1108,10 @@ static void matcher_free(struct bx_matcher *m) {
         for (size_t i = 0; i < m->literal_set.count; ++i)
             bx_literal_free(m->literal_set.items[i]);
         free(m->literal_set.items);
+    } else if (m->kind == MATCHER_ANY) {
+        for (size_t i = 0; i < m->any.count; ++i)
+            matcher_free(m->any.items[i]);
+        free(m->any.items);
     } else if (m->kind == MATCHER_POSIX) {
         regfree(&m->posix);
     } else {
@@ -1132,6 +1160,47 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         if (errmsg && !*errmsg)
             *errmsg = strdup("the -P option only supports a single pattern");
         return NULL;
+    }
+    if (opts->empty_pattern_list) {
+        /* A literal set of length zero never selects a record. */
+        struct bx_matcher *m = calloc(1u, sizeof(*m));
+        if (m)
+            m->kind = MATCHER_LITERAL_SET;
+        return m;
+    }
+    if (personality == BX_SEARCH_ZGREP && !opts->fixed_strings && opts->extra_patterns.len != 0u) {
+        /* Alternating inside a shared regex changes the meaning of capture
+         * numbers. Compile each expression with its own capture groups. */
+        size_t count = opts->extra_patterns.len;
+        if (count == SIZE_MAX)
+            return NULL;
+        struct bx_matcher *m = calloc(1u, sizeof(*m));
+        if (!m)
+            return NULL;
+        m->kind = MATCHER_ANY;
+        m->any.items = calloc(count + 1u, sizeof(*m->any.items));
+        if (!m->any.items) {
+            matcher_free(m);
+            return NULL;
+        }
+        struct search_opts single = *opts;
+        single.extra_patterns = (struct bx_search_pattern_vec){0};
+        for (size_t i = 0; i <= count; ++i) {
+            char *warning = NULL;
+            struct bx_matcher *child = compile_matcher(
+                i < count ? opts->extra_patterns.items[i] : pattern,
+                personality, &single, errmsg, &warning);
+            if (warningmsg && !*warningmsg)
+                *warningmsg = warning;
+            else
+                free(warning);
+            if (!child) {
+                matcher_free(m);
+                return NULL;
+            }
+            m->any.items[m->any.count++] = child;
+        }
+        return m;
     }
 
     if (opts->ignore_case)

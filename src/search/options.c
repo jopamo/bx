@@ -259,7 +259,8 @@ static bool bx_search_personality_is_rg(enum bx_search_personality personality) 
 static bool bx_search_personality_is_grep_family(enum bx_search_personality personality) {
     return personality == BX_SEARCH_GREP
         || personality == BX_SEARCH_EGREP
-        || personality == BX_SEARCH_FGREP;
+        || personality == BX_SEARCH_FGREP
+        || personality == BX_SEARCH_ZGREP;
 }
 
 static bool bx_search_parse_sort_key(const char *text, enum bx_search_sort_key *out) {
@@ -399,11 +400,14 @@ static bool bx_set_binary_files_mode(const char *progname,
 void bx_search_print_help(const char *progname) {
     const char *base = bx_cli_progname(progname, "grep");
     bool is_rg = strcmp(base, "rg") == 0;
+    bool is_zgrep = strcmp(base, "zgrep") == 0;
 
     if (!is_rg) {
         printf("Usage: %s [OPTION]... PATTERNS [FILE]...\n", progname);
-        puts("Search for PATTERNS in each FILE.");
-        puts("Example: grep -i 'hello world' menu.h main.c");
+        puts(is_zgrep ? "Search for PATTERNS in gzip or plain text FILEs."
+                      : "Search for PATTERNS in each FILE.");
+        if (!is_zgrep)
+            puts("Example: grep -i 'hello world' menu.h main.c");
         puts("PATTERNS can contain multiple patterns separated by newlines.");
         puts("");
         puts("Pattern selection and interpretation:");
@@ -440,15 +444,18 @@ void bx_search_print_help(const char *progname) {
         puts("  -a, --text                equivalent to --binary-files=text");
         puts("  -I                        equivalent to --binary-files=without-match");
         puts("  -d, --directories=ACTION  how to handle directories;");
-        puts("                            ACTION is 'read', 'recurse', or 'skip'");
+        puts(is_zgrep ? "                            ACTION is 'read' or 'skip'"
+                      : "                            ACTION is 'read', 'recurse', or 'skip'");
         puts("  -D, --devices=ACTION      how to handle devices, FIFOs and sockets;");
         puts("                            ACTION is 'read' or 'skip'");
-        puts("  -r, --recursive           like --directories=recurse");
-        puts("  -R, --dereference-recursive  likewise, but follow all symlinks");
-        puts("      --include=GLOB        search only files that match GLOB (a file pattern)");
-        puts("      --exclude=GLOB        skip files that match GLOB");
-        puts("      --exclude-from=FILE   skip files that match any file pattern from FILE");
-        puts("      --exclude-dir=GLOB    skip directories that match GLOB");
+        if (!is_zgrep) {
+            puts("  -r, --recursive           like --directories=recurse");
+            puts("  -R, --dereference-recursive  likewise, but follow all symlinks");
+            puts("      --include=GLOB        search only files that match GLOB (a file pattern)");
+            puts("      --exclude=GLOB        skip files that match GLOB");
+            puts("      --exclude-from=FILE   skip files that match any file pattern from FILE");
+            puts("      --exclude-dir=GLOB    skip directories that match GLOB");
+        }
         puts("  -L, --files-without-match  print only names of FILEs with no selected lines");
         puts("  -l, --files-with-matches  print only names of FILEs with selected lines");
         puts("  -c, --count               print only a count of selected lines per FILE");
@@ -467,10 +474,16 @@ void bx_search_print_help(const char *progname) {
         puts("                            WHEN is 'always', 'never', or 'auto'");
         puts("  -U, --binary              do not strip CR characters at EOL (MSDOS/Windows)");
         puts("");
-        puts("When FILE is '-', read standard input.  If no FILE is given, read standard");
-        puts("input, but with -r, recursively search the working directory instead.  With");
-        puts("fewer than two FILEs, assume -h.  Exit status is 0 if any line is selected,");
-        puts("1 otherwise; if any error occurs and -q is not given, the exit status is 2.");
+        if (is_zgrep) {
+            puts("With no FILE or with '-', read standard input. Recursion is not supported.");
+            puts("A missing FILE is also tried with a .gz suffix.");
+            puts("Exit status is 0 for a match, 1 for no match, or 2 for a detected error.");
+        } else {
+            puts("When FILE is '-', read standard input.  If no FILE is given, read standard");
+            puts("input, but with -r, recursively search the working directory instead.  With");
+            puts("fewer than two FILEs, assume -h.  Exit status is 0 if any line is selected,");
+            puts("1 otherwise; if any error occurs and -q is not given, the exit status is 2.");
+        }
         return;
     }
 
@@ -1105,7 +1118,8 @@ struct bx_search_list_args {
     bool has_pattern;
 };
 
-static int bx_search_read_list(const char* progname, const char* path, struct bx_search_pattern_vec* dest, bool excludes) {
+static int bx_search_read_list(const char* progname, const char* path,
+                               struct bx_search_pattern_vec* dest, bool excludes, bool zgrep) {
     bool use_stdin = !excludes && strcmp(path, "-") == 0;
     FILE* fp = use_stdin ? stdin : fopen(path, "r");
     if (!fp)
@@ -1113,9 +1127,15 @@ static int bx_search_read_list(const char* progname, const char* path, struct bx
 
     struct bx_record_stream stream = {0};
     int read_errno = 0;
+    bool embedded_nul = false;
+    ssize_t nread;
     bx_record_stream_begin(fp, &stream);
-    while (bx_record_stream_read(fp, &stream, '\n') >= 0) {
+    while ((nread = bx_record_stream_read(fp, &stream, '\n')) >= 0) {
         char* line = stream.record;
+        if (zgrep && memchr(line, '\0', (size_t)nread)) {
+            embedded_nul = true;
+            break;
+        }
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || (excludes && line[len - 1] == '\r')))
             line[--len] = '\0';
@@ -1131,20 +1151,48 @@ static int bx_search_read_list(const char* progname, const char* path, struct bx
     if (!use_stdin && fclose(fp) != 0 && !read_errno)
         read_errno = errno ? errno : EIO;
     bx_record_stream_dispose(&stream);
+    if (embedded_nul) {
+        fprintf(stderr, "%s: %s: NUL byte in pattern file is not supported\n", progname, path);
+        return -1;
+    }
     return read_errno ? bx_search_parse_path_error(progname, path, read_errno) : 0;
 }
 
-static int bx_search_apply_lists(const char* progname, struct search_opts* opts, const struct bx_search_list_args* lists) {
+static bool bx_zgrep_append_patterns(struct bx_search_pattern_vec *dest, const char *text) {
+    if (!strchr(text, '\n'))
+        return bx_search_pattern_vec_append(dest, text, false, false);
+
+    char *copy = strdup(text);
+    if (!copy)
+        return false;
+
+    bool ok = false;
+    for (char *part = copy; ; ) {
+        char *next = strchr(part, '\n');
+        if (next)
+            *next++ = '\0';
+        ok = bx_search_pattern_vec_append(dest, part, false, false);
+        if (!ok || !next)
+            break;
+        part = next;
+    }
+    free(copy);
+    return ok;
+}
+
+static int bx_search_apply_lists(const char* progname, struct search_opts* opts,
+                                 const struct bx_search_list_args* lists, bool zgrep) {
     for (size_t i = 0; i < lists->count; i++) {
         struct bx_search_list_arg list = lists->items[i];
         bool excludes = list.id == OPT_EXCLUDE || list.id == OPT_EXCLUDE_FROM;
         struct bx_search_pattern_vec* dest = excludes ? &opts->exclude_patterns : &opts->extra_patterns;
         if (list.id == 'f' || list.id == OPT_EXCLUDE_FROM) {
-            int status = bx_search_read_list(progname, list.value, dest, excludes);
+            int status = bx_search_read_list(progname, list.value, dest, excludes, zgrep);
             if (status)
                 return status;
         }
-        else if (!bx_search_pattern_vec_append(dest, list.value, false, false)) {
+        else if (!(zgrep ? bx_zgrep_append_patterns(dest, list.value)
+                         : bx_search_pattern_vec_append(dest, list.value, false, false))) {
             return bx_search_parse_out_of_memory(progname);
         }
     }
@@ -1152,7 +1200,10 @@ static int bx_search_apply_lists(const char* progname, struct search_opts* opts,
 }
 
 static int bx_search_missing_pattern(const char* progname, enum bx_search_personality personality) {
-    if (personality == BX_SEARCH_GREP)
+    if (personality == BX_SEARCH_ZGREP) {
+        fprintf(stderr, "%s: missing pattern\n", progname);
+        bx_grep_print_usage_try_help(progname);
+    } else if (personality == BX_SEARCH_GREP)
         bx_grep_print_usage_try_help(progname);
     else
         fprintf(stderr, "%s: ripgrep requires at least one pattern to execute a search\n", progname);
@@ -1220,6 +1271,7 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
     }
 
     bool rg = bx_search_personality_is_rg(personality);
+    bool zgrep = personality == BX_SEARCH_ZGREP;
     const struct bx_option_spec *specs = rg ? long_opts : grep_long_opts;
     size_t spec_count = rg ? sizeof(long_opts) / sizeof(*long_opts) : sizeof(grep_long_opts) / sizeof(*grep_long_opts);
     int operand_count = 0;
@@ -1273,6 +1325,10 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
         int c = option.spec->id;
         char *value = option.value;
         const char *long_name = option.short_name ? NULL : option.spec->long_name;
+        if (personality == BX_SEARCH_ZGREP
+            && (c == OPT_INCLUDE || c == OPT_EXCLUDE || c == OPT_EXCLUDE_FROM
+                || c == OPT_EXCLUDE_DIR || c == OPT_FILES))
+            return bx_grep_unrecognized_option(progname, token);
         if (c == 'e' || c == 'f' || c == OPT_EXCLUDE || c == OPT_EXCLUDE_FROM) {
             if (rg && (c == OPT_EXCLUDE || c == OPT_EXCLUDE_FROM))
                 return bx_grep_unrecognized_option(progname, c == OPT_EXCLUDE ? "--exclude" : "--exclude-from");
@@ -1411,12 +1467,19 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
                 return -1;
             opts->stats = false;
             break;
-        case 'l': opts->files_with_matches = true; break;
+        case 'l':
+            opts->files_with_matches = true;
+            if (zgrep)
+                opts->files_without_match = false;
+            break;
         case 'L':
             if (bx_search_personality_is_rg(personality))
                 opts->follow_symlinks = true;
-            else
+            else {
                 opts->files_without_match = true;
+                if (zgrep)
+                    opts->files_with_matches = false;
+            }
             break;
         case 'q': opts->quiet = true; break;
         case 'p':
@@ -1432,6 +1495,8 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
             opts->show_line_number = true;
             break;
         case 'r':
+            if (personality == BX_SEARCH_ZGREP)
+                return bx_grep_unrecognized_option(progname, token);
             if (bx_search_personality_is_rg(personality)) {
                 if (long_name && strcmp(long_name, "recursive") == 0)
                     return bx_grep_unrecognized_option(progname, token);
@@ -1445,6 +1510,8 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
             }
             break;
         case 'R':
+            if (personality == BX_SEARCH_ZGREP)
+                return bx_grep_unrecognized_option(progname, token);
             if (bx_search_personality_is_rg(personality)) {
                 fprintf(stderr, "%s: unrecognized flag %s\n",
                         progname, token ? token : "-R");
@@ -1467,6 +1534,8 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
                 if (strcmp(value, "read") == 0) {
                     opts->directory_mode = BX_GREP_DIR_READ;
                 } else if (strcmp(value, "recurse") == 0) {
+                    if (personality == BX_SEARCH_ZGREP)
+                        return bx_grep_unrecognized_option(progname, token);
                     opts->directory_mode = BX_GREP_DIR_RECURSE;
                     opts->recursive = true;
                     opts->follow_symlinks = false;
@@ -1596,6 +1665,7 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
         case 'm':
             if (!bx_search_parse_nonnegative_int(progname, personality, "-m", value, &opts->max_count))
                 return -1;
+            opts->max_count_set = true;
             break;
         case 'Z':
             if (bx_search_personality_is_rg(personality)) {
@@ -2378,16 +2448,35 @@ static int bx_search_parse(int argc, char** argv, struct search_opts* opts, enum
     if (!opts->files_only && !lists->has_pattern && !operand_count)
         return bx_search_missing_pattern(progname, personality);
 
-    int status = bx_search_apply_lists(progname, opts, lists);
+    int status = bx_search_apply_lists(progname, opts, lists, zgrep);
     if (status)
         return status;
 
     int first_file = 0;
+    if (zgrep) {
+        if (opts->quiet) {
+            opts->files_with_matches = false;
+            opts->files_without_match = false;
+        }
+        if (opts->quiet || opts->files_with_matches || opts->files_without_match)
+            opts->count_only = false;
+
+        if (!lists->has_pattern && operand_count && strchr(opts->operand_storage[0], '\n')) {
+            if (!bx_zgrep_append_patterns(&opts->extra_patterns, opts->operand_storage[0]))
+                return bx_search_parse_out_of_memory(progname);
+            first_file = 1;
+        }
+    }
     if (opts->files_only) {
         operands->pattern = "";
     } else if (opts->extra_patterns.len > 0u) {
         operands->pattern = opts->extra_patterns.items[opts->extra_patterns.len - 1u];
         bx_search_pattern_vec_drop_last(&opts->extra_patterns);
+    }
+    else if (zgrep && lists->has_pattern) {
+        /* No -f records is not the same as one empty pattern. */
+        operands->pattern = "";
+        opts->empty_pattern_list = true;
     }
     else if (operand_count == 0)
         return bx_search_missing_pattern(progname, personality);

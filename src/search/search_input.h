@@ -13,6 +13,7 @@ struct search_opts;
 
 int bx_search_input_open_fd(const char *filename,
                             const struct search_opts *opts);
+int bx_search_input_open_fd_flags(const char *filename, int extra_flags);
 FILE *bx_search_input_fopen(const char *filename,
                             const struct search_opts *opts);
 FILE *bx_search_input_open_stream(const char *filename,

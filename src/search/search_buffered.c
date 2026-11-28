@@ -106,14 +106,14 @@ static bool bx_search_buffered_emit_record(
         } else {
             bool prefix_printed;
 
+            if (opts->only_matching && opts->invert_match)
+                return true;
             bx_search_maybe_print_heading(display_name, opts,
                                           &output->heading_printed_for_file);
             prefix_printed = bx_search_print_result_prefix(
                 output->heading_printed_for_file ? NULL : display_name,
                 opts, (int)record->line_number, bm.start + 1u, true,
                 record->byte_offset, bx_search_match_field_separator(opts));
-            if (opts->only_matching && opts->invert_match)
-                return true;
             bx_search_maybe_emit_initial_tab(opts, prefix_printed);
             if (opts->invert_match) {
                 bx_search_print_plain_record_contents(text, record->len, opts);
@@ -202,6 +202,8 @@ static bool bx_search_buffered_emit_context_record(
                                         display_name, m, opts, output)) {
         return false;
     }
+    if (opts->line_buffered && opts->null_data)
+        fflush(bx_search_output_stream());
     output->printed_context_line = true;
     output->last_emitted_line = record->line_number;
     return true;
@@ -253,9 +255,9 @@ int bx_search_buffered_opened(FILE *f,
                               struct bx_search_stats *stats) {
     struct bx_search_context_roll before = {0};
     struct bx_search_buffered_output_state output = {0};
-    const bool with_context = bx_search_plan_needs_line_buffering(opts);
     const bool emits_text = !opts->quiet && !opts->count_only &&
         !opts->files_with_matches && !opts->files_without_match;
+    const bool with_context = emits_text && bx_search_plan_needs_line_buffering(opts);
     ssize_t len;
     int file_matches = 0;
     size_t matched_lines = 0u;
@@ -264,12 +266,12 @@ int bx_search_buffered_opened(FILE *f,
     size_t after_left = 0u;
     bool max_count_reached = false;
     bool saw_match_record = false;
-    bool binary_detected = false;
+    bool binary_detected = record_stream->binary_prefix;
     bool binary_diagnostic_reported = false;
     bool published_output = false;
     bool stop = false;
 
-    while (!stop &&
+    while (!stop && (!opts->line_buffered || !bx_search_output_failed()) &&
            (len = bx_search_input_read_record_until_binary(
                 f, record_stream, opts, NULL)) != -1) {
         unsigned char *raw = (unsigned char *)record_stream->record;

@@ -102,6 +102,7 @@ int bx_search_compute_offset_width_from_stat(const struct stat *st,
 int bx_search_output_get_offset_width(void);
 void bx_search_output_set_offset_width(int width);
 FILE *bx_search_output_stream(void);
+bool bx_search_output_failed(void);
 FILE *bx_search_error_output_stream(void);
 bool bx_search_stdout_is_captured(void);
 void bx_search_note_stdout_output(void);

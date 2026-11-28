@@ -52,7 +52,8 @@ int bx_search_streaming_opened(FILE *f,
     if (stats)
         stats->files_searched++;
 
-    while ((len = line_buffered_stdin_binary_watch
+    while ((!opts->line_buffered || !bx_search_output_failed()) &&
+           (len = line_buffered_stdin_binary_watch
                       ? bx_record_stream_read_live(f, record_stream,
                                                    bx_search_record_delimiter(opts))
                       : bx_search_input_read_record(f, record_stream, opts)) != -1) {
@@ -127,6 +128,8 @@ int bx_search_streaming_opened(FILE *f,
                     heading_printed_for_file ? NULL : display_name,
                     line_num, line_offset, m, &bm, opts
                 );
+                if (opts->null_data)
+                    bx_search_streaming_maybe_flush_line_buffered(opts);
                 stdout_emitted = true;
             } else if (!(opts->only_matching && opts->invert_match)) {
                 bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);

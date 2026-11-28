@@ -17,10 +17,8 @@
 #include "search_input.h"
 #include "search_internal.h"
 
-int bx_search_input_open_fd(const char *filename,
-                            const struct search_opts *opts) {
-    int flags = O_RDONLY;
-    (void)opts;
+int bx_search_input_open_fd_flags(const char *filename, int extra_flags) {
+    int flags = O_RDONLY | extra_flags;
 
 #ifdef O_LARGEFILE
     flags |= O_LARGEFILE;
@@ -31,6 +29,12 @@ int bx_search_input_open_fd(const char *filename,
 
     bx_search_dev_counters_note_content_open_call();
     return bx_fd_openat_cloexec(AT_FDCWD, filename, flags, 0);
+}
+
+int bx_search_input_open_fd(const char *filename,
+                            const struct search_opts *opts) {
+    (void)opts;
+    return bx_search_input_open_fd_flags(filename, 0);
 }
 
 FILE *bx_search_input_fopen(const char *filename,

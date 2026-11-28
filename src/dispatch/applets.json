@@ -1631,6 +1631,16 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "zgrep",
+      "main": "bx_zgrep_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "raw-output"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "rg",
       "main": "bx_rg_main",
       "capabilities": [
